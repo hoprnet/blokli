@@ -5,14 +5,15 @@ use std::{collections::HashMap, sync::Arc};
 use async_graphql::{Context, ID, Object, Result, SimpleObject, Union};
 use blokli_api_types::{
     Account, AccountsList, AccountsResult, ChainInfo, ChainInfoResult, Channel, ChannelStats, ChannelStatsResult,
-    ChannelsList, ChannelsResult, ContractAddressMap, CountResult, HoprBalance, InvalidAddressError,
-    MissingFilterError, ModuleAddress, NativeBalance, QueryFailedError, RedeemedStats, RedeemedStatsFilter, Safe,
-    SafeHoprAllowance, SafeSelectorInput, SafesBalance, SafesBalanceResult, Token, TokenValueString, TransactionCount,
-    UInt64,
+    ChannelsList, ChannelsResult, ContractAddressMap, CountResult, CurvyAggregatorState, CurvyCommitmentGasCostUpdate,
+    CurvyCommitmentGasFeeRootUpdate, CurvyCommittedNote, CurvyCommittedNullifier, CurvyGasFees, CurvyPendingNote,
+    CurvyTokenRegistration, CurvyVaultFees, CurvyVaultToken, HoprBalance, InvalidAddressError, MissingFilterError,
+    ModuleAddress, NativeBalance, QueryFailedError, RedeemedStats, RedeemedStatsFilter, Safe, SafeHoprAllowance,
+    SafeSelectorInput, SafesBalance, SafesBalanceResult, Token, TokenValueString, TransactionCount, UInt64, UInt256,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, HoprRpcOperations, rpc::RpcOperations};
-use blokli_chain_types::ContractAddresses;
+use blokli_chain_types::{AlloyAddressExt, ContractAddresses};
 use blokli_db_entity::{
     account, chain_info,
     conversions::{
@@ -26,10 +27,15 @@ use blokli_db_entity::{
             fetch_safes_by_chain_key as fetch_safes_by_chain_key_db, fetch_safes_by_owner as fetch_safes_by_owner_db,
         },
     },
-    hopr_node_safe_registration,
+    curvy_commitment_gas_cost, curvy_commitment_gas_fee_root, curvy_committed_note, curvy_committed_nullifier,
+    curvy_pending_note, curvy_token_registration, hopr_node_safe_registration,
     views::{account_current, channel_current},
 };
+use curvy_bindings::{
+    curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2, curvy_vault_v2::CurvyVaultV2, portal_factory::PortalFactory,
+};
 use futures::future::try_join_all;
+use hopr_bindings::exports::alloy::primitives::Address as AlloyAddress;
 use hopr_types::{
     crypto::prelude::Hash,
     primitive::{
@@ -38,11 +44,11 @@ use hopr_types::{
         traits::{IntoEndian, ToHex},
     },
 };
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect};
 use tracing::warn;
 
 use crate::{
-    conversions::transaction_from_record, errors, mutation::TransactionResult, validation::validate_eth_address,
+    conversions::transaction_from_record, curvy, errors, mutation::TransactionResult, validation::validate_eth_address,
 };
 
 /// Result type for HOPR balance queries
@@ -319,6 +325,37 @@ async fn build_safe_by_result_from_current_rows(
 /// Maximum number of safes `safesBalance` will fan out RPC balance calls for in a single request.
 /// Bounds RPC load; over this, the caller must narrow the query with `owner_address`.
 const SAFES_BALANCE_MAX_SAFES: usize = 1000;
+const CURVY_EVENT_DEFAULT_LIMIT: u64 = 100;
+const CURVY_EVENT_MAX_LIMIT: u64 = 1000;
+
+fn curvy_event_limit(first: Option<i32>) -> Result<u64> {
+    match first {
+        None => Ok(CURVY_EVENT_DEFAULT_LIMIT),
+        Some(first) if first > 0 && u64::try_from(first).is_ok_and(|first| first <= CURVY_EVENT_MAX_LIMIT) => {
+            Ok(u64::try_from(first).map_err(|error| errors::graphql_pagination_error(&error.to_string()))?)
+        }
+        Some(_) => Err(errors::graphql_pagination_error("first must be between 1 and 1000")),
+    }
+}
+
+fn curvy_from_block(from_block: Option<UInt64>) -> Result<Option<i64>> {
+    from_block
+        .map(|block| {
+            i64::try_from(block.0)
+                .map_err(|_| errors::graphql_pagination_error("fromBlock exceeds the supported database range"))
+        })
+        .transpose()
+}
+
+fn configured_curvy_address(address: Address, contract: &str) -> Result<AlloyAddress> {
+    if address == Address::default() {
+        return Err(errors::graphql_rpc_error(
+            "create Curvy contract instance",
+            format!("{contract} address is not configured"),
+        ));
+    }
+    Ok(AlloyAddress::from_hopr_address(address))
+}
 
 /// Enforces the [`SAFES_BALANCE_MAX_SAFES`] cap on the number of safes a single `safesBalance`
 /// request may fan out RPC calls for. Returns an error to surface to the caller when exceeded.
@@ -336,6 +373,385 @@ pub struct QueryRoot;
 
 #[Object]
 impl QueryRoot {
+    /// Retrieve Curvy notes emitted by `PendingNotes`, ordered by chain position.
+    #[graphql(name = "curvyPendingNotes")]
+    async fn curvy_pending_notes(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "fromBlock")] from_block: Option<UInt64>,
+        first: Option<i32>,
+    ) -> Result<Vec<CurvyPendingNote>> {
+        let db = ctx.data::<DatabaseConnection>()?;
+        let mut query = curvy_pending_note::Entity::find();
+        if let Some(block) = curvy_from_block(from_block)? {
+            query = query.filter(curvy_pending_note::Column::PublishedBlock.gte(block));
+        }
+        query
+            .order_by_asc(curvy_pending_note::Column::PublishedBlock)
+            .order_by_asc(curvy_pending_note::Column::PublishedTxIndex)
+            .order_by_asc(curvy_pending_note::Column::PublishedLogIndex)
+            .order_by_asc(curvy_pending_note::Column::EventItemIndex)
+            .limit(curvy_event_limit(first)?)
+            .all(db)
+            .await
+            .map_err(|error| errors::graphql_query_error("fetch Curvy pending notes", error))?
+            .into_iter()
+            .map(curvy::pending_note)
+            .collect()
+    }
+
+    /// Retrieve Curvy notes emitted by `CommittedNotes`, ordered by chain position.
+    #[graphql(name = "curvyCommittedNotes")]
+    async fn curvy_committed_notes(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "fromBlock")] from_block: Option<UInt64>,
+        first: Option<i32>,
+    ) -> Result<Vec<CurvyCommittedNote>> {
+        let db = ctx.data::<DatabaseConnection>()?;
+        let mut query = curvy_committed_note::Entity::find();
+        if let Some(block) = curvy_from_block(from_block)? {
+            query = query.filter(curvy_committed_note::Column::PublishedBlock.gte(block));
+        }
+        query
+            .order_by_asc(curvy_committed_note::Column::PublishedBlock)
+            .order_by_asc(curvy_committed_note::Column::PublishedTxIndex)
+            .order_by_asc(curvy_committed_note::Column::PublishedLogIndex)
+            .order_by_asc(curvy_committed_note::Column::EventItemIndex)
+            .limit(curvy_event_limit(first)?)
+            .all(db)
+            .await
+            .map_err(|error| errors::graphql_query_error("fetch Curvy committed notes", error))?
+            .into_iter()
+            .map(curvy::committed_note)
+            .collect()
+    }
+
+    /// Retrieve Curvy nullifiers emitted by `CommittedNullifiers`.
+    #[graphql(name = "curvyCommittedNullifiers")]
+    async fn curvy_committed_nullifiers(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "fromBlock")] from_block: Option<UInt64>,
+        first: Option<i32>,
+    ) -> Result<Vec<CurvyCommittedNullifier>> {
+        let db = ctx.data::<DatabaseConnection>()?;
+        let mut query = curvy_committed_nullifier::Entity::find();
+        if let Some(block) = curvy_from_block(from_block)? {
+            query = query.filter(curvy_committed_nullifier::Column::PublishedBlock.gte(block));
+        }
+        query
+            .order_by_asc(curvy_committed_nullifier::Column::PublishedBlock)
+            .order_by_asc(curvy_committed_nullifier::Column::PublishedTxIndex)
+            .order_by_asc(curvy_committed_nullifier::Column::PublishedLogIndex)
+            .order_by_asc(curvy_committed_nullifier::Column::EventItemIndex)
+            .limit(curvy_event_limit(first)?)
+            .all(db)
+            .await
+            .map_err(|error| errors::graphql_query_error("fetch Curvy committed nullifiers", error))?
+            .into_iter()
+            .map(curvy::committed_nullifier)
+            .collect()
+    }
+
+    /// Retrieve Curvy Aggregator commitment gas-fee root updates.
+    #[graphql(name = "curvyCommitmentGasFeeRootUpdates")]
+    async fn curvy_commitment_gas_fee_root_updates(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "fromBlock")] from_block: Option<UInt64>,
+        first: Option<i32>,
+    ) -> Result<Vec<CurvyCommitmentGasFeeRootUpdate>> {
+        let db = ctx.data::<DatabaseConnection>()?;
+        let mut query = curvy_commitment_gas_fee_root::Entity::find();
+        if let Some(block) = curvy_from_block(from_block)? {
+            query = query.filter(curvy_commitment_gas_fee_root::Column::PublishedBlock.gte(block));
+        }
+        query
+            .order_by_asc(curvy_commitment_gas_fee_root::Column::PublishedBlock)
+            .order_by_asc(curvy_commitment_gas_fee_root::Column::PublishedTxIndex)
+            .order_by_asc(curvy_commitment_gas_fee_root::Column::PublishedLogIndex)
+            .limit(curvy_event_limit(first)?)
+            .all(db)
+            .await
+            .map_err(|error| errors::graphql_query_error("fetch Curvy gas-fee root updates", error))?
+            .into_iter()
+            .map(curvy::commitment_gas_fee_root)
+            .collect()
+    }
+
+    /// Retrieve Curvy Vault token registrations.
+    #[graphql(name = "curvyTokenRegistrations")]
+    async fn curvy_token_registrations(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "fromBlock")] from_block: Option<UInt64>,
+        first: Option<i32>,
+    ) -> Result<Vec<CurvyTokenRegistration>> {
+        let db = ctx.data::<DatabaseConnection>()?;
+        let mut query = curvy_token_registration::Entity::find();
+        if let Some(block) = curvy_from_block(from_block)? {
+            query = query.filter(curvy_token_registration::Column::PublishedBlock.gte(block));
+        }
+        query
+            .order_by_asc(curvy_token_registration::Column::PublishedBlock)
+            .order_by_asc(curvy_token_registration::Column::PublishedTxIndex)
+            .order_by_asc(curvy_token_registration::Column::PublishedLogIndex)
+            .limit(curvy_event_limit(first)?)
+            .all(db)
+            .await
+            .map_err(|error| errors::graphql_query_error("fetch Curvy token registrations", error))?
+            .into_iter()
+            .map(curvy::token_registration)
+            .collect()
+    }
+
+    /// Retrieve per-token entries emitted by `CommitmentGasCostsUpdated`.
+    #[graphql(name = "curvyCommitmentGasCostUpdates")]
+    async fn curvy_commitment_gas_cost_updates(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "fromBlock")] from_block: Option<UInt64>,
+        first: Option<i32>,
+    ) -> Result<Vec<CurvyCommitmentGasCostUpdate>> {
+        let db = ctx.data::<DatabaseConnection>()?;
+        let mut query = curvy_commitment_gas_cost::Entity::find();
+        if let Some(block) = curvy_from_block(from_block)? {
+            query = query.filter(curvy_commitment_gas_cost::Column::PublishedBlock.gte(block));
+        }
+        query
+            .order_by_asc(curvy_commitment_gas_cost::Column::PublishedBlock)
+            .order_by_asc(curvy_commitment_gas_cost::Column::PublishedTxIndex)
+            .order_by_asc(curvy_commitment_gas_cost::Column::PublishedLogIndex)
+            .order_by_asc(curvy_commitment_gas_cost::Column::EventItemIndex)
+            .limit(curvy_event_limit(first)?)
+            .all(db)
+            .await
+            .map_err(|error| errors::graphql_query_error("fetch Curvy gas-cost updates", error))?
+            .into_iter()
+            .map(curvy::commitment_gas_cost)
+            .collect()
+    }
+
+    /// Read the current Curvy Aggregator root and indices directly from chain.
+    #[graphql(name = "curvyAggregatorState", complexity = 50)]
+    async fn curvy_aggregator_state(&self, ctx: &Context<'_>) -> Result<CurvyAggregatorState> {
+        let addresses = ctx.data::<ContractAddresses>()?;
+        let rpc = ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>()?;
+        let contract = CurvyAggregatorAlphaV2::new(
+            configured_curvy_address(addresses.curvy_aggregator, "Curvy Aggregator")?,
+            rpc.provider.clone(),
+        );
+        let (notes_tree_root, notes_batch_index, nullifiers_batch_index, note_index) = futures::try_join!(
+            async { contract.getCurrentNotesTreeRoot().call().await },
+            async { contract.getCurrentNotesBatchIndex().call().await },
+            async { contract.getCurrentNullifiersBatchIndex().call().await },
+            async { contract.getCurrentNoteIndex().call().await },
+        )
+        .map_err(|error| errors::graphql_rpc_error("query Curvy Aggregator state", error))?;
+        Ok(CurvyAggregatorState {
+            notes_tree_root: UInt256(notes_tree_root.to_string()),
+            notes_batch_index: UInt256(notes_batch_index.to_string()),
+            nullifiers_batch_index: UInt256(nullifiers_batch_index.to_string()),
+            note_index: UInt256(note_index.to_string()),
+        })
+    }
+
+    /// Read a Curvy note's raw `NoteStatus` value directly from chain.
+    #[graphql(name = "curvyNoteStatus", complexity = 50)]
+    async fn curvy_note_status(&self, ctx: &Context<'_>, #[graphql(name = "noteId")] note_id: UInt256) -> Result<i32> {
+        let addresses = ctx.data::<ContractAddresses>()?;
+        let rpc = ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>()?;
+        let contract = CurvyAggregatorAlphaV2::new(
+            configured_curvy_address(addresses.curvy_aggregator, "Curvy Aggregator")?,
+            rpc.provider.clone(),
+        );
+        let note_id = note_id
+            .0
+            .parse()
+            .map_err(|error| errors::graphql_rpc_error("parse note ID", error))?;
+        contract
+            .noteStatus(note_id)
+            .call()
+            .await
+            .map(i32::from)
+            .map_err(|error| errors::graphql_rpc_error("query Curvy note status", error))
+    }
+
+    /// Check whether a notes root is valid in the Curvy Aggregator.
+    #[graphql(name = "curvyValidNotesRoot", complexity = 50)]
+    async fn curvy_valid_notes_root(&self, ctx: &Context<'_>, root: UInt256) -> Result<bool> {
+        let addresses = ctx.data::<ContractAddresses>()?;
+        let rpc = ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>()?;
+        let contract = CurvyAggregatorAlphaV2::new(
+            configured_curvy_address(addresses.curvy_aggregator, "Curvy Aggregator")?,
+            rpc.provider.clone(),
+        );
+        let root = root
+            .0
+            .parse()
+            .map_err(|error| errors::graphql_rpc_error("parse notes root", error))?;
+        contract
+            .validNotesRoot(root)
+            .call()
+            .await
+            .map_err(|error| errors::graphql_rpc_error("query Curvy notes root", error))
+    }
+
+    /// Check whether a nullifier is already present in the Curvy Aggregator.
+    #[graphql(name = "curvyNullifierSpent", complexity = 50)]
+    async fn curvy_nullifier_spent(&self, ctx: &Context<'_>, nullifier: UInt256) -> Result<bool> {
+        let addresses = ctx.data::<ContractAddresses>()?;
+        let rpc = ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>()?;
+        let contract = CurvyAggregatorAlphaV2::new(
+            configured_curvy_address(addresses.curvy_aggregator, "Curvy Aggregator")?,
+            rpc.provider.clone(),
+        );
+        let nullifier = nullifier
+            .0
+            .parse()
+            .map_err(|error| errors::graphql_rpc_error("parse nullifier", error))?;
+        contract
+            .nullifiers(nullifier)
+            .call()
+            .await
+            .map_err(|error| errors::graphql_rpc_error("query Curvy nullifier", error))
+    }
+
+    /// Read the Curvy Vault deposit and withdrawal fees directly from chain.
+    #[graphql(name = "curvyVaultFees", complexity = 50)]
+    async fn curvy_vault_fees(&self, ctx: &Context<'_>) -> Result<CurvyVaultFees> {
+        let addresses = ctx.data::<ContractAddresses>()?;
+        let rpc = ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>()?;
+        let contract = CurvyVaultV2::new(
+            configured_curvy_address(addresses.curvy_vault, "Curvy Vault")?,
+            rpc.provider.clone(),
+        );
+        let (deposit_fee, withdrawal_fee) = futures::try_join!(async { contract.depositFee().call().await }, async {
+            contract.withdrawalFee().call().await
+        },)
+        .map_err(|error| errors::graphql_rpc_error("query Curvy Vault fees", error))?;
+        Ok(CurvyVaultFees {
+            deposit_fee: UInt256(deposit_fee.to_string()),
+            withdrawal_fee: UInt256(withdrawal_fee.to_string()),
+        })
+    }
+
+    /// Read a Curvy Vault token address and per-token gas fees directly from chain.
+    #[graphql(name = "curvyVaultToken", complexity = 50)]
+    async fn curvy_vault_token(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "tokenId")] token_id: UInt256,
+    ) -> Result<CurvyVaultToken> {
+        let addresses = ctx.data::<ContractAddresses>()?;
+        let rpc = ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>()?;
+        let contract = CurvyVaultV2::new(
+            configured_curvy_address(addresses.curvy_vault, "Curvy Vault")?,
+            rpc.provider.clone(),
+        );
+        let token_id = token_id
+            .0
+            .parse()
+            .map_err(|error| errors::graphql_rpc_error("parse token ID", error))?;
+        let (token_address, fees) =
+            futures::try_join!(async { contract.getTokenAddress(token_id).call().await }, async {
+                contract.perTokenGasFees(token_id).call().await
+            },)
+            .map_err(|error| errors::graphql_rpc_error("query Curvy Vault token", error))?;
+        Ok(CurvyVaultToken {
+            token_address: token_address.to_checksum(None),
+            gas_fees: CurvyGasFees {
+                token_id: UInt256(fees.tokenId.to_string()),
+                portal_deployment: UInt256(fees.portalDeployment.to_string()),
+                pending_note_commitment: UInt256(fees.pendingNoteCommitment.to_string()),
+                withdrawal: UInt256(fees.withdrawal.to_string()),
+            },
+        })
+    }
+
+    /// Derive a Curvy entry portal address directly from PortalFactory.
+    #[graphql(name = "curvyEntryPortalAddress", complexity = 50)]
+    async fn curvy_entry_portal_address(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "ownerHash")] owner_hash: UInt256,
+        recovery: String,
+    ) -> Result<String> {
+        let addresses = ctx.data::<ContractAddresses>()?;
+        let rpc = ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>()?;
+        let recovery =
+            Address::from_hex(&recovery).map_err(|error| errors::graphql_rpc_error("parse recovery address", error))?;
+        let owner_hash = owner_hash
+            .0
+            .parse()
+            .map_err(|error| errors::graphql_rpc_error("parse owner hash", error))?;
+        PortalFactory::new(
+            configured_curvy_address(addresses.curvy_portal_factory, "Curvy PortalFactory")?,
+            rpc.provider.clone(),
+        )
+        .getEntryPortalAddress(owner_hash, AlloyAddress::from_hopr_address(recovery))
+        .call()
+        .await
+        .map(|address| address.to_checksum(None))
+        .map_err(|error| errors::graphql_rpc_error("query Curvy entry portal address", error))
+    }
+
+    /// Derive a Curvy exit portal address directly from PortalFactory.
+    #[graphql(name = "curvyExitPortalAddress", complexity = 50)]
+    async fn curvy_exit_portal_address(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "exitAddress")] exit_address: String,
+        #[graphql(name = "exitChainId")] exit_chain_id: UInt256,
+        recovery: String,
+    ) -> Result<String> {
+        let addresses = ctx.data::<ContractAddresses>()?;
+        let rpc = ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>()?;
+        let exit_address =
+            Address::from_hex(&exit_address).map_err(|error| errors::graphql_rpc_error("parse exit address", error))?;
+        let recovery =
+            Address::from_hex(&recovery).map_err(|error| errors::graphql_rpc_error("parse recovery address", error))?;
+        let exit_chain_id = exit_chain_id
+            .0
+            .parse()
+            .map_err(|error| errors::graphql_rpc_error("parse exit chain ID", error))?;
+        PortalFactory::new(
+            configured_curvy_address(addresses.curvy_portal_factory, "Curvy PortalFactory")?,
+            rpc.provider.clone(),
+        )
+        .getExitPortalAddress(
+            AlloyAddress::from_hopr_address(exit_address),
+            exit_chain_id,
+            AlloyAddress::from_hopr_address(recovery),
+        )
+        .call()
+        .await
+        .map(|address| address.to_checksum(None))
+        .map_err(|error| errors::graphql_rpc_error("query Curvy exit portal address", error))
+    }
+
+    /// Check whether an address is registered with Curvy PortalFactory.
+    #[graphql(name = "curvyPortalRegistered", complexity = 50)]
+    async fn curvy_portal_registered(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "portalAddress")] portal_address: String,
+    ) -> Result<bool> {
+        let addresses = ctx.data::<ContractAddresses>()?;
+        let rpc = ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>()?;
+        let portal_address = Address::from_hex(&portal_address)
+            .map_err(|error| errors::graphql_rpc_error("parse portal address", error))?;
+        PortalFactory::new(
+            configured_curvy_address(addresses.curvy_portal_factory, "Curvy PortalFactory")?,
+            rpc.provider.clone(),
+        )
+        .portalIsRegistered(AlloyAddress::from_hopr_address(portal_address))
+        .call()
+        .await
+        .map_err(|error| errors::graphql_rpc_error("query Curvy portal registration", error))
+    }
+
     /// Retrieve accounts from the database with required filtering
     ///
     /// At least one filter parameter must be provided (keyid, packet_key, or chain_key).

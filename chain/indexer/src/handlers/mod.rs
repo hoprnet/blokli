@@ -7,6 +7,10 @@ use async_trait::async_trait;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, Log};
 use blokli_chain_types::{AlloyAddressExt, ContractAddresses};
 use blokli_db::{BlokliDbAllOperations, OpenTransaction};
+use curvy_bindings::{
+    curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2::CurvyAggregatorAlphaV2Events,
+    curvy_vault_v2::CurvyVaultV2::CurvyVaultV2Events,
+};
 use hopr_bindings::{
     exports::alloy::{
         primitives::{Address as AlloyAddress, B256, Log as AlloyLog},
@@ -38,6 +42,7 @@ use crate::{
 mod announcements;
 mod channel_utils;
 mod channels;
+mod curvy;
 mod helpers;
 mod node_safe_registry;
 mod oracles;
@@ -232,6 +237,12 @@ where
         } else if log.address.eq(&self.addresses.token) {
             let event = HoprTokenEvents::decode_log(&primitive_log)?;
             self.on_token_event(tx, event.data, is_synced).await
+        } else if log.address.eq(&self.addresses.curvy_aggregator) {
+            let event = CurvyAggregatorAlphaV2Events::decode_log(&primitive_log)?;
+            self.on_curvy_aggregator_event(tx, &log, event.data).await
+        } else if log.address.eq(&self.addresses.curvy_vault) {
+            let event = CurvyVaultV2Events::decode_log(&primitive_log)?;
+            self.on_curvy_vault_event(tx, &log, event.data).await
         } else if log.address.eq(&self.addresses.node_safe_registry) {
             let event = HoprNodeSafeRegistryEvents::decode_log(&primitive_log)?;
             self.on_node_safe_registry_event(tx, &log, event.data, is_synced).await
@@ -286,7 +297,8 @@ where
     ///
     /// `Vec<Address>` containing the monitored contract addresses in the following order:
     /// announcements, channels, ticket_price_oracle, winning_probability_oracle,
-    /// node_safe_registry, node_stake_factory, token.
+    /// node_safe_registry, node_stake_factory, token, followed by configured Curvy
+    /// Aggregator and Vault addresses.
     ///
     /// # Examples
     ///
@@ -294,10 +306,10 @@ where
     /// let addrs = handlers.contract_addresses();
     /// assert_eq!(addrs.len(), 7);
     /// // order: announcements, channels, ticket_price_oracle, winning_probability_oracle,
-    /// // node_safe_registry, node_stake_factory, token
+    /// // node_safe_registry, node_stake_factory, token, optional Curvy contracts
     /// ```
     fn contract_addresses(&self) -> Vec<Address> {
-        vec![
+        let mut addresses = vec![
             self.addresses.announcements,
             self.addresses.channels,
             self.addresses.ticket_price_oracle,
@@ -305,7 +317,14 @@ where
             self.addresses.node_safe_registry,
             self.addresses.node_stake_factory,
             self.addresses.token,
-        ]
+        ];
+        if self.addresses.curvy_aggregator != Address::default() {
+            addresses.push(self.addresses.curvy_aggregator);
+        }
+        if self.addresses.curvy_vault != Address::default() {
+            addresses.push(self.addresses.curvy_vault);
+        }
+        addresses
     }
 
     fn contract_addresses_map(&self) -> Arc<ContractAddresses> {
@@ -343,6 +362,10 @@ where
             crate::constants::topics::stake_factory()
         } else if contract.eq(&self.addresses.token) {
             crate::constants::topics::token()
+        } else if contract.eq(&self.addresses.curvy_aggregator) {
+            crate::constants::topics::curvy_aggregator()
+        } else if contract.eq(&self.addresses.curvy_vault) {
+            crate::constants::topics::curvy_vault()
         } else {
             panic!("use of unsupported contract address: {contract}");
         }

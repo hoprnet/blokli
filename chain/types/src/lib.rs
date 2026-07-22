@@ -128,6 +128,15 @@ pub struct ContractAddresses {
     #[serde_as(as = "DisplayFromStr")]
     #[serde(default)]
     pub xhopr_token: Address,
+    /// Curvy Aggregator proxy contract
+    #[serde(default)]
+    pub curvy_aggregator: Address,
+    /// Curvy Vault proxy contract
+    #[serde(default)]
+    pub curvy_vault: Address,
+    /// Curvy PortalFactory contract
+    #[serde(default)]
+    pub curvy_portal_factory: Address,
 }
 
 /// Holds instances to contracts.
@@ -313,6 +322,9 @@ where
             winning_probability_oracle: instances.winning_probability_oracle.address().to_hopr_address(),
             node_stake_factory: instances.node_stake_factory.address().to_hopr_address(),
             xhopr_token: instances.xhopr_token.address().to_hopr_address(),
+            curvy_aggregator: Address::default(),
+            curvy_vault: Address::default(),
+            curvy_portal_factory: Address::default(),
         }
     }
 }

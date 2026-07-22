@@ -378,6 +378,87 @@ type OpenedChannelsGraphEntry {
   source: Account!
 }
 
+"""Current Curvy Aggregator indices and notes-tree root."""
+type CurvyAggregatorState {
+  notesTreeRoot: UInt256!
+  notesBatchIndex: UInt256!
+  nullifiersBatchIndex: UInt256!
+  noteIndex: UInt256!
+}
+
+"""Position and transaction identity shared by indexed Curvy events."""
+type CurvyEventPosition {
+  transactionHash: Hex32!
+  block: UInt64!
+  transactionIndex: UInt64!
+  logIndex: UInt64!
+}
+
+"""Gas costs associated with a Curvy Vault token."""
+type CurvyGasFees {
+  tokenId: UInt256!
+  portalDeployment: UInt256!
+  pendingNoteCommitment: UInt256!
+  withdrawal: UInt256!
+}
+
+"""One note emitted by the Curvy Aggregator `PendingNotes` event."""
+type CurvyPendingNote {
+  noteId: UInt256!
+  ephemeralKey: [UInt256!]!
+  viewTag: Int!
+  tokenId: UInt256!
+  amount: UInt256!
+  isPlaintext: Boolean!
+  position: CurvyEventPosition!
+}
+
+"""One note emitted by the Curvy Aggregator `CommittedNotes` event."""
+type CurvyCommittedNote {
+  batchIndex: UInt256!
+  noteId: UInt256!
+  position: CurvyEventPosition!
+}
+
+"""One nullifier emitted by the Curvy Aggregator `CommittedNullifiers` event."""
+type CurvyCommittedNullifier {
+  batchIndex: UInt256!
+  nullifier: UInt256!
+  position: CurvyEventPosition!
+}
+
+"""A Curvy Aggregator commitment gas-fee root update."""
+type CurvyCommitmentGasFeeRootUpdate {
+  root: UInt256!
+  position: CurvyEventPosition!
+}
+
+"""A token registered by the Curvy Vault."""
+type CurvyTokenRegistration {
+  tokenAddress: String!
+  tokenId: UInt256!
+  position: CurvyEventPosition!
+}
+
+"""One item in a Curvy Vault commitment gas-cost update."""
+type CurvyCommitmentGasCostUpdate {
+  gasFees: CurvyGasFees!
+  root: UInt256!
+  position: CurvyEventPosition!
+}
+
+"""Current Curvy Vault protocol-level fees."""
+type CurvyVaultFees {
+  depositFee: UInt256!
+  withdrawalFee: UInt256!
+}
+
+"""A Curvy Vault token and its configured gas fees."""
+type CurvyVaultToken {
+  tokenAddress: String!
+  gasFees: CurvyGasFees!
+}
+
 """
 Internal query error
 """
@@ -392,6 +473,36 @@ type QueryFailedError {
 Root query type providing read-only access to indexed blockchain data
 """
 type QueryRoot {
+  "Retrieve Curvy notes emitted by `PendingNotes`, ordered by chain position."
+  curvyPendingNotes(fromBlock: UInt64, first: Int): [CurvyPendingNote!]!
+  "Retrieve Curvy notes emitted by `CommittedNotes`, ordered by chain position."
+  curvyCommittedNotes(fromBlock: UInt64, first: Int): [CurvyCommittedNote!]!
+  "Retrieve Curvy nullifiers emitted by `CommittedNullifiers`, ordered by chain position."
+  curvyCommittedNullifiers(fromBlock: UInt64, first: Int): [CurvyCommittedNullifier!]!
+  "Retrieve Curvy Aggregator commitment gas-fee root updates."
+  curvyCommitmentGasFeeRootUpdates(fromBlock: UInt64, first: Int): [CurvyCommitmentGasFeeRootUpdate!]!
+  "Retrieve Curvy Vault token registrations."
+  curvyTokenRegistrations(fromBlock: UInt64, first: Int): [CurvyTokenRegistration!]!
+  "Retrieve Curvy Vault commitment gas-cost updates."
+  curvyCommitmentGasCostUpdates(fromBlock: UInt64, first: Int): [CurvyCommitmentGasCostUpdate!]!
+  "Read the current Curvy Aggregator root and indices directly from chain."
+  curvyAggregatorState: CurvyAggregatorState!
+  "Read a Curvy note's raw `NoteStatus` value directly from chain."
+  curvyNoteStatus(noteId: UInt256!): Int!
+  "Check whether a notes root is valid in the Curvy Aggregator."
+  curvyValidNotesRoot(root: UInt256!): Boolean!
+  "Check whether a nullifier is already present in the Curvy Aggregator."
+  curvyNullifierSpent(nullifier: UInt256!): Boolean!
+  "Read the Curvy Vault deposit and withdrawal fees directly from chain."
+  curvyVaultFees: CurvyVaultFees!
+  "Read a Curvy Vault token address and per-token gas fees directly from chain."
+  curvyVaultToken(tokenId: UInt256!): CurvyVaultToken!
+  "Derive a Curvy entry portal address directly from PortalFactory."
+  curvyEntryPortalAddress(ownerHash: UInt256!, recovery: String!): String!
+  "Derive a Curvy exit portal address directly from PortalFactory."
+  curvyExitPortalAddress(exitAddress: String!, exitChainId: UInt256!, recovery: String!): String!
+  "Check whether an address is registered with Curvy PortalFactory."
+  curvyPortalRegistered(portalAddress: String!): Boolean!
   """
   Count accounts matching optional filters
 
@@ -938,6 +1049,18 @@ union SendTransactionSyncResult =
 Root subscription type providing real-time updates via Server-Sent Events (SSE)
 """
 type SubscriptionRoot {
+  "Stream indexed Curvy `PendingNotes` entries with an optional historical phase."
+  curvyPendingNote(fromBlock: UInt64): CurvyPendingNote!
+  "Stream indexed Curvy `CommittedNotes` entries with an optional historical phase."
+  curvyCommittedNote(fromBlock: UInt64): CurvyCommittedNote!
+  "Stream indexed Curvy `CommittedNullifiers` entries with an optional historical phase."
+  curvyCommittedNullifier(fromBlock: UInt64): CurvyCommittedNullifier!
+  "Stream Curvy Aggregator commitment gas-fee root updates."
+  curvyCommitmentGasFeeRootUpdated(fromBlock: UInt64): CurvyCommitmentGasFeeRootUpdate!
+  "Stream Curvy Vault token registrations."
+  curvyTokenRegistered(fromBlock: UInt64): CurvyTokenRegistration!
+  "Stream Curvy Vault commitment gas-cost updates."
+  curvyCommitmentGasCostsUpdated(fromBlock: UInt64): CurvyCommitmentGasCostUpdate!
   """
   Subscribe to real-time updates of account information
 
@@ -1170,3 +1293,9 @@ Used for values that exceed the 32-bit signed integer range of GraphQL Int.
 Maximum value: 18446744073709551615
 """
 scalar UInt64
+
+"""
+Unsigned 256-bit integer represented as a decimal string.
+Maximum value: 2^256 - 1.
+"""
+scalar UInt256
