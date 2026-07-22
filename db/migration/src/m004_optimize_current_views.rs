@@ -15,14 +15,6 @@ use sea_orm_migration::prelude::*;
 /// index scan on `idx_channel_state_position` / `idx_account_state_position`,
 /// turning full-table sorts into O(log n) lookups. It is portable across
 /// PostgreSQL and SQLite.
-///
-/// It additionally adds `published_block`-leading indexes on `channel_state` and
-/// `account_state`. Every pre-existing index on those tables leads with
-/// `channel_id` / `account_id`, so a block-range predicate (e.g. the reorg scan
-/// in `block.rs` filtering `published_block BETWEEN min AND max`) had no usable
-/// index and forced a full-table sequential scan. The new
-/// `(published_block, <parent_id>)` indexes turn that into a bounded index range
-/// scan and let the distinct-channel lookup be satisfied index-only.
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
@@ -104,33 +96,6 @@ impl MigrationTrait for Migration {
             ))
             .await?;
 
-        // Block-range index for the reorg scan (published_block BETWEEN ...).
-        // Leads with `published_block` and covers `channel_id` so the distinct
-        // affected-channel lookup can be satisfied index-only.
-        manager
-            .create_index(
-                Index::create()
-                    .if_not_exists()
-                    .name("idx_channel_state_block_channel")
-                    .table(ChannelState::Table)
-                    .col(ChannelState::PublishedBlock)
-                    .col(ChannelState::ChannelId)
-                    .to_owned(),
-            )
-            .await?;
-
-        manager
-            .create_index(
-                Index::create()
-                    .if_not_exists()
-                    .name("idx_account_state_block_account")
-                    .table(AccountState::Table)
-                    .col(AccountState::PublishedBlock)
-                    .col(AccountState::AccountId)
-                    .to_owned(),
-            )
-            .await?;
-
         Ok(())
     }
 
@@ -210,39 +175,6 @@ impl MigrationTrait for Migration {
             ))
             .await?;
 
-        // Drop the block-range indexes.
-        manager
-            .drop_index(
-                Index::drop()
-                    .name("idx_channel_state_block_channel")
-                    .table(ChannelState::Table)
-                    .to_owned(),
-            )
-            .await?;
-
-        manager
-            .drop_index(
-                Index::drop()
-                    .name("idx_account_state_block_account")
-                    .table(AccountState::Table)
-                    .to_owned(),
-            )
-            .await?;
-
         Ok(())
     }
-}
-
-#[derive(DeriveIden)]
-enum ChannelState {
-    Table,
-    ChannelId,
-    PublishedBlock,
-}
-
-#[derive(DeriveIden)]
-enum AccountState {
-    Table,
-    AccountId,
-    PublishedBlock,
 }
