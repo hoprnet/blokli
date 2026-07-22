@@ -69,6 +69,14 @@ nextest:
 nextest-package package:
     cargo nextest run -p {{ package }}
 
+# Run integration tests (requires Docker image with BLOKLI_TEST_REMOTE_IMAGE env var)
+integration-test:
+    cargo test -p blokli-integration-tests
+
+# Run the Curvy on-chain event indexing and GraphQL subscription test (requires Anvil)
+test-curvy-events:
+    cargo test -p blokli-api --test curvy_event_pipeline_test -- --nocapture
+
 # Run system tests (full smoke test suite)
 system-test: smoke-test-full
 
