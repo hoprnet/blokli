@@ -3,6 +3,7 @@ use blokli_api_types::{
     CurvyEventPosition, CurvyGasFees, CurvyPendingNote, CurvyTokenRegistration, Hex32, UInt64, UInt256,
 };
 use blokli_chain_rpc::Log;
+use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{BlokliDbAllOperations, OpenTransaction, errors::DbSqlError};
 use blokli_db_entity::{
     curvy_commitment_gas_cost, curvy_commitment_gas_fee_root, curvy_committed_note, curvy_committed_nullifier,
@@ -281,7 +282,7 @@ where
                 .await
                 .map_err(DbSqlError::from)?;
                 Ok(vec![IndexerEvent::CurvyTokenRegistered(CurvyTokenRegistration {
-                    token_address: event.token_address.to_checksum(None),
+                    token_address: event.token_address.to_hopr_address().to_hex(),
                     token_id: u256_scalar(event.token_id),
                     position: position(log),
                 })])

@@ -469,7 +469,8 @@ impl SubscriptionRoot {
         let indexer_state = ctx.data::<IndexerState>()?.clone();
         let (watermark, event_receiver, shutdown_receiver) =
             capture_watermark_synchronized(&indexer_state, &db).await?;
-        let mut query = curvy_pending_note::Entity::find().filter(watermark_condition(&watermark));
+        let mut query =
+            curvy_pending_note::Entity::find().filter(curvy_pending_note::Column::PublishedBlock.lte(watermark.block));
         if let Some(block) = curvy_start_block(from_block)? {
             query = query.filter(curvy_pending_note::Column::PublishedBlock.gte(block));
         }
@@ -506,7 +507,8 @@ impl SubscriptionRoot {
         let indexer_state = ctx.data::<IndexerState>()?.clone();
         let (watermark, event_receiver, shutdown_receiver) =
             capture_watermark_synchronized(&indexer_state, &db).await?;
-        let mut query = curvy_committed_note::Entity::find().filter(watermark_condition(&watermark));
+        let mut query = curvy_committed_note::Entity::find()
+            .filter(curvy_committed_note::Column::PublishedBlock.lte(watermark.block));
         if let Some(block) = curvy_start_block(from_block)? {
             query = query.filter(curvy_committed_note::Column::PublishedBlock.gte(block));
         }
@@ -543,7 +545,8 @@ impl SubscriptionRoot {
         let indexer_state = ctx.data::<IndexerState>()?.clone();
         let (watermark, event_receiver, shutdown_receiver) =
             capture_watermark_synchronized(&indexer_state, &db).await?;
-        let mut query = curvy_committed_nullifier::Entity::find().filter(watermark_condition(&watermark));
+        let mut query = curvy_committed_nullifier::Entity::find()
+            .filter(curvy_committed_nullifier::Column::PublishedBlock.lte(watermark.block));
         if let Some(block) = curvy_start_block(from_block)? {
             query = query.filter(curvy_committed_nullifier::Column::PublishedBlock.gte(block));
         }
@@ -580,7 +583,8 @@ impl SubscriptionRoot {
         let indexer_state = ctx.data::<IndexerState>()?.clone();
         let (watermark, event_receiver, shutdown_receiver) =
             capture_watermark_synchronized(&indexer_state, &db).await?;
-        let mut query = curvy_commitment_gas_fee_root::Entity::find().filter(watermark_condition(&watermark));
+        let mut query = curvy_commitment_gas_fee_root::Entity::find()
+            .filter(curvy_commitment_gas_fee_root::Column::PublishedBlock.lte(watermark.block));
         if let Some(block) = curvy_start_block(from_block)? {
             query = query.filter(curvy_commitment_gas_fee_root::Column::PublishedBlock.gte(block));
         }
@@ -616,7 +620,8 @@ impl SubscriptionRoot {
         let indexer_state = ctx.data::<IndexerState>()?.clone();
         let (watermark, event_receiver, shutdown_receiver) =
             capture_watermark_synchronized(&indexer_state, &db).await?;
-        let mut query = curvy_token_registration::Entity::find().filter(watermark_condition(&watermark));
+        let mut query = curvy_token_registration::Entity::find()
+            .filter(curvy_token_registration::Column::PublishedBlock.lte(watermark.block));
         if let Some(block) = curvy_start_block(from_block)? {
             query = query.filter(curvy_token_registration::Column::PublishedBlock.gte(block));
         }
@@ -652,7 +657,8 @@ impl SubscriptionRoot {
         let indexer_state = ctx.data::<IndexerState>()?.clone();
         let (watermark, event_receiver, shutdown_receiver) =
             capture_watermark_synchronized(&indexer_state, &db).await?;
-        let mut query = curvy_commitment_gas_cost::Entity::find().filter(watermark_condition(&watermark));
+        let mut query = curvy_commitment_gas_cost::Entity::find()
+            .filter(curvy_commitment_gas_cost::Column::PublishedBlock.lte(watermark.block));
         if let Some(block) = curvy_start_block(from_block)? {
             query = query.filter(curvy_commitment_gas_cost::Column::PublishedBlock.gte(block));
         }
