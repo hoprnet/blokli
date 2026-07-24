@@ -43,9 +43,7 @@ pub struct SafeContractEntry {
 /// Safes with this block number were loaded from CSV files during migration,
 /// not from real blockchain events. This allows identifying which safes
 /// need their module addresses refreshed on startup.
-const PRESEEDED_BLOCK_U32: u32 = 30_000_000;
-pub const PRESEEDED_BLOCK: i64 = i64::from(PRESEEDED_BLOCK_U32);
-const PRESEEDED_BLOCK_U64: u64 = u64::from(PRESEEDED_BLOCK_U32);
+pub const PRESEEDED_BLOCK_U64: u64 = 30_000_000;
 
 struct SafeCsvEntry {
     address: Address,
@@ -352,7 +350,7 @@ pub trait BlokliDbSafeContractOperations: BlokliDbGeneralModelOperations {
     /// Get all safes that have only pre-seeded state.
     ///
     /// Pre-seeded safes are those whose only state record has
-    /// `published_block = PRESEEDED_BLOCK` (30_000_000).
+    /// `published_block = PRESEEDED_BLOCK_U64` (30_000_000).
     /// These safes may have stale module addresses that need refreshing.
     ///
     /// # Returns
@@ -710,17 +708,19 @@ impl BlokliDbSafeContractOperations for BlokliDb {
             .all(tx.as_ref())
             .await?;
 
+        let preseeded_block_i64 = PRESEEDED_BLOCK_U64 as i64; // safe cast as the value is lower than i64::MAX and known at compile time
+
         let mut grouped_states = Vec::new();
         let mut current_safe_id = None;
-        let mut first_block = PRESEEDED_BLOCK;
+        let mut first_block = preseeded_block_i64;
         let mut last_state: Option<hopr_safe_contract_state::Model> = None;
 
         for state in states {
             match current_safe_id {
                 Some(safe_id) if safe_id != state.hopr_safe_contract_id => {
-                    if first_block == PRESEEDED_BLOCK {
+                    if first_block == preseeded_block_i64 {
                         if let Some(latest) = last_state.take() {
-                            if latest.published_block == PRESEEDED_BLOCK {
+                            if latest.published_block == preseeded_block_i64 {
                                 grouped_states.push((safe_id, latest));
                             }
                         }
@@ -741,9 +741,9 @@ impl BlokliDbSafeContractOperations for BlokliDb {
         }
 
         if let Some(safe_id) = current_safe_id {
-            if first_block == PRESEEDED_BLOCK {
+            if first_block == preseeded_block_i64 {
                 if let Some(latest) = last_state.take() {
-                    if latest.published_block == PRESEEDED_BLOCK {
+                    if latest.published_block == preseeded_block_i64 {
                         grouped_states.push((safe_id, latest));
                     }
                 }
