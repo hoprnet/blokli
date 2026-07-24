@@ -16,9 +16,10 @@ concurrency:
 jobs:
   coverage:
     name: Coverage
-    uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@798d791de5c5485c3043049781dfd0938539a36a # workflow-tests-v6
+    uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@3ee95c480962bb3c1fc0061887da9ba735f537c7 # workflow-tests-v6.1.1
     with:
       source_branch: ${{ github.ref_name }}
+      cachix_cache_name: blokli
       enable_unit_tests: false
       enable_integration_tests: false
       enable_unit_coverage: true
