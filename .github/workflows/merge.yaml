@@ -76,8 +76,6 @@ jobs:
       build_file: bloklid/Cargo.toml
       docker_image_name: bloklid
       docker_image_format: skopeo
-      deployment_namespace: blokli
-      deployment_label_selector: app.kubernetes.io/name=blokli
       concurrency_group_suffix: main
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
