@@ -112,11 +112,11 @@ async fn capture_watermark_synchronized(
     Ok((watermark, event_receiver, shutdown_receiver))
 }
 
-/// Queries all open channels at a specific watermark
+/// Queries all non-closed channels at a specific watermark
 ///
 /// This implements the Phase 1 historical snapshot by querying all channels
-/// that were open at the watermark position. Uses temporal queries to get
-/// the state as it existed at that exact point in time.
+/// that were open or pending-to-close at the watermark position. Uses temporal
+/// queries to get the state as it existed at that exact point in time.
 ///
 /// Channels are returned in batches for efficient processing.
 ///
@@ -166,18 +166,18 @@ async fn query_channels_at_watermark(
         state_map.entry(state.channel_id).or_insert(state);
     }
 
-    // Filter to only OPEN channels (status = 1)
-    let open_channels: Vec<_> = channels
+    // Filter out CLOSED channels (status != 0)
+    let non_closed_channels: Vec<_> = channels
         .into_iter()
-        .filter(|c| state_map.get(&c.id).map(|s| s.status == 1).unwrap_or(false))
+        .filter(|c| state_map.get(&c.id).map(|s| s.status != 0).unwrap_or(false))
         .collect();
 
-    if open_channels.is_empty() {
+    if non_closed_channels.is_empty() {
         return Ok(Vec::new());
     }
 
     // Collect all unique account IDs we need to fetch
-    let mut account_ids: Vec<i64> = open_channels
+    let mut account_ids: Vec<i64> = non_closed_channels
         .iter()
         .flat_map(|c| vec![c.source, c.destination])
         .collect();
@@ -194,7 +194,7 @@ async fn query_channels_at_watermark(
 
     // Build ChannelUpdate objects
     let mut results = Vec::new();
-    for channel in open_channels {
+    for channel in non_closed_channels {
         let state = match state_map.get(&channel.id) {
             Some(s) => s,
             None => {
@@ -591,9 +591,9 @@ impl SubscriptionRoot {
     /// Subscribe to the opened payment channels graph with real-time updates
     ///
     /// **Streaming Behavior:**
-    /// - Emits one OpenedChannelsGraphEntry per open channel
+    /// - Emits one OpenedChannelsGraphEntry per non-closed channel
     /// - Each entry contains a single channel with its source and destination accounts
-    /// - On subscription start, emits all existing open channels as separate entries
+    /// - On subscription start, emits all existing open and pending-to-close channels as separate entries
     /// - Subsequently, emits updates when any channel changes, including non-open states
     ///
     /// **Phase 1 Ordering:**
@@ -641,7 +641,7 @@ impl SubscriptionRoot {
         const BATCH_SIZE: usize = 100;
 
         Ok(stream! {
-            // Phase 1: Stream historical snapshot of all open channels at watermark
+            // Phase 1: Stream historical snapshot of all non-closed channels at watermark
             match query_channels_at_watermark(&db, &watermark, BATCH_SIZE).await {
                 Ok(mut historical_channels) => {
                     historical_channels.shuffle(&mut rand::rng());
@@ -1834,6 +1834,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_query_channels_at_watermark_includes_pending_to_close_channels() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+
+        // Create accounts
+        let source_id = create_test_account(db.conn(blokli_db::TargetDb::Index), vec![1; 20], "peer1")
+            .await
+            .unwrap();
+        let dest_id = create_test_account(db.conn(blokli_db::TargetDb::Index), vec![2; 20], "peer2")
+            .await
+            .unwrap();
+
+        // Create channel
+        let channel_id = create_test_channel(db.conn(blokli_db::TargetDb::Index), source_id, dest_id, "0xabc123")
+            .await
+            .unwrap();
+
+        // Insert PENDING_TO_CLOSE channel state (status = 2) at block 50
+        insert_channel_state(
+            db.conn(blokli_db::TargetDb::Index),
+            channel_id,
+            50,
+            0,
+            0,
+            vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            2, // PENDING_TO_CLOSE status
+        )
+        .await
+        .unwrap();
+
+        let watermark = Watermark {
+            block: 100,
+            tx_index: 0,
+            log_index: 0,
+        };
+
+        let result = query_channels_at_watermark(db.conn(blokli_db::TargetDb::Index), &watermark, 100)
+            .await
+            .unwrap();
+
+        // Pending-to-close channel should be returned in the initial snapshot
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].channel.concrete_channel_id, "0xabc123");
+        assert_eq!(
+            result[0].channel.status,
+            blokli_api_types::ChannelStatus::PendingToClose
+        );
+    }
+
+    #[tokio::test]
     async fn test_query_channels_at_watermark_excludes_closed_channels() {
         let db = BlokliDb::new_in_memory().await.unwrap();
 
@@ -1850,7 +1899,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Insert CLOSED channel state (status = 2)
+        // Insert CLOSED channel state (status = 0)
         insert_channel_state(
             db.conn(blokli_db::TargetDb::Index),
             channel_id,
@@ -1858,7 +1907,7 @@ mod tests {
             0,
             0,
             vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-            2, // CLOSED status
+            0, // CLOSED status
         )
         .await
         .unwrap();

@@ -1,6 +1,7 @@
 //! This crate contains various on-chain related modules and types.
 use constants::{ERC_1820_DEPLOYER, ERC_1820_REGISTRY_DEPLOY_CODE, ETH_VALUE_FOR_ERC1820_DEPLOYER};
 use hopr_bindings::{
+    erc677_mock::ERC677Mock::{self, ERC677MockInstance},
     exports::alloy::{
         contract::Result as ContractResult,
         network::TransactionBuilder,
@@ -23,6 +24,7 @@ use hopr_types::{
     primitive::primitives::Address,
 };
 use serde::{Deserialize, Serialize};
+use serde_with::{DisplayFromStr, serde_as};
 
 pub mod actions;
 pub mod chain_events;
@@ -92,27 +94,38 @@ pub struct ChainConfig {
 }
 
 /// Holds addresses of all smart contracts.
+#[serde_as]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ContractAddresses {
     /// wxHOPR token contract
+    #[serde_as(as = "DisplayFromStr")]
     pub token: Address,
     /// Channels contract
+    #[serde_as(as = "DisplayFromStr")]
     pub channels: Address,
     /// Announcements contract
+    #[serde_as(as = "DisplayFromStr")]
     pub announcements: Address,
     /// Node management module contract
+    #[serde_as(as = "DisplayFromStr")]
     pub module_implementation: Address,
     /// Node safe migration contract
+    #[serde_as(as = "DisplayFromStr")]
     pub node_safe_migration: Address,
     /// Safe registry contract
+    #[serde_as(as = "DisplayFromStr")]
     pub node_safe_registry: Address,
     /// Price oracle contract
+    #[serde_as(as = "DisplayFromStr")]
     pub ticket_price_oracle: Address,
     /// Minimum ticket winning probability contract
+    #[serde_as(as = "DisplayFromStr")]
     pub winning_probability_oracle: Address,
     /// Stake factory contract
+    #[serde_as(as = "DisplayFromStr")]
     pub node_stake_factory: Address,
     /// xHOPR token contract
+    #[serde_as(as = "DisplayFromStr")]
     #[serde(default)]
     pub xhopr_token: Address,
 }
@@ -121,6 +134,8 @@ pub struct ContractAddresses {
 #[derive(Debug)]
 pub struct ContractInstances<P> {
     pub token: HoprTokenInstance<P>,
+    /// xHOPR token — a distinct ERC677 token, not the wxHOPR (`token`) contract.
+    pub xhopr_token: ERC677MockInstance<P>,
     pub channels: HoprChannelsInstance<P>,
     pub announcements: HoprAnnouncementsInstance<P>,
     pub module_implementation: HoprNodeManagementModuleInstance<P>,
@@ -131,6 +146,11 @@ pub struct ContractInstances<P> {
     pub node_stake_factory: HoprNodeStakeFactoryInstance<P>,
 }
 
+/// Amount of xHOPR (18 decimals) minted to the deployer in the testing deployment.
+///
+/// Deliberately distinct from any wxHOPR amount so tests can assert xHOPR ≠ wxHOPR balances.
+const XHOPR_MINT_AMOUNT: u128 = 777_000_000_000_000_000_000;
+
 impl<P> ContractInstances<P>
 where
     P: Provider + Clone,
@@ -139,6 +159,10 @@ where
         Self {
             token: HoprTokenInstance::new(
                 AlloyAddress::from_hopr_address(contract_addresses.token),
+                provider.clone(),
+            ),
+            xhopr_token: ERC677MockInstance::new(
+                AlloyAddress::from_hopr_address(contract_addresses.xhopr_token),
                 provider.clone(),
             ),
             channels: HoprChannelsInstance::new(
@@ -222,6 +246,15 @@ where
         )
         .await?;
         let token = HoprToken::deploy(provider.clone()).await?;
+        // Deploy a distinct xHOPR token (ERC677) so its balance is independent of wxHOPR, and
+        // seed the deployer with a recognisably different amount for balance assertions in tests.
+        let xhopr_token = ERC677Mock::deploy(provider.clone()).await?;
+        xhopr_token
+            .batchMintInternal(vec![self_address], primitives::U256::from(XHOPR_MINT_AMOUNT))
+            .send()
+            .await?
+            .watch()
+            .await?;
         let channels = HoprChannels::deploy(
             provider.clone(),
             AlloyAddress::from(token.address().as_ref()),
@@ -237,6 +270,7 @@ where
 
         Ok(Self {
             token,
+            xhopr_token,
             channels,
             announcements,
             module_implementation,
@@ -278,7 +312,7 @@ where
             ticket_price_oracle: instances.ticket_price_oracle.address().to_hopr_address(),
             winning_probability_oracle: instances.winning_probability_oracle.address().to_hopr_address(),
             node_stake_factory: instances.node_stake_factory.address().to_hopr_address(),
-            xhopr_token: Address::default(),
+            xhopr_token: instances.xhopr_token.address().to_hopr_address(),
         }
     }
 }

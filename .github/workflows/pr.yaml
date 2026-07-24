@@ -84,9 +84,10 @@ jobs:
   # ── Shared checks (lint, pre-commit, audit) ─────────────────────────────────
   checks:
     name: Check
-    uses: hoprnet/hopr-workflows/.github/workflows/checks.yaml@6895dbbc515e39e0e283a68a80b8628ca6ead37a
+    uses: hoprnet/hopr-workflows/.github/workflows/checks.yaml@3ee95c480962bb3c1fc0061887da9ba735f537c7 # workflow-checks-v2.1.1
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
+      cachix_cache_name: blokli
       lint_command: "nix develop --command just quick"
       audit_command: "nix run -L .#audit"
       deps: true
@@ -97,11 +98,12 @@ jobs:
   # ── Shared tests (unit) ─────────────────────────────────────────────────────
   tests:
     name: Test
-    uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@798d791de5c5485c3043049781dfd0938539a36a # workflow-tests-v6
+    uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@3ee95c480962bb3c1fc0061887da9ba735f537c7 # workflow-tests-v6.1.1
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
+      cachix_cache_name: blokli
       enable_unit_tests: true
-      unit_test_command: "nix run -L .#test"
+      unit_test_command: "nix run -L .#nextest"
       enable_unit_coverage: true
       unit_coverage_command: "nix run .#coverage-unit"
       runner_unit: depot-ubuntu-24.04-4
@@ -121,7 +123,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Setup Nix
-        uses: hoprnet/hopr-workflows/actions/setup-nix@6895dbbc515e39e0e283a68a80b8628ca6ead37a
+        uses: hoprnet/hopr-workflows/actions/setup-nix@ade4bbd75f7204255c61d19c23f67d3da221e7d2 # setup-nix-v2.0.2
         with:
           cachix_cache_name: blokli
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
@@ -148,7 +150,7 @@ jobs:
             runner: depot-macos-15
             build_command: nix build -L .#binary-bloklid-aarch64-darwin
             required_label: "binary:aarch64-darwin"
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@b4ee9597f2c47f62fbc2c989a4af36fc4abf2f6f
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@45221eb1aadfc5c46751306c5c7d6d291c8a24b3 # build-binaries-v3.1.2
     permissions:
       contents: read
       id-token: write
@@ -168,7 +170,7 @@ jobs:
   # ── Build: Docker ───────────────────────────────────────────────────────────
   build-docker:
     name: Docker
-    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@fa71078959cf9f892185e8df16551720693a2cd1
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@25898d13dab1b3fbf4c33c394e7c581578a2b0d7 # build-docker-v3.2.0
     needs: build-binaries
     permissions:
       contents: read
@@ -190,7 +192,5 @@ jobs:
       build_file: bloklid/Cargo.toml
       docker_image_name: bloklid
       docker_image_format: skopeo
-      deployment_namespace: blokli
-      deployment_label_selector: app.kubernetes.io/name=blokli
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
