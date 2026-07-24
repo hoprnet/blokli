@@ -94,7 +94,7 @@ CREATE TABLE "curvy_commitment_gas_fee_root" (
 CREATE TABLE "curvy_committed_note" (
     "id" integer PRIMARY KEY AUTOINCREMENT,
     "batch_index" blob (32) NOT NULL,
-    "value" blob (32) NOT NULL,
+    "note_id" blob (32) NOT NULL,
     "event_item_index" integer NOT NULL,
     "chain_tx_hash" blob (32) NOT NULL,
     "published_block" integer NOT NULL,
@@ -106,7 +106,7 @@ CREATE TABLE "curvy_committed_note" (
 CREATE TABLE "curvy_committed_nullifier" (
     "id" integer PRIMARY KEY AUTOINCREMENT,
     "batch_index" blob (32) NOT NULL,
-    "value" blob (32) NOT NULL,
+    "nullifier" blob (32) NOT NULL,
     "event_item_index" integer NOT NULL,
     "chain_tx_hash" blob (32) NOT NULL,
     "published_block" integer NOT NULL,

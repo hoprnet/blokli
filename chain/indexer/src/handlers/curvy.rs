@@ -144,7 +144,7 @@ where
                     })?;
                     models.push(curvy_committed_note::ActiveModel {
                         batch_index: Set(u256_bytes(event.batchIndex)),
-                        value: Set(u256_bytes(note_id)),
+                        note_id: Set(u256_bytes(note_id)),
                         event_item_index: Set(event_item_index),
                         chain_tx_hash: Set(chain_tx_hash.clone()),
                         published_block: Set(block),
@@ -185,7 +185,7 @@ where
                     })?;
                     models.push(curvy_committed_nullifier::ActiveModel {
                         batch_index: Set(u256_bytes(event.batchIndex)),
-                        value: Set(u256_bytes(nullifier)),
+                        nullifier: Set(u256_bytes(nullifier)),
                         event_item_index: Set(event_item_index),
                         chain_tx_hash: Set(chain_tx_hash.clone()),
                         published_block: Set(block),

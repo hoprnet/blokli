@@ -224,7 +224,7 @@ erDiagram
     curvy_committed_note {
         bigint id PK "Primary key"
         binary(32) batch_index "Notes batch index (NOT NULL)"
-        binary(32) value "Committed note identifier (NOT NULL)"
+        binary(32) note_id "Committed note identifier (NOT NULL)"
         int event_item_index "Position in the event array (NOT NULL)"
         binary(32) chain_tx_hash "Containing chain transaction hash (NOT NULL)"
         bigint published_block "Published block (NOT NULL)"
@@ -236,7 +236,7 @@ erDiagram
     curvy_committed_nullifier {
         bigint id PK "Primary key"
         binary(32) batch_index "Nullifiers batch index (NOT NULL)"
-        binary(32) value "Committed nullifier (NOT NULL)"
+        binary(32) nullifier "Committed nullifier (NOT NULL)"
         int event_item_index "Position in the event array (NOT NULL)"
         binary(32) chain_tx_hash "Containing chain transaction hash (NOT NULL)"
         bigint published_block "Published block (NOT NULL)"
