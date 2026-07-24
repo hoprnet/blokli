@@ -7,7 +7,8 @@ use blokli_api_types::{
     Account, AccountsList, AccountsResult, ChainInfo, ChainInfoResult, Channel, ChannelStats, ChannelStatsResult,
     ChannelsList, ChannelsResult, ContractAddressMap, CountResult, HoprBalance, InvalidAddressError,
     MissingFilterError, ModuleAddress, NativeBalance, QueryFailedError, RedeemedStats, RedeemedStatsFilter, Safe,
-    SafeHoprAllowance, SafeSelectorInput, SafesBalance, SafesBalanceResult, TokenValueString, TransactionCount, UInt64,
+    SafeHoprAllowance, SafeSelectorInput, SafesBalance, SafesBalanceResult, Token, TokenValueString, TransactionCount,
+    UInt64,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, HoprRpcOperations, rpc::RpcOperations};
@@ -722,13 +723,21 @@ impl QueryRoot {
 
     /// Retrieve HOPR token balance for a specific address
     ///
-    /// This query makes a direct RPC call to the blockchain to get the current HOPR token balance.
+    /// This query makes a direct RPC call to the blockchain to get a current token balance.
     /// No database storage is used - balance is fetched directly from the chain.
+    ///
+    /// Only the HOPR token variants `HOPR` and `XHOPR` are supported. `NATIVE` is rejected —
+    /// use the `nativeBalance` query for the native (xDAI) balance.
     #[graphql(name = "hoprBalance", complexity = 50)]
     async fn hopr_balance(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "On-chain address to query (hexadecimal format)")] address: String,
+        #[graphql(
+            desc = "HOPR token to query: HOPR (default) or XHOPR. NATIVE is not accepted here — use nativeBalance \
+                    instead."
+        )]
+        token: Option<Token>,
     ) -> Result<HoprBalanceResult> {
         // Validate address format
         if let Err(e) = validate_eth_address(&address) {
@@ -745,16 +754,32 @@ impl QueryRoot {
         let rpc = ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>()?;
 
         // Make RPC call to get balance from blockchain
-        match rpc.get_hopr_balance(parsed_address).await {
-            Ok(balance) => Ok(HoprBalanceResult::Balance(HoprBalance {
+        let token = token.unwrap_or(Token::WxHOPR);
+        let result = match token {
+            Token::WxHOPR => rpc
+                .get_hopr_balance(parsed_address)
+                .await
+                .map(|b| b.to_string())
+                .map_err(|e| ("query wxHOPR balance", e)),
+            Token::XHOPR => rpc
+                .get_xhopr_balance(parsed_address)
+                .await
+                .map(|b| b.to_string())
+                .map_err(|e| ("query xHOPR balance", e)),
+            Token::Native => {
+                return Ok(HoprBalanceResult::QueryFailed(errors::not_implemented(
+                    "Native balance is not available via hoprBalance; use the nativeBalance query instead",
+                )));
+            }
+        };
+
+        Ok(match result {
+            Ok(balance) => HoprBalanceResult::Balance(HoprBalance {
                 address,
-                balance: TokenValueString(balance.to_string()),
-            })),
-            Err(e) => Ok(HoprBalanceResult::QueryFailed(errors::rpc_query_failed(
-                "query HOPR balance",
-                e,
-            ))),
-        }
+                balance: TokenValueString(balance),
+            }),
+            Err((op, e)) => HoprBalanceResult::QueryFailed(errors::rpc_query_failed(op, e)),
+        })
     }
 
     /// Retrieve native token balance for a specific address
@@ -1843,6 +1868,20 @@ mod tests {
             check_safes_balance_cap(SAFES_BALANCE_MAX_SAFES + 1).expect_err("count over the cap must be rejected");
         assert_eq!(err.code, errors::codes::LIMIT_EXCEEDED);
         assert!(err.message.contains("safes balance limit exceeded"));
+    }
+
+    #[test]
+    fn test_hopr_balance_token_argument_is_optional_for_legacy_clients() {
+        let schema = Schema::build(
+            QueryRoot,
+            async_graphql::EmptyMutation,
+            async_graphql::EmptySubscription,
+        )
+        .finish();
+        let sdl = schema.sdl();
+
+        assert!(sdl.contains("token: Token"));
+        assert!(!sdl.contains("token: Token!"));
     }
 
     #[tokio::test]

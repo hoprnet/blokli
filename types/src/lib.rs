@@ -190,9 +190,12 @@ impl From<ChannelStatus> for i16 {
 /// Token type for balance queries
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum Token {
-    /// HOPR token
+    /// wxHOPR token
     #[graphql(name = "HOPR")]
-    Hopr,
+    WxHOPR,
+    /// xHOPR token
+    #[graphql(name = "XHOPR")]
+    XHOPR,
     /// Native token
     #[graphql(name = "NATIVE")]
     Native,
@@ -205,7 +208,7 @@ pub struct Balance {
     pub address: String,
     /// Token balance associated with the on-chain address
     pub value: f64,
-    /// Type of token (HOPR or Native)
+    /// Type of token ((w)xHOPR or Native)
     pub token: Token,
 }
 

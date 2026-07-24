@@ -16,6 +16,7 @@ use tokio::sync::Mutex;
 struct MockRpcOperations {
     block_number: u64,
     hopr_balance: HoprBalance,
+    xhopr_balance: XHoprBalance,
     xdai_balance: XDaiBalance,
     channel_closure_notice_period: Duration,
 }
@@ -25,6 +26,7 @@ impl MockRpcOperations {
         Self {
             block_number: 2, // Set close to the blocks we'll provide (0, 1, 2)
             hopr_balance: HoprBalance::from(1000u64),
+            xhopr_balance: XHoprBalance::from(1000u64),
             xdai_balance: XDaiBalance::from(1000u64),
             channel_closure_notice_period: Duration::from_secs(300), // 5 minutes
         }
@@ -94,6 +96,10 @@ impl HoprIndexerRpcOperations for MockRpcOperations {
 
     async fn get_hopr_balance(&self, _address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance> {
         Ok(self.hopr_balance)
+    }
+
+    async fn get_xhopr_balance(&self, _address: Address) -> blokli_chain_rpc::errors::Result<XHoprBalance> {
+        Ok(self.xhopr_balance.clone())
     }
 
     async fn get_hopr_allowance(
@@ -368,6 +374,10 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
             self.inner.get_hopr_balance(address).await
         }
 
+        async fn get_xhopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XHoprBalance> {
+            self.inner.get_xhopr_balance(address).await
+        }
+
         async fn get_hopr_allowance(
             &self,
             owner: Address,
@@ -499,6 +509,7 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
     let mock_rpc = MockRpcOperations {
         block_number: 2,
         hopr_balance: HoprBalance::from(1000u64),
+        xhopr_balance: XHoprBalance::from(1000u64),
         xdai_balance: XDaiBalance::from(1000u64),
         channel_closure_notice_period: expected_grace_period,
     };

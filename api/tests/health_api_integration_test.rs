@@ -108,11 +108,17 @@ async fn test_healthz_returns_version() -> anyhow::Result<()> {
 async fn test_readyz_all_healthy() -> anyhow::Result<()> {
     let ctx = common::setup_http_test_environment().await?;
 
-    // Get current block number from Anvil (usually starts at 0 or low number)
-    // We'll update chain_info with a recent block to ensure lag is within threshold
-
-    // Update chain_info with block 0 (Anvil starts near there)
-    update_chain_info(&ctx.db, 0).await?;
+    // Seed chain_info to the current RPC block so the indexer looks caught up (lag ≈ 0),
+    // independent of how many blocks contract deployment produced.
+    let (_, probe) = make_request(ctx.app.clone(), "/readyz").await;
+    assert_eq!(
+        probe["checks"]["rpc"]["status"], "healthy",
+        "readyz probe RPC check should be healthy"
+    );
+    let rpc_block = probe["checks"]["rpc"]["block_number"]
+        .as_i64()
+        .expect("readyz probe should report the current RPC block number");
+    update_chain_info(&ctx.db, rpc_block).await?;
 
     let (status, json) = make_request(ctx.app, "/readyz").await;
 
@@ -130,8 +136,17 @@ async fn test_readyz_all_healthy() -> anyhow::Result<()> {
 async fn test_readyz_shows_indexer_lag() -> anyhow::Result<()> {
     let ctx = common::setup_http_test_environment().await?;
 
-    // Update chain_info with block 0
-    update_chain_info(&ctx.db, 0).await?;
+    // Seed chain_info to the current RPC block so the indexer looks caught up (lag ≈ 0),
+    // independent of how many blocks contract deployment produced.
+    let (_, probe) = make_request(ctx.app.clone(), "/readyz").await;
+    assert_eq!(
+        probe["checks"]["rpc"]["status"], "healthy",
+        "readyz probe RPC check should be healthy"
+    );
+    let rpc_block = probe["checks"]["rpc"]["block_number"]
+        .as_i64()
+        .expect("readyz probe should report the current RPC block number");
+    update_chain_info(&ctx.db, rpc_block).await?;
 
     let (status, json) = make_request(ctx.app, "/readyz").await;
 
