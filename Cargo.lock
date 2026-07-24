@@ -1680,7 +1680,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-api"
-version = "0.23.3"
+version = "0.23.4"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1856,6 +1856,7 @@ dependencies = [
  "libp2p-identity",
  "multiaddr",
  "serde",
+ "serde_with",
  "strum 0.28.0",
  "thiserror",
  "tracing",
@@ -3651,9 +3652,9 @@ dependencies = [
 
 [[package]]
 name = "hopr-bindings"
-version = "4.9.1"
+version = "4.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1afa8766e3b7c9ac7f770e5330bb08f91af6db385a1b388239814fc03f7c171a"
+checksum = "f2b7679591cc56238e934139e1e46f57e5df1d688e059a034fa0e38a5ce09b7c"
 dependencies = [
  "alloy",
  "anyhow",

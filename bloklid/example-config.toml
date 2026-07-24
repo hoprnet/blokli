@@ -5,7 +5,7 @@
 data_directory = "data"
 
 # Network identifier - specifies which HOPR network to connect to
-# Supported networks: rotsee (default, testnet), anvil-localhost (local development)
+# Supported networks: rotsee (default, testnet), jura (staging), anvil-localhost (local development)
 # Case-insensitive: anvil_localhost, anvil-localhost, and localhost are also accepted
 network = "rotsee"
 
@@ -37,6 +37,7 @@ max_block_range = 10000
 # ticket_price_oracle = "0x0000000000000000000000000000000000000000"
 # winning_probability_oracle = "0x0000000000000000000000000000000000000000"
 # node_stake_factory = "0x0000000000000000000000000000000000000000"
+# xhopr_token = "0x0000000000000000000000000000000000000000"
 
 # Database configuration - supports PostgreSQL or SQLite
 # IMPORTANT: This section is OPTIONAL if using environment variables.
@@ -91,7 +92,7 @@ otlp_endpoint = "http://localhost:4318"
 # otlp_signals = "metrics,traces,logs"
 otlp_signals = "metrics"
 
-# Interval between OTLP metric exports (default: 60s)
+# Interval between OTLP metric exports (default: 15s; this example uses 60s)
 # Must be greater than 0. Supports humantime syntax like "15s", "1m", or "500ms".
 # Runtime use is limited to OTLP metrics export. Current config validation still
 # requires a value greater than 0 whenever otlp_endpoint is set.

@@ -32,7 +32,7 @@ jobs:
           - architecture: aarch64-darwin
             runner: depot-macos-15
             build_command: nix build -L .#binary-bloklid-aarch64-darwin
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@b4ee9597f2c47f62fbc2c989a4af36fc4abf2f6f
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@45221eb1aadfc5c46751306c5c7d6d291c8a24b3 # build-binaries-v3.1.2
     permissions:
       contents: read
       id-token: write
@@ -50,7 +50,7 @@ jobs:
       gpg_private_key: ${{ secrets.GPG_HOPRNET_PRIVATE_KEY }}
   build-docker:
     name: Docker
-    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@fa71078959cf9f892185e8df16551720693a2cd1
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@25898d13dab1b3fbf4c33c394e7c581578a2b0d7 # build-docker-v3.2.0
     needs: build-binaries
     permissions:
       contents: read
@@ -76,8 +76,6 @@ jobs:
       build_file: bloklid/Cargo.toml
       docker_image_name: bloklid
       docker_image_format: skopeo
-      deployment_namespace: blokli
-      deployment_label_selector: app.kubernetes.io/name=blokli
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       docker_hub_username: ${{ secrets.DOCKER_HUB_USERNAME }}
@@ -93,7 +91,7 @@ jobs:
       id-token: write
     steps:
       - name: Release version
-        uses: hoprnet/hopr-workflows/actions/release-version@fd29bf3c58b72faacc300e068a05b59eb3b180bc # 0.9.4
+        uses: hoprnet/hopr-workflows/actions/release-version@ade4bbd75f7204255c61d19c23f67d3da221e7d2 # release-version-v5.1.1
         with:
           source_branch: ${{ github.ref_name }}
           file: bloklid/Cargo.toml

@@ -28,9 +28,6 @@ just test-debug
 
 # Run specific test by name
 cargo test test_get_channel_state_at -F runtime-tokio -- --nocapture
-
-# Run integration tests (requires Docker — see below)
-just test-indexer
 ```
 
 ### Manual API Testing (no Docker required)
@@ -58,9 +55,6 @@ just run-sqlite
 ```
 
 The GraphQL playground is available at `http://localhost:8080/graphiql` once bloklid is running.
-
-> **Note:** This approach does NOT run the automated integration tests. Those always require Docker (`just test-indexer`) because the test
-> fixture manages its own Anvil + PostgreSQL stack and deploys contracts internally.
 
 **Clean up between runs:**
 
