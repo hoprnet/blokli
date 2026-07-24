@@ -15,6 +15,7 @@ pub mod events;
 pub mod info;
 pub mod logs;
 pub mod node_safe_registrations;
+mod numeric;
 pub mod safe_contracts;
 pub mod safe_history;
 pub mod safe_redeemed_stats;

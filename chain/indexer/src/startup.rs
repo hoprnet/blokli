@@ -1,5 +1,5 @@
 use blokli_chain_rpc::HoprIndexerRpcOperations;
-use blokli_db::{BlokliDbAllOperations, safe_contracts::PRESEEDED_BLOCK};
+use blokli_db::{BlokliDbAllOperations, safe_contracts::PRESEEDED_BLOCK_U64};
 use hopr_types::primitive::prelude::{Address, ToHex};
 use tracing::{info, warn};
 
@@ -27,7 +27,7 @@ where
     info!(count = preseeded_safes.len(), "Found pre-seeded safes to refresh");
 
     let mut stats = RefreshStats::default();
-    let refresh_block = PRESEEDED_BLOCK as u64 + 1;
+    let refresh_block = PRESEEDED_BLOCK_U64 + 1;
 
     for safe in preseeded_safes {
         let safe_address = address_from_bytes(&safe.address, "safe address")?;
@@ -162,7 +162,7 @@ mod tests {
         let module_new = random_address();
         let chain_key = random_address();
 
-        db.upsert_safe_contract(None, safe_address, module_old, chain_key, PRESEEDED_BLOCK as u64, 0, 0)
+        db.upsert_safe_contract(None, safe_address, module_old, chain_key, PRESEEDED_BLOCK_U64, 0, 0)
             .await?;
 
         let mut modules = HashMap::new();

@@ -615,6 +615,10 @@ mod tests {
             .expect("valid channel entry")
     }
 
+    fn u256_to_u64(value: primitive_types::U256) -> anyhow::Result<u64> {
+        Ok(super::super::u256_to_u64(value, "ticket_index")?)
+    }
+
     #[tokio::test]
     async fn test_on_channel_event_balance_increased() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
@@ -1266,7 +1270,7 @@ mod tests {
     //         let next_ticket_index = ticket_index + 1;
     //
     //         let mut ticket =
-    //             mock_acknowledged_ticket(&COUNTERPARTY_CHAIN_KEY, &SELF_CHAIN_KEY, ticket_index.as_u64(), 1.0)?;
+    //             mock_acknowledged_ticket(&COUNTERPARTY_CHAIN_KEY, &SELF_CHAIN_KEY, ticket_index_u64, 1.0)?;
     //         ticket.status = AcknowledgedTicketStatus::BeingRedeemed;
     //
     //         let ticket_value = ticket.verified_ticket().amount;
@@ -1381,7 +1385,7 @@ mod tests {
     //         let next_ticket_index = ticket_index + 1;
     //
     //         let mut ticket =
-    //             mock_acknowledged_ticket(&COUNTERPARTY_CHAIN_KEY, &SELF_CHAIN_KEY, ticket_index.as_u64(), 1.0)?;
+    //             mock_acknowledged_ticket(&COUNTERPARTY_CHAIN_KEY, &SELF_CHAIN_KEY, ticket_index_u64, 1.0)?;
     //         ticket.status = AcknowledgedTicketStatus::BeingRedeemed;
     //
     //         let ticket_value = ticket.verified_ticket().amount;
@@ -1390,7 +1394,7 @@ mod tests {
     //         db.upsert_ticket(None, ticket.clone()).await?;
     //
     //         let old_ticket =
-    //             mock_acknowledged_ticket(&COUNTERPARTY_CHAIN_KEY, &SELF_CHAIN_KEY, ticket_index.as_u64() - 1, 1.0)?;
+    //             mock_acknowledged_ticket(&COUNTERPARTY_CHAIN_KEY, &SELF_CHAIN_KEY, ticket_index_u64 - 1, 1.0)?;
     //         db.upsert_ticket(None, old_ticket.clone()).await?;
     //
     //         let ticket_redeemed_log = SerializableLog {
@@ -1493,13 +1497,14 @@ mod tests {
 
         let ticket_index = primitive_types::U256::from((1u128 << 48) - 2);
         let next_ticket_index = ticket_index + 1;
+        let next_ticket_index_u64 = u256_to_u64(next_ticket_index)?;
 
         db.upsert_channel(None, channel, 1, 0, 0).await?;
 
         let channel_id = generate_channel_id(&SELF_CHAIN_ADDRESS, &COUNTERPARTY_CHAIN_ADDRESS);
         let channel_state = encode_channel_state(
             channel.balance,
-            next_ticket_index.as_u64(),
+            next_ticket_index_u64,
             0, // closure_time
             channel.channel_epoch,
             ChannelStatus::Open,
@@ -1526,17 +1531,15 @@ mod tests {
         // TODO: Add event verification - check published IndexerEvent instead of return value
 
         assert_eq!(
-            channel.ticket_index,
-            next_ticket_index.as_u64(),
+            channel.ticket_index, next_ticket_index_u64,
             "channel entry must contain next ticket index"
         );
 
         // TODO: Re-enable once get_outgoing_ticket_index is implemented
-        let outgoing_ticket_index = next_ticket_index.as_u64(); // db.get_outgoing_ticket_index(channel.get_id()).await?.load(Ordering::Relaxed);
+        let outgoing_ticket_index = next_ticket_index_u64; // db.get_outgoing_ticket_index(channel.get_id()).await?.load(Ordering::Relaxed);
 
         assert_eq!(
-            outgoing_ticket_index,
-            next_ticket_index.as_u64(),
+            outgoing_ticket_index, next_ticket_index_u64,
             "outgoing ticket index must be equal to next ticket index"
         );
 
@@ -1571,11 +1574,12 @@ mod tests {
         db.upsert_channel(None, channel, 1, 0, 0).await?;
 
         let next_ticket_index = primitive_types::U256::from((1u128 << 48) - 1);
+        let next_ticket_index_u64 = u256_to_u64(next_ticket_index)?;
 
         let channel_id = generate_channel_id(&COUNTERPARTY_CHAIN_ADDRESS, &SELF_CHAIN_ADDRESS);
         let channel_state = encode_channel_state(
             channel.balance,
-            next_ticket_index.as_u64(),
+            next_ticket_index_u64,
             0, // closure_time
             channel.channel_epoch,
             ChannelStatus::Open,
@@ -1602,8 +1606,7 @@ mod tests {
         // TODO: Add event verification - check published IndexerEvent instead of return value
 
         assert_eq!(
-            channel.ticket_index,
-            next_ticket_index.as_u64(),
+            channel.ticket_index, next_ticket_index_u64,
             "channel entry must contain next ticket index"
         );
         Ok(())
@@ -1645,9 +1648,10 @@ mod tests {
         db.upsert_channel(None, channel, 1, 0, 0).await?;
 
         let next_ticket_index = primitive_types::U256::from((1u128 << 48) - 1);
+        let next_ticket_index_u64 = u256_to_u64(next_ticket_index)?;
         let channel_state = encode_channel_state(
             channel.balance,
-            next_ticket_index.as_u64(),
+            next_ticket_index_u64,
             0,
             channel.channel_epoch,
             channel.status,
@@ -1674,8 +1678,7 @@ mod tests {
         // TODO: Add event verification - check published IndexerEvent instead of return value
 
         assert_eq!(
-            channel.ticket_index,
-            next_ticket_index.as_u64(),
+            channel.ticket_index, next_ticket_index_u64,
             "channel entry must contain next ticket index"
         );
         Ok(())
@@ -1706,7 +1709,7 @@ mod tests {
         db.upsert_channel(None, channel, 1, 0, 0).await?;
 
         let timestamp = SystemTime::now();
-        let closure_time_secs = timestamp.as_unix_timestamp().as_secs() as u32;
+        let closure_time_secs = u32::try_from(timestamp.as_unix_timestamp().as_secs())?;
 
         let channel_id = generate_channel_id(&SELF_CHAIN_ADDRESS, &COUNTERPARTY_CHAIN_ADDRESS);
         let channel_state = encode_channel_state(

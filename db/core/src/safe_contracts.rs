@@ -10,7 +10,9 @@ use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder
 use sea_query::OnConflict;
 
 use crate::{
-    BlokliDb, BlokliDbGeneralModelOperations, DbSqlError, OptTx, Result, safe_history::BlokliDbSafeHistoryOperations,
+    BlokliDb, BlokliDbGeneralModelOperations, DbSqlError, OptTx, Result,
+    numeric::{log_position_to_i64, u64_to_i64},
+    safe_history::BlokliDbSafeHistoryOperations,
 };
 
 /// Combined safe contract entry with identity and current state.
@@ -41,7 +43,7 @@ pub struct SafeContractEntry {
 /// Safes with this block number were loaded from CSV files during migration,
 /// not from real blockchain events. This allows identifying which safes
 /// need their module addresses refreshed on startup.
-pub const PRESEEDED_BLOCK: i64 = 30_000_000;
+pub const PRESEEDED_BLOCK_U64: u64 = 30_000_000;
 
 struct SafeCsvEntry {
     address: Address,
@@ -144,7 +146,7 @@ where
             entry.owners.clone(),
             threshold.to_string(),
             None,
-            PRESEEDED_BLOCK as u64,
+            PRESEEDED_BLOCK_U64,
             entry.deployed_tx_index,
             entry.deployed_log_index,
         )
@@ -157,7 +159,7 @@ where
             entry.address,
             *owner,
             true,
-            PRESEEDED_BLOCK as u64,
+            PRESEEDED_BLOCK_U64,
             entry.deployed_tx_index,
             entry.deployed_log_index,
         )
@@ -207,7 +209,7 @@ where
             entry.address,
             entry.module_address,
             entry.chain_key,
-            PRESEEDED_BLOCK as u64,
+            PRESEEDED_BLOCK_U64,
             entry.deployed_tx_index,
             entry.deployed_log_index,
         )
@@ -348,7 +350,7 @@ pub trait BlokliDbSafeContractOperations: BlokliDbGeneralModelOperations {
     /// Get all safes that have only pre-seeded state.
     ///
     /// Pre-seeded safes are those whose only state record has
-    /// `published_block = PRESEEDED_BLOCK` (30_000_000).
+    /// `published_block = PRESEEDED_BLOCK_U64` (30_000_000).
     /// These safes may have stale module addresses that need refreshing.
     ///
     /// # Returns
@@ -413,7 +415,6 @@ async fn get_latest_safe_state<C: ConnectionTrait>(
 #[async_trait]
 impl BlokliDbSafeContractOperations for BlokliDb {
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::cast_possible_wrap)]
     async fn create_safe_contract<'a>(
         &'a self,
         tx: OptTx<'a>,
@@ -430,7 +431,6 @@ impl BlokliDbSafeContractOperations for BlokliDb {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::cast_possible_wrap)]
     async fn upsert_safe_contract<'a>(
         &'a self,
         tx: OptTx<'a>,
@@ -442,6 +442,8 @@ impl BlokliDbSafeContractOperations for BlokliDb {
         log_index: u64,
     ) -> Result<i64> {
         let tx = self.nest_transaction(tx).await?;
+        let (published_block, published_tx_index, published_log_index) =
+            log_position_to_i64(block, tx_index, log_index)?;
 
         // Step 1: Find or create safe identity
         let existing_safe = HoprSafeContract::find()
@@ -467,9 +469,9 @@ impl BlokliDbSafeContractOperations for BlokliDb {
             hopr_safe_contract_id: Set(safe_id),
             module_address: Set(module_address.as_ref().to_vec()),
             chain_key: Set(chain_key.as_ref().to_vec()),
-            published_block: Set(block as i64),
-            published_tx_index: Set(tx_index as i64),
-            published_log_index: Set(log_index as i64),
+            published_block: Set(published_block),
+            published_tx_index: Set(published_tx_index),
+            published_log_index: Set(published_log_index),
             ..Default::default()
         };
 
@@ -558,7 +560,6 @@ impl BlokliDbSafeContractOperations for BlokliDb {
         Ok(Some(combine_entry(&identity, &state)))
     }
 
-    #[allow(clippy::cast_possible_wrap)]
     async fn get_safe_contract_at_block<'a>(
         &'a self,
         tx: OptTx<'a>,
@@ -566,6 +567,7 @@ impl BlokliDbSafeContractOperations for BlokliDb {
         block: u64,
     ) -> Result<Option<SafeContractEntry>> {
         let tx = self.nest_transaction(tx).await?;
+        let block = u64_to_i64(block, "block_number")?;
 
         // Step 1: Find safe identity by address
         let identity = HoprSafeContract::find()
@@ -581,7 +583,7 @@ impl BlokliDbSafeContractOperations for BlokliDb {
         // Step 2: Get the most recent state at or before the given block
         let state = HoprSafeContractState::find()
             .filter(hopr_safe_contract_state::Column::HoprSafeContractId.eq(identity.id))
-            .filter(hopr_safe_contract_state::Column::PublishedBlock.lte(block as i64))
+            .filter(hopr_safe_contract_state::Column::PublishedBlock.lte(block))
             .order_by_desc(hopr_safe_contract_state::Column::PublishedBlock)
             .order_by_desc(hopr_safe_contract_state::Column::PublishedTxIndex)
             .order_by_desc(hopr_safe_contract_state::Column::PublishedLogIndex)
@@ -706,17 +708,19 @@ impl BlokliDbSafeContractOperations for BlokliDb {
             .all(tx.as_ref())
             .await?;
 
+        let preseeded_block_i64 = u64_to_i64(PRESEEDED_BLOCK_U64, "preseeded block")?; // safe cast as the value is lower than i64::MAX and known at compile time
+
         let mut grouped_states = Vec::new();
         let mut current_safe_id = None;
-        let mut first_block = PRESEEDED_BLOCK;
+        let mut first_block = preseeded_block_i64;
         let mut last_state: Option<hopr_safe_contract_state::Model> = None;
 
         for state in states {
             match current_safe_id {
                 Some(safe_id) if safe_id != state.hopr_safe_contract_id => {
-                    if first_block == PRESEEDED_BLOCK {
+                    if first_block == preseeded_block_i64 {
                         if let Some(latest) = last_state.take() {
-                            if latest.published_block == PRESEEDED_BLOCK {
+                            if latest.published_block == preseeded_block_i64 {
                                 grouped_states.push((safe_id, latest));
                             }
                         }
@@ -737,9 +741,9 @@ impl BlokliDbSafeContractOperations for BlokliDb {
         }
 
         if let Some(safe_id) = current_safe_id {
-            if first_block == PRESEEDED_BLOCK {
+            if first_block == preseeded_block_i64 {
                 if let Some(latest) = last_state.take() {
-                    if latest.published_block == PRESEEDED_BLOCK {
+                    if latest.published_block == preseeded_block_i64 {
                         grouped_states.push((safe_id, latest));
                     }
                 }
@@ -796,18 +800,8 @@ impl BlokliDbSafeContractOperations for BlokliDb {
             .await?
             .ok_or_else(|| DbSqlError::EntityNotFound(format!("Safe contract state not found: {}", safe_address)))?;
 
-        let published_block = i64::try_from(block).map_err(|_| {
-            DbSqlError::Construction(format!("Block number {} out of range for safe module update", block))
-        })?;
-        let published_tx_index = i64::try_from(tx_index).map_err(|_| {
-            DbSqlError::Construction(format!(
-                "Transaction index {} out of range for safe module update",
-                tx_index
-            ))
-        })?;
-        let published_log_index = i64::try_from(log_index).map_err(|_| {
-            DbSqlError::Construction(format!("Log index {} out of range for safe module update", log_index))
-        })?;
+        let (published_block, published_tx_index, published_log_index) =
+            log_position_to_i64(block, tx_index, log_index)?;
 
         let state_model = hopr_safe_contract_state::ActiveModel {
             hopr_safe_contract_id: Set(identity.id),
@@ -970,7 +964,7 @@ mod tests {
         let key2 = random_address();
 
         // Create pre-seeded safe (block 30000000)
-        db.upsert_safe_contract(None, safe1, module1, key1, PRESEEDED_BLOCK as u64, 0, 0)
+        db.upsert_safe_contract(None, safe1, module1, key1, PRESEEDED_BLOCK_U64, 0, 0)
             .await?;
 
         // Create indexed safe (real block)
@@ -1023,7 +1017,7 @@ mod tests {
         let key1 = random_address();
 
         // Create pre-seeded safe
-        db.upsert_safe_contract(None, safe1, module1, key1, PRESEEDED_BLOCK as u64, 0, 0)
+        db.upsert_safe_contract(None, safe1, module1, key1, PRESEEDED_BLOCK_U64, 0, 0)
             .await?;
 
         // Verify it shows up in pre-seeded list
