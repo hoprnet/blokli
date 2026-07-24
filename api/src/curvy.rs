@@ -64,7 +64,7 @@ pub fn pending_note(model: curvy_pending_note::Model) -> async_graphql::Result<C
 pub fn committed_note(model: curvy_committed_note::Model) -> async_graphql::Result<CurvyCommittedNote> {
     Ok(CurvyCommittedNote {
         batch_index: uint256(&model.batch_index, "batch_index")?,
-        note_id: uint256(&model.value, "note_id")?,
+        note_id: uint256(&model.note_id, "note_id")?,
         position: position(
             &model.chain_tx_hash,
             model.published_block,
@@ -77,7 +77,7 @@ pub fn committed_note(model: curvy_committed_note::Model) -> async_graphql::Resu
 pub fn committed_nullifier(model: curvy_committed_nullifier::Model) -> async_graphql::Result<CurvyCommittedNullifier> {
     Ok(CurvyCommittedNullifier {
         batch_index: uint256(&model.batch_index, "batch_index")?,
-        nullifier: uint256(&model.value, "nullifier")?,
+        nullifier: uint256(&model.nullifier, "nullifier")?,
         position: position(
             &model.chain_tx_hash,
             model.published_block,

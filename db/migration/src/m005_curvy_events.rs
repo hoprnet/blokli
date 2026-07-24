@@ -67,7 +67,7 @@ impl MigrationTrait for Migration {
             CurvyCommittedNote::Table,
             CurvyCommittedNote::Id,
             CurvyCommittedNote::BatchIndex,
-            CurvyCommittedNote::Value,
+            CurvyCommittedNote::NoteId,
             CurvyCommittedNote::EventItemIndex,
             CurvyCommittedNote::ChainTxHash,
             CurvyCommittedNote::PublishedBlock,
@@ -81,7 +81,7 @@ impl MigrationTrait for Migration {
             CurvyCommittedNullifier::Table,
             CurvyCommittedNullifier::Id,
             CurvyCommittedNullifier::BatchIndex,
-            CurvyCommittedNullifier::Value,
+            CurvyCommittedNullifier::Nullifier,
             CurvyCommittedNullifier::EventItemIndex,
             CurvyCommittedNullifier::ChainTxHash,
             CurvyCommittedNullifier::PublishedBlock,
@@ -282,7 +282,7 @@ async fn create_batch_item_table<T: Iden + Clone + 'static>(
     table: T,
     id: T,
     batch_index: T,
-    value: T,
+    item_value: T,
     event_item_index: T,
     chain_tx_hash: T,
     published_block: T,
@@ -297,7 +297,7 @@ async fn create_batch_item_table<T: Iden + Clone + 'static>(
                 .if_not_exists()
                 .col(ColumnDef::new(id).big_integer().auto_increment().primary_key())
                 .col(ColumnDef::new(batch_index).binary_len(32).not_null())
-                .col(ColumnDef::new(value).binary_len(32).not_null())
+                .col(ColumnDef::new(item_value).binary_len(32).not_null())
                 .col(ColumnDef::new(event_item_index.clone()).integer().not_null())
                 .col(ColumnDef::new(chain_tx_hash).binary_len(32).not_null())
                 .col(ColumnDef::new(published_block.clone()).big_integer().not_null())
@@ -349,7 +349,7 @@ enum CurvyCommittedNote {
     Table,
     Id,
     BatchIndex,
-    Value,
+    NoteId,
     EventItemIndex,
     ChainTxHash,
     PublishedBlock,
@@ -361,7 +361,7 @@ enum CurvyCommittedNullifier {
     Table,
     Id,
     BatchIndex,
-    Value,
+    Nullifier,
     EventItemIndex,
     ChainTxHash,
     PublishedBlock,
