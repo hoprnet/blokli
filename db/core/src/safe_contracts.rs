@@ -708,7 +708,7 @@ impl BlokliDbSafeContractOperations for BlokliDb {
             .all(tx.as_ref())
             .await?;
 
-        let preseeded_block_i64 = PRESEEDED_BLOCK_U64.cast_signed(); // safe cast as the value is lower than i64::MAX and known at compile time
+        let preseeded_block_i64 = u64_to_i64(PRESEEDED_BLOCK_U64, "preseeded block")?; // safe cast as the value is lower than i64::MAX and known at compile time
 
         let mut grouped_states = Vec::new();
         let mut current_safe_id = None;
