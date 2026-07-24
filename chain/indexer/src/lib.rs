@@ -24,6 +24,7 @@ pub mod constants;
 pub mod custom_abis;
 pub mod errors;
 pub mod handlers;
+pub(crate) mod numeric;
 pub mod snapshot;
 pub mod startup;
 pub mod state;

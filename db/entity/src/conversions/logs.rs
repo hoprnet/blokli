@@ -14,8 +14,7 @@ fn u64_to_i64(value: u64, field_name: &str) -> Result<i64> {
 }
 
 fn i64_to_u64(value: i64, field_name: &str) -> Result<u64> {
-    u64::try_from(value)
-        .map_err(|_| DbEntityError::Conversion(format!("{field_name} {value} is negative or exceeds u64::MAX")))
+    u64::try_from(value).map_err(|_| DbEntityError::Conversion(format!("{field_name} {value} is negative")))
 }
 
 impl TryFrom<SerializableLog> for log::ActiveModel {

@@ -23,7 +23,7 @@ use hopr_bindings::{
 };
 use hopr_types::{
     crypto::prelude::Hash,
-    primitive::prelude::{Address, SerializableLog, U256},
+    primitive::prelude::{Address, SerializableLog},
 };
 use tracing::{debug, error, trace};
 
@@ -31,6 +31,7 @@ use crate::{
     IndexerState,
     custom_abis::safe_contract_events::SafeContract::SafeContractEvents,
     errors::{CoreEthereumIndexerError, Result},
+    numeric::{u64_to_u32, u256_to_u32, u256_to_u64},
     state::IndexerEvent,
 };
 
@@ -45,31 +46,6 @@ mod stake_factory;
 #[cfg(test)]
 mod test_utils;
 mod tokens;
-
-pub(super) fn u64_to_u32(value: u64, field_name: &str) -> Result<u32> {
-    u32::try_from(value)
-        .map_err(|_| CoreEthereumIndexerError::ProcessError(format!("{field_name} {value} does not fit into u32")))
-}
-
-pub(super) fn u256_to_u64(value: U256, field_name: &str) -> Result<u64> {
-    if value.bits() > 64 {
-        return Err(CoreEthereumIndexerError::ProcessError(format!(
-            "{field_name} {value} does not fit into u64"
-        )));
-    }
-
-    Ok(value.low_u64())
-}
-
-pub(super) fn u256_to_u32(value: U256, field_name: &str) -> Result<u32> {
-    if value.bits() > 32 {
-        return Err(CoreEthereumIndexerError::ProcessError(format!(
-            "{field_name} {value} does not fit into u32"
-        )));
-    }
-
-    Ok(value.low_u32())
-}
 
 #[cfg(all(feature = "telemetry", not(test)))]
 use hopr_types::telemetry::MultiCounter;

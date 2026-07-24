@@ -41,6 +41,7 @@ use tracing::{debug, error, info, trace, warn};
 use crate::{
     IndexerConfig, IndexerState,
     errors::{CoreEthereumIndexerError, Result},
+    numeric::{u64_to_i64, u64_to_u32},
     snapshot::{SnapshotInfo, SnapshotManager},
     traits::ChainLogHandler,
 };
@@ -98,17 +99,6 @@ fn checksum_low_32_bits(checksum_hash: &Hash) -> u32 {
             .try_into()
             .expect("checksum hash should be 32 bytes"),
     )
-}
-
-fn block_number_to_u32(block_number: u64) -> Result<u32> {
-    u32::try_from(block_number).map_err(|_| {
-        CoreEthereumIndexerError::ProcessError(format!("block_number {block_number} does not fit into u32"))
-    })
-}
-
-fn u64_to_i64(value: u64, field_name: &str) -> Result<i64> {
-    i64::try_from(value)
-        .map_err(|_| CoreEthereumIndexerError::ProcessError(format!("{field_name} {value} does not fit into i64")))
 }
 
 /// Indexer
@@ -372,7 +362,7 @@ where
             let mut stream_start_block = next_block_to_process;
 
             if stream_start_block <= historical_sync_head {
-                let historical_sync_head_u32 = match block_number_to_u32(historical_sync_head) {
+                let historical_sync_head_u32 = match u64_to_u32(historical_sync_head, "block_number") {
                     Ok(block_number) => block_number,
                     Err(error) => {
                         error!(
@@ -836,7 +826,7 @@ where
     {
         let _lock = indexer_state.acquire_processing_lock().await;
         let block_id = block.block_id;
-        let block_id_u32 = match block_number_to_u32(block_id) {
+        let block_id_u32 = match u64_to_u32(block_id, "block_number") {
             Ok(block_number) => block_number,
             Err(error) => {
                 error!(block_id, %error, "failed to convert block id to u32, skipping block");

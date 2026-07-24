@@ -15,8 +15,7 @@ pub(crate) fn u64_to_i64(value: u64, field_name: &str) -> Result<i64> {
 /// Converts a signed `i64` column value back into `u64`, returning
 /// [`DbSqlError::InvalidData`] when the stored value is negative.
 pub(crate) fn i64_to_u64(value: i64, field_name: &str) -> Result<u64> {
-    u64::try_from(value)
-        .map_err(|_| DbSqlError::InvalidData(format!("{field_name} {value} is negative or exceeds u64::MAX")))
+    u64::try_from(value).map_err(|_| DbSqlError::InvalidData(format!("{field_name} {value} is negative")))
 }
 
 /// Converts a signed `i64` column value into `u32`, returning
@@ -65,4 +64,41 @@ pub(crate) fn block_range_to_i64(block_number: Option<u64>, block_offset: Option
             .map(|value| u64_to_i64(value, "block_range_end"))
             .transpose()?,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn u64_to_i64_rejects_values_over_i64_max() {
+        assert_eq!(u64_to_i64(i64::MAX as u64, "field").unwrap(), i64::MAX);
+        let err = u64_to_i64(i64::MAX as u64 + 1, "ticket_index").expect_err("value over i64::MAX should be rejected");
+        assert!(matches!(err, DbSqlError::InvalidData(msg) if msg.contains("ticket_index")));
+    }
+
+    #[test]
+    fn i64_to_u64_rejects_negative_values() {
+        assert_eq!(i64_to_u64(0, "field").unwrap(), 0);
+        let err = i64_to_u64(-1, "block_number").expect_err("negative value should be rejected");
+        assert!(matches!(err, DbSqlError::InvalidData(msg) if msg.contains("negative")));
+    }
+
+    #[test]
+    fn i64_to_u32_rejects_out_of_range_values() {
+        assert_eq!(i64_to_u32(i64::from(u32::MAX), "field").unwrap(), u32::MAX);
+        assert!(i64_to_u32(-1, "field").is_err());
+        assert!(i64_to_u32(i64::from(u32::MAX) + 1, "field").is_err());
+    }
+
+    #[test]
+    fn block_range_to_i64_computes_exclusive_upper_bound() {
+        assert_eq!(block_range_to_i64(Some(10), Some(5)).unwrap(), (10, Some(16)));
+        assert_eq!(block_range_to_i64(None, None).unwrap(), (0, None));
+    }
+
+    #[test]
+    fn block_range_to_i64_rejects_u64_overflow() {
+        assert!(block_range_to_i64(Some(u64::MAX), Some(1)).is_err());
+    }
 }

@@ -25,6 +25,7 @@ use crate::{
     db::BlokliDb,
     errors::{DbSqlError, Result},
     events::{ChannelStateChange, StateChange},
+    numeric::u64_to_i64,
 };
 
 /// Database status code for an open channel
@@ -252,12 +253,7 @@ async fn insert_channel_state_and_emit(
         balance: Set(balance_bytes_12.to_vec()),
         status: Set(i16::from(i8::from(channel_entry.status))),
         epoch: Set(i64::from(channel_entry.channel_epoch)),
-        ticket_index: Set(i64::try_from(channel_entry.ticket_index).map_err(|_| {
-            DbSqlError::InvalidData(format!(
-                "channel ticket_index {} exceeds i64::MAX",
-                channel_entry.ticket_index
-            ))
-        })?),
+        ticket_index: Set(u64_to_i64(channel_entry.ticket_index, "channel ticket_index")?),
         closure_time: Set(match &channel_entry.status {
             ChannelStatus::PendingToClose(time) => Some(system_time_to_datetime(time).into()),
             _ => None,
