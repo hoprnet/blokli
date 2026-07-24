@@ -7,7 +7,10 @@ use hopr_types::primitive::prelude::Address;
 use sea_orm::{ColumnTrait, DbErr, EntityTrait, ModelTrait, QueryFilter, Set};
 use sea_query::OnConflict;
 
-use crate::{BlokliDb, BlokliDbGeneralModelOperations, DbSqlError, OptTx, Result, numeric::log_position_to_i64};
+use crate::{
+    BlokliDb, BlokliDbGeneralModelOperations, DbSqlError, OptTx, Result, TargetDb, numeric::log_position_to_i64,
+    with_opt_transaction,
+};
 
 #[async_trait]
 pub trait BlokliDbNodeSafeRegistrationOperations: BlokliDbGeneralModelOperations {
@@ -113,54 +116,54 @@ impl BlokliDbNodeSafeRegistrationOperations for BlokliDb {
         tx_index: u64,
         log_index: u64,
     ) -> Result<i64> {
-        let tx = self.nest_transaction(tx).await?;
         let (registered_block, registered_tx_index, registered_log_index) =
             log_position_to_i64(block, tx_index, log_index)?;
 
-        let registration_model = hopr_node_safe_registration::ActiveModel {
-            safe_address: Set(safe_address.as_ref().to_vec()),
-            node_address: Set(node_address.as_ref().to_vec()),
-            registered_block: Set(registered_block),
-            registered_tx_index: Set(registered_tx_index),
-            registered_log_index: Set(registered_log_index),
-            ..Default::default()
-        };
+        with_opt_transaction(self, tx, TargetDb::Index, |tx| {
+            Box::pin(async move {
+                let registration_model = hopr_node_safe_registration::ActiveModel {
+                    safe_address: Set(safe_address.as_ref().to_vec()),
+                    node_address: Set(node_address.as_ref().to_vec()),
+                    registered_block: Set(registered_block),
+                    registered_tx_index: Set(registered_tx_index),
+                    registered_log_index: Set(registered_log_index),
+                    ..Default::default()
+                };
 
-        match HoprNodeSafeRegistration::insert(registration_model)
-            .on_conflict(
-                OnConflict::columns([
-                    hopr_node_safe_registration::Column::RegisteredBlock,
-                    hopr_node_safe_registration::Column::RegisteredTxIndex,
-                    hopr_node_safe_registration::Column::RegisteredLogIndex,
-                ])
-                .do_nothing()
-                .to_owned(),
-            )
-            .exec(tx.as_ref())
-            .await
-        {
-            Ok(_) | Err(DbErr::RecordNotInserted) => {
-                // Success or already exists due to ON CONFLICT DO NOTHING
-            }
-            Err(e) => return Err(e.into()),
-        }
+                match HoprNodeSafeRegistration::insert(registration_model)
+                    .on_conflict(
+                        OnConflict::columns([
+                            hopr_node_safe_registration::Column::RegisteredBlock,
+                            hopr_node_safe_registration::Column::RegisteredTxIndex,
+                            hopr_node_safe_registration::Column::RegisteredLogIndex,
+                        ])
+                        .do_nothing()
+                        .to_owned(),
+                    )
+                    .exec(tx.as_ref())
+                    .await
+                {
+                    Ok(_) | Err(DbErr::RecordNotInserted) => {}
+                    Err(e) => return Err(e.into()),
+                }
 
-        // Retrieve the ID (whether newly inserted or existing)
-        let registration = HoprNodeSafeRegistration::find()
-            .filter(hopr_node_safe_registration::Column::RegisteredBlock.eq(registered_block))
-            .filter(hopr_node_safe_registration::Column::RegisteredTxIndex.eq(registered_tx_index))
-            .filter(hopr_node_safe_registration::Column::RegisteredLogIndex.eq(registered_log_index))
-            .one(tx.as_ref())
-            .await?
-            .ok_or_else(|| {
-                DbSqlError::EntityNotFound(format!(
-                    "Node safe registration not found after insert at block {} tx {} log {}",
-                    block, tx_index, log_index
-                ))
-            })?;
+                let registration = HoprNodeSafeRegistration::find()
+                    .filter(hopr_node_safe_registration::Column::RegisteredBlock.eq(registered_block))
+                    .filter(hopr_node_safe_registration::Column::RegisteredTxIndex.eq(registered_tx_index))
+                    .filter(hopr_node_safe_registration::Column::RegisteredLogIndex.eq(registered_log_index))
+                    .one(tx.as_ref())
+                    .await?
+                    .ok_or_else(|| {
+                        DbSqlError::EntityNotFound(format!(
+                            "Node safe registration not found after insert at block {} tx {} log {}",
+                            block, tx_index, log_index
+                        ))
+                    })?;
 
-        tx.commit().await?;
-        Ok(registration.id)
+                Ok(registration.id)
+            })
+        })
+        .await
     }
 
     /// Deletes a node-safe registration entry from the database.
@@ -189,26 +192,26 @@ impl BlokliDbNodeSafeRegistrationOperations for BlokliDb {
         safe_address: Address,
         node_address: Address,
     ) -> Result<()> {
-        let tx = self.nest_transaction(tx).await?;
+        with_opt_transaction(self, tx, TargetDb::Index, |tx| {
+            Box::pin(async move {
+                let registration = HoprNodeSafeRegistration::find()
+                    .filter(hopr_node_safe_registration::Column::SafeAddress.eq(safe_address.as_ref().to_vec()))
+                    .filter(hopr_node_safe_registration::Column::NodeAddress.eq(node_address.as_ref().to_vec()))
+                    .one(tx.as_ref())
+                    .await?
+                    .ok_or_else(|| {
+                        DbSqlError::EntityNotFound(format!(
+                            "Node safe registration not found: safe={}, node={}",
+                            safe_address, node_address
+                        ))
+                    })?;
 
-        // Find the registration first to ensure it exists
-        let registration = HoprNodeSafeRegistration::find()
-            .filter(hopr_node_safe_registration::Column::SafeAddress.eq(safe_address.as_ref().to_vec()))
-            .filter(hopr_node_safe_registration::Column::NodeAddress.eq(node_address.as_ref().to_vec()))
-            .one(tx.as_ref())
-            .await?
-            .ok_or_else(|| {
-                DbSqlError::EntityNotFound(format!(
-                    "Node safe registration not found: safe={}, node={}",
-                    safe_address, node_address
-                ))
-            })?;
+                registration.delete(tx.as_ref()).await?;
 
-        // Delete the registration entry
-        registration.delete(tx.as_ref()).await?;
-
-        tx.commit().await?;
-        Ok(())
+                Ok(())
+            })
+        })
+        .await
     }
 
     /// Retrieves all node addresses registered to a specific safe.
@@ -342,6 +345,30 @@ mod tests {
             .count(db.conn(crate::TargetDb::Index))
             .await?;
         assert_eq!(count, 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_register_node_to_safe_reuses_outer_transaction() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe_address = random_address();
+        let node_address = random_address();
+
+        let outer_tx = db.begin_transaction().await?;
+        db.register_node_to_safe(Some(&outer_tx), safe_address, node_address, 100, 0, 0)
+            .await?;
+
+        assert_eq!(HoprNodeSafeRegistration::find().count(outer_tx.as_ref()).await?, 1);
+
+        outer_tx.rollback().await?;
+
+        assert_eq!(
+            HoprNodeSafeRegistration::find()
+                .count(db.conn(crate::TargetDb::Index))
+                .await?,
+            0
+        );
 
         Ok(())
     }

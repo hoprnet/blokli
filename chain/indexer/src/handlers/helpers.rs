@@ -28,7 +28,6 @@ use crate::errors::{CoreEthereumIndexerError, Result};
 ///
 /// # Errors
 /// * Returns error if channel not found, state not found, or accounts not found
-#[allow(dead_code)]
 pub(super) async fn construct_channel_update<C>(conn: &C, channel_id: &Hash) -> Result<ChannelUpdate>
 where
     C: ConnectionTrait,
