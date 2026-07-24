@@ -30,6 +30,7 @@ use crate::{
     },
     db::BlokliDb,
     errors::DbSqlError,
+    numeric::{block_range_to_i64, i64_to_u64, log_position_to_i64},
 };
 
 #[derive(FromQueryResult)]
@@ -81,7 +82,9 @@ fn log_status_identity_filter(identities: impl IntoIterator<Item = LogIdentity>)
 
 async fn store_log_in_tx(tx: &OpenTransaction, log: SerializableLog) -> Result<()> {
     let log_id = log.to_string();
-    let log_model = log::ActiveModel::from(log.clone());
+    let log_model = log::ActiveModel::try_from(log.clone())
+        .map_err(DbSqlError::from)
+        .map_err(DbError::from)?;
     let log_result = Log::insert(log_model)
         .on_conflict(
             OnConflict::columns([log::Column::LogIndex, log::Column::TxIndex, log::Column::BlockNumber])
@@ -93,7 +96,9 @@ async fn store_log_in_tx(tx: &OpenTransaction, log: SerializableLog) -> Result<(
 
     match log_result {
         Ok(insert_result) => {
-            let mut status_model = log_status::ActiveModel::from(log);
+            let mut status_model = log_status::ActiveModel::try_from(log)
+                .map_err(DbSqlError::from)
+                .map_err(DbError::from)?;
             status_model.log_id = Set(insert_result.last_insert_id);
 
             match LogStatus::insert(status_model)
@@ -129,7 +134,9 @@ async fn store_log_in_tx(tx: &OpenTransaction, log: SerializableLog) -> Result<(
                 .await
             {
                 Ok(Some(existing_log)) => {
-                    let mut status_model = log_status::ActiveModel::from(log);
+                    let mut status_model = log_status::ActiveModel::try_from(log)
+                        .map_err(DbSqlError::from)
+                        .map_err(DbError::from)?;
                     status_model.log_id = Set(existing_log.id);
 
                     match LogStatus::insert(status_model)
@@ -177,7 +184,17 @@ async fn store_logs_chunk_in_tx(tx: &OpenTransaction, logs: &[SerializableLog]) 
         return Ok(());
     }
 
-    Log::insert_many(logs.iter().cloned().map(log::ActiveModel::from))
+    let log_models = logs
+        .iter()
+        .cloned()
+        .map(|log| {
+            log::ActiveModel::try_from(log)
+                .map_err(DbSqlError::from)
+                .map_err(DbError::from)
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Log::insert_many(log_models)
         .on_conflict(
             OnConflict::columns([log::Column::LogIndex, log::Column::TxIndex, log::Column::BlockNumber])
                 .do_nothing()
@@ -228,7 +245,9 @@ async fn store_logs_chunk_in_tx(tx: &OpenTransaction, logs: &[SerializableLog]) 
             ));
         };
 
-        let mut status_model = log_status::ActiveModel::from(log);
+        let mut status_model = log_status::ActiveModel::try_from(log)
+            .map_err(DbSqlError::from)
+            .map_err(DbError::from)?;
         status_model.log_id = Set(log_id);
         status_models.push(status_model);
     }
@@ -330,10 +349,12 @@ impl BlokliDbLogOperations for BlokliDb {
     }
 
     async fn get_log(&self, block_number: u64, tx_index: u64, log_index: u64) -> Result<SerializableLog> {
+        let (block_number, tx_index, log_index) =
+            log_position_to_i64(block_number, tx_index, log_index).map_err(DbError::from)?;
         let query = Log::find()
-            .filter(log::Column::BlockNumber.eq(block_number as i64))
-            .filter(log::Column::TxIndex.eq(tx_index as i64))
-            .filter(log::Column::LogIndex.eq(log_index as i64))
+            .filter(log::Column::BlockNumber.eq(block_number))
+            .filter(log::Column::TxIndex.eq(tx_index))
+            .filter(log::Column::LogIndex.eq(log_index))
             .find_also_related(LogStatus);
 
         match query.all(self.conn(TargetDb::Logs)).await {
@@ -357,13 +378,13 @@ impl BlokliDbLogOperations for BlokliDb {
         block_number: Option<u64>,
         block_offset: Option<u64>,
     ) -> Result<Vec<SerializableLog>> {
-        let min_block_number = block_number.unwrap_or(0);
-        let max_block_number = block_offset.map(|v| min_block_number + v + 1);
+        let (min_block_number, max_block_number) =
+            block_range_to_i64(block_number, block_offset).map_err(DbError::from)?;
 
         let query = Log::find()
             .find_also_related(LogStatus)
-            .filter(log::Column::BlockNumber.gte(min_block_number as i64))
-            .apply_if(max_block_number, |q, v| q.filter(log::Column::BlockNumber.lt(v as i64)))
+            .filter(log::Column::BlockNumber.gte(min_block_number))
+            .apply_if(max_block_number, |q, v| q.filter(log::Column::BlockNumber.lt(v)))
             .order_by_asc(log::Column::BlockNumber)
             .order_by_asc(log::Column::TxIndex)
             .order_by_asc(log::Column::LogIndex);
@@ -388,16 +409,16 @@ impl BlokliDbLogOperations for BlokliDb {
     }
 
     async fn get_logs_count(&self, block_number: Option<u64>, block_offset: Option<u64>) -> Result<u64> {
-        let min_block_number = block_number.unwrap_or(0);
-        let max_block_number = block_offset.map(|v| min_block_number + v + 1);
+        let (min_block_number, max_block_number) =
+            block_range_to_i64(block_number, block_offset).map_err(DbError::from)?;
 
         Log::find()
             .select_only()
             .column(log::Column::BlockNumber)
             .column(log::Column::TxIndex)
             .column(log::Column::LogIndex)
-            .filter(log::Column::BlockNumber.gte(min_block_number as i64))
-            .apply_if(max_block_number, |q, v| q.filter(log::Column::BlockNumber.lt(v as i64)))
+            .filter(log::Column::BlockNumber.gte(min_block_number))
+            .apply_if(max_block_number, |q, v| q.filter(log::Column::BlockNumber.lt(v)))
             .count(self.conn(TargetDb::Logs))
             .await
             .map_err(|e| DbSqlError::from(e).into())
@@ -409,32 +430,32 @@ impl BlokliDbLogOperations for BlokliDb {
         block_offset: Option<u64>,
         processed: Option<bool>,
     ) -> Result<Vec<u64>> {
-        let min_block_number = block_number.unwrap_or(0);
-        let max_block_number = block_offset.map(|v| min_block_number + v + 1);
+        let (min_block_number, max_block_number) =
+            block_range_to_i64(block_number, block_offset).map_err(DbError::from)?;
 
         LogStatus::find()
             .select_only()
             .column(log_status::Column::BlockNumber)
             .distinct()
-            .filter(log_status::Column::BlockNumber.gte(min_block_number as i64))
-            .apply_if(max_block_number, |q, v| {
-                q.filter(log_status::Column::BlockNumber.lt(v as i64))
-            })
+            .filter(log_status::Column::BlockNumber.gte(min_block_number))
+            .apply_if(max_block_number, |q, v| q.filter(log_status::Column::BlockNumber.lt(v)))
             .apply_if(processed, |q, v| q.filter(log_status::Column::Processed.eq(v)))
             .order_by_asc(log_status::Column::BlockNumber)
             .into_model::<BlockNumber>()
             .all(self.conn(TargetDb::Logs))
             .await
-            .map(|res| res.into_iter().map(|b| b.block_number as u64).collect())
             .map_err(|e| {
                 error!(error = ?e, "failed to get logs block numbers from db");
                 DbError::from(DbSqlError::from(e))
-            })
+            })?
+            .into_iter()
+            .map(|b| i64_to_u64(b.block_number, "block_number").map_err(DbError::from))
+            .collect()
     }
 
     async fn set_logs_processed(&self, block_number: Option<u64>, block_offset: Option<u64>) -> Result<()> {
-        let min_block_number = block_number.unwrap_or(0);
-        let max_block_number = block_offset.map(|v| min_block_number + v + 1);
+        let (min_block_number, max_block_number) =
+            block_range_to_i64(block_number, block_offset).map_err(DbError::from)?;
         let now = Utc::now();
 
         let query = LogStatus::update_many()
@@ -443,10 +464,8 @@ impl BlokliDbLogOperations for BlokliDb {
                 log_status::Column::ProcessedAt,
                 Expr::value(Value::ChronoDateTimeUtc(Some(now))),
             )
-            .filter(log_status::Column::BlockNumber.gte(min_block_number as i64))
-            .apply_if(max_block_number, |q, v| {
-                q.filter(log_status::Column::BlockNumber.lt(v as i64))
-            });
+            .filter(log_status::Column::BlockNumber.gte(min_block_number))
+            .apply_if(max_block_number, |q, v| q.filter(log_status::Column::BlockNumber.lt(v)));
 
         match query.exec(self.conn(TargetDb::Logs)).await {
             Ok(_) => Ok(()),
@@ -491,8 +510,8 @@ impl BlokliDbLogOperations for BlokliDb {
     }
 
     async fn set_logs_unprocessed(&self, block_number: Option<u64>, block_offset: Option<u64>) -> Result<()> {
-        let min_block_number = block_number.unwrap_or(0);
-        let max_block_number = block_offset.map(|v| min_block_number + v + 1);
+        let (min_block_number, max_block_number) =
+            block_range_to_i64(block_number, block_offset).map_err(DbError::from)?;
 
         let query = LogStatus::update_many()
             .col_expr(log_status::Column::Processed, Expr::value(Value::Bool(Some(false))))
@@ -500,10 +519,8 @@ impl BlokliDbLogOperations for BlokliDb {
                 log_status::Column::ProcessedAt,
                 Expr::value(Value::ChronoDateTimeUtc(None)),
             )
-            .filter(log_status::Column::BlockNumber.gte(min_block_number as i64))
-            .apply_if(max_block_number, |q, v| {
-                q.filter(log_status::Column::BlockNumber.lt(v as i64))
-            });
+            .filter(log_status::Column::BlockNumber.gte(min_block_number))
+            .apply_if(max_block_number, |q, v| q.filter(log_status::Column::BlockNumber.lt(v)));
 
         match query.exec(self.conn(TargetDb::Logs)).await {
             Ok(_) => Ok(()),
@@ -566,7 +583,7 @@ impl BlokliDbLogOperations for BlokliDb {
                                 let log_hash = Hash::create(&[
                                     log_entry.block_hash.as_slice(),
                                     log_entry.transaction_hash.as_slice(),
-                                    &(log_entry.log_index as u64).to_be_bytes(),
+                                    &i64_to_u64(log_entry.log_index, "log_index")?.to_be_bytes(),
                                 ]);
 
                                 let next_checksum = Hash::create(&[last_checksum.as_ref(), log_hash.as_ref()]);

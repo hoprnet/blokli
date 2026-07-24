@@ -17,7 +17,7 @@ use tracing::{debug, info, warn};
 
 #[cfg(all(feature = "telemetry", not(test)))]
 use super::increment_indexer_contract_log_count;
-use super::{ContractEventHandlers, PendingSafeMutation};
+use super::{ContractEventHandlers, PendingSafeMutation, u64_to_u32, u256_to_u32};
 use crate::{custom_abis::safe_contract_events::SafeContract::SafeContractEvents, errors::Result, state::IndexerEvent};
 
 fn to_hopr_contract_addresses(addresses: &BlokliContractAddresses) -> HoprContractAddresses {
@@ -134,24 +134,9 @@ where
                         safe_address,
                         signer,
                         ticket_amount,
-                        u32::try_from(log.block_number).map_err(|_| {
-                            crate::errors::CoreEthereumIndexerError::ProcessError(format!(
-                                "block number {} does not fit into u32",
-                                log.block_number
-                            ))
-                        })?,
-                        u32::try_from(log.tx_index).map_err(|_| {
-                            crate::errors::CoreEthereumIndexerError::ProcessError(format!(
-                                "tx index {} does not fit into u32",
-                                log.tx_index
-                            ))
-                        })?,
-                        u32::try_from(log.log_index.as_u64()).map_err(|_| {
-                            crate::errors::CoreEthereumIndexerError::ProcessError(format!(
-                                "log index {} does not fit into u32",
-                                log.log_index
-                            ))
-                        })?,
+                        u64_to_u32(log.block_number, "block_number")?,
+                        u64_to_u32(log.tx_index, "tx_index")?,
+                        u256_to_u32(log.log_index, "log_index")?,
                     )
                     .await?;
 
