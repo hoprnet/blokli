@@ -49,10 +49,10 @@ Run the indexer daemon:
 just run
 ```
 
-Run the GraphQL API server on its own:
+`bloklid` embeds the GraphQL API server. The `blokli-api` binary is only used to export the schema; for example:
 
 ```bash
-just run-api
+just export-schema-sqlite
 ```
 
 ## Docker Images
@@ -78,14 +78,21 @@ just docker-run-anvil trace
 
 **Environment Variables:**
 
-| Variable                     | Default         | Description                                     |
-| ---------------------------- | --------------- | ----------------------------------------------- |
-| `RUST_LOG`                   | `info`          | Logging level (error, warn, info, debug, trace) |
-| `ANVIL_BLOCK_TIME`           | `1`             | Block time in seconds                           |
-| `ANVIL_ACCOUNTS`             | `10`            | Number of accounts to create                    |
-| `ANVIL_BALANCE`              | `10000`         | Initial balance per account (ETH)               |
-| `ANVIL_DEPLOYER_PRIVATE_KEY` | (first account) | Private key for contract deployment             |
-| `BLOKLI_DATA_DIRECTORY`      | `/data`         | Data directory for SQLite databases             |
+| Variable                              | Default                   | Description                                              |
+| ------------------------------------- | ------------------------- | -------------------------------------------------------- |
+| `RUST_LOG`                            | `info`                    | Tracing filter, such as `info` or `bloklid=debug`        |
+| `BLOKLI_LOG_FORMAT`                   | text                      | Set to `json` for structured JSON logs                   |
+| `ANVIL_HOST`                          | `127.0.0.1`               | Anvil listen address                                     |
+| `ANVIL_PORT`                          | `8545`                    | Anvil RPC port                                           |
+| `ANVIL_BLOCK_TIME`                    | `1`                       | Block time in seconds                                    |
+| `ANVIL_ACCOUNTS`                      | `10`                      | Number of accounts to create                             |
+| `ANVIL_BALANCE`                       | `10000`                   | Initial balance per account in ETH                       |
+| `ANVIL_RPC_URL`                       | derived from `ANVIL_PORT` | URL used for readiness checks, deployment, and `bloklid` |
+| `ANVIL_DEPLOYER_PRIVATE_KEY`          | Anvil's first account     | Private key for contract deployment                      |
+| `BLOKLI_DEPLOYER_TICKET_PRICE`        | `100 wei wxHOPR`          | Initial ticket price oracle value                        |
+| `BLOKLI_DEPLOYER_WINNING_PROBABILITY` | `0.000125`                | Initial winning probability oracle value                 |
+| `BLOKLI_DATA_DIRECTORY`               | `/data`                   | Data directory for SQLite databases                      |
+| `BLOKLI_CONFIG_PATH`                  | `/config.toml`            | Generated daemon configuration path                      |
 
 Once running, access the GraphQL playground at: <http://localhost:8080/graphql>
 
@@ -157,14 +164,14 @@ See **[TESTING.md](TESTING.md)** for the complete testing guide.
 ### Running Specific Tests
 
 ```bash
-# Temporal query tests
-cargo test -p blokli-db-sql --lib state_queries -F runtime-tokio
+# Database tests
+cargo test -p blokli-db -F runtime-tokio
 
 # Reorg handling tests
-cargo test -p blokli-chain-indexer --lib block::tests::test_handle_reorg -F runtime-tokio
+cargo test -p blokli-chain-indexer -F runtime-tokio
 
 # Subscription tests
-cargo test -p blokli-db-sql --lib subscription -F runtime-tokio
+cargo test -p blokli-api --test safe_subscription_test -F runtime-tokio
 
 # Integration tests
 cargo test -p bloklid --test indexer_startup_test -F runtime-tokio
@@ -172,8 +179,8 @@ cargo test -p bloklid --test indexer_startup_test -F runtime-tokio
 # Transaction integration tests
 cargo test -p blokli-chain-api --test transaction_integration_test -F runtime-tokio -- --test-threads=1
 
-# Run specific test by name
-cargo test test_get_channel_state_at -F runtime-tokio -- --nocapture
+# Run a specific test by name
+cargo test -p blokli-db test_block_position_ordering -F runtime-tokio -- --nocapture
 ```
 
 ## Architecture
@@ -206,7 +213,7 @@ Blokli implements a temporal database system for tracking blockchain state chang
 
 ## Configuration
 
-Blokli can be configured via a configuration file (TOML) or environment variables. The precedence order is:
+Blokli can be configured via a configuration file (TOML) and the explicitly mapped environment variables below. The precedence order is:
 
 1. Environment Variables (Specific `BLOKLI_` vars or canonical `DATABASE_` vars)
 2. Configuration File
@@ -222,79 +229,105 @@ To generate a template configuration file:
 bloklid generate-config config.toml
 ```
 
-For a complete example with defaults and comments, see `bloklid/example-config.toml`.
+For fast-sync bootstrap, configure `indexer.fast_sync = true`, `indexer.enable_logs_snapshot = true`, and `indexer.logs_snapshot_url` to a
+`.tar.xz` archive that contains `hopr_logs.sql`. On an empty node, `bloklid` imports that file into the raw logs tables, rebuilds derived
+state locally, and then resumes normal RPC catch-up from the snapshot end. If the configured snapshot restore fails, startup fails.
 
-### Environment Variables
+For a complete example with comments, see [`bloklid/example-config.toml`](bloklid/example-config.toml). Duration values use human-readable
+syntax such as `500ms`, `15s`, and `1m`.
 
-You can override any configuration setting using environment variables.
+### Configuration Reference
 
-#### Daemon Configuration
+Only the mappings listed below are supported. A dash means the setting is available only in TOML. `BLOKLI_DATABASE_*` variables take
+priority over their canonical database aliases when both are set. Boolean environment values accept `true`/`false` and `1`/`0`.
 
-| Description             | Environment Variable |
-| :---------------------- | :------------------- |
-| Path to the config file | `BLOKLI_CONFIG_PATH` |
+#### Process Configuration
+
+| Setting            | Default   | Environment Variable | Description                                                    |
+| :----------------- | :-------- | :------------------- | :------------------------------------------------------------- |
+| Configuration file | automatic | `BLOKLI_CONFIG_PATH` | Overrides `-c`; otherwise `/etc/bloklid/bloklid.toml` is tried |
+| Log filter         | `info`    | `RUST_LOG`           | Standard `tracing-subscriber` filter syntax                    |
+| Log format         | text      | `BLOKLI_LOG_FORMAT`  | Set to `json` for structured JSON output                       |
 
 #### Root Configuration
 
-| Config Key                 | Environment Variable              |
-| :------------------------- | :-------------------------------- |
-| `host`                     | `BLOKLI_HOST`                     |
-| `data_directory`           | `BLOKLI_DATA_DIRECTORY`           |
-| `network`                  | `BLOKLI_NETWORK`                  |
-| `rpc_url`                  | `BLOKLI_RPC_URL`                  |
-| `max_rpc_requests_per_sec` | `BLOKLI_MAX_RPC_REQUESTS_PER_SEC` |
+| Config Key                 | Default                 | Environment Variable              | Description                                                               |
+| :------------------------- | :---------------------- | :-------------------------------- | :------------------------------------------------------------------------ |
+| `data_directory`           | `data`                  | `BLOKLI_DATA_DIRECTORY`           | Directory for daemon data                                                 |
+| `network`                  | `rotsee`                | `BLOKLI_NETWORK`                  | `rotsee`, `jura`, or `anvil-localhost` (`localhost` is an alias)          |
+| `rpc_url`                  | `http://localhost:8545` | `BLOKLI_RPC_URL`                  | Chain JSON-RPC endpoint                                                   |
+| `max_rpc_requests_per_sec` | `100`                   | `BLOKLI_MAX_RPC_REQUESTS_PER_SEC` | Maximum request rate; `0` means unlimited                                 |
+| `max_block_range`          | `10000`                 | `BLOKLI_MAX_BLOCK_RANGE`          | Ceiling for adaptive `eth_getLogs` ranges; `0` auto-discovers up to 10000 |
+
+The daemon also requires a `[database]` table or equivalent database environment variables.
 
 #### Database Configuration
 
-| Config Key                 | Primary Env Var                   | Canonical Env Vars                |
-| :------------------------- | :-------------------------------- | :-------------------------------- |
-| `database.url`             | `BLOKLI_DATABASE_URL`             | `DATABASE_URL`                    |
-| `database.host`            | `BLOKLI_DATABASE_HOST`            | `PGHOST`, `POSTGRES_HOST`         |
-| `database.port`            | `BLOKLI_DATABASE_PORT`            | `PGPORT`, `POSTGRES_PORT`         |
-| `database.username`        | `BLOKLI_DATABASE_USERNAME`        | `PGUSER`, `POSTGRES_USER`         |
-| `database.password`        | `BLOKLI_DATABASE_PASSWORD`        | `PGPASSWORD`, `POSTGRES_PASSWORD` |
-| `database.database`        | `BLOKLI_DATABASE_DATABASE`        | `PGDATABASE`, `POSTGRES_DB`       |
-| `database.type`            | `BLOKLI_DATABASE_TYPE`            | -                                 |
-| `database.max_connections` | `BLOKLI_DATABASE_MAX_CONNECTIONS` | -                                 |
-| `database.index_path`      | `BLOKLI_DATABASE_INDEX_PATH`      | -                                 |
-| `database.logs_path`       | `BLOKLI_DATABASE_LOGS_PATH`       | -                                 |
+`database.type` is required and accepts `postgresql`, `sqlite`, or `in-memory`. PostgreSQL accepts either `url` or the individual connection
+fields. SQLite uses separate index and raw-log databases.
+
+| Config Key                 | Default                        | Primary Env Var                   | Canonical Env Vars                |
+| :------------------------- | :----------------------------- | :-------------------------------- | :-------------------------------- |
+| `database.type`            | required                       | `BLOKLI_DATABASE_TYPE`            | —                                 |
+| `database.url`             | unset                          | `BLOKLI_DATABASE_URL`             | `DATABASE_URL`                    |
+| `database.host`            | `localhost` when URL is absent | `BLOKLI_DATABASE_HOST`            | `PGHOST`, `POSTGRES_HOST`         |
+| `database.port`            | `5432` when URL is absent      | `BLOKLI_DATABASE_PORT`            | `PGPORT`, `POSTGRES_PORT`         |
+| `database.username`        | empty when URL is absent       | `BLOKLI_DATABASE_USERNAME`        | `PGUSER`, `POSTGRES_USER`         |
+| `database.password`        | empty when URL is absent       | `BLOKLI_DATABASE_PASSWORD`        | `PGPASSWORD`, `POSTGRES_PASSWORD` |
+| `database.database`        | empty when URL is absent       | `BLOKLI_DATABASE_DATABASE`        | `PGDATABASE`, `POSTGRES_DB`       |
+| `database.max_connections` | `10`                           | `BLOKLI_DATABASE_MAX_CONNECTIONS` | —                                 |
+| `database.index_path`      | `data/bloklid-index.db`        | `BLOKLI_DATABASE_INDEX_PATH`      | —                                 |
+| `database.logs_path`       | `data/bloklid-logs.db`         | `BLOKLI_DATABASE_LOGS_PATH`       | —                                 |
 
 #### Indexer Configuration
 
-| Config Key                                      | Environment Variable                                   |
-| :---------------------------------------------- | :----------------------------------------------------- |
-| `indexer.fast_sync`                             | `BLOKLI_INDEXER_FAST_SYNC`                             |
-| `indexer.enable_logs_snapshot`                  | `BLOKLI_INDEXER_ENABLE_LOGS_SNAPSHOT`                  |
-| `indexer.enable_safe_indexing`                  | `BLOKLI_INDEXER_ENABLE_SAFE_INDEXING`                  |
-| `indexer.logs_snapshot_url`                     | `BLOKLI_INDEXER_LOGS_SNAPSHOT_URL`                     |
-| `indexer.subscription.event_bus_capacity`       | `BLOKLI_INDEXER_SUBSCRIPTION_EVENT_BUS_CAPACITY`       |
-| `indexer.subscription.shutdown_signal_capacity` | `BLOKLI_INDEXER_SUBSCRIPTION_SHUTDOWN_SIGNAL_CAPACITY` |
-| `indexer.subscription.batch_size`               | `BLOKLI_INDEXER_SUBSCRIPTION_BATCH_SIZE`               |
+| Config Key                                      | Default | Environment Variable                                   | Description                                           |
+| :---------------------------------------------- | :------ | :----------------------------------------------------- | :---------------------------------------------------- |
+| `indexer.fast_sync`                             | `true`  | `BLOKLI_INDEXER_FAST_SYNC`                             | Enables the fast initial synchronization path         |
+| `indexer.enable_logs_snapshot`                  | `false` | `BLOKLI_INDEXER_ENABLE_LOGS_SNAPSHOT`                  | Restores raw logs from a snapshot before catch-up     |
+| `indexer.enable_safe_indexing`                  | `false` | `BLOKLI_INDEXER_ENABLE_SAFE_INDEXING`                  | Indexes Safe events after Safe discovery              |
+| `indexer.logs_snapshot_url`                     | unset   | `BLOKLI_INDEXER_LOGS_SNAPSHOT_URL`                     | URL of a `.tar.xz` archive containing `hopr_logs.sql` |
+| `indexer.subscription.event_bus_capacity`       | `1000`  | `BLOKLI_INDEXER_SUBSCRIPTION_EVENT_BUS_CAPACITY`       | Channel-event bus capacity                            |
+| `indexer.subscription.shutdown_signal_capacity` | `10`    | `BLOKLI_INDEXER_SUBSCRIPTION_SHUTDOWN_SIGNAL_CAPACITY` | Shutdown signal buffer capacity                       |
+| `indexer.subscription.batch_size`               | `100`   | `BLOKLI_INDEXER_SUBSCRIPTION_BATCH_SIZE`               | Historical subscription query batch size              |
 
 #### API Configuration
 
-| Config Key                            | Environment Variable                         |
-| ------------------------------------- | -------------------------------------------- |
-| `api.enabled`                         | `BLOKLI_API_ENABLED`                         |
-| `api.bind_address`                    | `BLOKLI_API_BIND_ADDRESS`                    |
-| `api.playground_enabled`              | `BLOKLI_API_PLAYGROUND_ENABLED`              |
-| `api.gas_multiplier`                  | `BLOKLI_API_GAS_MULTIPLIER`                  |
-| `api.sse_keepalive.enabled`           | `BLOKLI_API_SSE_KEEPALIVE_ENABLED`           |
-| `api.sse_keepalive.interval`          | `BLOKLI_API_SSE_KEEPALIVE_INTERVAL`          |
-| `api.sse_keepalive.text`              | `BLOKLI_API_SSE_KEEPALIVE_TEXT`              |
-| `api.health.max_indexer_lag`          | `BLOKLI_API_HEALTH_MAX_INDEXER_LAG`          |
-| `api.health.timeout`                  | `BLOKLI_API_HEALTH_TIMEOUT`                  |
-| `api.health.readiness_check_interval` | `BLOKLI_API_HEALTH_READINESS_CHECK_INTERVAL` |
+| Config Key                            | Default          | Environment Variable                         | Description                                   |
+| ------------------------------------- | ---------------- | -------------------------------------------- | --------------------------------------------- |
+| `api.enabled`                         | `true`           | `BLOKLI_API_ENABLED`                         | Enables the embedded GraphQL server           |
+| `api.bind_address`                    | `127.0.0.1:8080` | `BLOKLI_API_BIND_ADDRESS`                    | API listen address                            |
+| `api.playground_enabled`              | `false`          | `BLOKLI_API_PLAYGROUND_ENABLED`              | Enables GraphQL Playground                    |
+| `api.gas_multiplier`                  | `1.0`            | `BLOKLI_API_GAS_MULTIPLIER`                  | Finite EIP-1559 fee multiplier, minimum `1.0` |
+| `api.max_query_depth`                 | `8`              | —                                            | Maximum GraphQL nesting depth                 |
+| `api.max_query_complexity`            | `500`            | —                                            | Maximum GraphQL complexity budget             |
+| `api.sse_keepalive.enabled`           | `true`           | `BLOKLI_API_SSE_KEEPALIVE_ENABLED`           | Enables SSE keep-alive events                 |
+| `api.sse_keepalive.interval`          | `15s`            | `BLOKLI_API_SSE_KEEPALIVE_INTERVAL`          | Keep-alive interval                           |
+| `api.sse_keepalive.text`              | `keep-alive`     | `BLOKLI_API_SSE_KEEPALIVE_TEXT`              | Keep-alive payload                            |
+| `api.health.max_indexer_lag`          | `10`             | `BLOKLI_API_HEALTH_MAX_INDEXER_LAG`          | Maximum finality-adjusted lag for readiness   |
+| `api.health.timeout`                  | `5s`             | `BLOKLI_API_HEALTH_TIMEOUT`                  | Readiness query timeout                       |
+| `api.health.readiness_check_interval` | `60s`            | `BLOKLI_API_HEALTH_READINESS_CHECK_INTERVAL` | Cached readiness refresh interval             |
 
 GraphQL subscriptions stream over SSE and send periodic keep-alive events to prevent idle connection timeouts. Keep-alive is enabled by
 default with a 15s interval and `keep-alive` payload, and can be customized via the `api.sse_keepalive.*` settings. `api.gas_multiplier`
 (default `1.0`, minimum `1.0`) scales `chainInfo.maxFeePerGas` and `chainInfo.maxPriorityFeePerGas` (rounded up to whole wei).
 `chainInfo.gasPrice` is not scaled.
 
+#### Telemetry Configuration
+
+| Config Key                         | Default   | Environment Variable            | Description                                                     |
+| ---------------------------------- | --------- | ------------------------------- | --------------------------------------------------------------- |
+| `telemetry.otlp_endpoint`          | unset     | `BLOKLI_OTLP_ENDPOINT`          | OTLP collector base URL; unset disables OTLP export             |
+| `telemetry.metric_export_interval` | `15s`     | `BLOKLI_METRIC_EXPORT_INTERVAL` | Metrics export interval; must be greater than zero when enabled |
+| `telemetry.otlp_signals`           | `metrics` | `BLOKLI_OTLP_SIGNALS`           | Comma-separated `metrics`, `traces`, and/or `logs`              |
+
+See [OTLP.md](OTLP.md) for endpoint schemes, per-signal paths, and collector examples.
+
 ### Contract Address Overrides
 
-You can override contract addresses via the configuration file. By default, addresses are resolved from hopr-bindings based on the selected
-network.
+You can override contract addresses via TOML only; no contract-address environment variables are defined. By default, addresses are resolved
+from `hopr-bindings` for the selected network. If `[contracts]` is present it replaces the complete resolved set: all fields below except
+`xhopr_token` are required. `xhopr_token` defaults to the zero address when omitted. Values are quoted `0x`-prefixed, 20-byte hex strings.
 
 ```toml
 [contracts]
@@ -307,4 +340,16 @@ node_safe_registry = "0x0000000000000000000000000000000000000000"
 ticket_price_oracle = "0x0000000000000000000000000000000000000000"
 winning_probability_oracle = "0x0000000000000000000000000000000000000000"
 node_stake_factory = "0x0000000000000000000000000000000000000000"
+xhopr_token = "0x0000000000000000000000000000000000000000"
 ```
+
+#### Contract Deployer Environment Variables
+
+These variables configure `blokli-contract-deployer` when it is run directly. Command-line options take precedence.
+
+| Environment Variable                  | Default                   | Description                       |
+| ------------------------------------- | ------------------------- | --------------------------------- |
+| `BLOKLI_DEPLOYER_RPC_URL`             | `http://127.0.0.1:8545`   | Deployment RPC endpoint           |
+| `ANVIL_DEPLOYER_PRIVATE_KEY`          | Anvil's first account key | Contract deployer private key     |
+| `BLOKLI_DEPLOYER_TICKET_PRICE`        | `100 wei wxHOPR`          | Initial ticket price oracle value |
+| `BLOKLI_DEPLOYER_WINNING_PROBABILITY` | `0.000125`                | Initial winning probability       |

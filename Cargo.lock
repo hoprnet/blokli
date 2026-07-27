@@ -2052,6 +2052,7 @@ dependencies = [
  "libp2p-identity",
  "multiaddr",
  "serde",
+ "serde_with",
  "strum 0.28.0",
  "thiserror",
  "tracing",
