@@ -581,7 +581,44 @@ fn default_otlp_signals() -> String {
 mod tests {
     use std::{fs, path::PathBuf};
 
+    use hopr_types::primitive::primitives::Address;
+
     use super::*;
+
+    #[test]
+    fn test_contract_overrides_from_hex_strings() {
+        let config = r#"
+            [contracts]
+            token = "0x0101010101010101010101010101010101010101"
+            channels = "0x0202020202020202020202020202020202020202"
+            announcements = "0x0303030303030303030303030303030303030303"
+            module_implementation = "0x0404040404040404040404040404040404040404"
+            node_safe_migration = "0x0505050505050505050505050505050505050505"
+            node_safe_registry = "0x0606060606060606060606060606060606060606"
+            ticket_price_oracle = "0x0707070707070707070707070707070707070707"
+            winning_probability_oracle = "0x0808080808080808080808080808080808080808"
+            node_stake_factory = "0x0909090909090909090909090909090909090909"
+            xhopr_token = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "#;
+
+        let config: Config = toml::from_str(config).expect("contracts should accept hex strings");
+
+        assert_eq!(
+            config.contracts_override,
+            Some(ContractAddresses {
+                token: Address::from([1; 20]),
+                channels: Address::from([2; 20]),
+                announcements: Address::from([3; 20]),
+                module_implementation: Address::from([4; 20]),
+                node_safe_migration: Address::from([5; 20]),
+                node_safe_registry: Address::from([6; 20]),
+                ticket_price_oracle: Address::from([7; 20]),
+                winning_probability_oracle: Address::from([8; 20]),
+                node_stake_factory: Address::from([9; 20]),
+                xhopr_token: Address::from([0xaa; 20]),
+            })
+        );
+    }
 
     #[test]
     fn test_strict_parsing() {
