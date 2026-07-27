@@ -27,8 +27,8 @@ use crate::errors::{DbSqlError, Result};
 ///
 /// Version history:
 /// - `"1.1.0"`: Initial schema (consolidated from prior migration stack)
-/// - `"1.2.0"`: 
-/// - `"1.3.0"`: SC set updated through a binding update. 
+/// - `"1.2.0"`:
+/// - `"1.3.0"`: SC set updated through a binding update.
 pub const SCHEMA_VERSION: &str = "1.3.0";
 
 /// The singleton ID used for the schema_version table.
