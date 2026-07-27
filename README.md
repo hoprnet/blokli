@@ -236,8 +236,6 @@ state locally, and then resumes normal RPC catch-up from the snapshot end. If th
 For a complete example with comments, see [`bloklid/example-config.toml`](bloklid/example-config.toml). Duration values use human-readable
 syntax such as `500ms`, `15s`, and `1m`.
 
-> > > > > > > theirs
-
 ### Configuration Reference
 
 Only the mappings listed below are supported. A dash means the setting is available only in TOML. `BLOKLI_DATABASE_*` variables take
