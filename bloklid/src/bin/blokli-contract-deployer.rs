@@ -9,6 +9,7 @@ use hopli_lib::utils::{a2h, h2a};
 use hopr_bindings::{
     config::ContractInstances,
     exports::alloy::{
+        network::EthereumWallet,
         primitives::{U256, aliases::U56},
         providers::ProviderBuilder,
         rpc::client::ClientBuilder,
@@ -26,7 +27,12 @@ use serde::Serialize;
 use tracing_subscriber::{Layer as _, prelude::*};
 use url::Url;
 
+/// Anvil account #0 — deploys the HOPR contracts.
 const DEFAULT_ANVIL_PRIVATE_KEY: &str = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+/// Anvil account #1 — pre-deploys the common contracts (ERC1820 registry, Multicall3, Safe suites),
+/// so that those transactions do not consume the HOPR deployer's nonces.
+const DEFAULT_ANVIL_COMMON_DEPLOYER_PRIVATE_KEY: &str =
+    "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
 static PANIC_HOOK_INSTALLED: Once = Once::new();
 
 #[derive(Debug, Parser)]
@@ -39,9 +45,17 @@ struct Args {
     #[arg(long, env = "BLOKLI_DEPLOYER_RPC_URL", default_value = "http://127.0.0.1:8545")]
     rpc_url: String,
 
-    /// Private key used to deploy contracts
+    /// Private key used to deploy the HOPR contracts
     #[arg(long, env = "ANVIL_DEPLOYER_PRIVATE_KEY", default_value = DEFAULT_ANVIL_PRIVATE_KEY)]
     private_key: String,
+
+    /// Private key used to pre-deploy the common contracts (ERC1820 registry, Multicall3, Safe suites)
+    #[arg(
+        long,
+        env = "ANVIL_COMMON_DEPLOYER_PRIVATE_KEY",
+        default_value = DEFAULT_ANVIL_COMMON_DEPLOYER_PRIVATE_KEY
+    )]
+    common_deployer_private_key: String,
 
     /// Minimum ticket price to set on the deployed HoprTicketPriceOracle.
     /// Defaults to the live rotsee value so the local cluster behaves like rotsee.
@@ -78,12 +92,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let signer_chain_key = ChainKeypair::from_secret(signer.to_bytes().as_ref())?;
     let signer_address = signer.address();
 
+    let common_deployer = PrivateKeySigner::from_str(&args.common_deployer_private_key)?;
+    let common_deployer_chain_key = ChainKeypair::from_secret(common_deployer.to_bytes().as_ref())?;
+
+    // Both signers live in the same wallet; the HOPR deployer is the default signer so that all
+    // contract deployments and calls below are sent from it.
+    let mut wallet = EthereumWallet::from(common_deployer);
+    wallet.register_default_signer(signer);
+
     let rpc_url = Url::parse(&args.rpc_url)?;
     let rpc_client = ClientBuilder::default().http(rpc_url);
-    let provider = ProviderBuilder::new().wallet(signer).connect_client(rpc_client);
+    let provider = ProviderBuilder::new().wallet(wallet).connect_client(rpc_client);
 
-    let instances =
-        ContractInstances::deploy_for_testing(provider, a2h(signer_chain_key.public().to_address())).await?;
+    let instances = ContractInstances::deploy_for_testing(
+        provider,
+        a2h(signer_chain_key.public().to_address()),
+        a2h(common_deployer_chain_key.public().to_address()),
+    )
+    .await?;
     let contracts = ContractAddresses::from(&instances);
     let output = ContractsOutput {
         contracts: BlokliContractAddresses {
