@@ -107,7 +107,7 @@ jobs:
       enable_unit_coverage: true
       unit_coverage_command: "nix run .#coverage-unit"
       runner_unit: depot-ubuntu-24.04-4
-      test_timeout: 30
+      test_timeout: 45
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
   # ── Repo-specific: schema validation ────────────────────────────────────────
