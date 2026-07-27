@@ -111,7 +111,7 @@ impl From<SerializableLog> for Log {
         Self {
             address: value.address,
             topics,
-            data: Box::from(value.data.as_ref()),
+            data: value.data.into_boxed_slice(),
             tx_index: value.tx_index,
             block_number: value.block_number,
             block_hash: value.block_hash.into(),
