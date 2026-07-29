@@ -158,7 +158,7 @@ in
       runCoverage = true;
       cargoLlvmCovCommand = "nextest";
       testCargoProfile = "ci-test";
-      cargoExtraArgs = "--lib";
+      cargoExtraArgs = "";
       extraNativeBuildInputs = [
         pkgs.cargo-nextest
         pkgs.foundry-bin
