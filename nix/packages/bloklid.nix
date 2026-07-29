@@ -5,6 +5,7 @@
 
 {
   lib,
+  pkgs,
   builders,
   sources,
   bloklidCrateInfo,
@@ -55,6 +56,21 @@ let
       "aarch64-darwin"
     ]
   );
+
+  blokliSchema = builders.local.callPackage nixLib.mkRustPackage {
+    src = sources.schema;
+    depsSrc = sources.deps;
+    rev = "schema";
+    cargoToml = ./../../api/Cargo.toml;
+    CARGO_PROFILE = "dev";
+    cargoExtraArgs = "--bin blokli-api";
+    postInstall = ''
+      mkdir -p "$out/share/blokli"
+      "$out/bin/blokli-api" export-schema \
+        --database-url "sqlite::memory:" \
+        --output "$out/share/blokli/schema.graphql"
+    '';
+  };
 in
 {
   # Development builds - for local testing and debugging
@@ -116,6 +132,8 @@ in
     })
     // {
       runClippy = true; # Run Clippy linter
+      prependPackageName = false;
+      cargoExtraArgs = "--workspace";
     }
   );
 
@@ -128,6 +146,25 @@ in
       runBench = true; # Run benchmarks
     }
   );
+
+  blokli-schema = blokliSchema;
+
+  schema-validation =
+    pkgs.runCommand "schema-validation"
+      {
+        nativeBuildInputs = [
+          (pkgs.python3.withPackages (pythonPackages: [ pythonPackages.graphql-core ]))
+        ];
+      }
+      ''
+        mkdir -p work/design "$out"
+        cp ${./../../design/target-api-schema.graphql} work/design/target-api-schema.graphql
+        cp ${blokliSchema}/share/blokli/schema.graphql work/schema.graphql
+
+        cd work
+        python ${./../../scripts/check_schema.py}
+        cp schema.graphql "$out/schema.graphql"
+      '';
 
   # Candidate build - used for smoke testing before release
   # Builds as static binary on Linux x86_64 for better test coverage

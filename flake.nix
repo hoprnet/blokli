@@ -145,7 +145,14 @@
               extraExtensions = [
                 "csv"
                 "graphql"
+                "pem"
+                "snap"
               ];
+            };
+            schema = nixLib.mkSrc {
+              inherit fs;
+              root = ./.;
+              extraExtensions = [ "csv" ];
             };
             deps = nixLib.mkDepsSrc {
               inherit fs;
@@ -162,6 +169,7 @@
           bloklidPackages = import ./nix/packages/bloklid.nix {
             inherit
               lib
+              pkgs
               builders
               sources
               bloklidCrateInfo
