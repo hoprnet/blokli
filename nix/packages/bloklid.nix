@@ -86,6 +86,18 @@ in
     }
   );
 
+  bloklid-nextest = builders.local.callPackage nixLib.mkRustPackage (
+    (mkbloklidBuildArgs {
+      src = sources.test;
+      depsSrc = sources.deps;
+    })
+    // {
+      runNextest = true;
+      prependPackageName = false;
+      cargoExtraArgs = "--workspace";
+    }
+  );
+
   bloklid-test-nightly = builders.localNightly.callPackage nixLib.mkRustPackage (
     (mkbloklidBuildArgs {
       src = sources.test;
