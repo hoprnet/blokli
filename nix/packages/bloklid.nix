@@ -63,11 +63,14 @@ let
     rev = "schema";
     cargoToml = ./../../api/Cargo.toml;
     CARGO_PROFILE = "dev";
-    cargoExtraArgs = "--bin blokli-api";
+    prependPackageName = false;
+    cargoExtraArgs = "-p blokli-api --bin blokli-api -p blokli-db-migration --bin migration";
     postInstall = ''
       mkdir -p "$out/share/blokli"
+      "$out/bin/migration" up \
+        -u "sqlite://$TMPDIR/blokli-schema.db?mode=rwc"
       "$out/bin/blokli-api" export-schema \
-        --database-url "sqlite::memory:" \
+        --database-url "sqlite://$TMPDIR/blokli-schema.db" \
         --output "$out/share/blokli/schema.graphql"
     '';
   };
@@ -111,6 +114,7 @@ in
       runNextest = true;
       prependPackageName = false;
       cargoExtraArgs = "--workspace";
+      extraNativeBuildInputs = [ pkgs.foundry-bin ];
     }
   );
 
