@@ -155,9 +155,13 @@ in
     })
     // {
       runCoverage = true;
+      cargoLlvmCovCommand = "nextest";
       testCargoProfile = "ci-test";
       cargoExtraArgs = "--lib";
-      extraNativeBuildInputs = [ pkgs.foundry-bin ];
+      extraNativeBuildInputs = [
+        pkgs.cargo-nextest
+        pkgs.foundry-bin
+      ];
     }
   );
 
