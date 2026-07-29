@@ -148,7 +148,7 @@ in
     }
   );
 
-  bloklid-coverage = builders.local.callPackage nixLib.mkRustPackage (
+  bloklid-coverage = builders.localCoverage.callPackage nixLib.mkRustPackage (
     (mkbloklidBuildArgs {
       src = sources.test;
       depsSrc = sources.deps;
