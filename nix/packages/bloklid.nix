@@ -148,6 +148,7 @@ in
     }
   );
 
+  # Coverage runs the unit-test suite through nextest and emits the LCOV report.
   bloklid-coverage = builders.localCoverage.callPackage nixLib.mkRustPackage (
     (mkbloklidBuildArgs {
       src = sources.test;
