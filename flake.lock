@@ -173,17 +173,17 @@
         "treefmt-nix": "treefmt-nix"
       },
       "locked": {
-        "lastModified": 1785330200,
-        "narHash": "sha256-bseaFE1mb7f5sgq137ow2TYUsArWsR5jZwY8mr1+jyo=",
+        "lastModified": 1785333146,
+        "narHash": "sha256-dOy1uXpfNeb6diunuAv8D1F8C6cqsOewi2WRv80MMXI=",
         "owner": "hoprnet",
         "repo": "nix-lib",
-        "rev": "3730beb66a991585d08105be234e3720fcd268d2",
+        "rev": "2573ddf8f54a9b18c175ffc9cdd77f73dc9b092d",
         "type": "github"
       },
       "original": {
         "owner": "hoprnet",
         "repo": "nix-lib",
-        "rev": "3730beb66a991585d08105be234e3720fcd268d2",
+        "rev": "2573ddf8f54a9b18c175ffc9cdd77f73dc9b092d",
         "type": "github"
       }
     },
