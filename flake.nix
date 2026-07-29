@@ -35,7 +35,7 @@
     nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     # HOPR Nix Library (provides flake-utils and reusable build functions)
-    nix-lib.url = "github:hoprnet/nix-lib/41b6b431e2d7f5605e6b2556bd7f8d8678b0c116";
+    nix-lib.url = "github:hoprnet/nix-lib/7f88b05c8375375eaff4bd4670ce45d47e0ccea7";
 
     # Rust build system
     crane.url = "github:ipetkov/crane";
@@ -91,6 +91,8 @@
         let
           # Git revision for version tracking
           rev = toString (self.shortRev or self.dirtyShortRev);
+          buildVersionEnv = builtins.getEnv "BUILD_VERSION";
+          buildVersion = if buildVersionEnv == "" then null else buildVersionEnv;
 
           # Filesystem utilities for source filtering
           fs = lib.fileset;
@@ -173,6 +175,7 @@
               builders
               sources
               bloklidCrateInfo
+              buildVersion
               rev
               buildPlatform
               nixLib
@@ -543,7 +546,7 @@
               type = "app";
               program = toString (
                 pkgs.writeShellScript "coverage-unit" ''
-                  nix develop .#coverage -c cargo llvm-cov --workspace --lib --lcov --output-path coverage.lcov
+                  nix build -L .#bloklid-coverage -o coverage.lcov
                 ''
               );
             };

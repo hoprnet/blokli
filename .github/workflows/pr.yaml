@@ -105,7 +105,7 @@ jobs:
       enable_unit_tests: true
       unit_test_command: "nix build -L .#bloklid-nextest"
       enable_unit_coverage: true
-      unit_coverage_command: "nix run .#coverage-unit"
+      unit_coverage_command: "nix build -L .#bloklid-coverage -o coverage.lcov"
       runner_unit: depot-ubuntu-24.04-4
       test_timeout: 30
     secrets:

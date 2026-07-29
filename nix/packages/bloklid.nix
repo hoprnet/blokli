@@ -9,6 +9,7 @@
   builders,
   sources,
   bloklidCrateInfo,
+  buildVersion,
   rev,
   buildPlatform,
   nixLib,
@@ -18,7 +19,12 @@ let
   mkbloklidBuildArgs =
     { src, depsSrc }:
     {
-      inherit src depsSrc rev;
+      inherit
+        src
+        depsSrc
+        rev
+        buildVersion
+        ;
       cargoExtraArgs = "--bins"; # Build all binary targets
       cargoToml = ./../../bloklid/Cargo.toml;
     };
@@ -112,6 +118,7 @@ in
     })
     // {
       runNextest = true;
+      testCargoProfile = "ci-test";
       prependPackageName = false;
       cargoExtraArgs = "--workspace";
       extraNativeBuildInputs = [ pkgs.foundry-bin ];
@@ -138,6 +145,19 @@ in
       runClippy = true; # Run Clippy linter
       prependPackageName = false;
       cargoExtraArgs = "--workspace";
+    }
+  );
+
+  bloklid-coverage = builders.local.callPackage nixLib.mkRustPackage (
+    (mkbloklidBuildArgs {
+      src = sources.test;
+      depsSrc = sources.deps;
+    })
+    // {
+      runCoverage = true;
+      testCargoProfile = "ci-test";
+      cargoExtraArgs = "--lib";
+      extraNativeBuildInputs = [ pkgs.foundry-bin ];
     }
   );
 

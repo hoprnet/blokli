@@ -3,7 +3,11 @@
 //! These tests verify that the shared test setup functions work correctly
 //! and provide the expected components for API integration testing.
 
-use super::*;
+mod common;
+
+use std::time::Duration;
+
+use common::{TestEnvironmentConfig, setup_simple_test_environment, setup_test_environment};
 
 /// Test that setup_test_environment creates all required components
 #[test_log::test(tokio::test)]
