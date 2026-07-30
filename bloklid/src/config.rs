@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{fmt, time::Duration};
 
 use blokli_chain_indexer::utils::redact_url;
 use blokli_chain_types::{ChainConfig, ContractAddresses};
@@ -61,7 +61,7 @@ fn default_max_block_range() -> u32 {
 /// Supports two formats:
 /// 1. Simple URL: `url = "postgresql://user:pass@host:port/database"`
 /// 2. Detailed components with individual fields (host, port, username, password, database)
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PostgreSqlConfig {
     /// Connection URL (Option 1: simple URL format)
@@ -85,6 +85,24 @@ pub struct PostgreSqlConfig {
     /// Maximum number of connections
     #[serde(default = "default_max_connections")]
     pub max_connections: u32,
+}
+
+impl fmt::Debug for PostgreSqlConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let url = self.url.as_deref().map(redact_database_url);
+        let password = self.password.as_ref().map(|_| "REDACTED");
+
+        formatter
+            .debug_struct("PostgreSqlConfig")
+            .field("url", &url)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("password", &password)
+            .field("database", &self.database)
+            .field("max_connections", &self.max_connections)
+            .finish()
+    }
 }
 
 /// SQLite database configuration
@@ -976,5 +994,41 @@ mod tests {
         // Non-URL string should remain unchanged for database URLs
         let not_url = "just-a-string";
         assert_eq!(redact_database_url(not_url), not_url);
+    }
+
+    #[test]
+    fn test_postgres_config_debug_redacts_password_field() {
+        let config = PostgreSqlConfig {
+            url: None,
+            host: Some("localhost".to_string()),
+            port: Some(5432),
+            username: Some("blokli".to_string()),
+            password: Some("do-not-log-this-password".to_string()),
+            database: Some("blokli".to_string()),
+            max_connections: 10,
+        };
+
+        let debug_output = format!("{config:?}");
+
+        assert!(!debug_output.contains("do-not-log-this-password"));
+        assert!(debug_output.contains("REDACTED"));
+    }
+
+    #[test]
+    fn test_postgres_config_debug_redacts_password_in_url() {
+        let config = PostgreSqlConfig {
+            url: Some("postgresql://blokli:do-not-log-this-password@localhost:5432/blokli".to_string()),
+            host: None,
+            port: None,
+            username: None,
+            password: None,
+            database: None,
+            max_connections: 10,
+        };
+
+        let debug_output = format!("{config:?}");
+
+        assert!(!debug_output.contains("do-not-log-this-password"));
+        assert!(debug_output.contains("postgresql://REDACTED:REDACTED@localhost:5432/blokli"));
     }
 }
