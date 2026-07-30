@@ -2,95 +2,9 @@ use std::{fmt, time::Duration};
 
 use blokli_chain_indexer::utils::redact_url;
 use blokli_chain_types::{ChainConfig, ContractAddresses};
-use url::Url;
+use blokli_db::utils::redact_database_url;
 
 use crate::network::Network;
-
-fn is_sensitive_database_parameter(key: &str, value: &str) -> bool {
-    let normalized_key = key
-        .chars()
-        .filter(|character| character.is_ascii_alphanumeric())
-        .flat_map(char::to_lowercase)
-        .collect::<String>();
-    let normalized_value = value.to_ascii_lowercase();
-
-    matches!(normalized_key.as_str(), "pass" | "pwd")
-        || [
-            "password",
-            "passwd",
-            "secret",
-            "token",
-            "apikey",
-            "credential",
-            "privatekey",
-            "sslkey",
-        ]
-        .iter()
-        .any(|marker| normalized_key.contains(marker))
-        || ["password=", "passwd=", "secret=", "token=", "api_key=", "apikey="]
-            .iter()
-            .any(|marker| normalized_value.contains(marker))
-}
-
-/// Redacts credentials from database URLs while keeping non-sensitive connection details visible.
-///
-/// # Examples
-/// ```
-/// # use bloklid::config::redact_database_url;
-/// assert_eq!(
-///     redact_database_url("postgres://user:pass@localhost:5432/mydb"),
-///     "postgres://REDACTED:REDACTED@localhost:5432/mydb"
-/// );
-/// assert_eq!(
-///     redact_database_url("postgresql://localhost:5432/mydb"),
-///     "postgresql://localhost:5432/mydb"
-/// );
-/// ```
-pub fn redact_database_url(url: &str) -> String {
-    const REDACTED: &str = "REDACTED";
-
-    let mut parsed = match Url::parse(url) {
-        Ok(parsed) => parsed,
-        Err(_) => return REDACTED.to_string(),
-    };
-
-    match parsed.scheme() {
-        "postgres" | "postgresql" if parsed.host_str().is_some() => {}
-        "sqlite" => {}
-        _ => return REDACTED.to_string(),
-    }
-
-    if (!parsed.username().is_empty() || parsed.password().is_some())
-        && (parsed.set_username(REDACTED).is_err() || parsed.set_password(Some(REDACTED)).is_err())
-    {
-        return REDACTED.to_string();
-    }
-
-    if parsed.query().is_some() {
-        let query_pairs = parsed
-            .query_pairs()
-            .map(|(key, value)| (key.into_owned(), value.into_owned()))
-            .collect::<Vec<_>>();
-
-        parsed
-            .query_pairs_mut()
-            .clear()
-            .extend_pairs(query_pairs.iter().map(|(key, value)| {
-                let value = if is_sensitive_database_parameter(key, value) {
-                    REDACTED
-                } else {
-                    value
-                };
-                (key.as_str(), value)
-            }));
-    }
-
-    if parsed.fragment().is_some() {
-        parsed.set_fragment(Some(REDACTED));
-    }
-
-    parsed.to_string()
-}
 
 fn default_rpc_url() -> String {
     "http://localhost:8545".to_string()
@@ -1018,68 +932,6 @@ mod tests {
     }
 
     #[test]
-    fn test_redact_database_url_with_credentials() {
-        // URL with username and password should redact only credentials
-        let url = "postgres://user:password@localhost:5432/mydb";
-        let redacted = redact_database_url(url);
-        assert_eq!(redacted, "postgres://REDACTED:REDACTED@localhost:5432/mydb");
-    }
-
-    #[test]
-    fn test_redact_database_url_without_credentials() {
-        // URL without credentials should remain unchanged
-        let url = "postgresql://localhost:5432/mydb";
-        let redacted = redact_database_url(url);
-        assert_eq!(redacted, "postgresql://localhost:5432/mydb");
-    }
-
-    #[test]
-    fn test_redact_database_url_with_port() {
-        // URL with custom port
-        let url = "postgres://admin:secret@db.example.com:9876/production";
-        let redacted = redact_database_url(url);
-        assert_eq!(redacted, "postgres://REDACTED:REDACTED@db.example.com:9876/production");
-    }
-
-    #[test]
-    fn test_redact_database_url_with_at_sign_in_password() {
-        let url = "postgresql://blokli:secret@fragment@localhost:5432/blokli";
-        let redacted = redact_database_url(url);
-
-        assert_eq!(redacted, "postgresql://REDACTED:REDACTED@localhost:5432/blokli");
-        assert!(!redacted.contains("secret"));
-        assert!(!redacted.contains("fragment"));
-    }
-
-    #[test]
-    fn test_redact_database_url_does_not_treat_path_at_sign_as_userinfo() {
-        let url = "postgresql://localhost:5432/blokli@archive";
-
-        assert_eq!(redact_database_url(url), url);
-    }
-
-    #[test]
-    fn test_redact_database_url_with_password_query_parameter() {
-        let url = "postgresql://localhost:5432/blokli?password=secret&sslmode=require";
-        let redacted = redact_database_url(url);
-
-        assert_eq!(
-            redacted,
-            "postgresql://localhost:5432/blokli?password=REDACTED&sslmode=require"
-        );
-        assert!(!redacted.contains("secret"));
-    }
-
-    #[test]
-    fn test_redact_unsupported_database_url() {
-        assert_eq!(redact_database_url("password=secret"), "REDACTED");
-        assert_eq!(
-            redact_database_url("postgresql:host=localhost password=secret"),
-            "REDACTED"
-        );
-    }
-
-    #[test]
     fn test_postgres_config_debug_redacts_password_field() {
         let config = PostgreSqlConfig {
             url: None,
@@ -1130,6 +982,6 @@ mod tests {
         let debug_output = format!("{config:?}");
 
         assert!(!debug_output.contains("do-not-log-this-password"));
-        assert!(debug_output.contains("password=REDACTED"));
+        assert!(debug_output.contains("?REDACTED"));
     }
 }
