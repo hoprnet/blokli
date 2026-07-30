@@ -23,7 +23,7 @@ jobs:
       enable_unit_tests: false
       enable_integration_tests: false
       enable_unit_coverage: true
-      unit_coverage_command: "nix run .#coverage-unit"
+      unit_coverage_command: "nix build -L .#bloklid-coverage -o coverage.lcov"
       runner_unit: depot-ubuntu-24.04-4
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}

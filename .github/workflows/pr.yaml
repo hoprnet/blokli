@@ -88,7 +88,7 @@ jobs:
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
       cachix_cache_name: blokli
-      lint_command: "nix develop --command just quick"
+      lint_command: "nix build -L .#bloklid-clippy"
       audit_command: "nix run -L .#audit"
       deps: true
       runner_small: depot-ubuntu-24.04-2
@@ -102,10 +102,9 @@ jobs:
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
       cachix_cache_name: blokli
-      enable_unit_tests: true
-      unit_test_command: "nix run -L .#nextest"
+      enable_unit_tests: false
       enable_unit_coverage: true
-      unit_coverage_command: "nix run .#coverage-unit"
+      unit_coverage_command: "nix build -L .#bloklid-coverage -o coverage.lcov"
       runner_unit: depot-ubuntu-24.04-4
       test_timeout: 30
     secrets:
@@ -127,10 +126,8 @@ jobs:
         with:
           cachix_cache_name: blokli
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      - name: Generate GraphQL schema
-        run: nix develop --command just export-schema-sqlite
-      - name: Validate schema against target
-        run: nix develop --command uv run scripts/check_schema.py
+      - name: Validate GraphQL schema
+        run: nix build -L .#schema-validation
   # ── Build: binaries ─────────────────────────────────────────────────────────
   build-binaries:
     name: Binary ${{ matrix.architecture }}
