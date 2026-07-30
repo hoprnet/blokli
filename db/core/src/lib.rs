@@ -21,6 +21,7 @@ pub mod safe_history;
 pub mod safe_redeemed_stats;
 pub mod snapshot;
 pub mod state_queries;
+pub mod utils;
 pub mod version;
 
 use std::{path::PathBuf, time::Instant};

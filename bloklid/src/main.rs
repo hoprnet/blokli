@@ -16,14 +16,17 @@ use args::{Args, Command, generate_config_template, peek_verbosity_from_env_args
 use async_signal::{Signal, Signals};
 use blokli_chain_api::BlokliChain;
 use blokli_chain_indexer::{snapshot::SnapshotManager, startup, utils::redact_url};
-use blokli_db::db::{BlokliDb, BlokliDbConfig};
+use blokli_db::{
+    db::{BlokliDb, BlokliDbConfig},
+    utils::redact_database_url,
+};
 use clap::Parser;
 use futures::TryStreamExt;
 use sea_orm::Database;
 use tokio::net::TcpListener;
 
 use crate::{
-    config::{Config, DatabaseConfig, redact_database_url},
+    config::{Config, DatabaseConfig},
     errors::BloklidError,
 };
 
