@@ -78,6 +78,8 @@ let
       "$out/bin/blokli-api" export-schema \
         --database-url "sqlite://$TMPDIR/blokli-schema.db" \
         --output "$out/share/blokli/schema.graphql"
+      # Keep the output schema-only so Crane does not scan the large dev binaries for source references.
+      rm -rf "$out/bin"
     '';
   };
 in
