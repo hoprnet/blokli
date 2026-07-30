@@ -32,6 +32,7 @@ use blokli_chain_rpc::{
     rpc::{RpcOperations, RpcOperationsConfig},
     transport::ReqwestClient,
 };
+use blokli_db::utils::redact_database_url;
 use config::ApiConfig;
 use errors::{ApiError, ApiResult};
 use hopr_bindings::exports::alloy::{
@@ -78,7 +79,7 @@ pub async fn start_server(network: String, finality: u16, config: ApiConfig) -> 
         .map_err(|error| ApiError::ConfigError(format!("Failed to initialize tracing: {error}")))?;
 
     info!("Starting blokli API server on {}", config.bind_address);
-    info!("Connecting to database: {}", redact_url(&config.database_url));
+    info!("Connecting to database: {}", redact_database_url(&config.database_url));
 
     // Connect to database
     let db = Database::connect(&config.database_url).await?;
