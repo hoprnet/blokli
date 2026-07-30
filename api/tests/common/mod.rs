@@ -11,9 +11,6 @@
 //!
 //! Tests can use this shared setup to ensure consistency and reduce maintenance burden.
 
-#[cfg(test)]
-mod test_common;
-
 use std::{sync::Arc, time::Duration};
 
 use async_graphql::Schema;
