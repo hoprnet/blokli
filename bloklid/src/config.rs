@@ -2,10 +2,37 @@ use std::{fmt, time::Duration};
 
 use blokli_chain_indexer::utils::redact_url;
 use blokli_chain_types::{ChainConfig, ContractAddresses};
+use url::Url;
 
 use crate::network::Network;
 
-/// Redacts username and password from database URLs while keeping host, port, and database visible
+fn is_sensitive_database_parameter(key: &str, value: &str) -> bool {
+    let normalized_key = key
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    let normalized_value = value.to_ascii_lowercase();
+
+    matches!(normalized_key.as_str(), "pass" | "pwd")
+        || [
+            "password",
+            "passwd",
+            "secret",
+            "token",
+            "apikey",
+            "credential",
+            "privatekey",
+            "sslkey",
+        ]
+        .iter()
+        .any(|marker| normalized_key.contains(marker))
+        || ["password=", "passwd=", "secret=", "token=", "api_key=", "apikey="]
+            .iter()
+            .any(|marker| normalized_value.contains(marker))
+}
+
+/// Redacts credentials from database URLs while keeping non-sensitive connection details visible.
 ///
 /// # Examples
 /// ```
@@ -20,24 +47,49 @@ use crate::network::Network;
 /// );
 /// ```
 pub fn redact_database_url(url: &str) -> String {
-    // Parse the URL to extract components
-    if let Some(scheme_end) = url.find("://") {
-        let scheme = &url[..scheme_end + 3];
-        let rest = &url[scheme_end + 3..];
+    const REDACTED: &str = "REDACTED";
 
-        // Check if there's an @ sign indicating credentials
-        if let Some(at_pos) = rest.find('@') {
-            let after_at = &rest[at_pos..];
-            // Redact credentials but keep everything else
-            format!("{}REDACTED:REDACTED{}", scheme, after_at)
-        } else {
-            // No credentials, return as-is
-            url.to_string()
-        }
-    } else {
-        // Not a URL format, return as-is
-        url.to_string()
+    let mut parsed = match Url::parse(url) {
+        Ok(parsed) => parsed,
+        Err(_) => return REDACTED.to_string(),
+    };
+
+    match parsed.scheme() {
+        "postgres" | "postgresql" if parsed.host_str().is_some() => {}
+        "sqlite" => {}
+        _ => return REDACTED.to_string(),
     }
+
+    if (!parsed.username().is_empty() || parsed.password().is_some())
+        && (parsed.set_username(REDACTED).is_err() || parsed.set_password(Some(REDACTED)).is_err())
+    {
+        return REDACTED.to_string();
+    }
+
+    if parsed.query().is_some() {
+        let query_pairs = parsed
+            .query_pairs()
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect::<Vec<_>>();
+
+        parsed
+            .query_pairs_mut()
+            .clear()
+            .extend_pairs(query_pairs.iter().map(|(key, value)| {
+                let value = if is_sensitive_database_parameter(key, value) {
+                    REDACTED
+                } else {
+                    value
+                };
+                (key.as_str(), value)
+            }));
+    }
+
+    if parsed.fragment().is_some() {
+        parsed.set_fragment(Some(REDACTED));
+    }
+
+    parsed.to_string()
 }
 
 fn default_rpc_url() -> String {
@@ -990,10 +1042,41 @@ mod tests {
     }
 
     #[test]
-    fn test_redact_non_url_string() {
-        // Non-URL string should remain unchanged for database URLs
-        let not_url = "just-a-string";
-        assert_eq!(redact_database_url(not_url), not_url);
+    fn test_redact_database_url_with_at_sign_in_password() {
+        let url = "postgresql://blokli:secret@fragment@localhost:5432/blokli";
+        let redacted = redact_database_url(url);
+
+        assert_eq!(redacted, "postgresql://REDACTED:REDACTED@localhost:5432/blokli");
+        assert!(!redacted.contains("secret"));
+        assert!(!redacted.contains("fragment"));
+    }
+
+    #[test]
+    fn test_redact_database_url_does_not_treat_path_at_sign_as_userinfo() {
+        let url = "postgresql://localhost:5432/blokli@archive";
+
+        assert_eq!(redact_database_url(url), url);
+    }
+
+    #[test]
+    fn test_redact_database_url_with_password_query_parameter() {
+        let url = "postgresql://localhost:5432/blokli?password=secret&sslmode=require";
+        let redacted = redact_database_url(url);
+
+        assert_eq!(
+            redacted,
+            "postgresql://localhost:5432/blokli?password=REDACTED&sslmode=require"
+        );
+        assert!(!redacted.contains("secret"));
+    }
+
+    #[test]
+    fn test_redact_unsupported_database_url() {
+        assert_eq!(redact_database_url("password=secret"), "REDACTED");
+        assert_eq!(
+            redact_database_url("postgresql:host=localhost password=secret"),
+            "REDACTED"
+        );
     }
 
     #[test]
@@ -1030,5 +1113,23 @@ mod tests {
 
         assert!(!debug_output.contains("do-not-log-this-password"));
         assert!(debug_output.contains("postgresql://REDACTED:REDACTED@localhost:5432/blokli"));
+    }
+
+    #[test]
+    fn test_postgres_config_debug_redacts_password_in_url_query() {
+        let config = PostgreSqlConfig {
+            url: Some("postgresql://localhost:5432/blokli?password=do-not-log-this-password".to_string()),
+            host: None,
+            port: None,
+            username: None,
+            password: None,
+            database: None,
+            max_connections: 10,
+        };
+
+        let debug_output = format!("{config:?}");
+
+        assert!(!debug_output.contains("do-not-log-this-password"));
+        assert!(debug_output.contains("password=REDACTED"));
     }
 }
