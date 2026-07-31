@@ -247,8 +247,10 @@
               name = "bloklid-anvil${if withCurvy then "-curvy" else ""}";
               Entrypoint = [ "/bin/blokli-anvil-entrypoint" ];
               pkgsLinux = platformPkgs;
-              env = [ "SSL_CERT_FILE=${platformPkgs.cacert}/etc/ssl/certs/ca-bundle.crt" ]
-                ++ lib.optionals withCurvy [ "BLOKLI_DEPLOY_CURVY=true" ];
+              env = [
+                "SSL_CERT_FILE=${platformPkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+              ]
+              ++ lib.optionals withCurvy [ "BLOKLI_DEPLOY_CURVY=true" ];
               extraContents = [
                 binary
                 platformPkgs.curl
