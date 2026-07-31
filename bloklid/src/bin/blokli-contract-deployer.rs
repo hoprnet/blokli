@@ -119,7 +119,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // The local deployment uses a single signer for both the HOPR and common contract deployers.
     let deployer_address = a2h(signer_chain_key.public().to_address());
-    let instances = ContractInstances::deploy_for_testing(provider, deployer_address, deployer_address).await?;
+    let instances = ContractInstances::deploy_for_testing(provider.clone(), deployer_address, deployer_address).await?;
     let contracts = ContractAddresses::from(&instances);
     let output = ContractsOutput {
         contracts: BlokliContractAddresses {
