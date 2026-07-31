@@ -323,6 +323,7 @@ The schema is organized into three root types following GraphQL best practices:
 - Safe deployments: Real-time notifications when new Safe contracts are deployed
 - Network topology: Opened channel graph updates for routing decisions
 - Transaction updates: Status changes for submitted transactions
+- Curvy note events: Filtered, resumable raw `PendingNotes` and `CommittedNotes` items
 
 **Error Handling**: Uses GraphQL union types to return domain-specific error types (InvalidAddressError, ContractNotAllowedError, etc.)
 alongside success types, providing structured error responses with codes and context.
@@ -951,6 +952,7 @@ Indexer handlers publish structured events containing complete data to avoid N+1
 | `KeyBindingFeeUpdated`    | Protocol fee parameter changes        | Fee amount (TokenValueString) | `keyBindingFeeUpdated`      |
 | `SafeDeployed`            | New safe contract deployed            | Safe address                  | `safeDeployed`              |
 | `TicketParametersUpdated` | Ticket price/probability changes      | Full TicketParameters object  | `ticketParametersUpdated`   |
+| `CurvyNote`               | Curvy note pending or committed       | One raw note item and cursor  | `curvyNoteEvents`           |
 
 **Two-Phase Subscription Pattern**:
 
@@ -983,7 +985,11 @@ The IndexerState uses an RwLock to ensure no events are missed between the snaps
 2. Capture watermark (last indexed block/tx/log)
 3. Subscribe to event channels
 4. Release read lock
-5. Events published during this time are buffered in the channel
+
+The Curvy note subscription replays raw logs rather than a derived wallet view. Its cursor includes the block, transaction, log, and array
+item positions and is exclusive. Historical and live items share one raw-field filter. Event-bus overflow or a reorganization terminates the
+stream so the client can resume from its last processed cursor instead of accepting silent loss. 5. Events published during this time are
+buffered in the channel
 
 **Overflow Handling**:
 
@@ -1478,10 +1484,12 @@ by the readiness checks.
 ## Local Contract Deployment Variants
 
 The standard local Anvil image deploys and indexes only the HOPR contract suite. An explicitly named Curvy development variant compiles an
-optional deployment dependency and deploys Curvy on the same chain with the same signer after HOPR deployment.
+optional deployment dependency and deploys Curvy on the same chain with the same signer after HOPR deployment. The variant writes the
+aggregator proxy into Blokli configuration so the indexer includes its two note topics.
 
-Curvy addresses are emitted as a separate client-facing artifact. They are not added to Blokli configuration, indexing filters, GraphQL
-schema, or production images. A failure in either requested deployment prevents final address/configuration artifacts from being published.
+Curvy addresses are also emitted as a separate client-facing artifact. Blokli indexes and forwards raw `PendingNotes` and `CommittedNotes`
+items but does not store ownership, correlate note lifecycles, or enrich the events. Those responsibilities stay in the node and client. A
+failure in either requested deployment prevents final address/configuration artifacts from being published.
 
 ## Design Principles and Patterns
 

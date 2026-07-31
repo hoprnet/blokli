@@ -14,7 +14,8 @@ use std::sync::{
 
 use async_broadcast::{Receiver, Sender, broadcast};
 use blokli_api_types::{
-    Account, ChannelUpdate, RedeemTicketDetails, RedemptionResult, TicketParameters, TokenValueString, UInt64,
+    Account, ChannelUpdate, CurvyNoteEvent, RedeemTicketDetails, RedemptionResult, TicketParameters, TokenValueString,
+    UInt64,
 };
 use hopr_types::primitive::prelude::Address;
 use tokio::sync::RwLock;
@@ -103,6 +104,9 @@ pub enum IndexerEvent {
     /// Carries all fields needed to identify the ticket and report the outcome.
     /// Subscribers filter by channel ID, issuer, or recipient address.
     TicketRedeemed(RedeemTicketDetailsInfo),
+
+    /// One raw item decoded from a Curvy `PendingNotes` or `CommittedNotes` log.
+    CurvyNote(CurvyNoteEvent),
 }
 
 /// Shared state for coordinating indexer operations with subscriptions

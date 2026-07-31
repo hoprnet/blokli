@@ -184,6 +184,7 @@ pub(super) mod test_helpers {
                 winning_probability_oracle: *WIN_PROB_ORACLE_ADDR,
                 node_stake_factory: Default::default(),
                 xhopr_token: *XHOPR_TOKEN_ADDR,
+                curvy_aggregator: Default::default(),
             },
             db,
             rpc_operations,

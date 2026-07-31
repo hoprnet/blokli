@@ -582,6 +582,7 @@ mod tests {
             winning_probability_oracle = "0x0808080808080808080808080808080808080808"
             node_stake_factory = "0x0909090909090909090909090909090909090909"
             xhopr_token = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            curvy_aggregator = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         "#;
 
         let config: Config = toml::from_str(config).expect("contracts should accept hex strings");
@@ -599,8 +600,28 @@ mod tests {
                 winning_probability_oracle: Address::from([8; 20]),
                 node_stake_factory: Address::from([9; 20]),
                 xhopr_token: Address::from([0xaa; 20]),
+                curvy_aggregator: Address::from([0xbb; 20]),
             })
         );
+    }
+
+    #[test]
+    fn test_contract_overrides_require_curvy_aggregator() {
+        let config = r#"
+            [contracts]
+            token = "0x0101010101010101010101010101010101010101"
+            channels = "0x0202020202020202020202020202020202020202"
+            announcements = "0x0303030303030303030303030303030303030303"
+            module_implementation = "0x0404040404040404040404040404040404040404"
+            node_safe_migration = "0x0505050505050505050505050505050505050505"
+            node_safe_registry = "0x0606060606060606060606060606060606060606"
+            ticket_price_oracle = "0x0707070707070707070707070707070707070707"
+            winning_probability_oracle = "0x0808080808080808080808080808080808080808"
+            node_stake_factory = "0x0909090909090909090909090909090909090909"
+            xhopr_token = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "#;
+
+        assert!(toml::from_str::<Config>(config).is_err());
     }
 
     #[test]

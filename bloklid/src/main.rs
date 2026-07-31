@@ -14,6 +14,7 @@ use std::{
 
 use args::{Args, Command, generate_config_template, peek_verbosity_from_env_args};
 use async_signal::{Signal, Signals};
+use blokli_api::server::ApiDatabases;
 use blokli_chain_api::BlokliChain;
 use blokli_chain_indexer::{snapshot::SnapshotManager, startup, utils::redact_url};
 use blokli_db::{
@@ -22,7 +23,6 @@ use blokli_db::{
 };
 use clap::Parser;
 use futures::TryStreamExt;
-use sea_orm::Database;
 use tokio::net::TcpListener;
 
 use crate::{
@@ -294,11 +294,6 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
         let api_handle = if api_config.enabled {
             tracing::info!("Starting blokli-api server on {}", api_config.bind_address);
 
-            // Connect to database for API server
-            let api_db = Database::connect(&database_path)
-                .await
-                .map_err(|e| BloklidError::NonSpecific(format!("Failed to connect API database: {}", e)))?;
-
             // Construct blokli-api ApiConfig from bloklid config
             // We need to get rpc_url and contracts from the original config
             let (rpc_url_for_api, _contracts_for_api, expected_block_time, finality) = {
@@ -343,7 +338,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
 
             // Build API app with indexer state for subscriptions and transaction components
             let api_app = blokli_api::server::build_app(
-                api_db,
+                ApiDatabases::from_blokli(blokli_chain.db()),
                 network.clone(),
                 blokli_api_config,
                 expected_block_time,

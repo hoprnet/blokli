@@ -140,7 +140,7 @@ pub async fn start_server(network: String, finality: u16, config: ApiConfig) -> 
 
     // Build the application
     let app = server::build_app(
-        db,
+        server::ApiDatabases::single(db),
         network,
         config.clone(),
         config.expected_block_time,

@@ -7,10 +7,11 @@ use async_trait::async_trait;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, Log};
 use blokli_chain_types::{AlloyAddressExt, ContractAddresses};
 use blokli_db::{BlokliDbAllOperations, OpenTransaction};
+use curvy_bindings::curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2::CurvyAggregatorAlphaV2Events;
 use hopr_bindings::{
     exports::alloy::{
         primitives::{Address as AlloyAddress, B256, Log as AlloyLog},
-        sol_types::SolEventInterface,
+        sol_types::{SolEvent, SolEventInterface},
     },
     hopr_announcements::HoprAnnouncements::HoprAnnouncementsEvents,
     hopr_channels::HoprChannels::HoprChannelsEvents,
@@ -261,6 +262,10 @@ where
             let event = HoprWinningProbabilityOracleEvents::decode_log(&primitive_log)?;
             self.on_ticket_winning_probability_oracle_event(tx, event.data, is_synced)
                 .await
+        } else if log.address.eq(&self.addresses.curvy_aggregator) {
+            let event = CurvyAggregatorAlphaV2Events::decode_log(&primitive_log)?;
+            let log_index = u256_to_u64(log.log_index, "log_index")?;
+            crate::curvy::expand_note_event(event.data, log.block_number, log.tx_index, log_index)
         } else {
             #[cfg(all(feature = "telemetry", not(test)))]
             increment_indexer_contract_log_count("unknown");
@@ -297,7 +302,7 @@ where
     /// // node_safe_registry, node_stake_factory, token
     /// ```
     fn contract_addresses(&self) -> Vec<Address> {
-        vec![
+        let mut addresses = vec![
             self.addresses.announcements,
             self.addresses.channels,
             self.addresses.ticket_price_oracle,
@@ -305,7 +310,9 @@ where
             self.addresses.node_safe_registry,
             self.addresses.node_stake_factory,
             self.addresses.token,
-        ]
+        ];
+        addresses.push(self.addresses.curvy_aggregator);
+        addresses
     }
 
     fn contract_addresses_map(&self) -> Arc<ContractAddresses> {
@@ -343,6 +350,11 @@ where
             crate::constants::topics::stake_factory()
         } else if contract.eq(&self.addresses.token) {
             crate::constants::topics::token()
+        } else if contract.eq(&self.addresses.curvy_aggregator) {
+            vec![
+                curvy_bindings::curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2::PendingNotes::SIGNATURE_HASH,
+                curvy_bindings::curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2::CommittedNotes::SIGNATURE_HASH,
+            ]
         } else {
             panic!("use of unsupported contract address: {contract}");
         }

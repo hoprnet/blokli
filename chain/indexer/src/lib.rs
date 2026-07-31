@@ -21,6 +21,7 @@
 pub mod block;
 pub mod config;
 pub mod constants;
+pub mod curvy;
 pub mod custom_abis;
 pub mod errors;
 pub mod handlers;

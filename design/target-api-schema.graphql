@@ -178,7 +178,7 @@ type Compatibility {
 
 """
 Map of contract identifier to contract address (hexadecimal format).
-Keys: token, channels, announcements, module_implementation, node_safe_migration, node_safe_registry, ticket_price_oracle, winning_probability_oracle, node_stake_factory
+Keys: token, channels, announcements, module_implementation, node_safe_migration, node_safe_registry, ticket_price_oracle, winning_probability_oracle, node_stake_factory, curvy_aggregator
 Example: {"token": "0x123...", "channels": "0x456...", "node_safe_registry": "0x789..."}
 """
 scalar ContractAddressMap
@@ -207,6 +207,68 @@ type Count {
 Result type for count queries
 """
 union CountResult = Count | MissingFilterError | QueryFailedError
+
+"""
+One item in a Curvy `CommittedNotes` event
+"""
+type CurvyCommittedNote {
+  "Curvy commitment batch index as a decimal uint256 string"
+  batchIndex: String!
+  "Exclusive resume cursor for this item"
+  cursor: CurvyEventCursor!
+  "Note identifier as a decimal uint256 string"
+  noteId: String!
+}
+
+"""
+Exclusive Curvy event position encoded as block, transaction, log, and item indexes
+"""
+scalar CurvyEventCursor
+
+"""
+Raw Curvy note item forwarded by Blokli
+"""
+union CurvyNoteEvent = CurvyCommittedNote | CurvyPendingNote
+
+"""
+Raw indexed fields accepted by the Curvy note subscription
+"""
+input CurvyNoteEventFilter {
+  "Restrict events to pending and/or committed notes"
+  kinds: [CurvyNoteEventKind!]
+  "Restrict events to known note identifiers represented as decimal uint256 strings"
+  noteIds: [String!]
+}
+
+"""
+Kind of raw Curvy note event
+"""
+enum CurvyNoteEventKind {
+  "A note was committed and is now spendable"
+  COMMITTED
+  "A note was announced and is not spendable yet"
+  PENDING
+}
+
+"""
+Metadata for one item in a Curvy `PendingNotes` event
+"""
+type CurvyPendingNote {
+  "Raw amount as a decimal uint256 string"
+  amount: String!
+  "Exclusive resume cursor for this item"
+  cursor: CurvyEventCursor!
+  "Baby Jubjub ephemeral public key coordinates represented as decimal strings"
+  ephemeralKey: [String!]!
+  "Whether the note payload is plaintext"
+  isPlaintext: Boolean!
+  "Note identifier as a decimal uint256 string"
+  noteId: String!
+  "Raw token identifier as a decimal uint256 string"
+  token: String!
+  "View tag used for local ownership detection"
+  viewTag: Int!
+}
 
 """
 ISO 8601 datetime string (e.g., "2024-01-15T10:30:00Z")
@@ -970,6 +1032,19 @@ type SubscriptionRoot {
     "Filter by channel status"
     status: ChannelStatus
   ): Channel!
+  """
+  Subscribe to raw Curvy pending and committed note items
+
+  Historical replay and live forwarding apply the same raw-field filter. The
+  after cursor is exclusive. Reorganizations and event-bus overflow terminate
+  the stream so clients can reconnect using the last cursor they processed.
+  """
+  curvyNoteEvents(
+    "Exclusive cursor after which replay starts"
+    after: CurvyEventCursor
+    "Filter over raw event kind and known note identifiers"
+    filter: CurvyNoteEventFilter
+  ): CurvyNoteEvent!
   """
   Subscribe to readiness-state updates for the API instance
 

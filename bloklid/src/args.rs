@@ -278,6 +278,7 @@ impl Args {
             winning_probability_oracle: network_config.addresses.winning_probability_oracle.to_hopr_address(),
             node_stake_factory: network_config.addresses.node_stake_factory.to_hopr_address(),
             xhopr_token: network_config.addresses.xhopr_token.to_hopr_address(),
+            curvy_aggregator: Default::default(),
         };
 
         if let Some(override_contracts) = config.contracts_override {

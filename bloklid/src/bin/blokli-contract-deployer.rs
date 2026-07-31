@@ -11,6 +11,7 @@ use std::{
     sync::Once,
 };
 
+#[cfg(feature = "curvy-test-deployment")]
 use blokli_chain_types::ContractAddresses as BlokliContractAddresses;
 use clap::Parser;
 #[cfg(feature = "curvy-test-deployment")]
@@ -30,7 +31,7 @@ use hopr_types::{
     chain::ContractAddresses,
     crypto::keypairs::{ChainKeypair, Keypair},
     internal::prelude::WinningProbability,
-    primitive::{prelude::HoprBalance, traits::IntoEndian},
+    primitive::{prelude::HoprBalance, primitives::Address, traits::IntoEndian},
 };
 use serde::Serialize;
 use tracing_subscriber::{Layer as _, prelude::*};
@@ -87,8 +88,22 @@ struct Args {
 }
 
 #[derive(Debug, Serialize)]
-struct ContractsOutput {
-    contracts: BlokliContractAddresses,
+struct ContractsOutput<T> {
+    contracts: T,
+}
+
+#[derive(Debug, Serialize)]
+struct DeployedHoprContractAddresses {
+    token: Address,
+    channels: Address,
+    announcements: Address,
+    module_implementation: Address,
+    node_safe_migration: Address,
+    node_safe_registry: Address,
+    ticket_price_oracle: Address,
+    winning_probability_oracle: Address,
+    node_stake_factory: Address,
+    xhopr_token: Address,
 }
 
 #[tokio::main]
@@ -121,8 +136,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let deployer_address = a2h(signer_chain_key.public().to_address());
     let instances = ContractInstances::deploy_for_testing(provider.clone(), deployer_address, deployer_address).await?;
     let contracts = ContractAddresses::from(&instances);
-    let output = ContractsOutput {
-        contracts: BlokliContractAddresses {
+    let hopr_output = ContractsOutput {
+        contracts: DeployedHoprContractAddresses {
             token: h2a(contracts.token),
             channels: h2a(contracts.channels),
             announcements: h2a(contracts.announcements),
@@ -135,7 +150,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
             xhopr_token: h2a(contracts.xhopr_token),
         },
     };
-    let toml_output = toml::to_string(&output)?;
 
     // Assign minter role to Anvil account 0
     let minter_role = instances.token.MINTER_ROLE().call().await?;
@@ -200,27 +214,33 @@ async fn main() -> Result<(), Box<dyn Error>> {
         args.winning_probability.as_f64()
     );
 
-    let curvy_json: Option<String> = if args.with_curvy {
+    let (curvy_json, toml_output): (Option<String>, String) = if args.with_curvy {
         #[cfg(feature = "curvy-test-deployment")]
         {
             tracing::info!("deploying Curvy v2 local-development contracts");
             let curvy_instances = CurvyContractInstances::deploy_for_testing(provider, signer_address).await?;
             let curvy_contracts = CurvyContractAddresses::from(&curvy_instances);
+            let output = ContractsOutput {
+                contracts: BlokliContractAddresses::new(&contracts, h2a(curvy_contracts.aggregator_proxy)),
+            };
             tracing::info!(
                 aggregator = %curvy_contracts.aggregator_proxy,
                 vault = %curvy_contracts.vault_proxy,
                 portal_factory = %curvy_contracts.portal_factory,
                 "Curvy contracts ready"
             );
-            Some(format!(
-                "{}\n",
-                serde_json::to_string_pretty(&curvy_contracts.to_ignition_json())?
-            ))
+            (
+                Some(format!(
+                    "{}\n",
+                    serde_json::to_string_pretty(&curvy_contracts.to_ignition_json())?
+                )),
+                toml::to_string(&output)?,
+            )
         }
         #[cfg(not(feature = "curvy-test-deployment"))]
         unreachable!("validate_args rejects Curvy without compiled support")
     } else {
-        None
+        (None, toml::to_string(&hopr_output)?)
     };
 
     // Publish outputs only after every requested deployment and serialization succeeds.

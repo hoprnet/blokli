@@ -722,6 +722,138 @@ pub struct RedeemTicketDetails {
     pub result: RedemptionResult,
 }
 
+/// Kind of raw Curvy note event.
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum CurvyNoteEventKind {
+    /// A note was announced and is not spendable yet.
+    Pending,
+    /// A note was committed and is now spendable.
+    Committed,
+}
+
+/// Exclusive position of one note within a Curvy contract log.
+///
+/// The scalar wire representation is `block:transaction:log:item`.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct CurvyEventCursor {
+    /// Block number.
+    pub block: u64,
+    /// Transaction index within the block.
+    pub transaction_index: u64,
+    /// Log index within the transaction.
+    pub log_index: u64,
+    /// Item index within the event arrays.
+    pub item_index: u32,
+}
+
+#[async_graphql::Scalar]
+impl async_graphql::ScalarType for CurvyEventCursor {
+    fn parse(value: async_graphql::Value) -> async_graphql::InputValueResult<Self> {
+        let async_graphql::Value::String(value) = value else {
+            return Err(InputValueError::custom("CurvyEventCursor must be a string"));
+        };
+        let mut parts = value.split(':');
+        let cursor = Self {
+            block: parts.next().ok_or("missing block")?.parse()?,
+            transaction_index: parts.next().ok_or("missing transaction index")?.parse()?,
+            log_index: parts.next().ok_or("missing log index")?.parse()?,
+            item_index: parts.next().ok_or("missing item index")?.parse()?,
+        };
+        if parts.next().is_some() {
+            return Err("too many cursor components".into());
+        }
+        Ok(cursor)
+    }
+
+    fn to_value(&self) -> async_graphql::Value {
+        async_graphql::Value::String(format!(
+            "{}:{}:{}:{}",
+            self.block, self.transaction_index, self.log_index, self.item_index
+        ))
+    }
+}
+
+/// Raw indexed fields accepted by the Curvy note subscription.
+#[derive(InputObject, Clone, Debug, Default)]
+pub struct CurvyNoteEventFilter {
+    /// Restrict events to pending and/or committed notes.
+    pub kinds: Option<Vec<CurvyNoteEventKind>>,
+    /// Restrict events to known note identifiers (decimal `uint256` strings).
+    #[graphql(name = "noteIds")]
+    pub note_ids: Option<Vec<String>>,
+}
+
+/// Metadata for one item in a Curvy `PendingNotes` event.
+#[derive(SimpleObject, Clone, Debug, Eq, PartialEq)]
+pub struct CurvyPendingNote {
+    /// Exclusive resume cursor for this item.
+    pub cursor: CurvyEventCursor,
+    /// Note identifier as a decimal `uint256` string.
+    #[graphql(name = "noteId")]
+    pub note_id: String,
+    /// Baby Jubjub ephemeral public key coordinates as decimal strings.
+    #[graphql(name = "ephemeralKey")]
+    pub ephemeral_key: Vec<String>,
+    /// View tag used for local ownership detection.
+    #[graphql(name = "viewTag")]
+    pub view_tag: u16,
+    /// Raw token identifier as a decimal `uint256` string.
+    pub token: String,
+    /// Raw amount as a decimal `uint256` string.
+    pub amount: String,
+    /// Whether the note payload is plaintext.
+    #[graphql(name = "isPlaintext")]
+    pub is_plaintext: bool,
+}
+
+/// One item in a Curvy `CommittedNotes` event.
+#[derive(SimpleObject, Clone, Debug, Eq, PartialEq)]
+pub struct CurvyCommittedNote {
+    /// Exclusive resume cursor for this item.
+    pub cursor: CurvyEventCursor,
+    /// Note identifier as a decimal `uint256` string.
+    #[graphql(name = "noteId")]
+    pub note_id: String,
+    /// Curvy commitment batch index as a decimal `uint256` string.
+    #[graphql(name = "batchIndex")]
+    pub batch_index: String,
+}
+
+/// Raw Curvy note item forwarded by Blokli.
+#[derive(Union, Clone, Debug, Eq, PartialEq)]
+pub enum CurvyNoteEvent {
+    /// Pending note metadata used by the node for local ownership detection.
+    Pending(CurvyPendingNote),
+    /// Committed note marker used by the node for local PIX correlation.
+    Committed(CurvyCommittedNote),
+}
+
+impl CurvyNoteEvent {
+    /// Returns the raw event kind.
+    pub fn kind(&self) -> CurvyNoteEventKind {
+        match self {
+            Self::Pending(_) => CurvyNoteEventKind::Pending,
+            Self::Committed(_) => CurvyNoteEventKind::Committed,
+        }
+    }
+
+    /// Returns the note identifier.
+    pub fn note_id(&self) -> &str {
+        match self {
+            Self::Pending(note) => &note.note_id,
+            Self::Committed(note) => &note.note_id,
+        }
+    }
+
+    /// Returns the event cursor.
+    pub fn cursor(&self) -> CurvyEventCursor {
+        match self {
+            Self::Pending(note) => note.cursor,
+            Self::Committed(note) => note.cursor,
+        }
+    }
+}
+
 /// Selector for safe lookup queries.
 ///
 /// This enum is used together with a single `address` argument when querying
@@ -824,7 +956,7 @@ pub struct TicketParameters {
 
 impl From<&blokli_chain_types::ContractAddresses> for ContractAddressMap {
     fn from(addresses: &blokli_chain_types::ContractAddresses) -> Self {
-        let map = [
+        let map: HashMap<String, String> = [
             ("token", &addresses.token),
             ("channels", &addresses.channels),
             ("announcements", &addresses.announcements),
@@ -839,6 +971,9 @@ impl From<&blokli_chain_types::ContractAddresses> for ContractAddressMap {
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
+
+        let mut map = map;
+        map.insert("curvy_aggregator".to_string(), addresses.curvy_aggregator.to_string());
 
         ContractAddressMap(map)
     }
