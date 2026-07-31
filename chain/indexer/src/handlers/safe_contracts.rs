@@ -12,7 +12,7 @@ use hopr_types::{
 };
 use tracing::{debug, info, warn};
 
-use super::ContractEventHandlers;
+use super::{ContractEventHandlers, u64_to_u32, u256_to_u32, u256_to_u64};
 use crate::{custom_abis::safe_contract_events::SafeContract::SafeContractEvents, errors::Result, state::IndexerEvent};
 
 fn to_hopr_contract_addresses(addresses: &BlokliContractAddresses) -> HoprContractAddresses {
@@ -72,24 +72,9 @@ where
                         safe_address,
                         signer,
                         ticket_amount,
-                        u32::try_from(log.block_number).map_err(|_| {
-                            crate::errors::CoreEthereumIndexerError::ProcessError(format!(
-                                "block number {} does not fit into u32",
-                                log.block_number
-                            ))
-                        })?,
-                        u32::try_from(log.tx_index).map_err(|_| {
-                            crate::errors::CoreEthereumIndexerError::ProcessError(format!(
-                                "tx index {} does not fit into u32",
-                                log.tx_index
-                            ))
-                        })?,
-                        u32::try_from(log.log_index.as_u64()).map_err(|_| {
-                            crate::errors::CoreEthereumIndexerError::ProcessError(format!(
-                                "log index {} does not fit into u32",
-                                log.log_index
-                            ))
-                        })?,
+                        u64_to_u32(log.block_number, "block_number")?,
+                        u64_to_u32(log.tx_index, "tx_index")?,
+                        u256_to_u32(log.log_index, "log_index")?,
                     )
                     .await?;
 
@@ -189,6 +174,7 @@ where
         _is_synced: bool,
     ) -> Result<Vec<IndexerEvent>> {
         let chain_tx_hash = Hash::from(log.tx_hash);
+        let log_index = u256_to_u64(log.log_index, "log_index")?;
 
         match event {
             SafeContractEvents::SafeSetup(safe_setup) => {
@@ -208,7 +194,7 @@ where
                         Some(safe_setup.initiator.to_hopr_address()),
                         log.block_number,
                         log.tx_index,
-                        log.log_index.as_u64(),
+                        log_index,
                     )
                     .await?;
 
@@ -221,7 +207,7 @@ where
                             true,
                             log.block_number,
                             log.tx_index,
-                            log.log_index.as_u64(),
+                            log_index,
                         )
                         .await?;
                 }
@@ -251,7 +237,7 @@ where
                         None,
                         log.block_number,
                         log.tx_index,
-                        log.log_index.as_u64(),
+                        log_index,
                     )
                     .await?;
                 self.db
@@ -262,7 +248,7 @@ where
                         true,
                         log.block_number,
                         log.tx_index,
-                        log.log_index.as_u64(),
+                        log_index,
                     )
                     .await?;
                 info!(
@@ -289,7 +275,7 @@ where
                         None,
                         log.block_number,
                         log.tx_index,
-                        log.log_index.as_u64(),
+                        log_index,
                     )
                     .await?;
                 self.db
@@ -300,7 +286,7 @@ where
                         false,
                         log.block_number,
                         log.tx_index,
-                        log.log_index.as_u64(),
+                        log_index,
                     )
                     .await?;
                 info!(
@@ -326,7 +312,7 @@ where
                         None,
                         log.block_number,
                         log.tx_index,
-                        log.log_index.as_u64(),
+                        log_index,
                     )
                     .await?;
                 info!(
@@ -352,7 +338,7 @@ where
                         None,
                         log.block_number,
                         log.tx_index,
-                        log.log_index.as_u64(),
+                        log_index,
                     )
                     .await?;
                 info!(
@@ -379,7 +365,7 @@ where
                         None,
                         log.block_number,
                         log.tx_index,
-                        log.log_index.as_u64(),
+                        log_index,
                     )
                     .await?;
                 warn!(
