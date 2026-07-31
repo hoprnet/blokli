@@ -199,8 +199,7 @@ jobs:
     # Match on explicit failure/cancellation rather than !success(): jobs gated to main
     # are *skipped* on other base branches, and a skipped need also makes success() false.
     if: >-
-      ${{ always() && github.event.pull_request.merged == true
-      && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
+      ${{ always() && github.event.pull_request.merged == true && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
     runs-on: depot-ubuntu-24.04-2
     steps:
       - name: Notify failed merge pipeline
