@@ -152,7 +152,9 @@ in
     // {
       runClippy = true; # Run Clippy linter
       prependPackageName = false;
-      cargoExtraArgs = "--workspace";
+      # --all-features so optional, cfg-gated code (e.g. curvy-test-deployment) is
+      # linted too; without it those paths are never compiled by CI.
+      cargoExtraArgs = "--workspace --all-features";
     }
   );
 

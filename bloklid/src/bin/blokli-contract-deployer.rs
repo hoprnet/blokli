@@ -244,6 +244,14 @@ fn validate_args(args: &Args) -> io::Result<()> {
             "--curvy-json-out requires --with-curvy",
         ));
     }
+    // The HOPR TOML falls back to stdout, but the Curvy JSON has no such fallback: stdout is
+    // already carrying the TOML, so a second document there would garble both.
+    if args.with_curvy && args.curvy_json_out.is_none() {
+        tracing::warn!(
+            "--with-curvy without --curvy-json-out: the Ignition address JSON is discarded; only the aggregator, \
+             vault and portal factory addresses are logged"
+        );
+    }
     if let (Some(hopr), Some(curvy)) = (args.output.as_deref(), args.curvy_json_out.as_deref())
         && normalize_path(hopr)? == normalize_path(curvy)?
     {
