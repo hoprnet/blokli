@@ -1,44 +1,10 @@
-use std::time::Duration;
+use std::{fmt, time::Duration};
 
 use blokli_chain_indexer::utils::redact_url;
 use blokli_chain_types::{ChainConfig, ContractAddresses};
+use blokli_db::utils::redact_database_url;
 
 use crate::network::Network;
-
-/// Redacts username and password from database URLs while keeping host, port, and database visible
-///
-/// # Examples
-/// ```
-/// # use bloklid::config::redact_database_url;
-/// assert_eq!(
-///     redact_database_url("postgres://user:pass@localhost:5432/mydb"),
-///     "postgres://REDACTED:REDACTED@localhost:5432/mydb"
-/// );
-/// assert_eq!(
-///     redact_database_url("postgresql://localhost:5432/mydb"),
-///     "postgresql://localhost:5432/mydb"
-/// );
-/// ```
-pub fn redact_database_url(url: &str) -> String {
-    // Parse the URL to extract components
-    if let Some(scheme_end) = url.find("://") {
-        let scheme = &url[..scheme_end + 3];
-        let rest = &url[scheme_end + 3..];
-
-        // Check if there's an @ sign indicating credentials
-        if let Some(at_pos) = rest.find('@') {
-            let after_at = &rest[at_pos..];
-            // Redact credentials but keep everything else
-            format!("{}REDACTED:REDACTED{}", scheme, after_at)
-        } else {
-            // No credentials, return as-is
-            url.to_string()
-        }
-    } else {
-        // Not a URL format, return as-is
-        url.to_string()
-    }
-}
 
 fn default_rpc_url() -> String {
     "http://localhost:8545".to_string()
@@ -61,7 +27,7 @@ fn default_max_block_range() -> u32 {
 /// Supports two formats:
 /// 1. Simple URL: `url = "postgresql://user:pass@host:port/database"`
 /// 2. Detailed components with individual fields (host, port, username, password, database)
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PostgreSqlConfig {
     /// Connection URL (Option 1: simple URL format)
@@ -85,6 +51,24 @@ pub struct PostgreSqlConfig {
     /// Maximum number of connections
     #[serde(default = "default_max_connections")]
     pub max_connections: u32,
+}
+
+impl fmt::Debug for PostgreSqlConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let url = self.url.as_deref().map(redact_database_url);
+        let password = self.password.as_ref().map(|_| "REDACTED");
+
+        formatter
+            .debug_struct("PostgreSqlConfig")
+            .field("url", &url)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("password", &password)
+            .field("database", &self.database)
+            .field("max_connections", &self.max_connections)
+            .finish()
+    }
 }
 
 /// SQLite database configuration
@@ -580,7 +564,44 @@ fn default_otlp_signals() -> String {
 mod tests {
     use std::{fs, path::PathBuf};
 
+    use hopr_types::primitive::primitives::Address;
+
     use super::*;
+
+    #[test]
+    fn test_contract_overrides_from_hex_strings() {
+        let config = r#"
+            [contracts]
+            token = "0x0101010101010101010101010101010101010101"
+            channels = "0x0202020202020202020202020202020202020202"
+            announcements = "0x0303030303030303030303030303030303030303"
+            module_implementation = "0x0404040404040404040404040404040404040404"
+            node_safe_migration = "0x0505050505050505050505050505050505050505"
+            node_safe_registry = "0x0606060606060606060606060606060606060606"
+            ticket_price_oracle = "0x0707070707070707070707070707070707070707"
+            winning_probability_oracle = "0x0808080808080808080808080808080808080808"
+            node_stake_factory = "0x0909090909090909090909090909090909090909"
+            xhopr_token = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "#;
+
+        let config: Config = toml::from_str(config).expect("contracts should accept hex strings");
+
+        assert_eq!(
+            config.contracts_override,
+            Some(ContractAddresses {
+                token: Address::from([1; 20]),
+                channels: Address::from([2; 20]),
+                announcements: Address::from([3; 20]),
+                module_implementation: Address::from([4; 20]),
+                node_safe_migration: Address::from([5; 20]),
+                node_safe_registry: Address::from([6; 20]),
+                ticket_price_oracle: Address::from([7; 20]),
+                winning_probability_oracle: Address::from([8; 20]),
+                node_stake_factory: Address::from([9; 20]),
+                xhopr_token: Address::from([0xaa; 20]),
+            })
+        );
+    }
 
     #[test]
     fn test_strict_parsing() {
@@ -911,33 +932,56 @@ mod tests {
     }
 
     #[test]
-    fn test_redact_database_url_with_credentials() {
-        // URL with username and password should redact only credentials
-        let url = "postgres://user:password@localhost:5432/mydb";
-        let redacted = redact_database_url(url);
-        assert_eq!(redacted, "postgres://REDACTED:REDACTED@localhost:5432/mydb");
+    fn test_postgres_config_debug_redacts_password_field() {
+        let config = PostgreSqlConfig {
+            url: None,
+            host: Some("localhost".to_string()),
+            port: Some(5432),
+            username: Some("blokli".to_string()),
+            password: Some("do-not-log-this-password".to_string()),
+            database: Some("blokli".to_string()),
+            max_connections: 10,
+        };
+
+        let debug_output = format!("{config:?}");
+
+        assert!(!debug_output.contains("do-not-log-this-password"));
+        assert!(debug_output.contains("REDACTED"));
     }
 
     #[test]
-    fn test_redact_database_url_without_credentials() {
-        // URL without credentials should remain unchanged
-        let url = "postgresql://localhost:5432/mydb";
-        let redacted = redact_database_url(url);
-        assert_eq!(redacted, "postgresql://localhost:5432/mydb");
+    fn test_postgres_config_debug_redacts_password_in_url() {
+        let config = PostgreSqlConfig {
+            url: Some("postgresql://blokli:do-not-log-this-password@localhost:5432/blokli".to_string()),
+            host: None,
+            port: None,
+            username: None,
+            password: None,
+            database: None,
+            max_connections: 10,
+        };
+
+        let debug_output = format!("{config:?}");
+
+        assert!(!debug_output.contains("do-not-log-this-password"));
+        assert!(debug_output.contains("postgresql://REDACTED:REDACTED@localhost:5432/blokli"));
     }
 
     #[test]
-    fn test_redact_database_url_with_port() {
-        // URL with custom port
-        let url = "postgres://admin:secret@db.example.com:9876/production";
-        let redacted = redact_database_url(url);
-        assert_eq!(redacted, "postgres://REDACTED:REDACTED@db.example.com:9876/production");
-    }
+    fn test_postgres_config_debug_redacts_password_in_url_query() {
+        let config = PostgreSqlConfig {
+            url: Some("postgresql://localhost:5432/blokli?password=do-not-log-this-password".to_string()),
+            host: None,
+            port: None,
+            username: None,
+            password: None,
+            database: None,
+            max_connections: 10,
+        };
 
-    #[test]
-    fn test_redact_non_url_string() {
-        // Non-URL string should remain unchanged for database URLs
-        let not_url = "just-a-string";
-        assert_eq!(redact_database_url(not_url), not_url);
+        let debug_output = format!("{config:?}");
+
+        assert!(!debug_output.contains("do-not-log-this-password"));
+        assert!(debug_output.contains("?REDACTED"));
     }
 }

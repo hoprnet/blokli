@@ -1,6 +1,3 @@
-// Allow casts for u32 block numbers
-#![allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
-
 use async_trait::async_trait;
 use blokli_db_entity::{
     chain_info,
@@ -23,6 +20,7 @@ use crate::{
     api::info::{DomainSeparator, IndexerData},
     db::BlokliDb,
     errors::{DbSqlError, DbSqlError::MissingFixedTableEntry, Result},
+    numeric::i64_to_u32,
 };
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -364,12 +362,7 @@ impl BlokliDbInfoOperations for BlokliDb {
                         .await?
                         .ok_or(DbSqlError::MissingFixedTableEntry("chain_info".into()))
                         .and_then(|m| {
-                            let block_number = u32::try_from(m.last_indexed_block).map_err(|_| {
-                                DbSqlError::InvalidData(format!(
-                                    "last_indexed_block {} exceeds u32::MAX",
-                                    m.last_indexed_block
-                                ))
-                            })?;
+                            let block_number = i64_to_u32(m.last_indexed_block, "last_indexed_block")?;
                             Ok(IndexerStateInfo {
                                 latest_block_number: block_number,
                                 ..Default::default()
@@ -390,12 +383,7 @@ impl BlokliDbInfoOperations for BlokliDb {
                         .await?
                         .ok_or(MissingFixedTableEntry("chain_info".into()))?;
 
-                    let current_last_indexed_block = u32::try_from(model.last_indexed_block).map_err(|_| {
-                        DbSqlError::InvalidData(format!(
-                            "last_indexed_block {} exceeds u32::MAX",
-                            model.last_indexed_block
-                        ))
-                    })?;
+                    let current_last_indexed_block = i64_to_u32(model.last_indexed_block, "last_indexed_block")?;
 
                     let mut active_model = model.into_active_model();
 
@@ -405,7 +393,7 @@ impl BlokliDbInfoOperations for BlokliDb {
                         "update block"
                     );
 
-                    active_model.last_indexed_block = Set(block_num as i64);
+                    active_model.last_indexed_block = Set(i64::from(block_num));
                     active_model.update(tx.as_ref()).await?;
 
                     Ok::<_, DbSqlError>(())

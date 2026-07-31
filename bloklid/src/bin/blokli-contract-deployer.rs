@@ -20,7 +20,7 @@ use hopr_types::{
     chain::ContractAddresses,
     crypto::keypairs::{ChainKeypair, Keypair},
     internal::prelude::WinningProbability,
-    primitive::{prelude::HoprBalance, primitives::Address, traits::IntoEndian},
+    primitive::{prelude::HoprBalance, traits::IntoEndian},
 };
 use serde::Serialize;
 use tracing_subscriber::{Layer as _, prelude::*};
@@ -82,8 +82,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let rpc_client = ClientBuilder::default().http(rpc_url);
     let provider = ProviderBuilder::new().wallet(signer).connect_client(rpc_client);
 
-    let instances =
-        ContractInstances::deploy_for_testing(provider, a2h(signer_chain_key.public().to_address())).await?;
+    // The local deployment uses a single signer for both the HOPR and common contract deployers.
+    let deployer_address = a2h(signer_chain_key.public().to_address());
+    let instances = ContractInstances::deploy_for_testing(provider, deployer_address, deployer_address).await?;
     let contracts = ContractAddresses::from(&instances);
     let output = ContractsOutput {
         contracts: BlokliContractAddresses {
@@ -96,7 +97,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             ticket_price_oracle: h2a(contracts.ticket_price_oracle),
             winning_probability_oracle: h2a(contracts.winning_probability_oracle),
             node_stake_factory: h2a(contracts.node_stake_factory),
-            xhopr_token: Address::default(), // xHOPR is not deployed by this script, so we set it to zero address
+            xhopr_token: h2a(contracts.xhopr_token),
         },
     };
     let toml_output = toml::to_string(&output)?;

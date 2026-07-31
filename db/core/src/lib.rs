@@ -15,11 +15,13 @@ pub mod events;
 pub mod info;
 pub mod logs;
 pub mod node_safe_registrations;
+mod numeric;
 pub mod safe_contracts;
 pub mod safe_history;
 pub mod safe_redeemed_stats;
 pub mod snapshot;
 pub mod state_queries;
+pub mod utils;
 pub mod version;
 
 use std::{path::PathBuf, time::Instant};

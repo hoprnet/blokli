@@ -57,8 +57,8 @@ futures-util = "0.3.32"
 hex = "0.4.3"
 hex-literal = "1.1.0"
 hopli = { git = "https://github.com/hoprnet/hopli", branch = "main" }
-hopr-bindings = "4.9.1"
-hopr-types = "1.8.2"
+hopr-bindings = "4.12.0"
+hopr-types = "2.0.2"
 
 http = "1.4.2"
 humantime-serde = "1.1.1"
@@ -91,6 +91,7 @@ sea-orm = { version = "2.0.0-rc.40", default-features = false, features = [
   "runtime-tokio-rustls",
   "sqlx-postgres",
   "with-chrono",
+  "with-json",
 ] }
 sea-orm-cli = { version = "2.0.0-rc.40", default-features = false, features = [
   "codegen",
@@ -164,6 +165,13 @@ strip         = true
 # perform minimal optimizations to prevent stack overflows in large tests
 [profile.test]
 opt-level = 1
+
+# CI keeps line-level backtraces while avoiding large incremental and full
+# debug-info artifacts in the Nix binary cache.
+[profile.ci-test]
+debug       = 1
+incremental = false
+inherits    = "test"
 
 # this profile focuses on the best runtime performance and the smallest binary size
 [profile.release]
