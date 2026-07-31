@@ -48,6 +48,7 @@ blokli-db-migration = { path = "db/migration" }
 chrono = "0.4.45"
 clap = { version = "4.6.1", features = ["derive", "env", "string"] }
 config = "0.15.23"
+curvy-bindings = { version = "=1.0.0-rc-1" }
 dashmap = "6.2.1"
 env_logger = "0.11.10"
 flagset = "0.4.7"
@@ -57,7 +58,7 @@ futures-util = "0.3.32"
 hex = "0.4.3"
 hex-literal = "1.1.0"
 hopli = { git = "https://github.com/hoprnet/hopli", branch = "main" }
-hopr-bindings = "4.12.0"
+hopr-bindings = "4.12.1"
 hopr-types = "2.0.2"
 
 http = "1.4.2"

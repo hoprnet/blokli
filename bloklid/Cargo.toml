@@ -9,6 +9,7 @@ repository  = "https://github.com/hoprnet/hoprnet"
 version     = "0.12.1"
 
 [features]
+curvy-test-deployment = ["dep:curvy-bindings"]
 default = ["runtime-tokio"]
 runtime-tokio = [
   "blokli-chain-api/runtime-tokio",
@@ -49,6 +50,7 @@ opentelemetry_sdk = { workspace = true, features = [
 ] }
 sea-orm = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 serde_with = { workspace = true }
 smart-default = { workspace = true }
 strum = { workspace = true }
@@ -71,6 +73,7 @@ blokli-db            = { workspace = true }
 
 # HOPR dependencies
 config = { workspace = true }
+curvy-bindings = { workspace = true, optional = true }
 hopr-bindings = { workspace = true }
 hopr-types = { workspace = true, features = [
   "chain",

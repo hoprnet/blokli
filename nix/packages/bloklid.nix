@@ -52,6 +52,12 @@ let
       "${name}-dev" = builders.${platform}.callPackage nixLib.mkRustPackage (
         args // { CARGO_PROFILE = "dev"; }
       );
+      "${name}-curvy" = builders.${platform}.callPackage nixLib.mkRustPackage (
+        args
+        // {
+          cargoExtraArgs = "-p bloklid --bins --features curvy-test-deployment";
+        }
+      );
     };
 
   bloklidPackages = builtins.foldl' (a: b: a // b) { } (
@@ -146,7 +152,9 @@ in
     // {
       runClippy = true; # Run Clippy linter
       prependPackageName = false;
-      cargoExtraArgs = "--workspace";
+      # --all-features so optional, cfg-gated code (e.g. curvy-test-deployment) is
+      # linted too; without it those paths are never compiled by CI.
+      cargoExtraArgs = "--workspace --all-features";
     }
   );
 

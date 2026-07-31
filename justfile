@@ -82,11 +82,11 @@ fmt:
 
 # Run clippy lints with warnings as errors
 clippy:
-    cargo clippy --workspace -- -D warnings
+    cargo clippy --workspace --all-features -- -D warnings
 
 # Run clippy on all targets (lib, bin, tests, benches, examples)
 clippy-all:
-    cargo clippy --workspace --all-targets -- -D warnings
+    cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 # Automatically fix clippy warnings
 clippy-fix:
@@ -311,6 +311,10 @@ helm-push:
 # Run smoke tests with Docker Compose (PostgreSQL + Anvil) - includes checkpoint resume validation
 smoke-test:
     ./tests/smoke/run-smoke-test.sh
+
+# Run the Curvy image smoke test (deploys Curvy v2 on Anvil, verifies on-chain bytecode)
+smoke-test-curvy:
+    ./tests/smoke/run-curvy-smoke-test.sh
 
 # Run smoke tests against Gnosis Chain RPC (allows high lag) - includes checkpoint resume validation
 smoke-test-gnosis:

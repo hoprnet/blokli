@@ -7,6 +7,7 @@ ANVIL_BLOCK_TIME="${ANVIL_BLOCK_TIME:-1}"
 ANVIL_ACCOUNTS="${ANVIL_ACCOUNTS:-10}"
 ANVIL_BALANCE="${ANVIL_BALANCE:-10000}"
 ANVIL_RPC_URL="${ANVIL_RPC_URL:-http://127.0.0.1:${ANVIL_PORT}}"
+BLOKLI_DEPLOY_CURVY="${BLOKLI_DEPLOY_CURVY:-false}"
 
 DATA_DIR="${BLOKLI_DATA_DIRECTORY:-/data}"
 CONFIG_PATH="${BLOKLI_CONFIG_PATH:-/config.toml}"
@@ -54,6 +55,13 @@ CONTRACTS_PATH="${DATA_DIR}/contracts-deploy.toml"
 DEPLOYER_ARGS=()
 if [ -n "${ANVIL_DEPLOYER_PRIVATE_KEY:-}" ]; then
   DEPLOYER_ARGS+=(--private-key "${ANVIL_DEPLOYER_PRIVATE_KEY}")
+fi
+if [ "${BLOKLI_DEPLOY_CURVY}" = "true" ]; then
+  CURVY_JSON_PATH="${CURVY_JSON_PATH:-${DATA_DIR}/curvy_deployed_addresses.json}"
+  # The default lives under DATA_DIR (already created above), but an overridden
+  # CURVY_JSON_PATH may point somewhere that does not exist yet.
+  mkdir -p "$(dirname "${CURVY_JSON_PATH}")"
+  DEPLOYER_ARGS+=(--with-curvy --curvy-json-out "${CURVY_JSON_PATH}")
 fi
 
 # Deploy contracts with error handling
