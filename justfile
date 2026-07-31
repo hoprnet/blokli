@@ -312,6 +312,10 @@ helm-push:
 smoke-test:
     ./tests/smoke/run-smoke-test.sh
 
+# Run the Curvy image smoke test (deploys Curvy v2 on Anvil, verifies on-chain bytecode)
+smoke-test-curvy:
+    ./tests/smoke/run-curvy-smoke-test.sh
+
 # Run smoke tests against Gnosis Chain RPC (allows high lag) - includes checkpoint resume validation
 smoke-test-gnosis:
     SMOKE_CONFIG=config-smoke-gnosis.toml ./tests/smoke/run-smoke-test.sh

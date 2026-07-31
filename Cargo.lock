@@ -4032,7 +4032,8 @@ dependencies = [
 [[package]]
 name = "hopr-bindings"
 version = "4.12.1"
-source = "git+https://github.com/hoprnet/contracts?branch=jean%2Frelax-constraint-on-alloy#f444d2616f175e58fba18e4314458337c0208a92"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9002389b5e9013a604cb654dc89152bd4c32ea64031f7f4837a8631c27ca2c51"
 dependencies = [
  "alloy",
  "anyhow",
