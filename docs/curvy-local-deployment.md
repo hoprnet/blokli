@@ -39,6 +39,14 @@ nix build -L .#docker-bloklid-anvil-curvy-x86_64-linux \
 docker load < result-curvy-image
 ```
 
+The merge pipeline also publishes this image to the artifact registry as
+`bloklid-anvil-curvy`, alongside the Curvy-free `bloklid-anvil`. Pull it instead of
+building locally when you only need to run the image:
+
+```bash
+docker pull europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid-anvil-curvy:latest
+```
+
 Start the image with a writable data directory. The entrypoint writes
 `curvy_deployed_addresses.json` only after both HOPR and Curvy deployment succeed.
 
