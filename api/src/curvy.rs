@@ -7,7 +7,10 @@ use blokli_db_entity::{
     curvy_pending_note, curvy_token_registration,
 };
 use hopr_bindings::exports::alloy::primitives::U256;
-use hopr_types::{crypto::types::Hash, primitive::prelude::Address, primitive::traits::ToHex};
+use hopr_types::{
+    crypto::types::Hash,
+    primitive::{prelude::Address, traits::ToHex},
+};
 
 use crate::errors;
 

@@ -15,11 +15,13 @@ use curvy_bindings::{
 };
 use hopr_bindings::exports::alloy::primitives::U256;
 use hopr_types::primitive::traits::ToHex;
-use sea_orm::sea_query::OnConflict;
-use sea_orm::{ActiveValue::Set, EntityTrait};
+use sea_orm::{ActiveValue::Set, EntityTrait, sea_query::OnConflict};
 
 use super::ContractEventHandlers;
-use crate::{errors::CoreEthereumIndexerError, errors::Result, state::IndexerEvent};
+use crate::{
+    errors::{CoreEthereumIndexerError, Result},
+    state::IndexerEvent,
+};
 
 fn u256_bytes(value: U256) -> Vec<u8> {
     value.to_be_bytes::<32>().to_vec()
