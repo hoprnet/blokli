@@ -265,7 +265,9 @@
               extraContents = [
                 binary
                 platformPkgs.curl
-                platformPkgs.foundry
+                # The Nixpkgs Foundry 1.7.1 package embeds vulnerable quinn-proto
+                # 0.11.14. The pinned foundry.nix nightly uses 0.11.16.
+                platformPkgs.foundry-bin
                 (mkStaticEntrypoint {
                   pkgs = platformPkgs;
                   binary = anvilEntrypoint;

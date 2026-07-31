@@ -10,7 +10,8 @@
 #   2. curvy_deployed_addresses.json is written and is valid JSON
 #   3. every expected Ignition key is present, well-formed and non-zero
 #   4. every unique address has bytecode on chain (eth_getCode != 0x)
-#   5. the HOPR contracts.toml is written too (the Curvy path must not break it)
+#   5. the generated Blokli config contains the HOPR contracts section too
+#      (the Curvy path must not break it)
 #
 # Usage:
 #   SOURCE_IMAGE=myimage:tag ./run-curvy-smoke-test.sh # pull image from a registry
@@ -45,7 +46,7 @@ NIX_FLAKE_TARGET="${NIX_FLAKE_TARGET:-.#docker-bloklid-anvil-curvy-${HOST_NIX_AR
 LOCAL_IMAGE="bloklid-anvil-curvy:latest"
 CONTAINER_NAME="blokli-curvy-smoke"
 CURVY_JSON_IN_CONTAINER="/data/curvy_deployed_addresses.json"
-CONTRACTS_TOML_IN_CONTAINER="/data/contracts.toml"
+CONFIG_TOML_IN_CONTAINER="/config.toml"
 
 HOST_PORT_RPC="${HOST_PORT_RPC:-8545}"
 HOST_PORT_API="${HOST_PORT_API:-8080}"
@@ -195,11 +196,15 @@ copy_artifacts() {
   fi
   log_pass "curvy_deployed_addresses.json present"
 
-  if ! docker cp "${CONTAINER_NAME}:${CONTRACTS_TOML_IN_CONTAINER}" "${WORK_DIR}/contracts.toml" 2>/dev/null; then
-    log_error "${CONTRACTS_TOML_IN_CONTAINER} missing — HOPR deployment did not complete"
+  if ! docker cp "${CONTAINER_NAME}:${CONFIG_TOML_IN_CONTAINER}" "${WORK_DIR}/config.toml" 2>/dev/null; then
+    log_error "${CONFIG_TOML_IN_CONTAINER} missing — Blokli configuration was not generated"
     return 1
   fi
-  log_pass "contracts.toml present"
+  if ! grep -q '^\[contracts\]$' "${WORK_DIR}/config.toml"; then
+    log_error "${CONFIG_TOML_IN_CONTAINER} has no [contracts] section — HOPR deployment did not complete"
+    return 1
+  fi
+  log_pass "HOPR contracts present in generated config"
 }
 
 validate_json() {
