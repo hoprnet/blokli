@@ -30,7 +30,10 @@ use hopr_types::{
     chain::ContractAddresses,
     crypto::keypairs::{ChainKeypair, Keypair},
     internal::prelude::WinningProbability,
-    primitive::{prelude::HoprBalance, traits::IntoEndian},
+    primitive::{
+        prelude::{Address, HoprBalance},
+        traits::IntoEndian,
+    },
 };
 use serde::Serialize;
 use tracing_subscriber::{Layer as _, prelude::*};
