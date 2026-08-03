@@ -2,39 +2,6 @@
 source: api/tests/curvy_event_pipeline_test.rs
 expression: history_data
 ---
-curvyCommitmentGasCostUpdates:
-  - gasFees:
-      pendingNoteCommitment: "100000000000000000"
-      portalDeployment: "50000000000000000"
-      tokenId: "1"
-      withdrawal: "50000000000000000"
-    position:
-      block: "23"
-      eventItemIndex: "0"
-      logIndex: "1"
-      transactionHash: "0x25a382935bdad339d6d8882c429a59c7d0cdfdaf21f56aa6a683e523a3865dce"
-      transactionIndex: "0"
-    root: "318527533646335451640559730256624356987889861989382757516685243934603950464"
-  - gasFees:
-      pendingNoteCommitment: "200000000000000000"
-      portalDeployment: "50000000000000000"
-      tokenId: "2"
-      withdrawal: "50000000000000000"
-    position:
-      block: "23"
-      eventItemIndex: "1"
-      logIndex: "1"
-      transactionHash: "0x25a382935bdad339d6d8882c429a59c7d0cdfdaf21f56aa6a683e523a3865dce"
-      transactionIndex: "0"
-    root: "318527533646335451640559730256624356987889861989382757516685243934603950464"
-curvyCommitmentGasFeeRootUpdates:
-  - position:
-      block: "23"
-      eventItemIndex: "0"
-      logIndex: "0"
-      transactionHash: "0x25a382935bdad339d6d8882c429a59c7d0cdfdaf21f56aa6a683e523a3865dce"
-      transactionIndex: "0"
-    root: "318527533646335451640559730256624356987889861989382757516685243934603950464"
 curvyCommittedNotes:
   - batchIndex: "6"
     noteId: "100"
@@ -48,7 +15,7 @@ curvyCommittedNotes:
     noteId: "101"
     position:
       block: "27"
-      eventItemIndex: "0"
+      eventItemIndex: "1"
       logIndex: "0"
       transactionHash: "0x3131313131313131313131313131313131313131313131313131313131313131"
       transactionIndex: "0"
@@ -56,7 +23,7 @@ curvyCommittedNotes:
     noteId: "102"
     position:
       block: "27"
-      eventItemIndex: "1"
+      eventItemIndex: "3"
       logIndex: "0"
       transactionHash: "0x3131313131313131313131313131313131313131313131313131313131313131"
       transactionIndex: "0"
@@ -73,7 +40,7 @@ curvyCommittedNullifiers:
     nullifier: "202"
     position:
       block: "28"
-      eventItemIndex: "1"
+      eventItemIndex: "2"
       logIndex: "0"
       transactionHash: "0x3232323232323232323232323232323232323232323232323232323232323232"
       transactionIndex: "0"
@@ -92,12 +59,3 @@ curvyPendingNotes:
       transactionIndex: "0"
     tokenId: "1"
     viewTag: 44
-curvyTokenRegistrations:
-  - position:
-      block: "20"
-      eventItemIndex: "0"
-      logIndex: "0"
-      transactionHash: "0xb8273cb397b6df9f4065573eb83d2ff0c8f1fdf4fbcd6a0ccd247c6747a7d6e0"
-      transactionIndex: "0"
-    tokenAddress: "0x9a676e781a523b5d0c0e43731313a708cb607508"
-    tokenId: "2"

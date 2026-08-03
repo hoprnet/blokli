@@ -66,31 +66,6 @@ CREATE TABLE "channel_state" (
     FOREIGN KEY ("channel_id") REFERENCES "channel" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
-CREATE TABLE "curvy_commitment_gas_cost" (
-    "id" integer PRIMARY KEY AUTOINCREMENT,
-    "token_id" blob (32) NOT NULL,
-    "portal_deployment" blob (32) NOT NULL,
-    "pending_note_commitment" blob (32) NOT NULL,
-    "withdrawal" blob (32) NOT NULL,
-    "root" blob (32) NOT NULL,
-    "event_item_index" integer NOT NULL,
-    "chain_tx_hash" blob (32) NOT NULL,
-    "published_block" integer NOT NULL,
-    "published_tx_index" integer NOT NULL,
-    "published_log_index" integer NOT NULL,
-    CONSTRAINT "idx_curvy_commitment_gas_cost_unique_position" UNIQUE ("published_block", "published_tx_index", "published_log_index", "event_item_index")
-);
-
-CREATE TABLE "curvy_commitment_gas_fee_root" (
-    "id" integer PRIMARY KEY AUTOINCREMENT,
-    "root" blob (32) NOT NULL,
-    "chain_tx_hash" blob (32) NOT NULL,
-    "published_block" integer NOT NULL,
-    "published_tx_index" integer NOT NULL,
-    "published_log_index" integer NOT NULL,
-    CONSTRAINT "idx_curvy_commitment_gas_fee_root_unique_position" UNIQUE ("published_block", "published_tx_index", "published_log_index")
-);
-
 CREATE TABLE "curvy_committed_note" (
     "id" integer PRIMARY KEY AUTOINCREMENT,
     "batch_index" blob (32) NOT NULL,
@@ -130,17 +105,6 @@ CREATE TABLE "curvy_pending_note" (
     "published_tx_index" integer NOT NULL,
     "published_log_index" integer NOT NULL,
     CONSTRAINT "idx_curvy_pending_note_unique_position" UNIQUE ("published_block", "published_tx_index", "published_log_index", "event_item_index")
-);
-
-CREATE TABLE "curvy_token_registration" (
-    "id" integer PRIMARY KEY AUTOINCREMENT,
-    "token_address" blob (20) NOT NULL,
-    "token_id" blob (32) NOT NULL,
-    "chain_tx_hash" blob (32) NOT NULL,
-    "published_block" integer NOT NULL,
-    "published_tx_index" integer NOT NULL,
-    "published_log_index" integer NOT NULL,
-    CONSTRAINT "idx_curvy_token_registration_unique_position" UNIQUE ("published_block", "published_tx_index", "published_log_index")
 );
 
 CREATE TABLE "hopr_balance" (

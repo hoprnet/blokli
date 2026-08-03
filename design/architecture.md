@@ -1482,10 +1482,11 @@ explicitly named Curvy development variant compiles an optional deployment depen
 and deploys Curvy on the same chain with the same signer after HOPR deployment.
 
 The deployment artifact and generated Blokli configuration include the Curvy
-Aggregator, Vault, and PortalFactory addresses. Configured Aggregator and Vault
-addresses extend the indexer's address/topic filter. Their supported events are stored
-as append-only, position-keyed records; array-valued events are normalized into one row
-per array item. PortalFactory has no indexed event in the supported surface.
+Aggregator, Vault, and PortalFactory addresses. The configured Aggregator address
+extends the indexer's address/topic filter. Pending-note, committed-note, and
+committed-nullifier events are stored as append-only, position-keyed records; zero
+padding is omitted and array-valued events are normalized into one row per array item.
+PortalFactory has no indexed event in the supported surface.
 
 GraphQL exposes cursor-paginated event-history queries ordered by the full normalized
 event position, including the item index within array-valued events. Two-phase

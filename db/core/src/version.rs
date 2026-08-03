@@ -1,6 +1,7 @@
 use blokli_db_entity::prelude::{
-    Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, HoprBalance, HoprNodeSafeRegistration,
-    HoprSafeContract, HoprSafeContractState, HoprSafeRedeemedStats, Log, LogStatus, LogTopicInfo, NativeBalance,
+    Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, CurvyCommittedNote, CurvyCommittedNullifier,
+    CurvyPendingNote, HoprBalance, HoprNodeSafeRegistration, HoprSafeContract, HoprSafeContractState,
+    HoprSafeRedeemedStats, Log, LogStatus, LogTopicInfo, NativeBalance,
 };
 use migration::{Migrator, MigratorChainLogs, MigratorIndex, MigratorTrait, SafeDataOrigin};
 use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait, Statement};
@@ -238,6 +239,10 @@ async fn clear_all_data(db: &DatabaseConnection, logs_db: Option<&DatabaseConnec
 ///
 /// Returns an error if any database operations fail.
 async fn clear_index_data(db: &DatabaseConnection) -> Result<()> {
+    CurvyPendingNote::delete_many().exec(db).await?;
+    CurvyCommittedNote::delete_many().exec(db).await?;
+    CurvyCommittedNullifier::delete_many().exec(db).await?;
+
     ChannelState::delete_many().exec(db).await?;
     Channel::delete_many().exec(db).await?;
 
@@ -274,7 +279,7 @@ async fn clear_logs_data(db: &DatabaseConnection) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use blokli_db_entity::{chain_info, log, prelude::HoprSafeContract};
+    use blokli_db_entity::{chain_info, curvy_committed_nullifier, log, prelude::HoprSafeContract};
     use sea_orm::{ActiveModelTrait, DbBackend, EntityTrait, PaginatorTrait, Set, Statement};
 
     use super::*;
@@ -376,6 +381,18 @@ mod tests {
         }
         .update(db.conn(crate::TargetDb::Index))
         .await?;
+        curvy_committed_nullifier::ActiveModel {
+            id: Default::default(),
+            batch_index: Set(vec![1; 32]),
+            nullifier: Set(vec![2; 32]),
+            event_item_index: Set(0),
+            chain_tx_hash: Set(vec![3; 32]),
+            published_block: Set(100),
+            published_tx_index: Set(5),
+            published_log_index: Set(10),
+        }
+        .insert(db.conn(crate::TargetDb::Index))
+        .await?;
 
         // Verify data exists
         let chain_info_before = ChainInfo::find_by_id(1)
@@ -416,6 +433,13 @@ mod tests {
         );
         assert_eq!(chain_info_after.last_indexed_tx_index, None);
         assert_eq!(chain_info_after.last_indexed_log_index, None);
+        assert!(
+            curvy_committed_nullifier::Entity::find()
+                .one(db.conn(crate::TargetDb::Index))
+                .await?
+                .is_none(),
+            "Curvy event history should be cleared during a version reset"
+        );
 
         Ok(())
     }

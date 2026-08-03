@@ -17,17 +17,11 @@ use blokli_chain_rpc::{
 };
 use blokli_chain_types::{AlloyAddressExt, ContractAddresses};
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
-use blokli_db_entity::{
-    chain_info, curvy_commitment_gas_cost, curvy_commitment_gas_fee_root, curvy_committed_note,
-    curvy_committed_nullifier, curvy_pending_note, curvy_token_registration,
-};
+use blokli_db_entity::{chain_info, curvy_committed_note, curvy_committed_nullifier, curvy_pending_note};
 use curvy_bindings::{
     config::CurvyContractInstances,
     constants::DEV_PORTAL_DEPLOYMENT_FEE,
-    curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2::{
-        CommitmentGasFeeRootUpdated, CommittedNotes, CommittedNullifiers, PendingNotes,
-    },
-    curvy_vault_v2::CurvyVaultV2::{CommitmentGasCostsUpdated, TokenRegistration},
+    curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2::{CommittedNotes, CommittedNullifiers, PendingNotes},
     portal_factory::CurvyTypes::Note,
 };
 use futures::StreamExt;
@@ -182,7 +176,7 @@ async fn test_curvy_events_are_indexed_and_streamed() -> anyhow::Result<()> {
 
     let latest_block = provider.get_block_number().await?;
     let filter = Filter::new()
-        .address(vec![curvy_addresses.aggregator_proxy, curvy_addresses.vault_proxy])
+        .address(curvy_addresses.aggregator_proxy)
         .from_block(0)
         .to_block(latest_block);
     let chain_logs = provider
@@ -228,80 +222,6 @@ async fn test_curvy_events_are_indexed_and_streamed() -> anyhow::Result<()> {
         .data(GasMultiplier(1.0))
         .finish();
     let handlers = ContractEventHandlers::new(contract_addresses, db.clone(), rpc_operations, indexer_state, true);
-
-    let token_logs = logs_with_signature(&chain_logs, TokenRegistration::SIGNATURE_HASH);
-    anyhow::ensure!(
-        !token_logs.is_empty(),
-        "Curvy deployment did not emit TokenRegistration"
-    );
-    let mut expected_token_registrations = Vec::new();
-    for log in &token_logs {
-        let event = decode_event::<TokenRegistration>(log)?;
-        let expected = json!({
-            "position": event_position(log, 0),
-            "tokenAddress": event.token_address.to_hopr_address().to_hex(),
-            "tokenId": event.token_id.to_string(),
-        });
-        assert_live_events(
-            &schema,
-            r#"subscription { curvyTokenRegistered { position { block eventItemIndex logIndex transactionHash transactionIndex } tokenAddress tokenId } }"#,
-            "curvyTokenRegistered",
-            std::slice::from_ref(&expected),
-            handlers.collect_log_event(SerializableLog::from(log.clone()), true),
-        )
-        .await?;
-        expected_token_registrations.push(expected);
-    }
-
-    let gas_root_logs = logs_with_signature(&chain_logs, CommitmentGasFeeRootUpdated::SIGNATURE_HASH);
-    anyhow::ensure!(
-        gas_root_logs.len() == 1,
-        "expected one CommitmentGasFeeRootUpdated event"
-    );
-    let gas_root_log = &gas_root_logs[0];
-    let gas_root_event = decode_event::<CommitmentGasFeeRootUpdated>(gas_root_log)?;
-    let expected_gas_root = json!({
-        "position": event_position(gas_root_log, 0),
-        "root": gas_root_event.root.to_string(),
-    });
-    assert_live_events(
-        &schema,
-        r#"subscription { curvyCommitmentGasFeeRootUpdated { position { block eventItemIndex logIndex transactionHash transactionIndex } root } }"#,
-        "curvyCommitmentGasFeeRootUpdated",
-        std::slice::from_ref(&expected_gas_root),
-        handlers.collect_log_event(SerializableLog::from(gas_root_log.clone()), true),
-    )
-    .await?;
-
-    let gas_cost_logs = logs_with_signature(&chain_logs, CommitmentGasCostsUpdated::SIGNATURE_HASH);
-    anyhow::ensure!(gas_cost_logs.len() == 1, "expected one CommitmentGasCostsUpdated event");
-    let gas_cost_log = &gas_cost_logs[0];
-    let gas_cost_event = decode_event::<CommitmentGasCostsUpdated>(gas_cost_log)?;
-    let expected_gas_costs = gas_cost_event
-        .gasFees
-        .iter()
-        .enumerate()
-        .map(|(item_index, fees)| {
-            json!({
-                "gasFees": {
-                    "pendingNoteCommitment": fees.pendingNoteCommitment.to_string(),
-                    "portalDeployment": fees.portalDeployment.to_string(),
-                    "tokenId": fees.tokenId.to_string(),
-                    "withdrawal": fees.withdrawal.to_string(),
-                },
-                "position": event_position(gas_cost_log, item_index),
-                "root": gas_cost_event.root.to_string(),
-            })
-        })
-        .collect::<Vec<_>>();
-    assert_live_events(
-        &schema,
-        r#"subscription { curvyCommitmentGasCostsUpdated { gasFees { pendingNoteCommitment portalDeployment tokenId withdrawal } position { block eventItemIndex logIndex transactionHash transactionIndex } root } }"#,
-        "curvyCommitmentGasCostsUpdated",
-        &expected_gas_costs,
-        handlers.collect_log_event(SerializableLog::from(gas_cost_log.clone()), true),
-    )
-    .await?;
 
     let pending_logs = logs_with_signature(&chain_logs, PendingNotes::SIGNATURE_HASH);
     anyhow::ensure!(
@@ -349,7 +269,7 @@ async fn test_curvy_events_are_indexed_and_streamed() -> anyhow::Result<()> {
     );
     let committed_notes_event = CommittedNotes {
         batchIndex: U256::from(7),
-        noteIds: vec![U256::from(101), U256::from(102)],
+        noteIds: vec![U256::ZERO, U256::from(101), U256::ZERO, U256::from(102)],
     };
     let committed_notes_log = encoded_event_log(
         contract_addresses.curvy_aggregator,
@@ -361,11 +281,13 @@ async fn test_curvy_events_are_indexed_and_streamed() -> anyhow::Result<()> {
         .noteIds
         .iter()
         .enumerate()
-        .map(|(item_index, note_id)| {
-            json!({
-                "batchIndex": committed_notes_event.batchIndex.to_string(),
-                "noteId": note_id.to_string(),
-                "position": event_position(&Log::from(committed_notes_log.clone()), item_index),
+        .filter_map(|(item_index, note_id)| {
+            (*note_id != U256::ZERO).then(|| {
+                json!({
+                    "batchIndex": committed_notes_event.batchIndex.to_string(),
+                    "noteId": note_id.to_string(),
+                    "position": event_position(&Log::from(committed_notes_log.clone()), item_index),
+                })
             })
         })
         .collect::<Vec<_>>();
@@ -388,7 +310,7 @@ async fn test_curvy_events_are_indexed_and_streamed() -> anyhow::Result<()> {
 
     let committed_nullifiers_event = CommittedNullifiers {
         batchIndex: U256::from(8),
-        nullifiers: vec![U256::from(201), U256::from(202)],
+        nullifiers: vec![U256::from(201), U256::ZERO, U256::from(202)],
     };
     let committed_nullifiers_log = encoded_event_log(
         contract_addresses.curvy_aggregator,
@@ -400,11 +322,13 @@ async fn test_curvy_events_are_indexed_and_streamed() -> anyhow::Result<()> {
         .nullifiers
         .iter()
         .enumerate()
-        .map(|(item_index, nullifier)| {
-            json!({
-                "batchIndex": committed_nullifiers_event.batchIndex.to_string(),
-                "nullifier": nullifier.to_string(),
-                "position": event_position(&Log::from(committed_nullifiers_log.clone()), item_index),
+        .filter_map(|(item_index, nullifier)| {
+            (*nullifier != U256::ZERO).then(|| {
+                json!({
+                    "batchIndex": committed_nullifiers_event.batchIndex.to_string(),
+                    "nullifier": nullifier.to_string(),
+                    "position": event_position(&Log::from(committed_nullifiers_log.clone()), item_index),
+                })
             })
         })
         .collect::<Vec<_>>();
@@ -421,12 +345,9 @@ async fn test_curvy_events_are_indexed_and_streamed() -> anyhow::Result<()> {
         .execute(
             r#"
                 query {
-                    curvyCommitmentGasCostUpdates(first: 10) { gasFees { pendingNoteCommitment portalDeployment tokenId withdrawal } position { block eventItemIndex logIndex transactionHash transactionIndex } root }
-                    curvyCommitmentGasFeeRootUpdates(first: 10) { position { block eventItemIndex logIndex transactionHash transactionIndex } root }
                     curvyCommittedNotes(first: 10) { batchIndex noteId position { block eventItemIndex logIndex transactionHash transactionIndex } }
                     curvyCommittedNullifiers(first: 10) { batchIndex nullifier position { block eventItemIndex logIndex transactionHash transactionIndex } }
                     curvyPendingNotes(first: 10) { amount ephemeralKey isPlaintext noteId position { block eventItemIndex logIndex transactionHash transactionIndex } tokenId viewTag }
-                    curvyTokenRegistrations(first: 10) { position { block eventItemIndex logIndex transactionHash transactionIndex } tokenAddress tokenId }
                 }
             "#,
         )
@@ -460,38 +381,11 @@ async fn test_curvy_events_are_indexed_and_streamed() -> anyhow::Result<()> {
         cursor_page_response.data.into_json()?
     );
 
-    for log in token_logs {
-        handlers.collect_log_event(SerializableLog::from(log), true).await?;
-    }
-    handlers
-        .collect_log_event(SerializableLog::from(gas_root_log.clone()), true)
-        .await?;
-    handlers
-        .collect_log_event(SerializableLog::from(gas_cost_log.clone()), true)
-        .await?;
     handlers
         .collect_log_event(SerializableLog::from(pending_log.clone()), true)
         .await?;
     handlers.collect_log_event(committed_notes_log, true).await?;
     handlers.collect_log_event(committed_nullifiers_log, true).await?;
-    assert_eq!(
-        curvy_token_registration::Entity::find()
-            .count(db.conn(TargetDb::Index))
-            .await?,
-        u64::try_from(expected_token_registrations.len())?
-    );
-    assert_eq!(
-        curvy_commitment_gas_fee_root::Entity::find()
-            .count(db.conn(TargetDb::Index))
-            .await?,
-        1
-    );
-    assert_eq!(
-        curvy_commitment_gas_cost::Entity::find()
-            .count(db.conn(TargetDb::Index))
-            .await?,
-        u64::try_from(expected_gas_costs.len())?
-    );
     assert_eq!(
         curvy_pending_note::Entity::find()
             .count(db.conn(TargetDb::Index))

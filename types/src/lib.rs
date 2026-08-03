@@ -201,24 +201,7 @@ pub struct CurvyCommittedNullifier {
     pub position: CurvyEventPosition,
 }
 
-/// A Curvy Aggregator commitment gas-fee root update.
-#[derive(SimpleObject, Clone, Debug)]
-pub struct CurvyCommitmentGasFeeRootUpdate {
-    pub root: UInt256,
-    pub position: CurvyEventPosition,
-}
-
-/// A token registered by the Curvy Vault.
-#[derive(SimpleObject, Clone, Debug)]
-pub struct CurvyTokenRegistration {
-    #[graphql(name = "tokenAddress")]
-    pub token_address: String,
-    #[graphql(name = "tokenId")]
-    pub token_id: UInt256,
-    pub position: CurvyEventPosition,
-}
-
-/// Per-token gas fees emitted by `CommitmentGasCostsUpdated`.
+/// Current per-token gas fees read from the Curvy Vault.
 #[derive(SimpleObject, Clone, Debug)]
 pub struct CurvyGasFees {
     #[graphql(name = "tokenId")]
@@ -228,15 +211,6 @@ pub struct CurvyGasFees {
     #[graphql(name = "pendingNoteCommitment")]
     pub pending_note_commitment: UInt256,
     pub withdrawal: UInt256,
-}
-
-/// One item in a Curvy Vault commitment gas-cost update.
-#[derive(SimpleObject, Clone, Debug)]
-pub struct CurvyCommitmentGasCostUpdate {
-    #[graphql(name = "gasFees")]
-    pub gas_fees: CurvyGasFees,
-    pub root: UInt256,
-    pub position: CurvyEventPosition,
 }
 
 /// Current Curvy Aggregator indices and notes-tree root.

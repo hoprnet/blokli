@@ -89,181 +89,11 @@ impl MigrationTrait for Migration {
             CurvyCommittedNullifier::PublishedLogIndex,
             "idx_curvy_committed_nullifier_unique_position",
         )
-        .await?;
-
-        manager
-            .create_table(
-                Table::create()
-                    .table(CurvyCommitmentGasFeeRoot::Table)
-                    .if_not_exists()
-                    .col(
-                        ColumnDef::new(CurvyCommitmentGasFeeRoot::Id)
-                            .big_integer()
-                            .auto_increment()
-                            .primary_key(),
-                    )
-                    .col(
-                        ColumnDef::new(CurvyCommitmentGasFeeRoot::Root)
-                            .binary_len(32)
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(CurvyCommitmentGasFeeRoot::ChainTxHash)
-                            .binary_len(32)
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(CurvyCommitmentGasFeeRoot::PublishedBlock)
-                            .big_integer()
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(CurvyCommitmentGasFeeRoot::PublishedTxIndex)
-                            .big_integer()
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(CurvyCommitmentGasFeeRoot::PublishedLogIndex)
-                            .big_integer()
-                            .not_null(),
-                    )
-                    .index(&mut position_index(
-                        "idx_curvy_commitment_gas_fee_root_unique_position",
-                        CurvyCommitmentGasFeeRoot::PublishedBlock,
-                        CurvyCommitmentGasFeeRoot::PublishedTxIndex,
-                        CurvyCommitmentGasFeeRoot::PublishedLogIndex,
-                    ))
-                    .to_owned(),
-            )
-            .await?;
-
-        manager
-            .create_table(
-                Table::create()
-                    .table(CurvyTokenRegistration::Table)
-                    .if_not_exists()
-                    .col(
-                        ColumnDef::new(CurvyTokenRegistration::Id)
-                            .big_integer()
-                            .auto_increment()
-                            .primary_key(),
-                    )
-                    .col(
-                        ColumnDef::new(CurvyTokenRegistration::TokenAddress)
-                            .binary_len(20)
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(CurvyTokenRegistration::TokenId)
-                            .binary_len(32)
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(CurvyTokenRegistration::ChainTxHash)
-                            .binary_len(32)
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(CurvyTokenRegistration::PublishedBlock)
-                            .big_integer()
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(CurvyTokenRegistration::PublishedTxIndex)
-                            .big_integer()
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(CurvyTokenRegistration::PublishedLogIndex)
-                            .big_integer()
-                            .not_null(),
-                    )
-                    .index(&mut position_index(
-                        "idx_curvy_token_registration_unique_position",
-                        CurvyTokenRegistration::PublishedBlock,
-                        CurvyTokenRegistration::PublishedTxIndex,
-                        CurvyTokenRegistration::PublishedLogIndex,
-                    ))
-                    .to_owned(),
-            )
-            .await?;
-
-        manager
-            .create_table(
-                Table::create()
-                    .table(CurvyCommitmentGasCost::Table)
-                    .if_not_exists()
-                    .col(
-                        ColumnDef::new(CurvyCommitmentGasCost::Id)
-                            .big_integer()
-                            .auto_increment()
-                            .primary_key(),
-                    )
-                    .col(
-                        ColumnDef::new(CurvyCommitmentGasCost::TokenId)
-                            .binary_len(32)
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(CurvyCommitmentGasCost::PortalDeployment)
-                            .binary_len(32)
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(CurvyCommitmentGasCost::PendingNoteCommitment)
-                            .binary_len(32)
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(CurvyCommitmentGasCost::Withdrawal)
-                            .binary_len(32)
-                            .not_null(),
-                    )
-                    .col(ColumnDef::new(CurvyCommitmentGasCost::Root).binary_len(32).not_null())
-                    .col(
-                        ColumnDef::new(CurvyCommitmentGasCost::EventItemIndex)
-                            .integer()
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(CurvyCommitmentGasCost::ChainTxHash)
-                            .binary_len(32)
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(CurvyCommitmentGasCost::PublishedBlock)
-                            .big_integer()
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(CurvyCommitmentGasCost::PublishedTxIndex)
-                            .big_integer()
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(CurvyCommitmentGasCost::PublishedLogIndex)
-                            .big_integer()
-                            .not_null(),
-                    )
-                    .index(
-                        Index::create()
-                            .name("idx_curvy_commitment_gas_cost_unique_position")
-                            .col(CurvyCommitmentGasCost::PublishedBlock)
-                            .col(CurvyCommitmentGasCost::PublishedTxIndex)
-                            .col(CurvyCommitmentGasCost::PublishedLogIndex)
-                            .col(CurvyCommitmentGasCost::EventItemIndex)
-                            .unique(),
-                    )
-                    .to_owned(),
-            )
-            .await
+        .await
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         for table in [
-            CurvyCommitmentGasCost::Table.to_string(),
-            CurvyTokenRegistration::Table.to_string(),
-            CurvyCommitmentGasFeeRoot::Table.to_string(),
             CurvyCommittedNullifier::Table.to_string(),
             CurvyCommittedNote::Table.to_string(),
             CurvyPendingNote::Table.to_string(),
@@ -317,16 +147,6 @@ async fn create_batch_item_table<T: Iden + Clone + 'static>(
         .await
 }
 
-fn position_index<T: Iden + 'static>(name: &str, block: T, tx_index: T, log_index: T) -> IndexCreateStatement {
-    Index::create()
-        .name(name)
-        .col(block)
-        .col(tx_index)
-        .col(log_index)
-        .unique()
-        .to_owned()
-}
-
 #[derive(DeriveIden)]
 enum CurvyPendingNote {
     Table,
@@ -362,42 +182,6 @@ enum CurvyCommittedNullifier {
     Id,
     BatchIndex,
     Nullifier,
-    EventItemIndex,
-    ChainTxHash,
-    PublishedBlock,
-    PublishedTxIndex,
-    PublishedLogIndex,
-}
-#[derive(DeriveIden)]
-enum CurvyCommitmentGasFeeRoot {
-    Table,
-    Id,
-    Root,
-    ChainTxHash,
-    PublishedBlock,
-    PublishedTxIndex,
-    PublishedLogIndex,
-}
-#[derive(DeriveIden)]
-enum CurvyTokenRegistration {
-    Table,
-    Id,
-    TokenAddress,
-    TokenId,
-    ChainTxHash,
-    PublishedBlock,
-    PublishedTxIndex,
-    PublishedLogIndex,
-}
-#[derive(DeriveIden)]
-enum CurvyCommitmentGasCost {
-    Table,
-    Id,
-    TokenId,
-    PortalDeployment,
-    PendingNoteCommitment,
-    Withdrawal,
-    Root,
     EventItemIndex,
     ChainTxHash,
     PublishedBlock,

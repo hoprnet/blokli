@@ -6,9 +6,9 @@ use async_broadcast::Receiver;
 use async_graphql::{Context, ID, Result, Subscription};
 use async_stream::{stream, try_stream};
 use blokli_api_types::{
-    Account, Channel, ChannelUpdate, CurvyCommitmentGasCostUpdate, CurvyCommitmentGasFeeRootUpdate, CurvyCommittedNote,
-    CurvyCommittedNullifier, CurvyEventPosition, CurvyPendingNote, CurvyTokenRegistration, Hex32,
-    OpenedChannelsGraphEntry, RedeemTicketDetails, Safe, TicketParameters, TokenValueString, Transaction, UInt64,
+    Account, Channel, ChannelUpdate, CurvyCommittedNote, CurvyCommittedNullifier, CurvyEventPosition, CurvyPendingNote,
+    Hex32, OpenedChannelsGraphEntry, RedeemTicketDetails, Safe, TicketParameters, TokenValueString, Transaction,
+    UInt64,
 };
 use blokli_chain_api::transaction_store::{
     TransactionEvent, TransactionStatus as StoreTransactionStatus, TransactionStore,
@@ -25,8 +25,7 @@ use blokli_db_entity::{
         account_aggregation::{fetch_accounts_by_keyids, fetch_accounts_with_filters},
         safe_aggregation::{CurrentSafe, fetch_safe_by_address, fetch_safe_threshold_by_address},
     },
-    curvy_commitment_gas_cost, curvy_commitment_gas_fee_root, curvy_committed_note, curvy_committed_nullifier,
-    curvy_pending_note, curvy_token_registration, hopr_node_safe_registration,
+    curvy_committed_note, curvy_committed_nullifier, curvy_pending_note, hopr_node_safe_registration,
 };
 use chrono::Utc;
 use futures::{Stream, StreamExt, pin_mut};
@@ -422,24 +421,6 @@ impl CurvyPositioned for CurvyCommittedNullifier {
     }
 }
 
-impl CurvyPositioned for CurvyCommitmentGasFeeRootUpdate {
-    fn position(&self) -> &CurvyEventPosition {
-        &self.position
-    }
-}
-
-impl CurvyPositioned for CurvyTokenRegistration {
-    fn position(&self) -> &CurvyEventPosition {
-        &self.position
-    }
-}
-
-impl CurvyPositioned for CurvyCommitmentGasCostUpdate {
-    fn position(&self) -> &CurvyEventPosition {
-        &self.position
-    }
-}
-
 fn curvy_history_stream<E, T, F>(
     db: DatabaseConnection,
     query: Select<E>,
@@ -478,35 +459,58 @@ where
 {
     try_stream! {
         pin_mut!(historical);
-        while let Some(event) = historical.next().await {
-            yield event?;
-        }
         loop {
-            tokio::select! {
+            let historical_event: Option<Result<T>> = tokio::select! {
                 biased;
                 shutdown_result = shutdown_receiver.recv() => {
                     match shutdown_result {
                         Ok(_) | Err(async_broadcast::RecvError::Closed) => return,
                         Err(async_broadcast::RecvError::Overflowed(count)) => {
-                            warn!(count, "Curvy subscription shutdown signal overflowed");
+                            Err(errors::graphql_subscription_lagged_error(
+                                "Curvy subscription shutdown signal",
+                                count,
+                            ))
+                        }
+                    }
+                }
+                historical_event = historical.next() => Ok(historical_event),
+            }?;
+            match historical_event {
+                Some(event) => yield event?,
+                None => break,
+            }
+        }
+        loop {
+            let event = tokio::select! {
+                biased;
+                shutdown_result = shutdown_receiver.recv() => {
+                    match shutdown_result {
+                        Ok(_) | Err(async_broadcast::RecvError::Closed) => return,
+                        Err(async_broadcast::RecvError::Overflowed(count)) => {
+                            Err(errors::graphql_subscription_lagged_error(
+                                "Curvy subscription shutdown signal",
+                                count,
+                            ))
                         }
                     }
                 }
                 event_result = event_receiver.recv() => {
                     match event_result {
-                        Ok(event) => {
-                            if let Some(event) = select(event)
-                                && start_block.is_none_or(|start_block| event.position().block.0 >= start_block)
-                            {
-                                yield event;
-                            }
-                        }
+                        Ok(event) => Ok(event),
                         Err(async_broadcast::RecvError::Closed) => return,
                         Err(async_broadcast::RecvError::Overflowed(count)) => {
-                            warn!(count, "Curvy subscription event bus overflowed");
+                            Err(errors::graphql_subscription_lagged_error(
+                                "Curvy subscription event bus",
+                                count,
+                            ))
                         }
                     }
                 }
+            }?;
+            if let Some(event) = select(event)
+                && start_block.is_none_or(|start_block| event.position().block.0 >= start_block)
+            {
+                yield event;
             }
         }
     }
@@ -648,121 +652,6 @@ impl SubscriptionRoot {
             start_block.map(|start_block| start_block.api),
             |event| match event {
                 IndexerEvent::CurvyCommittedNullifier(event) => Some(event),
-                _ => None,
-            },
-        ))
-    }
-
-    /// Stream Curvy Aggregator commitment gas-fee root updates.
-    #[graphql(name = "curvyCommitmentGasFeeRootUpdated")]
-    async fn curvy_commitment_gas_fee_root_updated(
-        &self,
-        ctx: &Context<'_>,
-        #[graphql(name = "fromBlock")] from_block: Option<UInt64>,
-    ) -> Result<impl Stream<Item = Result<CurvyCommitmentGasFeeRootUpdate>>> {
-        let db = ctx.data::<DatabaseConnection>()?.clone();
-        let indexer_state = ctx.data::<IndexerState>()?.clone();
-        let (watermark, event_receiver, shutdown_receiver) =
-            capture_watermark_synchronized(&indexer_state, &db).await?;
-        let start_block = curvy_start_block(from_block)?;
-        let mut query = curvy_commitment_gas_fee_root::Entity::find()
-            .filter(curvy_commitment_gas_fee_root::Column::PublishedBlock.lte(watermark.block));
-        if let Some(start_block) = start_block {
-            query = query.filter(curvy_commitment_gas_fee_root::Column::PublishedBlock.gte(start_block.database));
-        }
-        let historical = curvy_history_stream(
-            db,
-            query
-                .order_by_asc(curvy_commitment_gas_fee_root::Column::PublishedBlock)
-                .order_by_asc(curvy_commitment_gas_fee_root::Column::PublishedTxIndex)
-                .order_by_asc(curvy_commitment_gas_fee_root::Column::PublishedLogIndex),
-            "fetch Curvy gas-fee root history",
-            curvy::commitment_gas_fee_root,
-        );
-        Ok(curvy_event_stream(
-            historical,
-            event_receiver,
-            shutdown_receiver,
-            start_block.map(|start_block| start_block.api),
-            |event| match event {
-                IndexerEvent::CurvyCommitmentGasFeeRootUpdated(event) => Some(event),
-                _ => None,
-            },
-        ))
-    }
-
-    /// Stream Curvy Vault token registrations.
-    #[graphql(name = "curvyTokenRegistered")]
-    async fn curvy_token_registered(
-        &self,
-        ctx: &Context<'_>,
-        #[graphql(name = "fromBlock")] from_block: Option<UInt64>,
-    ) -> Result<impl Stream<Item = Result<CurvyTokenRegistration>>> {
-        let db = ctx.data::<DatabaseConnection>()?.clone();
-        let indexer_state = ctx.data::<IndexerState>()?.clone();
-        let (watermark, event_receiver, shutdown_receiver) =
-            capture_watermark_synchronized(&indexer_state, &db).await?;
-        let start_block = curvy_start_block(from_block)?;
-        let mut query = curvy_token_registration::Entity::find()
-            .filter(curvy_token_registration::Column::PublishedBlock.lte(watermark.block));
-        if let Some(start_block) = start_block {
-            query = query.filter(curvy_token_registration::Column::PublishedBlock.gte(start_block.database));
-        }
-        let historical = curvy_history_stream(
-            db,
-            query
-                .order_by_asc(curvy_token_registration::Column::PublishedBlock)
-                .order_by_asc(curvy_token_registration::Column::PublishedTxIndex)
-                .order_by_asc(curvy_token_registration::Column::PublishedLogIndex),
-            "fetch Curvy token-registration history",
-            curvy::token_registration,
-        );
-        Ok(curvy_event_stream(
-            historical,
-            event_receiver,
-            shutdown_receiver,
-            start_block.map(|start_block| start_block.api),
-            |event| match event {
-                IndexerEvent::CurvyTokenRegistered(event) => Some(event),
-                _ => None,
-            },
-        ))
-    }
-
-    /// Stream Curvy Vault commitment gas-cost updates.
-    #[graphql(name = "curvyCommitmentGasCostsUpdated")]
-    async fn curvy_commitment_gas_costs_updated(
-        &self,
-        ctx: &Context<'_>,
-        #[graphql(name = "fromBlock")] from_block: Option<UInt64>,
-    ) -> Result<impl Stream<Item = Result<CurvyCommitmentGasCostUpdate>>> {
-        let db = ctx.data::<DatabaseConnection>()?.clone();
-        let indexer_state = ctx.data::<IndexerState>()?.clone();
-        let (watermark, event_receiver, shutdown_receiver) =
-            capture_watermark_synchronized(&indexer_state, &db).await?;
-        let start_block = curvy_start_block(from_block)?;
-        let mut query = curvy_commitment_gas_cost::Entity::find()
-            .filter(curvy_commitment_gas_cost::Column::PublishedBlock.lte(watermark.block));
-        if let Some(start_block) = start_block {
-            query = query.filter(curvy_commitment_gas_cost::Column::PublishedBlock.gte(start_block.database));
-        }
-        let historical = curvy_history_stream(
-            db,
-            query
-                .order_by_asc(curvy_commitment_gas_cost::Column::PublishedBlock)
-                .order_by_asc(curvy_commitment_gas_cost::Column::PublishedTxIndex)
-                .order_by_asc(curvy_commitment_gas_cost::Column::PublishedLogIndex)
-                .order_by_asc(curvy_commitment_gas_cost::Column::EventItemIndex),
-            "fetch Curvy gas-cost history",
-            curvy::commitment_gas_cost,
-        );
-        Ok(curvy_event_stream(
-            historical,
-            event_receiver,
-            shutdown_receiver,
-            start_block.map(|start_block| start_block.api),
-            |event| match event {
-                IndexerEvent::CurvyCommitmentGasCostsUpdated(event) => Some(event),
                 _ => None,
             },
         ))
@@ -1947,12 +1836,13 @@ fn matches_channel_filters(
 mod tests {
     use std::time::Duration;
 
+    use async_broadcast::broadcast;
     use async_graphql::{EmptyMutation, Object, Schema};
-    use blokli_api_types::RedemptionResult;
+    use blokli_api_types::{CurvyCommittedNote, CurvyEventPosition, Hex32, RedemptionResult, UInt64, UInt256};
     use blokli_chain_indexer::state::{IndexerEvent, RedeemTicketDetailsInfo};
     use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb};
     use blokli_db_entity::{hopr_safe_contract, hopr_safe_contract_state};
-    use futures::StreamExt;
+    use futures::{StreamExt, pin_mut, stream};
     use sea_orm::{ActiveModelTrait, Set};
 
     use super::*;
@@ -1966,6 +1856,78 @@ mod tests {
         async fn dummy(&self) -> bool {
             true
         }
+    }
+
+    fn curvy_committed_note(block: u64) -> CurvyCommittedNote {
+        CurvyCommittedNote {
+            batch_index: UInt256("1".to_string()),
+            note_id: UInt256(block.to_string()),
+            position: CurvyEventPosition {
+                transaction_hash: Hex32(format!("0x{:064x}", block)),
+                block: UInt64(block),
+                transaction_index: UInt64(0),
+                log_index: UInt64(0),
+                event_item_index: UInt64(0),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn test_curvy_event_stream_reports_event_bus_lag() -> anyhow::Result<()> {
+        let (mut event_sender, event_receiver) = broadcast(1);
+        event_sender.set_overflow(true);
+        let (_shutdown_sender, shutdown_receiver) = broadcast(1);
+        event_sender
+            .try_broadcast(IndexerEvent::CurvyCommittedNote(curvy_committed_note(1)))
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        event_sender
+            .try_broadcast(IndexerEvent::CurvyCommittedNote(curvy_committed_note(2)))
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+
+        let events = curvy_event_stream(
+            stream::empty(),
+            event_receiver,
+            shutdown_receiver,
+            None,
+            |event| match event {
+                IndexerEvent::CurvyCommittedNote(event) => Some(event),
+                _ => None,
+            },
+        );
+        pin_mut!(events);
+        let error = events
+            .next()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Curvy event stream ended without reporting lag"))?
+            .expect_err("overflow must terminate the Curvy subscription with an error");
+
+        assert!(error.message.contains("missed 1 events"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_curvy_event_stream_observes_shutdown_during_history() -> anyhow::Result<()> {
+        let (_event_sender, event_receiver) = broadcast(1);
+        let (shutdown_sender, shutdown_receiver) = broadcast(1);
+        shutdown_sender
+            .try_broadcast(())
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let historical = stream::iter([Ok::<_, async_graphql::Error>(curvy_committed_note(1))]);
+
+        let events = curvy_event_stream(
+            historical,
+            event_receiver,
+            shutdown_receiver,
+            None,
+            |event| match event {
+                IndexerEvent::CurvyCommittedNote(event) => Some(event),
+                _ => None,
+            },
+        );
+        pin_mut!(events);
+
+        assert!(events.next().await.is_none());
+        Ok(())
     }
 
     // Helper: Create test channel in database

@@ -112,6 +112,9 @@ pub mod codes {
     /// Request exceeds an allowed resource limit
     pub const LIMIT_EXCEEDED: &str = "LIMIT_EXCEEDED";
 
+    /// A subscription receiver fell behind its event source
+    pub const SUBSCRIPTION_LAGGED: &str = "SUBSCRIPTION_LAGGED";
+
     /// Requested schema version is not supported by this server
     pub const UNSUPPORTED_SCHEMA_VERSION: &str = "UNSUPPORTED_SCHEMA_VERSION";
 
@@ -223,6 +226,11 @@ pub mod messages {
     /// Invalid pagination parameters message
     pub fn invalid_pagination(reason: &str) -> String {
         format!("Invalid pagination parameters: {}", reason)
+    }
+
+    /// Subscription lag error message.
+    pub fn subscription_lagged(stream: &str, missed: impl std::fmt::Display) -> String {
+        format!("{stream} lagged and missed {missed} events; reconnect to resume from a persisted position")
     }
 
     /// Resource limit exceeded message
@@ -547,4 +555,10 @@ pub fn graphql_rpc_error(operation: &str, error: impl std::fmt::Display) -> asyn
 pub fn graphql_pagination_error(reason: &str) -> async_graphql::Error {
     async_graphql::Error::new(messages::invalid_pagination(reason))
         .extend_with(|_, extensions| extensions.set("code", codes::INVALID_PAGINATION))
+}
+
+/// Creates a top-level GraphQL error when a subscription can no longer guarantee lossless delivery.
+pub fn graphql_subscription_lagged_error(stream: &str, missed: impl std::fmt::Display) -> async_graphql::Error {
+    async_graphql::Error::new(messages::subscription_lagged(stream, missed))
+        .extend_with(|_, extensions| extensions.set("code", codes::SUBSCRIPTION_LAGGED))
 }

@@ -1,13 +1,9 @@
 use blokli_api_types::{
-    CurvyCommitmentGasCostUpdate, CurvyCommitmentGasFeeRootUpdate, CurvyCommittedNote, CurvyCommittedNullifier,
-    CurvyEventPosition, CurvyGasFees, CurvyPendingNote, CurvyTokenRegistration, Hex32, UInt64, UInt256,
+    CurvyCommittedNote, CurvyCommittedNullifier, CurvyEventPosition, CurvyPendingNote, Hex32, UInt64, UInt256,
 };
-use blokli_db_entity::{
-    curvy_commitment_gas_cost, curvy_commitment_gas_fee_root, curvy_committed_note, curvy_committed_nullifier,
-    curvy_pending_note, curvy_token_registration,
-};
+use blokli_db_entity::{curvy_committed_note, curvy_committed_nullifier, curvy_pending_note};
 use hopr_bindings::exports::alloy::primitives::U256;
-use hopr_types::{crypto::types::Hash, primitive::prelude::Address, primitive::traits::ToHex};
+use hopr_types::{crypto::types::Hash, primitive::traits::ToHex};
 
 use crate::errors;
 
@@ -85,61 +81,6 @@ pub fn committed_nullifier(model: curvy_committed_nullifier::Model) -> async_gra
     Ok(CurvyCommittedNullifier {
         batch_index: uint256(&model.batch_index, "batch_index")?,
         nullifier: uint256(&model.nullifier, "nullifier")?,
-        position: position(
-            &model.chain_tx_hash,
-            model.published_block,
-            model.published_tx_index,
-            model.published_log_index,
-            model.event_item_index,
-        )?,
-    })
-}
-
-pub fn commitment_gas_fee_root(
-    model: curvy_commitment_gas_fee_root::Model,
-) -> async_graphql::Result<CurvyCommitmentGasFeeRootUpdate> {
-    Ok(CurvyCommitmentGasFeeRootUpdate {
-        root: uint256(&model.root, "root")?,
-        position: position(
-            &model.chain_tx_hash,
-            model.published_block,
-            model.published_tx_index,
-            model.published_log_index,
-            0,
-        )?,
-    })
-}
-
-pub fn token_registration(model: curvy_token_registration::Model) -> async_graphql::Result<CurvyTokenRegistration> {
-    let token_address: [u8; 20] = model
-        .token_address
-        .as_slice()
-        .try_into()
-        .map_err(|_| errors::graphql_query_error("decode Curvy event", "token_address is not 20 bytes"))?;
-    Ok(CurvyTokenRegistration {
-        token_address: Address::from(token_address).to_hex(),
-        token_id: uint256(&model.token_id, "token_id")?,
-        position: position(
-            &model.chain_tx_hash,
-            model.published_block,
-            model.published_tx_index,
-            model.published_log_index,
-            0,
-        )?,
-    })
-}
-
-pub fn commitment_gas_cost(
-    model: curvy_commitment_gas_cost::Model,
-) -> async_graphql::Result<CurvyCommitmentGasCostUpdate> {
-    Ok(CurvyCommitmentGasCostUpdate {
-        gas_fees: CurvyGasFees {
-            token_id: uint256(&model.token_id, "token_id")?,
-            portal_deployment: uint256(&model.portal_deployment, "portal_deployment")?,
-            pending_note_commitment: uint256(&model.pending_note_commitment, "pending_note_commitment")?,
-            withdrawal: uint256(&model.withdrawal, "withdrawal")?,
-        },
-        root: uint256(&model.root, "root")?,
         position: position(
             &model.chain_tx_hash,
             model.published_block,

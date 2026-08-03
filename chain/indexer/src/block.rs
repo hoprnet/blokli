@@ -10,12 +10,15 @@ use std::{
 };
 
 use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
-use blokli_chain_types::AlloyAddressExt;
+use blokli_chain_types::{AlloyAddressExt, ContractAddresses};
 use blokli_db::{
-    BlokliDbGeneralModelOperations, TargetDb, api::logs::BlokliDbLogOperations, info::BlokliDbInfoOperations,
-    safe_contracts::BlokliDbSafeContractOperations,
+    BlokliDbGeneralModelOperations, TargetDb, api::logs::BlokliDbLogOperations, errors::DbSqlError,
+    info::BlokliDbInfoOperations, safe_contracts::BlokliDbSafeContractOperations,
 };
-use blokli_db_entity::{channel_state, prelude::ChannelState};
+use blokli_db_entity::{
+    channel_state, curvy_committed_note, curvy_committed_nullifier, curvy_pending_note,
+    prelude::{ChannelState, CurvyCommittedNote, CurvyCommittedNullifier, CurvyPendingNote},
+};
 use futures::{
     StreamExt,
     channel::mpsc::channel,
@@ -88,6 +91,10 @@ pub struct ReorgInfo {
     pub affected_block_range: (u64, u64),
     /// Number of logs that were marked as removed
     pub removed_log_count: usize,
+}
+
+fn is_removed_curvy_log(log: &SerializableLog, addresses: &ContractAddresses) -> bool {
+    log.removed && log.address == addresses.curvy_aggregator
 }
 
 #[cfg(any(test, feature = "telemetry"))]
@@ -849,7 +856,21 @@ where
         // FIXME: The block indexing and marking as processed should be done in a single
         // transaction. This is difficult since currently this would be across databases.
         // Process all logs - events are published internally via IndexerState
+        let contract_addresses = logs_handler.contract_addresses_map();
         for log in block.logs.clone() {
+            if is_removed_curvy_log(&log, &contract_addresses) {
+                debug!(
+                    block_id = log.block_number,
+                    tx_index = log.tx_index,
+                    log_index = %log.log_index,
+                    "skipping removed Curvy log after reorg cleanup"
+                );
+                if let Err(error) = db.set_log_processed(log).await {
+                    error!(block_id, %error, "failed to mark removed Curvy log as processed");
+                    panic!("failed to mark removed Curvy log as processed")
+                }
+                continue;
+            }
             match logs_handler.collect_log_event(log.clone(), is_synced).await {
                 Ok(()) => match db.set_log_processed(log).await {
                     Ok(_) => {}
@@ -989,11 +1010,14 @@ where
     ///
     /// # Audit Trail Preservation
     ///
-    /// This function follows the **never-delete principle**:
+    /// Channel history follows the **never-delete principle**:
     /// - Invalidated states from reorganized blocks remain in the database
     /// - Temporal queries automatically use corrective states to reflect canonical chain state
     /// - Complete history is preserved for auditing and forensic analysis
     /// - Multiple reorgs can occur - each adds new corrective states without removing old ones
+    ///
+    /// Curvy event rows are canonical append-only feeds rather than versioned state. Rows in the affected range are
+    /// deleted before replacement-chain logs are processed so orphaned notes and nullifiers cannot be served.
     ///
     /// # Arguments
     ///
@@ -1082,6 +1106,43 @@ where
             max_block, canonical_block, "Processing reorg: identifying affected channels"
         );
 
+        // Stop active subscriptions before canonical event history is changed.
+        if !indexer_state.signal_shutdown() {
+            error!("Failed to signal shutdown to subscriptions after reorg - channel may be closed");
+        } else {
+            info!("Signaled shutdown to active subscriptions after reorg");
+        }
+
+        let min_block_i64 = i64::try_from(min_block).map_err(|_| {
+            CoreEthereumIndexerError::ProcessError("Curvy reorg start block exceeds the database range".to_string())
+        })?;
+        let max_block_i64 = i64::try_from(max_block).map_err(|_| {
+            CoreEthereumIndexerError::ProcessError("Curvy reorg end block exceeds the database range".to_string())
+        })?;
+        let pending_notes = CurvyPendingNote::delete_many()
+            .filter(curvy_pending_note::Column::PublishedBlock.gte(min_block_i64))
+            .filter(curvy_pending_note::Column::PublishedBlock.lte(max_block_i64))
+            .exec(db_conn)
+            .await
+            .map_err(DbSqlError::from)?
+            .rows_affected;
+        let committed_notes = CurvyCommittedNote::delete_many()
+            .filter(curvy_committed_note::Column::PublishedBlock.gte(min_block_i64))
+            .filter(curvy_committed_note::Column::PublishedBlock.lte(max_block_i64))
+            .exec(db_conn)
+            .await
+            .map_err(DbSqlError::from)?
+            .rows_affected;
+        let committed_nullifiers = CurvyCommittedNullifier::delete_many()
+            .filter(curvy_committed_nullifier::Column::PublishedBlock.gte(min_block_i64))
+            .filter(curvy_committed_nullifier::Column::PublishedBlock.lte(max_block_i64))
+            .exec(db_conn)
+            .await
+            .map_err(DbSqlError::from)?
+            .rows_affected;
+        let deleted_curvy_events = pending_notes + committed_notes + committed_nullifiers;
+        info!(deleted_curvy_events, "Removed orphaned Curvy event history");
+
         // Step 1: Query channel_state table for all states in the affected block range
         // This tells us which channels were affected by the reorg
         let affected_states = ChannelState::find()
@@ -1155,15 +1216,6 @@ where
             corrected_count += 1;
 
             debug!(channel_id, canonical_block, "Inserted corrective state");
-        }
-
-        // Signal shutdown to active subscriptions
-        // Subscriptions will detect shutdown signal and close client connections,
-        // forcing clients to reconnect and get fresh watermarks
-        if !indexer_state.signal_shutdown() {
-            error!("Failed to signal shutdown to subscriptions after reorg - channel may be closed");
-        } else {
-            info!("Signaled shutdown to active subscriptions after reorg");
         }
 
         info!(corrected_count, "Reorg handling complete");
@@ -1273,7 +1325,7 @@ mod tests {
         safe_contracts::BlokliDbSafeContractOperations, state_queries::get_channel_state_at,
     };
     use blokli_db_entity::{
-        account, channel,
+        account, channel, curvy_committed_note,
         prelude::{Account, Channel},
     };
     use futures::{Stream, channel::mpsc::unbounded, join};
@@ -1292,6 +1344,7 @@ mod tests {
     };
     use mockall::mock;
     use multiaddr::Multiaddr;
+    use sea_orm::PaginatorTrait;
 
     use super::*;
     use crate::traits::{ChainLogHandler, MockChainLogHandler};
@@ -1317,6 +1370,27 @@ mod tests {
             .expect("valid checksum hash");
 
         assert_eq!(checksum_low_32_bits(&checksum_hash), 0x1d1e1f20);
+    }
+
+    #[test]
+    fn test_removed_curvy_log_detection() {
+        let addresses = ContractAddresses {
+            curvy_aggregator: *ALICE,
+            curvy_vault: *BOB,
+            ..Default::default()
+        };
+        let mut log = SerializableLog {
+            address: *ALICE,
+            removed: true,
+            ..Default::default()
+        };
+
+        assert!(is_removed_curvy_log(&log, &addresses));
+        log.removed = false;
+        assert!(!is_removed_curvy_log(&log, &addresses));
+        log.address = *CHRIS;
+        log.removed = true;
+        assert!(!is_removed_curvy_log(&log, &addresses));
     }
 
     fn build_announcement_logs(
@@ -2483,6 +2557,20 @@ mod tests {
         create_channel_state(&db, 1, 10, 0, 0, [1u8; 12], 1, false).await?;
         create_channel_state(&db, 1, 50, 0, 0, [2u8; 12], 1, false).await?;
         create_channel_state(&db, 1, 100, 0, 0, [3u8; 12], 2, false).await?;
+        for block in [99_i64, 100_i64] {
+            curvy_committed_note::ActiveModel {
+                id: Default::default(),
+                batch_index: Set(vec![0; 32]),
+                note_id: Set(vec![u8::try_from(block)?; 32]),
+                event_item_index: Set(0),
+                chain_tx_hash: Set(vec![u8::try_from(block)?; 32]),
+                published_block: Set(block),
+                published_tx_index: Set(0),
+                published_log_index: Set(0),
+            }
+            .insert(db.conn(TargetDb::Index))
+            .await?;
+        }
 
         // Simulate reorg affecting blocks 100-100
         let reorg_info = ReorgInfo {
@@ -2502,6 +2590,22 @@ mod tests {
 
         // Verify correction was made
         assert_eq!(corrected_count, 1, "Expected 1 channel to be corrected");
+        assert_eq!(
+            curvy_committed_note::Entity::find()
+                .filter(curvy_committed_note::Column::PublishedBlock.eq(99))
+                .count(db.conn(TargetDb::Index))
+                .await?,
+            1,
+            "Curvy history before the reorg range should be retained"
+        );
+        assert_eq!(
+            curvy_committed_note::Entity::find()
+                .filter(curvy_committed_note::Column::PublishedBlock.eq(100))
+                .count(db.conn(TargetDb::Index))
+                .await?,
+            0,
+            "orphaned Curvy history should be removed"
+        );
 
         // Verify corrective state was inserted
         let states = get_channel_states(&db, 1).await?;

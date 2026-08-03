@@ -176,9 +176,6 @@ mod tests {
             "curvy_pending_note",
             "curvy_committed_note",
             "curvy_committed_nullifier",
-            "curvy_commitment_gas_fee_root",
-            "curvy_token_registration",
-            "curvy_commitment_gas_cost",
         ] {
             assert!(table_exists(&db, table).await, "{table} table should exist");
         }

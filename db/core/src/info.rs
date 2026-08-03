@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use blokli_db_entity::{
     chain_info,
     prelude::{
-        Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, HoprBalance as HoprBalanceEntity,
-        HoprSafeContract, NativeBalance,
+        Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, CurvyCommittedNote,
+        CurvyCommittedNullifier, CurvyPendingNote, HoprBalance as HoprBalanceEntity, HoprSafeContract, NativeBalance,
     },
 };
 use futures::TryFutureExt;
@@ -144,6 +144,18 @@ impl BlokliDbInfoOperations for BlokliDb {
             return Ok(false);
         }
 
+        if CurvyPendingNote::find().one(c).await?.is_some() {
+            return Ok(false);
+        }
+
+        if CurvyCommittedNote::find().one(c).await?.is_some() {
+            return Ok(false);
+        }
+
+        if CurvyCommittedNullifier::find().one(c).await?.is_some() {
+            return Ok(false);
+        }
+
         Ok(true)
     }
 
@@ -155,6 +167,9 @@ impl BlokliDbInfoOperations for BlokliDb {
                     Account::delete_many().exec(tx.as_ref()).await?;
                     Announcement::delete_many().exec(tx.as_ref()).await?;
                     Channel::delete_many().exec(tx.as_ref()).await?;
+                    CurvyPendingNote::delete_many().exec(tx.as_ref()).await?;
+                    CurvyCommittedNote::delete_many().exec(tx.as_ref()).await?;
+                    CurvyCommittedNullifier::delete_many().exec(tx.as_ref()).await?;
                     ChainInfo::delete_many().exec(tx.as_ref()).await?;
 
                     // Initial row is needed in the ChainInfo table
@@ -417,10 +432,12 @@ impl BlokliDbInfoOperations for BlokliDb {
 
 #[cfg(test)]
 mod tests {
+    use blokli_db_entity::curvy_pending_note;
     use hex_literal::hex;
     use hopr_types::primitive::{balance::HoprBalance, prelude::Address};
+    use sea_orm::{ActiveModelTrait, EntityTrait, PaginatorTrait, Set};
 
-    use crate::{db::BlokliDb, info::BlokliDbInfoOperations};
+    use crate::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb, info::BlokliDbInfoOperations};
 
     lazy_static::lazy_static! {
         static ref ADDR_1: Address = Address::from(hex!("86fa27add61fafc955e2da17329bba9f31692fe7"));
@@ -514,6 +531,35 @@ mod tests {
             "ticket price must be reset to None after third clear"
         );
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_curvy_history_participates_in_index_lifecycle() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let connection = db.conn(TargetDb::Index);
+        curvy_pending_note::ActiveModel {
+            id: Default::default(),
+            note_id: Set(vec![1; 32]),
+            ephemeral_key_x: Set(vec![2; 32]),
+            ephemeral_key_y: Set(vec![3; 32]),
+            view_tag: Set(4),
+            token_id: Set(vec![5; 32]),
+            amount: Set(vec![6; 32]),
+            is_plaintext: Set(true),
+            event_item_index: Set(0),
+            chain_tx_hash: Set(vec![7; 32]),
+            published_block: Set(8),
+            published_tx_index: Set(0),
+            published_log_index: Set(0),
+        }
+        .insert(connection)
+        .await?;
+
+        assert!(!db.index_is_empty().await?);
+        db.clear_index_db(None).await?;
+        assert!(db.index_is_empty().await?);
+        assert_eq!(curvy_pending_note::Entity::find().count(connection).await?, 0);
         Ok(())
     }
 }

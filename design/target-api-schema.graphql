@@ -436,26 +436,6 @@ type CurvyCommittedNullifier {
   position: CurvyEventPosition!
 }
 
-"""A Curvy Aggregator commitment gas-fee root update."""
-type CurvyCommitmentGasFeeRootUpdate {
-  root: UInt256!
-  position: CurvyEventPosition!
-}
-
-"""A token registered by the Curvy Vault."""
-type CurvyTokenRegistration {
-  tokenAddress: String!
-  tokenId: UInt256!
-  position: CurvyEventPosition!
-}
-
-"""One item in a Curvy Vault commitment gas-cost update."""
-type CurvyCommitmentGasCostUpdate {
-  gasFees: CurvyGasFees!
-  root: UInt256!
-  position: CurvyEventPosition!
-}
-
 """Current Curvy Vault protocol-level fees."""
 type CurvyVaultFees {
   depositFee: UInt256!
@@ -488,12 +468,6 @@ type QueryRoot {
   curvyCommittedNotes(fromBlock: UInt64, after: CurvyEventCursor, first: Int): [CurvyCommittedNote!]!
   "Retrieve Curvy nullifiers emitted by `CommittedNullifiers`, ordered by chain position."
   curvyCommittedNullifiers(fromBlock: UInt64, after: CurvyEventCursor, first: Int): [CurvyCommittedNullifier!]!
-  "Retrieve Curvy Aggregator commitment gas-fee root updates."
-  curvyCommitmentGasFeeRootUpdates(fromBlock: UInt64, after: CurvyEventCursor, first: Int): [CurvyCommitmentGasFeeRootUpdate!]!
-  "Retrieve Curvy Vault token registrations."
-  curvyTokenRegistrations(fromBlock: UInt64, after: CurvyEventCursor, first: Int): [CurvyTokenRegistration!]!
-  "Retrieve Curvy Vault commitment gas-cost updates."
-  curvyCommitmentGasCostUpdates(fromBlock: UInt64, after: CurvyEventCursor, first: Int): [CurvyCommitmentGasCostUpdate!]!
   "Read the current Curvy Aggregator root and indices directly from chain."
   curvyAggregatorState: CurvyAggregatorState!
   "Read a Curvy note's raw `NoteStatus` value directly from chain."
@@ -1062,12 +1036,6 @@ type SubscriptionRoot {
   curvyCommittedNote(fromBlock: UInt64): CurvyCommittedNote!
   "Stream indexed Curvy `CommittedNullifiers` entries with an optional historical phase."
   curvyCommittedNullifier(fromBlock: UInt64): CurvyCommittedNullifier!
-  "Stream Curvy Aggregator commitment gas-fee root updates."
-  curvyCommitmentGasFeeRootUpdated(fromBlock: UInt64): CurvyCommitmentGasFeeRootUpdate!
-  "Stream Curvy Vault token registrations."
-  curvyTokenRegistered(fromBlock: UInt64): CurvyTokenRegistration!
-  "Stream Curvy Vault commitment gas-cost updates."
-  curvyCommitmentGasCostsUpdated(fromBlock: UInt64): CurvyCommitmentGasCostUpdate!
   """
   Subscribe to real-time updates of account information
 

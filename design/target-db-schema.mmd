@@ -245,42 +245,6 @@ erDiagram
     }
     %% Composite unique constraint: UNIQUE(published_block, published_tx_index, published_log_index, event_item_index)
 
-    curvy_commitment_gas_fee_root {
-        bigint id PK "Primary key"
-        binary(32) root "Commitment gas-fee root (NOT NULL)"
-        binary(32) chain_tx_hash "Containing chain transaction hash (NOT NULL)"
-        bigint published_block "Published block (NOT NULL)"
-        bigint published_tx_index "Published transaction index (NOT NULL)"
-        bigint published_log_index "Published log index (NOT NULL)"
-    }
-    %% Composite unique constraint: UNIQUE(published_block, published_tx_index, published_log_index)
-
-    curvy_token_registration {
-        bigint id PK "Primary key"
-        binary(20) token_address "Registered token address (NOT NULL)"
-        binary(32) token_id "Registered token identifier (NOT NULL)"
-        binary(32) chain_tx_hash "Containing chain transaction hash (NOT NULL)"
-        bigint published_block "Published block (NOT NULL)"
-        bigint published_tx_index "Published transaction index (NOT NULL)"
-        bigint published_log_index "Published log index (NOT NULL)"
-    }
-    %% Composite unique constraint: UNIQUE(published_block, published_tx_index, published_log_index)
-
-    curvy_commitment_gas_cost {
-        bigint id PK "Primary key"
-        binary(32) token_id "Token identifier (NOT NULL)"
-        binary(32) portal_deployment "Portal deployment gas cost (NOT NULL)"
-        binary(32) pending_note_commitment "Pending-note commitment gas cost (NOT NULL)"
-        binary(32) withdrawal "Withdrawal gas cost (NOT NULL)"
-        binary(32) root "Commitment gas-cost root (NOT NULL)"
-        int event_item_index "Position in the event array (NOT NULL)"
-        binary(32) chain_tx_hash "Containing chain transaction hash (NOT NULL)"
-        bigint published_block "Published block (NOT NULL)"
-        bigint published_tx_index "Published transaction index (NOT NULL)"
-        bigint published_log_index "Published log index (NOT NULL)"
-    }
-    %% Composite unique constraint: UNIQUE(published_block, published_tx_index, published_log_index, event_item_index)
-
     %% ========================================
     %% RELATIONSHIPS
     %% ========================================

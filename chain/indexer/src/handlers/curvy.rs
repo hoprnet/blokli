@@ -1,18 +1,10 @@
 use blokli_api_types::{
-    CurvyCommitmentGasCostUpdate, CurvyCommitmentGasFeeRootUpdate, CurvyCommittedNote, CurvyCommittedNullifier,
-    CurvyEventPosition, CurvyGasFees, CurvyPendingNote, CurvyTokenRegistration, Hex32, UInt64, UInt256,
+    CurvyCommittedNote, CurvyCommittedNullifier, CurvyEventPosition, CurvyPendingNote, Hex32, UInt64, UInt256,
 };
 use blokli_chain_rpc::Log;
-use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{BlokliDbAllOperations, OpenTransaction, errors::DbSqlError};
-use blokli_db_entity::{
-    curvy_commitment_gas_cost, curvy_commitment_gas_fee_root, curvy_committed_note, curvy_committed_nullifier,
-    curvy_pending_note, curvy_token_registration,
-};
-use curvy_bindings::{
-    curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2::{CurvyAggregatorAlphaV2Events, PendingNotes},
-    curvy_vault_v2::CurvyVaultV2::CurvyVaultV2Events,
-};
+use blokli_db_entity::{curvy_committed_note, curvy_committed_nullifier, curvy_pending_note};
+use curvy_bindings::curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2::{CurvyAggregatorAlphaV2Events, PendingNotes};
 use hopr_bindings::exports::alloy::primitives::U256;
 use hopr_types::primitive::traits::ToHex;
 use sea_orm::sea_query::OnConflict;
@@ -92,6 +84,9 @@ where
                 let mut models = Vec::with_capacity(len);
                 let mut events = Vec::with_capacity(len);
                 for item_index in 0..len {
+                    if event.noteIds[item_index] == U256::ZERO {
+                        continue;
+                    }
                     let event_item_index = i64::try_from(item_index).map_err(|_| {
                         CoreEthereumIndexerError::ProcessError("PendingNotes item index overflow".to_string())
                     })?;
@@ -123,26 +118,31 @@ where
                         position: position(log, event_item_index)?,
                     }));
                 }
-                curvy_pending_note::Entity::insert_many(models)
-                    .on_conflict(
-                        OnConflict::columns([
-                            curvy_pending_note::Column::PublishedBlock,
-                            curvy_pending_note::Column::PublishedTxIndex,
-                            curvy_pending_note::Column::PublishedLogIndex,
-                            curvy_pending_note::Column::EventItemIndex,
-                        ])
-                        .do_nothing()
-                        .to_owned(),
-                    )
-                    .exec_without_returning(tx.as_ref())
-                    .await
-                    .map_err(DbSqlError::from)?;
+                if !models.is_empty() {
+                    curvy_pending_note::Entity::insert_many(models)
+                        .on_conflict(
+                            OnConflict::columns([
+                                curvy_pending_note::Column::PublishedBlock,
+                                curvy_pending_note::Column::PublishedTxIndex,
+                                curvy_pending_note::Column::PublishedLogIndex,
+                                curvy_pending_note::Column::EventItemIndex,
+                            ])
+                            .do_nothing()
+                            .to_owned(),
+                        )
+                        .exec_without_returning(tx.as_ref())
+                        .await
+                        .map_err(DbSqlError::from)?;
+                }
                 Ok(events)
             }
             CurvyAggregatorAlphaV2Events::CommittedNotes(event) => {
                 let mut models = Vec::with_capacity(event.noteIds.len());
                 let mut events = Vec::with_capacity(event.noteIds.len());
                 for (item_index, note_id) in event.noteIds.into_iter().enumerate() {
+                    if note_id == U256::ZERO {
+                        continue;
+                    }
                     let event_item_index = i64::try_from(item_index).map_err(|_| {
                         CoreEthereumIndexerError::ProcessError("CommittedNotes item index overflow".to_string())
                     })?;
@@ -184,6 +184,9 @@ where
                 let mut models = Vec::with_capacity(event.nullifiers.len());
                 let mut events = Vec::with_capacity(event.nullifiers.len());
                 for (item_index, nullifier) in event.nullifiers.into_iter().enumerate() {
+                    if nullifier == U256::ZERO {
+                        continue;
+                    }
                     let event_item_index = i64::try_from(item_index).map_err(|_| {
                         CoreEthereumIndexerError::ProcessError("CommittedNullifiers item index overflow".to_string())
                     })?;
@@ -211,129 +214,6 @@ where
                                 curvy_committed_nullifier::Column::PublishedTxIndex,
                                 curvy_committed_nullifier::Column::PublishedLogIndex,
                                 curvy_committed_nullifier::Column::EventItemIndex,
-                            ])
-                            .do_nothing()
-                            .to_owned(),
-                        )
-                        .exec_without_returning(tx.as_ref())
-                        .await
-                        .map_err(DbSqlError::from)?;
-                }
-                Ok(events)
-            }
-            CurvyAggregatorAlphaV2Events::CommitmentGasFeeRootUpdated(event) => {
-                curvy_commitment_gas_fee_root::Entity::insert(curvy_commitment_gas_fee_root::ActiveModel {
-                    root: Set(u256_bytes(event.root)),
-                    chain_tx_hash: Set(chain_tx_hash),
-                    published_block: Set(block),
-                    published_tx_index: Set(tx_index),
-                    published_log_index: Set(log_index),
-                    ..Default::default()
-                })
-                .on_conflict(
-                    OnConflict::columns([
-                        curvy_commitment_gas_fee_root::Column::PublishedBlock,
-                        curvy_commitment_gas_fee_root::Column::PublishedTxIndex,
-                        curvy_commitment_gas_fee_root::Column::PublishedLogIndex,
-                    ])
-                    .do_nothing()
-                    .to_owned(),
-                )
-                .exec_without_returning(tx.as_ref())
-                .await
-                .map_err(DbSqlError::from)?;
-                Ok(vec![IndexerEvent::CurvyCommitmentGasFeeRootUpdated(
-                    CurvyCommitmentGasFeeRootUpdate {
-                        root: u256_scalar(event.root),
-                        position: position(log, 0)?,
-                    },
-                )])
-            }
-            _ => Ok(Vec::new()),
-        }
-    }
-
-    pub(super) async fn on_curvy_vault_event(
-        &self,
-        tx: &OpenTransaction,
-        log: &Log,
-        event: CurvyVaultV2Events,
-    ) -> Result<Vec<IndexerEvent>> {
-        let (block, tx_index, log_index) = coordinates(log)?;
-        let chain_tx_hash = log.tx_hash.as_ref().to_vec();
-
-        match event {
-            CurvyVaultV2Events::TokenRegistration(event) => {
-                curvy_token_registration::Entity::insert(curvy_token_registration::ActiveModel {
-                    token_address: Set(event.token_address.as_slice().to_vec()),
-                    token_id: Set(u256_bytes(event.token_id)),
-                    chain_tx_hash: Set(chain_tx_hash),
-                    published_block: Set(block),
-                    published_tx_index: Set(tx_index),
-                    published_log_index: Set(log_index),
-                    ..Default::default()
-                })
-                .on_conflict(
-                    OnConflict::columns([
-                        curvy_token_registration::Column::PublishedBlock,
-                        curvy_token_registration::Column::PublishedTxIndex,
-                        curvy_token_registration::Column::PublishedLogIndex,
-                    ])
-                    .do_nothing()
-                    .to_owned(),
-                )
-                .exec_without_returning(tx.as_ref())
-                .await
-                .map_err(DbSqlError::from)?;
-                Ok(vec![IndexerEvent::CurvyTokenRegistered(CurvyTokenRegistration {
-                    token_address: event.token_address.to_hopr_address().to_hex(),
-                    token_id: u256_scalar(event.token_id),
-                    position: position(log, 0)?,
-                })])
-            }
-            CurvyVaultV2Events::CommitmentGasCostsUpdated(event) => {
-                let mut models = Vec::with_capacity(event.gasFees.len());
-                let mut events = Vec::with_capacity(event.gasFees.len());
-                for (item_index, fees) in event.gasFees.into_iter().enumerate() {
-                    let event_item_index = i64::try_from(item_index).map_err(|_| {
-                        CoreEthereumIndexerError::ProcessError(
-                            "CommitmentGasCostsUpdated item index overflow".to_string(),
-                        )
-                    })?;
-                    models.push(curvy_commitment_gas_cost::ActiveModel {
-                        token_id: Set(u256_bytes(fees.tokenId)),
-                        portal_deployment: Set(u256_bytes(fees.portalDeployment)),
-                        pending_note_commitment: Set(u256_bytes(fees.pendingNoteCommitment)),
-                        withdrawal: Set(u256_bytes(fees.withdrawal)),
-                        root: Set(u256_bytes(event.root)),
-                        event_item_index: Set(event_item_index),
-                        chain_tx_hash: Set(chain_tx_hash.clone()),
-                        published_block: Set(block),
-                        published_tx_index: Set(tx_index),
-                        published_log_index: Set(log_index),
-                        ..Default::default()
-                    });
-                    events.push(IndexerEvent::CurvyCommitmentGasCostsUpdated(
-                        CurvyCommitmentGasCostUpdate {
-                            gas_fees: CurvyGasFees {
-                                token_id: u256_scalar(fees.tokenId),
-                                portal_deployment: u256_scalar(fees.portalDeployment),
-                                pending_note_commitment: u256_scalar(fees.pendingNoteCommitment),
-                                withdrawal: u256_scalar(fees.withdrawal),
-                            },
-                            root: u256_scalar(event.root),
-                            position: position(log, event_item_index)?,
-                        },
-                    ));
-                }
-                if !models.is_empty() {
-                    curvy_commitment_gas_cost::Entity::insert_many(models)
-                        .on_conflict(
-                            OnConflict::columns([
-                                curvy_commitment_gas_cost::Column::PublishedBlock,
-                                curvy_commitment_gas_cost::Column::PublishedTxIndex,
-                                curvy_commitment_gas_cost::Column::PublishedLogIndex,
-                                curvy_commitment_gas_cost::Column::EventItemIndex,
                             ])
                             .do_nothing()
                             .to_owned(),
