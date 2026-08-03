@@ -1481,10 +1481,21 @@ The standard local Anvil image deploys and indexes only the HOPR contract suite.
 explicitly named Curvy development variant compiles an optional deployment dependency
 and deploys Curvy on the same chain with the same signer after HOPR deployment.
 
-Curvy addresses are emitted as a separate client-facing artifact. They are not added
-to Blokli configuration, indexing filters, GraphQL schema, or production images. A
-failure in either requested deployment prevents final address/configuration artifacts
-from being published.
+The deployment artifact and generated Blokli configuration include the Curvy
+Aggregator, Vault, and PortalFactory addresses. Configured Aggregator and Vault
+addresses extend the indexer's address/topic filter. Their supported events are stored
+as append-only, position-keyed records; array-valued events are normalized into one row
+per array item. PortalFactory has no indexed event in the supported surface.
+
+GraphQL exposes cursor-paginated event-history queries ordered by the full normalized
+event position, including the item index within array-valued events. Two-phase
+subscriptions stream historical rows without materializing the full history, then
+bridge a synchronized database watermark to live indexer events while retaining the
+client's lower block bound. Curvy view functions are read directly from the configured
+contracts through the existing RPC layer. State-changing Curvy calls use Blokli's
+existing pre-signed raw-transaction mutations, keeping signing and proof construction
+outside the service. A failure in either requested deployment prevents final
+address/configuration artifacts from being published.
 
 ## Design Principles and Patterns
 

@@ -4,11 +4,11 @@ use std::{collections::HashMap, sync::Arc};
 
 use async_broadcast::Receiver;
 use async_graphql::{Context, ID, Result, Subscription};
-use async_stream::stream;
+use async_stream::{stream, try_stream};
 use blokli_api_types::{
     Account, Channel, ChannelUpdate, CurvyCommitmentGasCostUpdate, CurvyCommitmentGasFeeRootUpdate, CurvyCommittedNote,
-    CurvyCommittedNullifier, CurvyPendingNote, CurvyTokenRegistration, Hex32, OpenedChannelsGraphEntry,
-    RedeemTicketDetails, Safe, TicketParameters, TokenValueString, Transaction, UInt64,
+    CurvyCommittedNullifier, CurvyEventPosition, CurvyPendingNote, CurvyTokenRegistration, Hex32,
+    OpenedChannelsGraphEntry, RedeemTicketDetails, Safe, TicketParameters, TokenValueString, Transaction, UInt64,
 };
 use blokli_chain_api::transaction_store::{
     TransactionEvent, TransactionStatus as StoreTransactionStatus, TransactionStore,
@@ -29,7 +29,7 @@ use blokli_db_entity::{
     curvy_pending_note, curvy_token_registration, hopr_node_safe_registration,
 };
 use chrono::Utc;
-use futures::Stream;
+use futures::{Stream, StreamExt, pin_mut};
 use hopr_bindings::exports::alloy::hex;
 use hopr_types::primitive::{
     prelude::HoprBalance as PrimitiveHoprBalance,
@@ -37,7 +37,7 @@ use hopr_types::primitive::{
     traits::{IntoEndian, ToHex},
 };
 use rand::seq::SliceRandom;
-use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Select};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -400,19 +400,86 @@ fn watermark_condition(watermark: &Watermark) -> Condition {
     Condition::all().add(channel_state::Column::PublishedBlock.lte(watermark.block))
 }
 
-fn curvy_event_stream<T, F>(
-    historical: Vec<T>,
+trait CurvyPositioned {
+    fn position(&self) -> &CurvyEventPosition;
+}
+
+impl CurvyPositioned for CurvyPendingNote {
+    fn position(&self) -> &CurvyEventPosition {
+        &self.position
+    }
+}
+
+impl CurvyPositioned for CurvyCommittedNote {
+    fn position(&self) -> &CurvyEventPosition {
+        &self.position
+    }
+}
+
+impl CurvyPositioned for CurvyCommittedNullifier {
+    fn position(&self) -> &CurvyEventPosition {
+        &self.position
+    }
+}
+
+impl CurvyPositioned for CurvyCommitmentGasFeeRootUpdate {
+    fn position(&self) -> &CurvyEventPosition {
+        &self.position
+    }
+}
+
+impl CurvyPositioned for CurvyTokenRegistration {
+    fn position(&self) -> &CurvyEventPosition {
+        &self.position
+    }
+}
+
+impl CurvyPositioned for CurvyCommitmentGasCostUpdate {
+    fn position(&self) -> &CurvyEventPosition {
+        &self.position
+    }
+}
+
+fn curvy_history_stream<E, T, F>(
+    db: DatabaseConnection,
+    query: Select<E>,
+    operation: &'static str,
+    convert: F,
+) -> impl Stream<Item = Result<T>>
+where
+    E: EntityTrait + 'static,
+    E::Model: Send + 'static,
+    T: Send + 'static,
+    F: Fn(E::Model) -> Result<T> + Send + Sync + 'static,
+{
+    try_stream! {
+        let mut rows = query
+            .stream(&db)
+            .await
+            .map_err(|error| errors::graphql_query_error(operation, error))?;
+        while let Some(row) = rows.next().await {
+            let model = row.map_err(|error| errors::graphql_query_error(operation, error))?;
+            yield convert(model)?;
+        }
+    }
+}
+
+fn curvy_event_stream<T, H, F>(
+    historical: H,
     mut event_receiver: Receiver<IndexerEvent>,
     mut shutdown_receiver: Receiver<()>,
+    start_block: Option<u64>,
     select: F,
-) -> impl Stream<Item = T>
+) -> impl Stream<Item = Result<T>>
 where
-    T: Send + 'static,
+    T: CurvyPositioned + Send + 'static,
+    H: Stream<Item = Result<T>> + Send + 'static,
     F: Fn(IndexerEvent) -> Option<T> + Send + Sync + 'static,
 {
-    stream! {
-        for event in historical {
-            yield event;
+    try_stream! {
+        pin_mut!(historical);
+        while let Some(event) = historical.next().await {
+            yield event?;
         }
         loop {
             tokio::select! {
@@ -428,7 +495,9 @@ where
                 event_result = event_receiver.recv() => {
                     match event_result {
                         Ok(event) => {
-                            if let Some(event) = select(event) {
+                            if let Some(event) = select(event)
+                                && start_block.is_none_or(|start_block| event.position().block.0 >= start_block)
+                            {
                                 yield event;
                             }
                         }
@@ -443,11 +512,20 @@ where
     }
 }
 
-fn curvy_start_block(from_block: Option<UInt64>) -> Result<Option<i64>> {
+#[derive(Clone, Copy)]
+struct CurvyStartBlock {
+    api: u64,
+    database: i64,
+}
+
+fn curvy_start_block(from_block: Option<UInt64>) -> Result<Option<CurvyStartBlock>> {
     from_block
         .map(|block| {
-            i64::try_from(block.0)
-                .map_err(|_| errors::graphql_pagination_error("fromBlock exceeds the supported database range"))
+            Ok(CurvyStartBlock {
+                api: block.0,
+                database: i64::try_from(block.0)
+                    .map_err(|_| errors::graphql_pagination_error("fromBlock exceeds the supported database range"))?,
+            })
         })
         .transpose()
 }
@@ -464,31 +542,32 @@ impl SubscriptionRoot {
         &self,
         ctx: &Context<'_>,
         #[graphql(name = "fromBlock")] from_block: Option<UInt64>,
-    ) -> Result<impl Stream<Item = CurvyPendingNote>> {
+    ) -> Result<impl Stream<Item = Result<CurvyPendingNote>>> {
         let db = ctx.data::<DatabaseConnection>()?.clone();
         let indexer_state = ctx.data::<IndexerState>()?.clone();
         let (watermark, event_receiver, shutdown_receiver) =
             capture_watermark_synchronized(&indexer_state, &db).await?;
+        let start_block = curvy_start_block(from_block)?;
         let mut query =
             curvy_pending_note::Entity::find().filter(curvy_pending_note::Column::PublishedBlock.lte(watermark.block));
-        if let Some(block) = curvy_start_block(from_block)? {
-            query = query.filter(curvy_pending_note::Column::PublishedBlock.gte(block));
+        if let Some(start_block) = start_block {
+            query = query.filter(curvy_pending_note::Column::PublishedBlock.gte(start_block.database));
         }
-        let historical = query
-            .order_by_asc(curvy_pending_note::Column::PublishedBlock)
-            .order_by_asc(curvy_pending_note::Column::PublishedTxIndex)
-            .order_by_asc(curvy_pending_note::Column::PublishedLogIndex)
-            .order_by_asc(curvy_pending_note::Column::EventItemIndex)
-            .all(&db)
-            .await
-            .map_err(|error| errors::graphql_query_error("fetch Curvy pending-note history", error))?
-            .into_iter()
-            .map(curvy::pending_note)
-            .collect::<Result<Vec<_>>>()?;
+        let historical = curvy_history_stream(
+            db,
+            query
+                .order_by_asc(curvy_pending_note::Column::PublishedBlock)
+                .order_by_asc(curvy_pending_note::Column::PublishedTxIndex)
+                .order_by_asc(curvy_pending_note::Column::PublishedLogIndex)
+                .order_by_asc(curvy_pending_note::Column::EventItemIndex),
+            "fetch Curvy pending-note history",
+            curvy::pending_note,
+        );
         Ok(curvy_event_stream(
             historical,
             event_receiver,
             shutdown_receiver,
+            start_block.map(|start_block| start_block.api),
             |event| match event {
                 IndexerEvent::CurvyPendingNote(event) => Some(event),
                 _ => None,
@@ -502,31 +581,32 @@ impl SubscriptionRoot {
         &self,
         ctx: &Context<'_>,
         #[graphql(name = "fromBlock")] from_block: Option<UInt64>,
-    ) -> Result<impl Stream<Item = CurvyCommittedNote>> {
+    ) -> Result<impl Stream<Item = Result<CurvyCommittedNote>>> {
         let db = ctx.data::<DatabaseConnection>()?.clone();
         let indexer_state = ctx.data::<IndexerState>()?.clone();
         let (watermark, event_receiver, shutdown_receiver) =
             capture_watermark_synchronized(&indexer_state, &db).await?;
+        let start_block = curvy_start_block(from_block)?;
         let mut query = curvy_committed_note::Entity::find()
             .filter(curvy_committed_note::Column::PublishedBlock.lte(watermark.block));
-        if let Some(block) = curvy_start_block(from_block)? {
-            query = query.filter(curvy_committed_note::Column::PublishedBlock.gte(block));
+        if let Some(start_block) = start_block {
+            query = query.filter(curvy_committed_note::Column::PublishedBlock.gte(start_block.database));
         }
-        let historical = query
-            .order_by_asc(curvy_committed_note::Column::PublishedBlock)
-            .order_by_asc(curvy_committed_note::Column::PublishedTxIndex)
-            .order_by_asc(curvy_committed_note::Column::PublishedLogIndex)
-            .order_by_asc(curvy_committed_note::Column::EventItemIndex)
-            .all(&db)
-            .await
-            .map_err(|error| errors::graphql_query_error("fetch Curvy committed-note history", error))?
-            .into_iter()
-            .map(curvy::committed_note)
-            .collect::<Result<Vec<_>>>()?;
+        let historical = curvy_history_stream(
+            db,
+            query
+                .order_by_asc(curvy_committed_note::Column::PublishedBlock)
+                .order_by_asc(curvy_committed_note::Column::PublishedTxIndex)
+                .order_by_asc(curvy_committed_note::Column::PublishedLogIndex)
+                .order_by_asc(curvy_committed_note::Column::EventItemIndex),
+            "fetch Curvy committed-note history",
+            curvy::committed_note,
+        );
         Ok(curvy_event_stream(
             historical,
             event_receiver,
             shutdown_receiver,
+            start_block.map(|start_block| start_block.api),
             |event| match event {
                 IndexerEvent::CurvyCommittedNote(event) => Some(event),
                 _ => None,
@@ -540,31 +620,32 @@ impl SubscriptionRoot {
         &self,
         ctx: &Context<'_>,
         #[graphql(name = "fromBlock")] from_block: Option<UInt64>,
-    ) -> Result<impl Stream<Item = CurvyCommittedNullifier>> {
+    ) -> Result<impl Stream<Item = Result<CurvyCommittedNullifier>>> {
         let db = ctx.data::<DatabaseConnection>()?.clone();
         let indexer_state = ctx.data::<IndexerState>()?.clone();
         let (watermark, event_receiver, shutdown_receiver) =
             capture_watermark_synchronized(&indexer_state, &db).await?;
+        let start_block = curvy_start_block(from_block)?;
         let mut query = curvy_committed_nullifier::Entity::find()
             .filter(curvy_committed_nullifier::Column::PublishedBlock.lte(watermark.block));
-        if let Some(block) = curvy_start_block(from_block)? {
-            query = query.filter(curvy_committed_nullifier::Column::PublishedBlock.gte(block));
+        if let Some(start_block) = start_block {
+            query = query.filter(curvy_committed_nullifier::Column::PublishedBlock.gte(start_block.database));
         }
-        let historical = query
-            .order_by_asc(curvy_committed_nullifier::Column::PublishedBlock)
-            .order_by_asc(curvy_committed_nullifier::Column::PublishedTxIndex)
-            .order_by_asc(curvy_committed_nullifier::Column::PublishedLogIndex)
-            .order_by_asc(curvy_committed_nullifier::Column::EventItemIndex)
-            .all(&db)
-            .await
-            .map_err(|error| errors::graphql_query_error("fetch Curvy committed-nullifier history", error))?
-            .into_iter()
-            .map(curvy::committed_nullifier)
-            .collect::<Result<Vec<_>>>()?;
+        let historical = curvy_history_stream(
+            db,
+            query
+                .order_by_asc(curvy_committed_nullifier::Column::PublishedBlock)
+                .order_by_asc(curvy_committed_nullifier::Column::PublishedTxIndex)
+                .order_by_asc(curvy_committed_nullifier::Column::PublishedLogIndex)
+                .order_by_asc(curvy_committed_nullifier::Column::EventItemIndex),
+            "fetch Curvy committed-nullifier history",
+            curvy::committed_nullifier,
+        );
         Ok(curvy_event_stream(
             historical,
             event_receiver,
             shutdown_receiver,
+            start_block.map(|start_block| start_block.api),
             |event| match event {
                 IndexerEvent::CurvyCommittedNullifier(event) => Some(event),
                 _ => None,
@@ -578,30 +659,31 @@ impl SubscriptionRoot {
         &self,
         ctx: &Context<'_>,
         #[graphql(name = "fromBlock")] from_block: Option<UInt64>,
-    ) -> Result<impl Stream<Item = CurvyCommitmentGasFeeRootUpdate>> {
+    ) -> Result<impl Stream<Item = Result<CurvyCommitmentGasFeeRootUpdate>>> {
         let db = ctx.data::<DatabaseConnection>()?.clone();
         let indexer_state = ctx.data::<IndexerState>()?.clone();
         let (watermark, event_receiver, shutdown_receiver) =
             capture_watermark_synchronized(&indexer_state, &db).await?;
+        let start_block = curvy_start_block(from_block)?;
         let mut query = curvy_commitment_gas_fee_root::Entity::find()
             .filter(curvy_commitment_gas_fee_root::Column::PublishedBlock.lte(watermark.block));
-        if let Some(block) = curvy_start_block(from_block)? {
-            query = query.filter(curvy_commitment_gas_fee_root::Column::PublishedBlock.gte(block));
+        if let Some(start_block) = start_block {
+            query = query.filter(curvy_commitment_gas_fee_root::Column::PublishedBlock.gte(start_block.database));
         }
-        let historical = query
-            .order_by_asc(curvy_commitment_gas_fee_root::Column::PublishedBlock)
-            .order_by_asc(curvy_commitment_gas_fee_root::Column::PublishedTxIndex)
-            .order_by_asc(curvy_commitment_gas_fee_root::Column::PublishedLogIndex)
-            .all(&db)
-            .await
-            .map_err(|error| errors::graphql_query_error("fetch Curvy gas-fee root history", error))?
-            .into_iter()
-            .map(curvy::commitment_gas_fee_root)
-            .collect::<Result<Vec<_>>>()?;
+        let historical = curvy_history_stream(
+            db,
+            query
+                .order_by_asc(curvy_commitment_gas_fee_root::Column::PublishedBlock)
+                .order_by_asc(curvy_commitment_gas_fee_root::Column::PublishedTxIndex)
+                .order_by_asc(curvy_commitment_gas_fee_root::Column::PublishedLogIndex),
+            "fetch Curvy gas-fee root history",
+            curvy::commitment_gas_fee_root,
+        );
         Ok(curvy_event_stream(
             historical,
             event_receiver,
             shutdown_receiver,
+            start_block.map(|start_block| start_block.api),
             |event| match event {
                 IndexerEvent::CurvyCommitmentGasFeeRootUpdated(event) => Some(event),
                 _ => None,
@@ -615,30 +697,31 @@ impl SubscriptionRoot {
         &self,
         ctx: &Context<'_>,
         #[graphql(name = "fromBlock")] from_block: Option<UInt64>,
-    ) -> Result<impl Stream<Item = CurvyTokenRegistration>> {
+    ) -> Result<impl Stream<Item = Result<CurvyTokenRegistration>>> {
         let db = ctx.data::<DatabaseConnection>()?.clone();
         let indexer_state = ctx.data::<IndexerState>()?.clone();
         let (watermark, event_receiver, shutdown_receiver) =
             capture_watermark_synchronized(&indexer_state, &db).await?;
+        let start_block = curvy_start_block(from_block)?;
         let mut query = curvy_token_registration::Entity::find()
             .filter(curvy_token_registration::Column::PublishedBlock.lte(watermark.block));
-        if let Some(block) = curvy_start_block(from_block)? {
-            query = query.filter(curvy_token_registration::Column::PublishedBlock.gte(block));
+        if let Some(start_block) = start_block {
+            query = query.filter(curvy_token_registration::Column::PublishedBlock.gte(start_block.database));
         }
-        let historical = query
-            .order_by_asc(curvy_token_registration::Column::PublishedBlock)
-            .order_by_asc(curvy_token_registration::Column::PublishedTxIndex)
-            .order_by_asc(curvy_token_registration::Column::PublishedLogIndex)
-            .all(&db)
-            .await
-            .map_err(|error| errors::graphql_query_error("fetch Curvy token-registration history", error))?
-            .into_iter()
-            .map(curvy::token_registration)
-            .collect::<Result<Vec<_>>>()?;
+        let historical = curvy_history_stream(
+            db,
+            query
+                .order_by_asc(curvy_token_registration::Column::PublishedBlock)
+                .order_by_asc(curvy_token_registration::Column::PublishedTxIndex)
+                .order_by_asc(curvy_token_registration::Column::PublishedLogIndex),
+            "fetch Curvy token-registration history",
+            curvy::token_registration,
+        );
         Ok(curvy_event_stream(
             historical,
             event_receiver,
             shutdown_receiver,
+            start_block.map(|start_block| start_block.api),
             |event| match event {
                 IndexerEvent::CurvyTokenRegistered(event) => Some(event),
                 _ => None,
@@ -652,31 +735,32 @@ impl SubscriptionRoot {
         &self,
         ctx: &Context<'_>,
         #[graphql(name = "fromBlock")] from_block: Option<UInt64>,
-    ) -> Result<impl Stream<Item = CurvyCommitmentGasCostUpdate>> {
+    ) -> Result<impl Stream<Item = Result<CurvyCommitmentGasCostUpdate>>> {
         let db = ctx.data::<DatabaseConnection>()?.clone();
         let indexer_state = ctx.data::<IndexerState>()?.clone();
         let (watermark, event_receiver, shutdown_receiver) =
             capture_watermark_synchronized(&indexer_state, &db).await?;
+        let start_block = curvy_start_block(from_block)?;
         let mut query = curvy_commitment_gas_cost::Entity::find()
             .filter(curvy_commitment_gas_cost::Column::PublishedBlock.lte(watermark.block));
-        if let Some(block) = curvy_start_block(from_block)? {
-            query = query.filter(curvy_commitment_gas_cost::Column::PublishedBlock.gte(block));
+        if let Some(start_block) = start_block {
+            query = query.filter(curvy_commitment_gas_cost::Column::PublishedBlock.gte(start_block.database));
         }
-        let historical = query
-            .order_by_asc(curvy_commitment_gas_cost::Column::PublishedBlock)
-            .order_by_asc(curvy_commitment_gas_cost::Column::PublishedTxIndex)
-            .order_by_asc(curvy_commitment_gas_cost::Column::PublishedLogIndex)
-            .order_by_asc(curvy_commitment_gas_cost::Column::EventItemIndex)
-            .all(&db)
-            .await
-            .map_err(|error| errors::graphql_query_error("fetch Curvy gas-cost history", error))?
-            .into_iter()
-            .map(curvy::commitment_gas_cost)
-            .collect::<Result<Vec<_>>>()?;
+        let historical = curvy_history_stream(
+            db,
+            query
+                .order_by_asc(curvy_commitment_gas_cost::Column::PublishedBlock)
+                .order_by_asc(curvy_commitment_gas_cost::Column::PublishedTxIndex)
+                .order_by_asc(curvy_commitment_gas_cost::Column::PublishedLogIndex)
+                .order_by_asc(curvy_commitment_gas_cost::Column::EventItemIndex),
+            "fetch Curvy gas-cost history",
+            curvy::commitment_gas_cost,
+        );
         Ok(curvy_event_stream(
             historical,
             event_receiver,
             shutdown_receiver,
+            start_block.map(|start_block| start_block.api),
             |event| match event {
                 IndexerEvent::CurvyCommitmentGasCostsUpdated(event) => Some(event),
                 _ => None,

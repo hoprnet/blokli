@@ -29,13 +29,17 @@ fn u256_scalar(value: U256) -> UInt256 {
     UInt256(value.to_string())
 }
 
-fn position(log: &Log) -> CurvyEventPosition {
-    CurvyEventPosition {
+fn position(log: &Log, event_item_index: i64) -> Result<CurvyEventPosition> {
+    Ok(CurvyEventPosition {
         transaction_hash: Hex32(log.tx_hash.to_hex()),
         block: UInt64(log.block_number),
         transaction_index: UInt64(log.tx_index),
         log_index: UInt64(log.log_index.as_u64()),
-    }
+        event_item_index: UInt64(
+            u64::try_from(event_item_index)
+                .map_err(|_| CoreEthereumIndexerError::ProcessError("Curvy event item index underflow".to_string()))?,
+        ),
+    })
 }
 
 fn coordinates(log: &Log) -> Result<(i64, i64, i64)> {
@@ -116,7 +120,7 @@ where
                         token_id: u256_scalar(event.tokens[item_index]),
                         amount: u256_scalar(event.amounts[item_index]),
                         is_plaintext: event.isPlaintext[item_index],
-                        position: position(log),
+                        position: position(log, event_item_index)?,
                     }));
                 }
                 curvy_pending_note::Entity::insert_many(models)
@@ -155,7 +159,7 @@ where
                     events.push(IndexerEvent::CurvyCommittedNote(CurvyCommittedNote {
                         batch_index: u256_scalar(event.batchIndex),
                         note_id: u256_scalar(note_id),
-                        position: position(log),
+                        position: position(log, event_item_index)?,
                     }));
                 }
                 if !models.is_empty() {
@@ -196,7 +200,7 @@ where
                     events.push(IndexerEvent::CurvyCommittedNullifier(CurvyCommittedNullifier {
                         batch_index: u256_scalar(event.batchIndex),
                         nullifier: u256_scalar(nullifier),
-                        position: position(log),
+                        position: position(log, event_item_index)?,
                     }));
                 }
                 if !models.is_empty() {
@@ -241,7 +245,7 @@ where
                 Ok(vec![IndexerEvent::CurvyCommitmentGasFeeRootUpdated(
                     CurvyCommitmentGasFeeRootUpdate {
                         root: u256_scalar(event.root),
-                        position: position(log),
+                        position: position(log, 0)?,
                     },
                 )])
             }
@@ -284,7 +288,7 @@ where
                 Ok(vec![IndexerEvent::CurvyTokenRegistered(CurvyTokenRegistration {
                     token_address: event.token_address.to_hopr_address().to_hex(),
                     token_id: u256_scalar(event.token_id),
-                    position: position(log),
+                    position: position(log, 0)?,
                 })])
             }
             CurvyVaultV2Events::CommitmentGasCostsUpdated(event) => {
@@ -318,7 +322,7 @@ where
                                 withdrawal: u256_scalar(fees.withdrawal),
                             },
                             root: u256_scalar(event.root),
-                            position: position(log),
+                            position: position(log, event_item_index)?,
                         },
                     ));
                 }

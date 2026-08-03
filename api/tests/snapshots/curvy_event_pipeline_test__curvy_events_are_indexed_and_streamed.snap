@@ -10,6 +10,7 @@ curvyCommitmentGasCostUpdates:
       withdrawal: "50000000000000000"
     position:
       block: "23"
+      eventItemIndex: "0"
       logIndex: "1"
       transactionHash: "0x25a382935bdad339d6d8882c429a59c7d0cdfdaf21f56aa6a683e523a3865dce"
       transactionIndex: "0"
@@ -21,6 +22,7 @@ curvyCommitmentGasCostUpdates:
       withdrawal: "50000000000000000"
     position:
       block: "23"
+      eventItemIndex: "1"
       logIndex: "1"
       transactionHash: "0x25a382935bdad339d6d8882c429a59c7d0cdfdaf21f56aa6a683e523a3865dce"
       transactionIndex: "0"
@@ -28,15 +30,25 @@ curvyCommitmentGasCostUpdates:
 curvyCommitmentGasFeeRootUpdates:
   - position:
       block: "23"
+      eventItemIndex: "0"
       logIndex: "0"
       transactionHash: "0x25a382935bdad339d6d8882c429a59c7d0cdfdaf21f56aa6a683e523a3865dce"
       transactionIndex: "0"
     root: "318527533646335451640559730256624356987889861989382757516685243934603950464"
 curvyCommittedNotes:
+  - batchIndex: "6"
+    noteId: "100"
+    position:
+      block: "26"
+      eventItemIndex: "0"
+      logIndex: "0"
+      transactionHash: "0x3030303030303030303030303030303030303030303030303030303030303030"
+      transactionIndex: "0"
   - batchIndex: "7"
     noteId: "101"
     position:
       block: "27"
+      eventItemIndex: "0"
       logIndex: "0"
       transactionHash: "0x3131313131313131313131313131313131313131313131313131313131313131"
       transactionIndex: "0"
@@ -44,6 +56,7 @@ curvyCommittedNotes:
     noteId: "102"
     position:
       block: "27"
+      eventItemIndex: "1"
       logIndex: "0"
       transactionHash: "0x3131313131313131313131313131313131313131313131313131313131313131"
       transactionIndex: "0"
@@ -52,6 +65,7 @@ curvyCommittedNullifiers:
     nullifier: "201"
     position:
       block: "28"
+      eventItemIndex: "0"
       logIndex: "0"
       transactionHash: "0x3232323232323232323232323232323232323232323232323232323232323232"
       transactionIndex: "0"
@@ -59,6 +73,7 @@ curvyCommittedNullifiers:
     nullifier: "202"
     position:
       block: "28"
+      eventItemIndex: "1"
       logIndex: "0"
       transactionHash: "0x3232323232323232323232323232323232323232323232323232323232323232"
       transactionIndex: "0"
@@ -71,6 +86,7 @@ curvyPendingNotes:
     noteId: "9007574289759491131023224166345896283315443369610012895819834084153145090913"
     position:
       block: "26"
+      eventItemIndex: "0"
       logIndex: "1"
       transactionHash: "0x858dda83f79bde6555f9997df198578ce4b6843f39f02eca52d2a34095436c2f"
       transactionIndex: "0"
@@ -79,6 +95,7 @@ curvyPendingNotes:
 curvyTokenRegistrations:
   - position:
       block: "20"
+      eventItemIndex: "0"
       logIndex: "0"
       transactionHash: "0xb8273cb397b6df9f4065573eb83d2ff0c8f1fdf4fbcd6a0ccd247c6747a7d6e0"
       transactionIndex: "0"

@@ -74,9 +74,10 @@ fn decode_event<E: SolEvent>(log: &Log) -> anyhow::Result<E> {
     .map_err(Into::into)
 }
 
-fn event_position(log: &Log) -> Value {
+fn event_position(log: &Log, event_item_index: usize) -> Value {
     json!({
         "block": log.block_number.to_string(),
+        "eventItemIndex": event_item_index.to_string(),
         "logIndex": log.log_index.to_string(),
         "transactionHash": log.tx_hash.to_hex(),
         "transactionIndex": log.tx_index.to_string(),
@@ -237,13 +238,13 @@ async fn test_curvy_events_are_indexed_and_streamed() -> anyhow::Result<()> {
     for log in &token_logs {
         let event = decode_event::<TokenRegistration>(log)?;
         let expected = json!({
-            "position": event_position(log),
+            "position": event_position(log, 0),
             "tokenAddress": event.token_address.to_hopr_address().to_hex(),
             "tokenId": event.token_id.to_string(),
         });
         assert_live_events(
             &schema,
-            r#"subscription { curvyTokenRegistered { position { block logIndex transactionHash transactionIndex } tokenAddress tokenId } }"#,
+            r#"subscription { curvyTokenRegistered { position { block eventItemIndex logIndex transactionHash transactionIndex } tokenAddress tokenId } }"#,
             "curvyTokenRegistered",
             std::slice::from_ref(&expected),
             handlers.collect_log_event(SerializableLog::from(log.clone()), true),
@@ -260,12 +261,12 @@ async fn test_curvy_events_are_indexed_and_streamed() -> anyhow::Result<()> {
     let gas_root_log = &gas_root_logs[0];
     let gas_root_event = decode_event::<CommitmentGasFeeRootUpdated>(gas_root_log)?;
     let expected_gas_root = json!({
-        "position": event_position(gas_root_log),
+        "position": event_position(gas_root_log, 0),
         "root": gas_root_event.root.to_string(),
     });
     assert_live_events(
         &schema,
-        r#"subscription { curvyCommitmentGasFeeRootUpdated { position { block logIndex transactionHash transactionIndex } root } }"#,
+        r#"subscription { curvyCommitmentGasFeeRootUpdated { position { block eventItemIndex logIndex transactionHash transactionIndex } root } }"#,
         "curvyCommitmentGasFeeRootUpdated",
         std::slice::from_ref(&expected_gas_root),
         handlers.collect_log_event(SerializableLog::from(gas_root_log.clone()), true),
@@ -279,7 +280,8 @@ async fn test_curvy_events_are_indexed_and_streamed() -> anyhow::Result<()> {
     let expected_gas_costs = gas_cost_event
         .gasFees
         .iter()
-        .map(|fees| {
+        .enumerate()
+        .map(|(item_index, fees)| {
             json!({
                 "gasFees": {
                     "pendingNoteCommitment": fees.pendingNoteCommitment.to_string(),
@@ -287,14 +289,14 @@ async fn test_curvy_events_are_indexed_and_streamed() -> anyhow::Result<()> {
                     "tokenId": fees.tokenId.to_string(),
                     "withdrawal": fees.withdrawal.to_string(),
                 },
-                "position": event_position(gas_cost_log),
+                "position": event_position(gas_cost_log, item_index),
                 "root": gas_cost_event.root.to_string(),
             })
         })
         .collect::<Vec<_>>();
     assert_live_events(
         &schema,
-        r#"subscription { curvyCommitmentGasCostsUpdated { gasFees { pendingNoteCommitment portalDeployment tokenId withdrawal } position { block logIndex transactionHash transactionIndex } root } }"#,
+        r#"subscription { curvyCommitmentGasCostsUpdated { gasFees { pendingNoteCommitment portalDeployment tokenId withdrawal } position { block eventItemIndex logIndex transactionHash transactionIndex } root } }"#,
         "curvyCommitmentGasCostsUpdated",
         &expected_gas_costs,
         handlers.collect_log_event(SerializableLog::from(gas_cost_log.clone()), true),
@@ -321,7 +323,7 @@ async fn test_curvy_events_are_indexed_and_streamed() -> anyhow::Result<()> {
                 ],
                 "isPlaintext": pending_event.isPlaintext[index],
                 "noteId": note_id.to_string(),
-                "position": event_position(pending_log),
+                "position": event_position(pending_log, index),
                 "tokenId": pending_event.tokens[index].to_string(),
                 "viewTag": pending_event.viewTags[index],
             })
@@ -329,13 +331,22 @@ async fn test_curvy_events_are_indexed_and_streamed() -> anyhow::Result<()> {
         .collect::<Vec<_>>();
     assert_live_events(
         &schema,
-        r#"subscription { curvyPendingNote { amount ephemeralKey isPlaintext noteId position { block logIndex transactionHash transactionIndex } tokenId viewTag } }"#,
+        r#"subscription { curvyPendingNote { amount ephemeralKey isPlaintext noteId position { block eventItemIndex logIndex transactionHash transactionIndex } tokenId viewTag } }"#,
         "curvyPendingNote",
         &expected_pending_notes,
         handlers.collect_log_event(SerializableLog::from(pending_log.clone()), true),
     )
     .await?;
 
+    let filtered_committed_notes_log = encoded_event_log(
+        contract_addresses.curvy_aggregator,
+        &CommittedNotes {
+            batchIndex: U256::from(6),
+            noteIds: vec![U256::from(100)],
+        },
+        latest_block,
+        0x30,
+    );
     let committed_notes_event = CommittedNotes {
         batchIndex: U256::from(7),
         noteIds: vec![U256::from(101), U256::from(102)],
@@ -346,24 +357,32 @@ async fn test_curvy_events_are_indexed_and_streamed() -> anyhow::Result<()> {
         latest_block + 1,
         0x31,
     );
-    let committed_notes_position = event_position(&Log::from(committed_notes_log.clone()));
     let expected_committed_notes = committed_notes_event
         .noteIds
         .iter()
-        .map(|note_id| {
+        .enumerate()
+        .map(|(item_index, note_id)| {
             json!({
                 "batchIndex": committed_notes_event.batchIndex.to_string(),
                 "noteId": note_id.to_string(),
-                "position": committed_notes_position,
+                "position": event_position(&Log::from(committed_notes_log.clone()), item_index),
             })
         })
         .collect::<Vec<_>>();
     assert_live_events(
         &schema,
-        r#"subscription { curvyCommittedNote { batchIndex noteId position { block logIndex transactionHash transactionIndex } } }"#,
+        &format!(
+            "subscription {{ curvyCommittedNote(fromBlock: \"{}\") {{ batchIndex noteId position {{ block eventItemIndex logIndex transactionHash transactionIndex }} }} }}",
+            latest_block + 1
+        ),
         "curvyCommittedNote",
         &expected_committed_notes,
-        handlers.collect_log_event(committed_notes_log.clone(), true),
+        async {
+            handlers
+                .collect_log_event(filtered_committed_notes_log.clone(), true)
+                .await?;
+            handlers.collect_log_event(committed_notes_log.clone(), true).await
+        },
     )
     .await?;
 
@@ -377,21 +396,21 @@ async fn test_curvy_events_are_indexed_and_streamed() -> anyhow::Result<()> {
         latest_block + 2,
         0x32,
     );
-    let committed_nullifiers_position = event_position(&Log::from(committed_nullifiers_log.clone()));
     let expected_committed_nullifiers = committed_nullifiers_event
         .nullifiers
         .iter()
-        .map(|nullifier| {
+        .enumerate()
+        .map(|(item_index, nullifier)| {
             json!({
                 "batchIndex": committed_nullifiers_event.batchIndex.to_string(),
                 "nullifier": nullifier.to_string(),
-                "position": committed_nullifiers_position,
+                "position": event_position(&Log::from(committed_nullifiers_log.clone()), item_index),
             })
         })
         .collect::<Vec<_>>();
     assert_live_events(
         &schema,
-        r#"subscription { curvyCommittedNullifier { batchIndex nullifier position { block logIndex transactionHash transactionIndex } } }"#,
+        r#"subscription { curvyCommittedNullifier { batchIndex nullifier position { block eventItemIndex logIndex transactionHash transactionIndex } } }"#,
         "curvyCommittedNullifier",
         &expected_committed_nullifiers,
         handlers.collect_log_event(committed_nullifiers_log.clone(), true),
@@ -402,12 +421,12 @@ async fn test_curvy_events_are_indexed_and_streamed() -> anyhow::Result<()> {
         .execute(
             r#"
                 query {
-                    curvyCommitmentGasCostUpdates(first: 10) { gasFees { pendingNoteCommitment portalDeployment tokenId withdrawal } position { block logIndex transactionHash transactionIndex } root }
-                    curvyCommitmentGasFeeRootUpdates(first: 10) { position { block logIndex transactionHash transactionIndex } root }
-                    curvyCommittedNotes(first: 10) { batchIndex noteId position { block logIndex transactionHash transactionIndex } }
-                    curvyCommittedNullifiers(first: 10) { batchIndex nullifier position { block logIndex transactionHash transactionIndex } }
-                    curvyPendingNotes(first: 10) { amount ephemeralKey isPlaintext noteId position { block logIndex transactionHash transactionIndex } tokenId viewTag }
-                    curvyTokenRegistrations(first: 10) { position { block logIndex transactionHash transactionIndex } tokenAddress tokenId }
+                    curvyCommitmentGasCostUpdates(first: 10) { gasFees { pendingNoteCommitment portalDeployment tokenId withdrawal } position { block eventItemIndex logIndex transactionHash transactionIndex } root }
+                    curvyCommitmentGasFeeRootUpdates(first: 10) { position { block eventItemIndex logIndex transactionHash transactionIndex } root }
+                    curvyCommittedNotes(first: 10) { batchIndex noteId position { block eventItemIndex logIndex transactionHash transactionIndex } }
+                    curvyCommittedNullifiers(first: 10) { batchIndex nullifier position { block eventItemIndex logIndex transactionHash transactionIndex } }
+                    curvyPendingNotes(first: 10) { amount ephemeralKey isPlaintext noteId position { block eventItemIndex logIndex transactionHash transactionIndex } tokenId viewTag }
+                    curvyTokenRegistrations(first: 10) { position { block eventItemIndex logIndex transactionHash transactionIndex } tokenAddress tokenId }
                 }
             "#,
         )
@@ -416,6 +435,30 @@ async fn test_curvy_events_are_indexed_and_streamed() -> anyhow::Result<()> {
         .map_err(|errors| anyhow::anyhow!("GraphQL query errors: {errors:?}"))?;
     let history_data = history_response.data.into_json()?;
     insta::assert_yaml_snapshot!(history_data);
+
+    let cursor_page_response = schema
+        .execute(format!(
+            r#"
+                query {{
+                    curvyCommittedNotes(
+                        after: {{ block: "{}", transactionIndex: "0", logIndex: "0", eventItemIndex: "0" }}
+                        first: 1
+                    ) {{
+                        batchIndex
+                        noteId
+                        position {{ block eventItemIndex logIndex transactionHash transactionIndex }}
+                    }}
+                }}
+            "#,
+            latest_block + 1
+        ))
+        .await
+        .into_result()
+        .map_err(|errors| anyhow::anyhow!("GraphQL cursor query errors: {errors:?}"))?;
+    insta::assert_yaml_snapshot!(
+        "curvy_cursor_continues_within_log",
+        cursor_page_response.data.into_json()?
+    );
 
     for log in token_logs {
         handlers.collect_log_event(SerializableLog::from(log), true).await?;
@@ -459,7 +502,7 @@ async fn test_curvy_events_are_indexed_and_streamed() -> anyhow::Result<()> {
         curvy_committed_note::Entity::find()
             .count(db.conn(TargetDb::Index))
             .await?,
-        u64::try_from(expected_committed_notes.len())?,
+        u64::try_from(expected_committed_notes.len() + 1)?,
         "replaying a CommittedNotes log must not duplicate its rows"
     );
     assert_eq!(

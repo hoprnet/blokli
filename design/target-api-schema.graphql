@@ -386,12 +386,21 @@ type CurvyAggregatorState {
   noteIndex: UInt256!
 }
 
+"""Exclusive pagination cursor for indexed Curvy events."""
+input CurvyEventCursor {
+  block: UInt64!
+  transactionIndex: UInt64!
+  logIndex: UInt64!
+  eventItemIndex: UInt64!
+}
+
 """Position and transaction identity shared by indexed Curvy events."""
 type CurvyEventPosition {
   transactionHash: Hex32!
   block: UInt64!
   transactionIndex: UInt64!
   logIndex: UInt64!
+  eventItemIndex: UInt64!
 }
 
 """Gas costs associated with a Curvy Vault token."""
@@ -474,17 +483,17 @@ Root query type providing read-only access to indexed blockchain data
 """
 type QueryRoot {
   "Retrieve Curvy notes emitted by `PendingNotes`, ordered by chain position."
-  curvyPendingNotes(fromBlock: UInt64, first: Int): [CurvyPendingNote!]!
+  curvyPendingNotes(fromBlock: UInt64, after: CurvyEventCursor, first: Int): [CurvyPendingNote!]!
   "Retrieve Curvy notes emitted by `CommittedNotes`, ordered by chain position."
-  curvyCommittedNotes(fromBlock: UInt64, first: Int): [CurvyCommittedNote!]!
+  curvyCommittedNotes(fromBlock: UInt64, after: CurvyEventCursor, first: Int): [CurvyCommittedNote!]!
   "Retrieve Curvy nullifiers emitted by `CommittedNullifiers`, ordered by chain position."
-  curvyCommittedNullifiers(fromBlock: UInt64, first: Int): [CurvyCommittedNullifier!]!
+  curvyCommittedNullifiers(fromBlock: UInt64, after: CurvyEventCursor, first: Int): [CurvyCommittedNullifier!]!
   "Retrieve Curvy Aggregator commitment gas-fee root updates."
-  curvyCommitmentGasFeeRootUpdates(fromBlock: UInt64, first: Int): [CurvyCommitmentGasFeeRootUpdate!]!
+  curvyCommitmentGasFeeRootUpdates(fromBlock: UInt64, after: CurvyEventCursor, first: Int): [CurvyCommitmentGasFeeRootUpdate!]!
   "Retrieve Curvy Vault token registrations."
-  curvyTokenRegistrations(fromBlock: UInt64, first: Int): [CurvyTokenRegistration!]!
+  curvyTokenRegistrations(fromBlock: UInt64, after: CurvyEventCursor, first: Int): [CurvyTokenRegistration!]!
   "Retrieve Curvy Vault commitment gas-cost updates."
-  curvyCommitmentGasCostUpdates(fromBlock: UInt64, first: Int): [CurvyCommitmentGasCostUpdate!]!
+  curvyCommitmentGasCostUpdates(fromBlock: UInt64, after: CurvyEventCursor, first: Int): [CurvyCommitmentGasCostUpdate!]!
   "Read the current Curvy Aggregator root and indices directly from chain."
   curvyAggregatorState: CurvyAggregatorState!
   "Read a Curvy note's raw `NoteStatus` value directly from chain."

@@ -26,6 +26,7 @@ fn position(
     block: i64,
     transaction_index: i64,
     log_index: i64,
+    event_item_index: i64,
 ) -> async_graphql::Result<CurvyEventPosition> {
     Ok(CurvyEventPosition {
         transaction_hash: Hex32(Hash::from(bytes32(chain_tx_hash, "chain_tx_hash")?).to_hex()),
@@ -36,6 +37,10 @@ fn position(
         ),
         log_index: UInt64(
             u64::try_from(log_index).map_err(|error| errors::graphql_query_error("decode Curvy event", error))?,
+        ),
+        event_item_index: UInt64(
+            u64::try_from(event_item_index)
+                .map_err(|error| errors::graphql_query_error("decode Curvy event", error))?,
         ),
     })
 }
@@ -57,6 +62,7 @@ pub fn pending_note(model: curvy_pending_note::Model) -> async_graphql::Result<C
             model.published_block,
             model.published_tx_index,
             model.published_log_index,
+            model.event_item_index,
         )?,
     })
 }
@@ -70,6 +76,7 @@ pub fn committed_note(model: curvy_committed_note::Model) -> async_graphql::Resu
             model.published_block,
             model.published_tx_index,
             model.published_log_index,
+            model.event_item_index,
         )?,
     })
 }
@@ -83,6 +90,7 @@ pub fn committed_nullifier(model: curvy_committed_nullifier::Model) -> async_gra
             model.published_block,
             model.published_tx_index,
             model.published_log_index,
+            model.event_item_index,
         )?,
     })
 }
@@ -97,6 +105,7 @@ pub fn commitment_gas_fee_root(
             model.published_block,
             model.published_tx_index,
             model.published_log_index,
+            0,
         )?,
     })
 }
@@ -115,6 +124,7 @@ pub fn token_registration(model: curvy_token_registration::Model) -> async_graph
             model.published_block,
             model.published_tx_index,
             model.published_log_index,
+            0,
         )?,
     })
 }
@@ -135,6 +145,7 @@ pub fn commitment_gas_cost(
             model.published_block,
             model.published_tx_index,
             model.published_log_index,
+            model.event_item_index,
         )?,
     })
 }

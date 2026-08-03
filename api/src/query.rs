@@ -6,10 +6,11 @@ use async_graphql::{Context, ID, Object, Result, SimpleObject, Union};
 use blokli_api_types::{
     Account, AccountsList, AccountsResult, ChainInfo, ChainInfoResult, Channel, ChannelStats, ChannelStatsResult,
     ChannelsList, ChannelsResult, ContractAddressMap, CountResult, CurvyAggregatorState, CurvyCommitmentGasCostUpdate,
-    CurvyCommitmentGasFeeRootUpdate, CurvyCommittedNote, CurvyCommittedNullifier, CurvyGasFees, CurvyPendingNote,
-    CurvyTokenRegistration, CurvyVaultFees, CurvyVaultToken, HoprBalance, InvalidAddressError, MissingFilterError,
-    ModuleAddress, NativeBalance, QueryFailedError, RedeemedStats, RedeemedStatsFilter, Safe, SafeHoprAllowance,
-    SafeSelectorInput, SafesBalance, SafesBalanceResult, TokenValueString, TransactionCount, UInt64, UInt256,
+    CurvyCommitmentGasFeeRootUpdate, CurvyCommittedNote, CurvyCommittedNullifier, CurvyEventCursor, CurvyGasFees,
+    CurvyPendingNote, CurvyTokenRegistration, CurvyVaultFees, CurvyVaultToken, HoprBalance, InvalidAddressError,
+    MissingFilterError, ModuleAddress, NativeBalance, QueryFailedError, RedeemedStats, RedeemedStatsFilter, Safe,
+    SafeHoprAllowance, SafeSelectorInput, SafesBalance, SafesBalanceResult, TokenValueString, TransactionCount, UInt64,
+    UInt256,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, HoprRpcOperations, rpc::RpcOperations};
@@ -44,7 +45,9 @@ use hopr_types::{
         traits::{IntoEndian, ToHex},
     },
 };
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect};
+use sea_orm::{
+    ColumnTrait, Condition, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
+};
 use tracing::warn;
 
 use crate::{
@@ -347,6 +350,66 @@ fn curvy_from_block(from_block: Option<UInt64>) -> Result<Option<i64>> {
         .transpose()
 }
 
+#[derive(Clone, Copy)]
+struct DatabaseCurvyEventCursor {
+    block: i64,
+    transaction_index: i64,
+    log_index: i64,
+    event_item_index: i64,
+}
+
+fn curvy_cursor(cursor: Option<CurvyEventCursor>) -> Result<Option<DatabaseCurvyEventCursor>> {
+    cursor
+        .map(|cursor| {
+            let convert = |value: UInt64| {
+                i64::try_from(value.0)
+                    .map_err(|_| errors::graphql_pagination_error("cursor exceeds the supported database range"))
+            };
+            Ok(DatabaseCurvyEventCursor {
+                block: convert(cursor.block)?,
+                transaction_index: convert(cursor.transaction_index)?,
+                log_index: convert(cursor.log_index)?,
+                event_item_index: convert(cursor.event_item_index)?,
+            })
+        })
+        .transpose()
+}
+
+fn curvy_cursor_condition<C>(
+    block: C,
+    transaction_index: C,
+    log_index: C,
+    event_item_index: Option<C>,
+    cursor: DatabaseCurvyEventCursor,
+) -> Condition
+where
+    C: ColumnTrait + Copy,
+{
+    let mut condition = Condition::any()
+        .add(block.gt(cursor.block))
+        .add(
+            Condition::all()
+                .add(block.eq(cursor.block))
+                .add(transaction_index.gt(cursor.transaction_index)),
+        )
+        .add(
+            Condition::all()
+                .add(block.eq(cursor.block))
+                .add(transaction_index.eq(cursor.transaction_index))
+                .add(log_index.gt(cursor.log_index)),
+        );
+    if let Some(event_item_index) = event_item_index {
+        condition = condition.add(
+            Condition::all()
+                .add(block.eq(cursor.block))
+                .add(transaction_index.eq(cursor.transaction_index))
+                .add(log_index.eq(cursor.log_index))
+                .add(event_item_index.gt(cursor.event_item_index)),
+        );
+    }
+    condition
+}
+
 fn configured_curvy_address(address: Address, contract: &str) -> Result<AlloyAddress> {
     if address == Address::default() {
         return Err(errors::graphql_rpc_error(
@@ -379,12 +442,22 @@ impl QueryRoot {
         &self,
         ctx: &Context<'_>,
         #[graphql(name = "fromBlock")] from_block: Option<UInt64>,
+        after: Option<CurvyEventCursor>,
         first: Option<i32>,
     ) -> Result<Vec<CurvyPendingNote>> {
         let db = ctx.data::<DatabaseConnection>()?;
         let mut query = curvy_pending_note::Entity::find();
         if let Some(block) = curvy_from_block(from_block)? {
             query = query.filter(curvy_pending_note::Column::PublishedBlock.gte(block));
+        }
+        if let Some(cursor) = curvy_cursor(after)? {
+            query = query.filter(curvy_cursor_condition(
+                curvy_pending_note::Column::PublishedBlock,
+                curvy_pending_note::Column::PublishedTxIndex,
+                curvy_pending_note::Column::PublishedLogIndex,
+                Some(curvy_pending_note::Column::EventItemIndex),
+                cursor,
+            ));
         }
         query
             .order_by_asc(curvy_pending_note::Column::PublishedBlock)
@@ -406,12 +479,22 @@ impl QueryRoot {
         &self,
         ctx: &Context<'_>,
         #[graphql(name = "fromBlock")] from_block: Option<UInt64>,
+        after: Option<CurvyEventCursor>,
         first: Option<i32>,
     ) -> Result<Vec<CurvyCommittedNote>> {
         let db = ctx.data::<DatabaseConnection>()?;
         let mut query = curvy_committed_note::Entity::find();
         if let Some(block) = curvy_from_block(from_block)? {
             query = query.filter(curvy_committed_note::Column::PublishedBlock.gte(block));
+        }
+        if let Some(cursor) = curvy_cursor(after)? {
+            query = query.filter(curvy_cursor_condition(
+                curvy_committed_note::Column::PublishedBlock,
+                curvy_committed_note::Column::PublishedTxIndex,
+                curvy_committed_note::Column::PublishedLogIndex,
+                Some(curvy_committed_note::Column::EventItemIndex),
+                cursor,
+            ));
         }
         query
             .order_by_asc(curvy_committed_note::Column::PublishedBlock)
@@ -433,12 +516,22 @@ impl QueryRoot {
         &self,
         ctx: &Context<'_>,
         #[graphql(name = "fromBlock")] from_block: Option<UInt64>,
+        after: Option<CurvyEventCursor>,
         first: Option<i32>,
     ) -> Result<Vec<CurvyCommittedNullifier>> {
         let db = ctx.data::<DatabaseConnection>()?;
         let mut query = curvy_committed_nullifier::Entity::find();
         if let Some(block) = curvy_from_block(from_block)? {
             query = query.filter(curvy_committed_nullifier::Column::PublishedBlock.gte(block));
+        }
+        if let Some(cursor) = curvy_cursor(after)? {
+            query = query.filter(curvy_cursor_condition(
+                curvy_committed_nullifier::Column::PublishedBlock,
+                curvy_committed_nullifier::Column::PublishedTxIndex,
+                curvy_committed_nullifier::Column::PublishedLogIndex,
+                Some(curvy_committed_nullifier::Column::EventItemIndex),
+                cursor,
+            ));
         }
         query
             .order_by_asc(curvy_committed_nullifier::Column::PublishedBlock)
@@ -460,12 +553,22 @@ impl QueryRoot {
         &self,
         ctx: &Context<'_>,
         #[graphql(name = "fromBlock")] from_block: Option<UInt64>,
+        after: Option<CurvyEventCursor>,
         first: Option<i32>,
     ) -> Result<Vec<CurvyCommitmentGasFeeRootUpdate>> {
         let db = ctx.data::<DatabaseConnection>()?;
         let mut query = curvy_commitment_gas_fee_root::Entity::find();
         if let Some(block) = curvy_from_block(from_block)? {
             query = query.filter(curvy_commitment_gas_fee_root::Column::PublishedBlock.gte(block));
+        }
+        if let Some(cursor) = curvy_cursor(after)? {
+            query = query.filter(curvy_cursor_condition(
+                curvy_commitment_gas_fee_root::Column::PublishedBlock,
+                curvy_commitment_gas_fee_root::Column::PublishedTxIndex,
+                curvy_commitment_gas_fee_root::Column::PublishedLogIndex,
+                None,
+                cursor,
+            ));
         }
         query
             .order_by_asc(curvy_commitment_gas_fee_root::Column::PublishedBlock)
@@ -486,12 +589,22 @@ impl QueryRoot {
         &self,
         ctx: &Context<'_>,
         #[graphql(name = "fromBlock")] from_block: Option<UInt64>,
+        after: Option<CurvyEventCursor>,
         first: Option<i32>,
     ) -> Result<Vec<CurvyTokenRegistration>> {
         let db = ctx.data::<DatabaseConnection>()?;
         let mut query = curvy_token_registration::Entity::find();
         if let Some(block) = curvy_from_block(from_block)? {
             query = query.filter(curvy_token_registration::Column::PublishedBlock.gte(block));
+        }
+        if let Some(cursor) = curvy_cursor(after)? {
+            query = query.filter(curvy_cursor_condition(
+                curvy_token_registration::Column::PublishedBlock,
+                curvy_token_registration::Column::PublishedTxIndex,
+                curvy_token_registration::Column::PublishedLogIndex,
+                None,
+                cursor,
+            ));
         }
         query
             .order_by_asc(curvy_token_registration::Column::PublishedBlock)
@@ -512,12 +625,22 @@ impl QueryRoot {
         &self,
         ctx: &Context<'_>,
         #[graphql(name = "fromBlock")] from_block: Option<UInt64>,
+        after: Option<CurvyEventCursor>,
         first: Option<i32>,
     ) -> Result<Vec<CurvyCommitmentGasCostUpdate>> {
         let db = ctx.data::<DatabaseConnection>()?;
         let mut query = curvy_commitment_gas_cost::Entity::find();
         if let Some(block) = curvy_from_block(from_block)? {
             query = query.filter(curvy_commitment_gas_cost::Column::PublishedBlock.gte(block));
+        }
+        if let Some(cursor) = curvy_cursor(after)? {
+            query = query.filter(curvy_cursor_condition(
+                curvy_commitment_gas_cost::Column::PublishedBlock,
+                curvy_commitment_gas_cost::Column::PublishedTxIndex,
+                curvy_commitment_gas_cost::Column::PublishedLogIndex,
+                Some(curvy_commitment_gas_cost::Column::EventItemIndex),
+                cursor,
+            ));
         }
         query
             .order_by_asc(curvy_commitment_gas_cost::Column::PublishedBlock)

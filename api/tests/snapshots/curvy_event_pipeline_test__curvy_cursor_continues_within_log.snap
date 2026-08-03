@@ -1,0 +1,13 @@
+---
+source: api/tests/curvy_event_pipeline_test.rs
+expression: cursor_page_response.data.into_json()?
+---
+curvyCommittedNotes:
+  - batchIndex: "7"
+    noteId: "102"
+    position:
+      block: "27"
+      eventItemIndex: "1"
+      logIndex: "0"
+      transactionHash: "0x3131313131313131313131313131313131313131313131313131313131313131"
+      transactionIndex: "0"

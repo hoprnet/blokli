@@ -139,6 +139,18 @@ impl ScalarType for UInt256 {
     }
 }
 
+/// Exclusive pagination cursor for indexed Curvy events.
+#[derive(InputObject, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CurvyEventCursor {
+    pub block: UInt64,
+    #[graphql(name = "transactionIndex")]
+    pub transaction_index: UInt64,
+    #[graphql(name = "logIndex")]
+    pub log_index: UInt64,
+    #[graphql(name = "eventItemIndex")]
+    pub event_item_index: UInt64,
+}
+
 /// Position and transaction identity shared by indexed Curvy events.
 #[derive(SimpleObject, Clone, Debug)]
 pub struct CurvyEventPosition {
@@ -149,6 +161,8 @@ pub struct CurvyEventPosition {
     pub transaction_index: UInt64,
     #[graphql(name = "logIndex")]
     pub log_index: UInt64,
+    #[graphql(name = "eventItemIndex")]
+    pub event_item_index: UInt64,
 }
 
 /// One note emitted by `PendingNotes`.
