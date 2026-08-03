@@ -67,7 +67,6 @@ blokli-chain-rpc     = { workspace = true }
 blokli-chain-types   = { workspace = true }
 blokli-db            = { workspace = true }
 blokli-db-entity     = { workspace = true }
-curvy-bindings       = { workspace = true }
 hopr-bindings        = { workspace = true }
 hopr-types           = { workspace = true, features = ["crypto", "primitive"] }
 
@@ -87,6 +86,7 @@ lazy_static = { workspace = true, optional = true }
 [dev-dependencies]
 base64ct            = { workspace = true, features = ["alloc"] }
 blokli-db-migration = { path = "../db/migration" }
+curvy-bindings      = { workspace = true }
 env_logger          = { workspace = true }
 hopr-types          = { workspace = true, features = ["internal"] }
 insta               = { workspace = true, features = ["redactions", "yaml"] }

@@ -1483,20 +1483,63 @@ and deploys Curvy on the same chain with the same signer after HOPR deployment.
 
 The deployment artifact and generated Blokli configuration include the Curvy
 Aggregator, Vault, and PortalFactory addresses. The configured Aggregator address
-extends the indexer's address/topic filter. Pending-note, committed-note, and
+extends the indexer's address/topic filter only when Curvy indexing is explicitly
+enabled. Pending-note, committed-note, and
 committed-nullifier events are stored as append-only, position-keyed records; zero
 padding is omitted and array-valued events are normalized into one row per array item.
 PortalFactory has no indexed event in the supported surface.
+
+Committed notes and nullifiers also receive independent dense, zero-based indices.
+The note index is the canonical leaf position in Curvy's depth-30 Poseidon tree. The
+indexer advances a constant-space frontier transactionally with each committed-note
+event and persists completed depth-14 shard roots when a 16,384-leaf boundary is
+crossed. This keeps steady-state indexer memory bounded; it does not retain the full
+tree or generate user witnesses.
+
+The tree's cryptographic behaviour is not defined here. Poseidon hashing, the field
+encoding, the tree geometry, and the versioned frontier snapshot format all come from
+Curvy's canonical Rust core, which Blokli consumes as an external dependency and
+re-exports through the chain-types boundary; no Curvy cryptography is reimplemented in
+this repository. The same core backs Curvy's own indexing services, so a shared upstream
+release — rather than agreement between parallel implementations — is what guarantees
+that Blokli's derived leaf indices, shard roots, and tree roots match the protocol's.
+Snapshot compatibility is therefore a property of that release, and the tree version
+recorded on every checkpoint is what detects a geometry change across an upgrade.
+
+Each state-changing Curvy log atomically persists its event rows, completed shard roots,
+and a checkpoint identified by the containing block hash. Multiple state-changing logs
+in one block replace that block's checkpoint inside their respective transactions, so
+the latest checkpoint always describes all durable Curvy rows through the latest
+committed log. Pending-only blocks do not write redundant frontier snapshots. A
+checkpoint records the tree geometry, dense note/nullifier counts, completed-shard
+count, tree root, and canonical frontier snapshot; it is also the sole persisted live
+frontier state. GraphQL synchronization pages are pinned to one checkpoint and bounded
+by its counts, so concurrent indexing cannot change a client's dataset. Note pages
+batch-associate the latest preceding `PendingNotes` announcement when available;
+shard-root and tail-leaf pages let an SDK bootstrap the compact tree representation
+without rebuilding every completed shard.
+
+On a reorganization, the Curvy handler removes rows, shard roots, and checkpoints at or
+after the first affected block through the indexer's derived-state rollback seam. The
+live frontier is restored from the latest earlier checkpoint before canonical
+replacement logs are replayed. Checkpoint counts are cross-checked against retained
+dense note and nullifier indices; a missing or inconsistent checkpoint is fatal when
+retained Curvy history exists, because continuing would make dense indices and roots
+silently diverge. Ordinary restarts restore the latest checkpoint; the existing logs
+snapshot remains the source for rebuilding all derived index state on a fresh
+installation.
 
 GraphQL exposes cursor-paginated event-history queries ordered by the full normalized
 event position, including the item index within array-valued events. Two-phase
 subscriptions stream historical rows without materializing the full history, then
 bridge a synchronized database watermark to live indexer events while retaining the
-client's lower block bound. Curvy view functions are read directly from the configured
-contracts through the existing RPC layer. State-changing Curvy calls use Blokli's
-existing pre-signed raw-transaction mutations, keeping signing and proof construction
-outside the service. A failure in either requested deployment prevents final
-address/configuration artifacts from being published.
+client's lower block bound. Checkpoint-pinned dense pages are separate from this event
+history surface and are intended for deterministic SDK synchronization. Curvy view
+functions and non-note protocol state are read directly from the configured contracts
+through the existing RPC layer. State-changing Curvy calls use Blokli's existing
+pre-signed raw-transaction mutations, keeping signing and proof construction outside
+the service. A failure in either requested deployment prevents final address/configuration
+artifacts from being published.
 
 ## Design Principles and Patterns
 

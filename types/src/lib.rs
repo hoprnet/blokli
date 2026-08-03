@@ -122,6 +122,9 @@ impl ScalarType for UInt256 {
             Value::Number(value) => value.to_string(),
             _ => return Err("UInt256 must be a decimal string or non-negative integer".into()),
         };
+        if value.is_empty() {
+            return Err("UInt256 must not be empty".into());
+        }
         let normalized = value.trim_start_matches('0');
         let normalized = if normalized.is_empty() { "0" } else { normalized };
         const MAX_U256: &str = "115792089237316195423570985008687907853269984665640564039457584007913129639935";
@@ -156,6 +159,8 @@ pub struct CurvyEventCursor {
 pub struct CurvyEventPosition {
     #[graphql(name = "transactionHash")]
     pub transaction_hash: Hex32,
+    #[graphql(name = "blockHash")]
+    pub block_hash: Hex32,
     pub block: UInt64,
     #[graphql(name = "transactionIndex")]
     pub transaction_index: UInt64,
@@ -169,7 +174,7 @@ pub struct CurvyEventPosition {
 #[derive(SimpleObject, Clone, Debug)]
 pub struct CurvyPendingNote {
     #[graphql(name = "noteId")]
-    pub note_id: UInt256,
+    pub note_id: Hex32,
     #[graphql(name = "ephemeralKey")]
     pub ephemeral_key: Vec<UInt256>,
     #[graphql(name = "viewTag")]
@@ -186,9 +191,11 @@ pub struct CurvyPendingNote {
 #[derive(SimpleObject, Clone, Debug)]
 pub struct CurvyCommittedNote {
     #[graphql(name = "batchIndex")]
-    pub batch_index: UInt256,
+    pub batch_index: Hex32,
     #[graphql(name = "noteId")]
-    pub note_id: UInt256,
+    pub note_id: Hex32,
+    #[graphql(name = "leafIndex")]
+    pub leaf_index: UInt64,
     pub position: CurvyEventPosition,
 }
 
@@ -196,9 +203,93 @@ pub struct CurvyCommittedNote {
 #[derive(SimpleObject, Clone, Debug)]
 pub struct CurvyCommittedNullifier {
     #[graphql(name = "batchIndex")]
-    pub batch_index: UInt256,
-    pub nullifier: UInt256,
+    pub batch_index: Hex32,
+    pub nullifier: Hex32,
+    #[graphql(name = "nullifierIndex")]
+    pub nullifier_index: UInt64,
     pub position: CurvyEventPosition,
+}
+
+/// Finalized, immutable Curvy synchronization checkpoint.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvySyncCheckpoint {
+    #[graphql(name = "blockNumber")]
+    pub block_number: UInt64,
+    #[graphql(name = "blockHash")]
+    pub block_hash: Hex32,
+    #[graphql(name = "aggregatorAddress")]
+    pub aggregator_address: String,
+    #[graphql(name = "treeVersion")]
+    pub tree_version: i32,
+    #[graphql(name = "treeDepth")]
+    pub tree_depth: i32,
+    #[graphql(name = "shardHeight")]
+    pub shard_height: i32,
+    #[graphql(name = "shardSize")]
+    pub shard_size: UInt64,
+    #[graphql(name = "noteCount")]
+    pub note_count: UInt64,
+    #[graphql(name = "nullifierCount")]
+    pub nullifier_count: UInt64,
+    #[graphql(name = "shardCount")]
+    pub shard_count: UInt64,
+    #[graphql(name = "notesRoot")]
+    pub notes_root: Hex32,
+}
+
+/// Committed note plus its optional announcement metadata for SDK synchronization.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvySyncNote {
+    #[graphql(name = "leafIndex")]
+    pub leaf_index: UInt64,
+    #[graphql(name = "noteId")]
+    pub note_id: Hex32,
+    #[graphql(name = "batchIndex")]
+    pub batch_index: Hex32,
+    pub announcement: Option<CurvyPendingNote>,
+    #[graphql(name = "commitPosition")]
+    pub commit_position: CurvyEventPosition,
+}
+
+/// One completed Curvy notes-tree shard.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyShardRoot {
+    #[graphql(name = "shardIndex")]
+    pub shard_index: UInt64,
+    pub root: Hex32,
+    #[graphql(name = "completionPosition")]
+    pub completion_position: CurvyEventPosition,
+}
+
+/// Checkpoint-pinned page of dense Curvy committed notes.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvySyncNotePage {
+    pub checkpoint: Hex32,
+    pub notes: Vec<CurvySyncNote>,
+    #[graphql(name = "nextIndex")]
+    pub next_index: UInt64,
+    pub total: UInt64,
+}
+
+/// Checkpoint-pinned page of dense Curvy nullifiers.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvySyncNullifierPage {
+    pub checkpoint: Hex32,
+    pub nullifiers: Vec<CurvyCommittedNullifier>,
+    #[graphql(name = "nextIndex")]
+    pub next_index: UInt64,
+    pub total: UInt64,
+}
+
+/// Checkpoint-pinned page of completed Curvy shard roots.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyShardRootPage {
+    pub checkpoint: Hex32,
+    #[graphql(name = "shardRoots")]
+    pub shard_roots: Vec<CurvyShardRoot>,
+    #[graphql(name = "nextIndex")]
+    pub next_index: UInt64,
+    pub total: UInt64,
 }
 
 /// Current per-token gas fees read from the Curvy Vault.
@@ -217,7 +308,7 @@ pub struct CurvyGasFees {
 #[derive(SimpleObject, Clone, Debug)]
 pub struct CurvyAggregatorState {
     #[graphql(name = "notesTreeRoot")]
-    pub notes_tree_root: UInt256,
+    pub notes_tree_root: Hex32,
     #[graphql(name = "notesBatchIndex")]
     pub notes_batch_index: UInt256,
     #[graphql(name = "nullifiersBatchIndex")]
@@ -242,6 +333,42 @@ pub struct CurvyVaultToken {
     pub token_address: String,
     #[graphql(name = "gasFees")]
     pub gas_fees: CurvyGasFees,
+}
+
+/// Successful Curvy pending-note history response.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyPendingNotes {
+    pub notes: Vec<CurvyPendingNote>,
+}
+
+/// Successful Curvy committed-note history response.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyCommittedNotes {
+    pub notes: Vec<CurvyCommittedNote>,
+}
+
+/// Successful Curvy committed-nullifier history response.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyCommittedNullifiers {
+    pub nullifiers: Vec<CurvyCommittedNullifier>,
+}
+
+/// Boolean value returned by a Curvy contract read.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyBooleanValue {
+    pub value: bool,
+}
+
+/// Raw Curvy note status returned by the Aggregator.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyNoteStatus {
+    pub status: i32,
+}
+
+/// Address derived or returned by a Curvy contract read.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyAddress {
+    pub address: String,
 }
 
 /// Map of contract identifiers to contract addresses

@@ -47,6 +47,16 @@ pub trait ChainLogHandler {
     /// # Returns
     /// * `Result<()>` - Success or error
     async fn collect_log_event(&self, log: SerializableLog, is_synced: bool) -> Result<()>;
+
+    /// Returns whether a fetched log should be dispatched to the contract handler.
+    fn should_process_log(&self, _log: &SerializableLog) -> bool {
+        true
+    }
+
+    /// Reverts handler-owned derived state from the first affected block onward.
+    async fn revert_block_derived_state(&self, _from_block: u64) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

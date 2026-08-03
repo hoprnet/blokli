@@ -81,6 +81,7 @@ pub struct ContractEventHandlers<T, Db> {
     /// indexer state for publishing events to subscribers
     pub(super) indexer_state: IndexerState,
     pub(super) enable_safe_indexing: bool,
+    pub(super) enable_curvy_indexing: bool,
 }
 
 impl<T, Db> Debug for ContractEventHandlers<T, Db> {
@@ -118,6 +119,7 @@ where
         rpc_operations: T,
         indexer_state: IndexerState,
         enable_safe_indexing: bool,
+        enable_curvy_indexing: bool,
     ) -> Self {
         Self {
             addresses: Arc::new(addresses),
@@ -125,6 +127,7 @@ where
             _rpc_operations: rpc_operations,
             indexer_state,
             enable_safe_indexing,
+            enable_curvy_indexing,
         }
     }
 
@@ -232,7 +235,7 @@ where
         } else if log.address.eq(&self.addresses.token) {
             let event = HoprTokenEvents::decode_log(&primitive_log)?;
             self.on_token_event(tx, event.data, is_synced).await
-        } else if log.address.eq(&self.addresses.curvy_aggregator) {
+        } else if self.enable_curvy_indexing && log.address.eq(&self.addresses.curvy_aggregator) {
             let event = CurvyAggregatorAlphaV2Events::decode_log(&primitive_log)?;
             self.on_curvy_aggregator_event(tx, &log, event.data).await
         } else if log.address.eq(&self.addresses.node_safe_registry) {
@@ -310,7 +313,7 @@ where
             self.addresses.node_stake_factory,
             self.addresses.token,
         ];
-        if self.addresses.curvy_aggregator != Address::default() {
+        if self.enable_curvy_indexing {
             addresses.push(self.addresses.curvy_aggregator);
         }
         addresses
@@ -318,6 +321,10 @@ where
 
     fn contract_addresses_map(&self) -> Arc<ContractAddresses> {
         self.addresses.clone()
+    }
+
+    fn should_process_log(&self, log: &SerializableLog) -> bool {
+        !(log.removed && log.address == self.addresses.curvy_aggregator)
     }
 
     /// Map a contract address to its associated event topics.
@@ -393,6 +400,10 @@ where
         }
 
         Ok(())
+    }
+
+    async fn revert_block_derived_state(&self, from_block: u64) -> Result<()> {
+        self.revert_curvy_state(from_block).await
     }
 }
 

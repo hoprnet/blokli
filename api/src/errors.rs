@@ -256,11 +256,28 @@ pub mod messages {
 // GraphQL Error Builder Functions
 // ============================================================================
 
+/// Value accepted by the context-error builder.
+pub trait ContextErrorMessage {
+    fn context_error_message(self) -> String;
+}
+
+impl ContextErrorMessage for String {
+    fn context_error_message(self) -> String {
+        self
+    }
+}
+
+impl ContextErrorMessage for async_graphql::Error {
+    fn context_error_message(self) -> String {
+        self.message
+    }
+}
+
 /// Creates a QueryFailedError for context retrieval failures
-pub fn context_error(context_type: &str, error: impl std::fmt::Display) -> QueryFailedError {
+pub fn context_error(context_type: &str, error: impl ContextErrorMessage) -> QueryFailedError {
     QueryFailedError {
         code: codes::CONTEXT_ERROR.to_string(),
-        message: messages::context_error(context_type, error),
+        message: messages::context_error(context_type, error.context_error_message()),
     }
 }
 
@@ -539,22 +556,10 @@ pub fn invalid_schema_version_header() -> async_graphql::Error {
         .extend_with(|_, e| e.set("code", codes::INVALID_SCHEMA_VERSION_HEADER))
 }
 
-/// Creates a top-level GraphQL error for a database query failure.
-pub fn graphql_query_error(operation: &str, error: impl std::fmt::Display) -> async_graphql::Error {
-    async_graphql::Error::new(messages::query_error(operation, error))
-        .extend_with(|_, extensions| extensions.set("code", codes::QUERY_FAILED))
-}
-
-/// Creates a top-level GraphQL error for a blockchain RPC failure.
-pub fn graphql_rpc_error(operation: &str, error: impl std::fmt::Display) -> async_graphql::Error {
-    async_graphql::Error::new(messages::rpc_error(operation, error))
-        .extend_with(|_, extensions| extensions.set("code", codes::RPC_ERROR))
-}
-
-/// Creates a top-level GraphQL error for invalid pagination input.
-pub fn graphql_pagination_error(reason: &str) -> async_graphql::Error {
-    async_graphql::Error::new(messages::invalid_pagination(reason))
-        .extend_with(|_, extensions| extensions.set("code", codes::INVALID_PAGINATION))
+/// Adapts the shared query-error taxonomy for GraphQL surfaces that cannot return unions.
+pub fn graphql_error(error: QueryFailedError) -> async_graphql::Error {
+    let code = error.code;
+    async_graphql::Error::new(error.message).extend_with(|_, extensions| extensions.set("code", code))
 }
 
 /// Creates a top-level GraphQL error when a subscription can no longer guarantee lossless delivery.

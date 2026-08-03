@@ -165,6 +165,7 @@ mod uint256_tests {
         let too_large = "115792089237316195423570985008687907853269984665640564039457584007913129639936";
 
         assert!(UInt256::parse(Value::String(too_large.to_string())).is_err());
+        assert!(UInt256::parse(Value::String(String::new())).is_err());
         assert!(UInt256::parse(Value::String("-1".to_string())).is_err());
         assert!(UInt256::parse(Value::String("0x2a".to_string())).is_err());
     }

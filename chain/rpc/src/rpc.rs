@@ -9,6 +9,9 @@ use std::{
 
 use async_trait::async_trait;
 use blokli_chain_types::{AlloyAddressExt, ContractAddresses, ContractInstances};
+use curvy_bindings::{
+    curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2, curvy_vault_v2::CurvyVaultV2, portal_factory::PortalFactory,
+};
 use hopr_bindings::exports::alloy::{
     primitives::{Address as AlloyAddress, FixedBytes, U256},
     providers::{
@@ -33,11 +36,18 @@ use validator::Validate;
 
 // use crate::middleware::GnosisScan;
 use crate::{
-    Eip1559FeeEstimation, HoprRpcOperations,
+    CurvyAggregatorState, CurvyGasFees, CurvyVaultToken, Eip1559FeeEstimation, HoprRpcOperations,
     client::GasOracleFiller,
     errors::{Result, RpcError},
     transport::HttpRequestor,
 };
+
+fn configured_contract(address: Address, name: &str) -> Result<AlloyAddress> {
+    if address == Address::default() {
+        return Err(RpcError::Other(format!("{name} contract address is not configured")));
+    }
+    Ok(AlloyAddress::from_hopr_address(address))
+}
 
 // define basic safe abi
 sol!(
@@ -671,6 +681,140 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
             max_fee_per_gas: estimate.max_fee_per_gas,
             max_priority_fee_per_gas: estimate.max_priority_fee_per_gas,
         })
+    }
+
+    async fn get_curvy_aggregator_state(&self) -> Result<CurvyAggregatorState> {
+        let contract = CurvyAggregatorAlphaV2::new(
+            configured_contract(self.cfg.contract_addrs.curvy_aggregator, "Curvy Aggregator")?,
+            self.provider.clone(),
+        );
+        let (notes_tree_root, notes_batch_index, nullifiers_batch_index, note_index) = futures::try_join!(
+            async { contract.getCurrentNotesTreeRoot().call().await },
+            async { contract.getCurrentNotesBatchIndex().call().await },
+            async { contract.getCurrentNullifiersBatchIndex().call().await },
+            async { contract.getCurrentNoteIndex().call().await },
+        )?;
+        Ok(CurvyAggregatorState {
+            notes_tree_root: notes_tree_root.to_be_bytes(),
+            notes_batch_index: notes_batch_index.to_be_bytes(),
+            nullifiers_batch_index: nullifiers_batch_index.to_be_bytes(),
+            note_index: note_index.to_be_bytes(),
+        })
+    }
+
+    async fn get_curvy_note_status(&self, note_id: [u8; 32]) -> Result<u8> {
+        CurvyAggregatorAlphaV2::new(
+            configured_contract(self.cfg.contract_addrs.curvy_aggregator, "Curvy Aggregator")?,
+            self.provider.clone(),
+        )
+        .noteStatus(U256::from_be_bytes(note_id))
+        .call()
+        .await
+        .map_err(Into::into)
+    }
+
+    async fn is_curvy_notes_root_valid(&self, root: [u8; 32]) -> Result<bool> {
+        CurvyAggregatorAlphaV2::new(
+            configured_contract(self.cfg.contract_addrs.curvy_aggregator, "Curvy Aggregator")?,
+            self.provider.clone(),
+        )
+        .validNotesRoot(U256::from_be_bytes(root))
+        .call()
+        .await
+        .map_err(Into::into)
+    }
+
+    async fn is_curvy_nullifier_spent(&self, nullifier: [u8; 32]) -> Result<bool> {
+        CurvyAggregatorAlphaV2::new(
+            configured_contract(self.cfg.contract_addrs.curvy_aggregator, "Curvy Aggregator")?,
+            self.provider.clone(),
+        )
+        .nullifiers(U256::from_be_bytes(nullifier))
+        .call()
+        .await
+        .map_err(Into::into)
+    }
+
+    async fn get_curvy_vault_fees(&self) -> Result<([u8; 32], [u8; 32])> {
+        let contract = CurvyVaultV2::new(
+            configured_contract(self.cfg.contract_addrs.curvy_vault, "Curvy Vault")?,
+            self.provider.clone(),
+        );
+        let (deposit_fee, withdrawal_fee) = futures::try_join!(async { contract.depositFee().call().await }, async {
+            contract.withdrawalFee().call().await
+        },)?;
+        Ok((
+            U256::from(deposit_fee).to_be_bytes(),
+            U256::from(withdrawal_fee).to_be_bytes(),
+        ))
+    }
+
+    async fn get_curvy_vault_token(&self, token_id: [u8; 32]) -> Result<CurvyVaultToken> {
+        let contract = CurvyVaultV2::new(
+            configured_contract(self.cfg.contract_addrs.curvy_vault, "Curvy Vault")?,
+            self.provider.clone(),
+        );
+        let token_id = U256::from_be_bytes(token_id);
+        let (token_address, fees) =
+            futures::try_join!(async { contract.getTokenAddress(token_id).call().await }, async {
+                contract.perTokenGasFees(token_id).call().await
+            },)?;
+        Ok(CurvyVaultToken {
+            token_address: token_address.to_hopr_address(),
+            gas_fees: CurvyGasFees {
+                token_id: fees.tokenId.to_be_bytes(),
+                portal_deployment: fees.portalDeployment.to_be_bytes(),
+                pending_note_commitment: fees.pendingNoteCommitment.to_be_bytes(),
+                withdrawal: fees.withdrawal.to_be_bytes(),
+            },
+        })
+    }
+
+    async fn derive_curvy_entry_portal_address(&self, owner_hash: [u8; 32], recovery: Address) -> Result<Address> {
+        PortalFactory::new(
+            configured_contract(self.cfg.contract_addrs.curvy_portal_factory, "Curvy PortalFactory")?,
+            self.provider.clone(),
+        )
+        .getEntryPortalAddress(
+            U256::from_be_bytes(owner_hash),
+            AlloyAddress::from_hopr_address(recovery),
+        )
+        .call()
+        .await
+        .map(AlloyAddressExt::to_hopr_address)
+        .map_err(Into::into)
+    }
+
+    async fn derive_curvy_exit_portal_address(
+        &self,
+        exit_address: Address,
+        exit_chain_id: [u8; 32],
+        recovery: Address,
+    ) -> Result<Address> {
+        PortalFactory::new(
+            configured_contract(self.cfg.contract_addrs.curvy_portal_factory, "Curvy PortalFactory")?,
+            self.provider.clone(),
+        )
+        .getExitPortalAddress(
+            AlloyAddress::from_hopr_address(exit_address),
+            U256::from_be_bytes(exit_chain_id),
+            AlloyAddress::from_hopr_address(recovery),
+        )
+        .call()
+        .await
+        .map(AlloyAddressExt::to_hopr_address)
+        .map_err(Into::into)
+    }
+
+    async fn is_curvy_portal_registered(&self, portal_address: Address) -> Result<bool> {
+        PortalFactory::new(
+            configured_contract(self.cfg.contract_addrs.curvy_portal_factory, "Curvy PortalFactory")?,
+            self.provider.clone(),
+        )
+        .portalIsRegistered(AlloyAddress::from_hopr_address(portal_address))
+        .call()
+        .await
+        .map_err(Into::into)
     }
 
     //     // Check on-chain status of, node, safe, and module

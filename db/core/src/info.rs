@@ -6,7 +6,8 @@ use blokli_db_entity::{
     chain_info,
     prelude::{
         Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, CurvyCommittedNote,
-        CurvyCommittedNullifier, CurvyPendingNote, HoprBalance as HoprBalanceEntity, HoprSafeContract, NativeBalance,
+        CurvyCommittedNullifier, CurvyPendingNote, CurvyShardRoot, CurvySyncCheckpoint,
+        HoprBalance as HoprBalanceEntity, HoprSafeContract, NativeBalance,
     },
 };
 use futures::TryFutureExt;
@@ -156,6 +157,14 @@ impl BlokliDbInfoOperations for BlokliDb {
             return Ok(false);
         }
 
+        if CurvyShardRoot::find().one(c).await?.is_some() {
+            return Ok(false);
+        }
+
+        if CurvySyncCheckpoint::find().one(c).await?.is_some() {
+            return Ok(false);
+        }
+
         Ok(true)
     }
 
@@ -167,6 +176,8 @@ impl BlokliDbInfoOperations for BlokliDb {
                     Account::delete_many().exec(tx.as_ref()).await?;
                     Announcement::delete_many().exec(tx.as_ref()).await?;
                     Channel::delete_many().exec(tx.as_ref()).await?;
+                    CurvySyncCheckpoint::delete_many().exec(tx.as_ref()).await?;
+                    CurvyShardRoot::delete_many().exec(tx.as_ref()).await?;
                     CurvyPendingNote::delete_many().exec(tx.as_ref()).await?;
                     CurvyCommittedNote::delete_many().exec(tx.as_ref()).await?;
                     CurvyCommittedNullifier::delete_many().exec(tx.as_ref()).await?;
@@ -432,7 +443,7 @@ impl BlokliDbInfoOperations for BlokliDb {
 
 #[cfg(test)]
 mod tests {
-    use blokli_db_entity::curvy_pending_note;
+    use blokli_db_entity::{curvy_pending_note, curvy_shard_root, curvy_sync_checkpoint};
     use hex_literal::hex;
     use hopr_types::primitive::{balance::HoprBalance, prelude::Address};
     use sea_orm::{ActiveModelTrait, EntityTrait, PaginatorTrait, Set};
@@ -552,6 +563,39 @@ mod tests {
             published_block: Set(8),
             published_tx_index: Set(0),
             published_log_index: Set(0),
+            block_hash: Set(vec![8; 32]),
+            ..Default::default()
+        }
+        .insert(connection)
+        .await?;
+        curvy_shard_root::ActiveModel {
+            tree_version: Set(1),
+            shard_height: Set(14),
+            shard_index: Set(0),
+            root: Set(vec![11; 32]),
+            block_hash: Set(vec![12; 32]),
+            chain_tx_hash: Set(vec![13; 32]),
+            completion_block: Set(8),
+            completion_tx_index: Set(0),
+            completion_log_index: Set(0),
+            completion_event_item_index: Set(0),
+            ..Default::default()
+        }
+        .insert(connection)
+        .await?;
+        curvy_sync_checkpoint::ActiveModel {
+            block_number: Set(8),
+            block_hash: Set(vec![12; 32]),
+            aggregator_address: Set(vec![14; 20]),
+            tree_version: Set(1),
+            tree_depth: Set(30),
+            shard_height: Set(14),
+            leaf_count: Set(16_384),
+            nullifier_count: Set(1),
+            shard_count: Set(1),
+            root: Set(vec![9; 32]),
+            frontier_snapshot: Set(vec![10]),
+            ..Default::default()
         }
         .insert(connection)
         .await?;
@@ -560,6 +604,8 @@ mod tests {
         db.clear_index_db(None).await?;
         assert!(db.index_is_empty().await?);
         assert_eq!(curvy_pending_note::Entity::find().count(connection).await?, 0);
+        assert_eq!(curvy_shard_root::Entity::find().count(connection).await?, 0);
+        assert_eq!(curvy_sync_checkpoint::Entity::find().count(connection).await?, 0);
         Ok(())
     }
 }

@@ -28,6 +28,7 @@ pub mod actions;
 pub mod chain_events;
 pub mod channel;
 pub mod constants;
+pub mod curvy_tree;
 pub mod errors;
 // Various (mostly testing related) utility functions
 pub mod utils;

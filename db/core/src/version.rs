@@ -1,7 +1,7 @@
 use blokli_db_entity::prelude::{
     Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, CurvyCommittedNote, CurvyCommittedNullifier,
-    CurvyPendingNote, HoprBalance, HoprNodeSafeRegistration, HoprSafeContract, HoprSafeContractState,
-    HoprSafeRedeemedStats, Log, LogStatus, LogTopicInfo, NativeBalance,
+    CurvyPendingNote, CurvyShardRoot, CurvySyncCheckpoint, HoprBalance, HoprNodeSafeRegistration, HoprSafeContract,
+    HoprSafeContractState, HoprSafeRedeemedStats, Log, LogStatus, LogTopicInfo, NativeBalance,
 };
 use migration::{Migrator, MigratorChainLogs, MigratorIndex, MigratorTrait, SafeDataOrigin};
 use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait, Statement};
@@ -28,6 +28,7 @@ use crate::errors::{DbSqlError, Result};
 ///
 /// Version history:
 /// - `"1.1.0"`: Initial schema (consolidated from prior migration stack)
+/// - `"1.2.0"`: Curvy event history, dense indices, notes-tree shards, and checkpoints
 pub const SCHEMA_VERSION: &str = "1.2.0";
 
 /// The singleton ID used for the schema_version table.
@@ -239,6 +240,8 @@ async fn clear_all_data(db: &DatabaseConnection, logs_db: Option<&DatabaseConnec
 ///
 /// Returns an error if any database operations fail.
 async fn clear_index_data(db: &DatabaseConnection) -> Result<()> {
+    CurvySyncCheckpoint::delete_many().exec(db).await?;
+    CurvyShardRoot::delete_many().exec(db).await?;
     CurvyPendingNote::delete_many().exec(db).await?;
     CurvyCommittedNote::delete_many().exec(db).await?;
     CurvyCommittedNullifier::delete_many().exec(db).await?;
@@ -390,6 +393,9 @@ mod tests {
             published_block: Set(100),
             published_tx_index: Set(5),
             published_log_index: Set(10),
+            nullifier_index: Set(0),
+            block_hash: Set(vec![4; 32]),
+            ..Default::default()
         }
         .insert(db.conn(crate::TargetDb::Index))
         .await?;

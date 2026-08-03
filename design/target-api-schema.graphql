@@ -378,12 +378,24 @@ type OpenedChannelsGraphEntry {
   source: Account!
 }
 
+"""Address derived or returned by a Curvy contract read."""
+type CurvyAddress {
+  address: String!
+}
+
 """Current Curvy Aggregator indices and notes-tree root."""
 type CurvyAggregatorState {
-  notesTreeRoot: UInt256!
+  notesTreeRoot: Hex32!
   notesBatchIndex: UInt256!
   nullifiersBatchIndex: UInt256!
   noteIndex: UInt256!
+}
+
+union CurvyAggregatorStateResult = CurvyAggregatorState | QueryFailedError
+
+"""Boolean value returned by a Curvy contract read."""
+type CurvyBooleanValue {
+  value: Boolean!
 }
 
 """Exclusive pagination cursor for indexed Curvy events."""
@@ -397,6 +409,7 @@ input CurvyEventCursor {
 """Position and transaction identity shared by indexed Curvy events."""
 type CurvyEventPosition {
   transactionHash: Hex32!
+  blockHash: Hex32!
   block: UInt64!
   transactionIndex: UInt64!
   logIndex: UInt64!
@@ -413,7 +426,7 @@ type CurvyGasFees {
 
 """One note emitted by the Curvy Aggregator `PendingNotes` event."""
 type CurvyPendingNote {
-  noteId: UInt256!
+  noteId: Hex32!
   ephemeralKey: [UInt256!]!
   viewTag: Int!
   tokenId: UInt256!
@@ -424,16 +437,73 @@ type CurvyPendingNote {
 
 """One note emitted by the Curvy Aggregator `CommittedNotes` event."""
 type CurvyCommittedNote {
-  batchIndex: UInt256!
-  noteId: UInt256!
+  batchIndex: Hex32!
+  noteId: Hex32!
+  leafIndex: UInt64!
   position: CurvyEventPosition!
 }
 
 """One nullifier emitted by the Curvy Aggregator `CommittedNullifiers` event."""
 type CurvyCommittedNullifier {
-  batchIndex: UInt256!
-  nullifier: UInt256!
+  batchIndex: Hex32!
+  nullifier: Hex32!
+  nullifierIndex: UInt64!
   position: CurvyEventPosition!
+}
+
+"""Finalized, immutable Curvy synchronization checkpoint."""
+type CurvySyncCheckpoint {
+  blockNumber: UInt64!
+  blockHash: Hex32!
+  aggregatorAddress: String!
+  treeVersion: Int!
+  treeDepth: Int!
+  shardHeight: Int!
+  shardSize: UInt64!
+  noteCount: UInt64!
+  nullifierCount: UInt64!
+  shardCount: UInt64!
+  notesRoot: Hex32!
+}
+
+"""Committed note plus its optional announcement metadata for SDK synchronization."""
+type CurvySyncNote {
+  leafIndex: UInt64!
+  noteId: Hex32!
+  batchIndex: Hex32!
+  announcement: CurvyPendingNote
+  commitPosition: CurvyEventPosition!
+}
+
+"""One completed Curvy notes-tree shard."""
+type CurvyShardRoot {
+  shardIndex: UInt64!
+  root: Hex32!
+  completionPosition: CurvyEventPosition!
+}
+
+"""Checkpoint-pinned page of dense Curvy committed notes."""
+type CurvySyncNotePage {
+  checkpoint: Hex32!
+  notes: [CurvySyncNote!]!
+  nextIndex: UInt64!
+  total: UInt64!
+}
+
+"""Checkpoint-pinned page of dense Curvy nullifiers."""
+type CurvySyncNullifierPage {
+  checkpoint: Hex32!
+  nullifiers: [CurvyCommittedNullifier!]!
+  nextIndex: UInt64!
+  total: UInt64!
+}
+
+"""Checkpoint-pinned page of completed Curvy shard roots."""
+type CurvyShardRootPage {
+  checkpoint: Hex32!
+  shardRoots: [CurvyShardRoot!]!
+  nextIndex: UInt64!
+  total: UInt64!
 }
 
 """Current Curvy Vault protocol-level fees."""
@@ -447,6 +517,42 @@ type CurvyVaultToken {
   tokenAddress: String!
   gasFees: CurvyGasFees!
 }
+
+"""Successful Curvy pending-note history response."""
+type CurvyPendingNotes {
+  notes: [CurvyPendingNote!]!
+}
+
+"""Successful Curvy committed-note history response."""
+type CurvyCommittedNotes {
+  notes: [CurvyCommittedNote!]!
+}
+
+"""Successful Curvy committed-nullifier history response."""
+type CurvyCommittedNullifiers {
+  nullifiers: [CurvyCommittedNullifier!]!
+}
+
+"""Raw Curvy note status returned by the Aggregator."""
+type CurvyNoteStatus {
+  status: Int!
+}
+
+union CurvyCommittedNotesResult = CurvyCommittedNotes | QueryFailedError
+union CurvyCommittedNullifiersResult = CurvyCommittedNullifiers | QueryFailedError
+union CurvyEntryPortalAddressResult = CurvyAddress | InvalidAddressError | QueryFailedError
+union CurvyExitPortalAddressResult = CurvyAddress | InvalidAddressError | QueryFailedError
+union CurvyNoteStatusResult = CurvyNoteStatus | QueryFailedError
+union CurvyNullifierSpentResult = CurvyBooleanValue | QueryFailedError
+union CurvyPendingNotesResult = CurvyPendingNotes | QueryFailedError
+union CurvyPortalRegisteredResult = CurvyBooleanValue | InvalidAddressError | QueryFailedError
+union CurvyShardRootsResult = CurvyShardRootPage | QueryFailedError
+union CurvySyncCheckpointResult = CurvySyncCheckpoint | QueryFailedError
+union CurvySyncNotesResult = CurvySyncNotePage | QueryFailedError
+union CurvySyncNullifiersResult = CurvySyncNullifierPage | QueryFailedError
+union CurvyValidNotesRootResult = CurvyBooleanValue | QueryFailedError
+union CurvyVaultFeesResult = CurvyVaultFees | QueryFailedError
+union CurvyVaultTokenResult = CurvyVaultToken | QueryFailedError
 
 """
 Internal query error
@@ -462,30 +568,6 @@ type QueryFailedError {
 Root query type providing read-only access to indexed blockchain data
 """
 type QueryRoot {
-  "Retrieve Curvy notes emitted by `PendingNotes`, ordered by chain position."
-  curvyPendingNotes(fromBlock: UInt64, after: CurvyEventCursor, first: Int): [CurvyPendingNote!]!
-  "Retrieve Curvy notes emitted by `CommittedNotes`, ordered by chain position."
-  curvyCommittedNotes(fromBlock: UInt64, after: CurvyEventCursor, first: Int): [CurvyCommittedNote!]!
-  "Retrieve Curvy nullifiers emitted by `CommittedNullifiers`, ordered by chain position."
-  curvyCommittedNullifiers(fromBlock: UInt64, after: CurvyEventCursor, first: Int): [CurvyCommittedNullifier!]!
-  "Read the current Curvy Aggregator root and indices directly from chain."
-  curvyAggregatorState: CurvyAggregatorState!
-  "Read a Curvy note's raw `NoteStatus` value directly from chain."
-  curvyNoteStatus(noteId: UInt256!): Int!
-  "Check whether a notes root is valid in the Curvy Aggregator."
-  curvyValidNotesRoot(root: UInt256!): Boolean!
-  "Check whether a nullifier is already present in the Curvy Aggregator."
-  curvyNullifierSpent(nullifier: UInt256!): Boolean!
-  "Read the Curvy Vault deposit and withdrawal fees directly from chain."
-  curvyVaultFees: CurvyVaultFees!
-  "Read a Curvy Vault token address and per-token gas fees directly from chain."
-  curvyVaultToken(tokenId: UInt256!): CurvyVaultToken!
-  "Derive a Curvy entry portal address directly from PortalFactory."
-  curvyEntryPortalAddress(ownerHash: UInt256!, recovery: String!): String!
-  "Derive a Curvy exit portal address directly from PortalFactory."
-  curvyExitPortalAddress(exitAddress: String!, exitChainId: UInt256!, recovery: String!): String!
-  "Check whether an address is registered with Curvy PortalFactory."
-  curvyPortalRegistered(portalAddress: String!): Boolean!
   """
   Count accounts matching optional filters
 
@@ -620,6 +702,46 @@ type QueryRoot {
   Returns the API version and a semver requirement for compatible blokli-client releases.
   """
   compatibility: Compatibility!
+  "Read the current Curvy Aggregator root and indices directly from chain."
+  curvyAggregatorState: CurvyAggregatorStateResult!
+  "Retrieve Curvy notes emitted by `CommittedNotes`, ordered by chain position."
+  curvyCommittedNotes(fromBlock: UInt64, after: CurvyEventCursor, first: Int): CurvyCommittedNotesResult!
+  "Retrieve Curvy nullifiers emitted by `CommittedNullifiers`, ordered by chain position."
+  curvyCommittedNullifiers(
+    fromBlock: UInt64
+    after: CurvyEventCursor
+    first: Int
+  ): CurvyCommittedNullifiersResult!
+  "Derive a Curvy entry portal address directly from PortalFactory."
+  curvyEntryPortalAddress(ownerHash: UInt256!, recovery: String!): CurvyEntryPortalAddressResult!
+  "Derive a Curvy exit portal address directly from PortalFactory."
+  curvyExitPortalAddress(
+    exitAddress: String!
+    exitChainId: UInt256!
+    recovery: String!
+  ): CurvyExitPortalAddressResult!
+  "Read a Curvy note's raw `NoteStatus` value directly from chain."
+  curvyNoteStatus(noteId: Hex32!): CurvyNoteStatusResult!
+  "Check whether a nullifier is already present in the Curvy Aggregator."
+  curvyNullifierSpent(nullifier: Hex32!): CurvyNullifierSpentResult!
+  "Retrieve Curvy notes emitted by `PendingNotes`, ordered by chain position."
+  curvyPendingNotes(fromBlock: UInt64, after: CurvyEventCursor, first: Int): CurvyPendingNotesResult!
+  "Check whether an address is registered with Curvy PortalFactory."
+  curvyPortalRegistered(portalAddress: String!): CurvyPortalRegisteredResult!
+  "Retrieve checkpoint-pinned completed notes-tree shard roots."
+  curvyShardRoots(checkpoint: Hex32!, fromIndex: UInt64, first: Int): CurvyShardRootsResult!
+  "Retrieve the latest Curvy synchronization checkpoint or one pinned by block hash."
+  curvySyncCheckpoint(blockHash: Hex32): CurvySyncCheckpointResult!
+  "Retrieve checkpoint-pinned committed notes by dense leaf index."
+  curvySyncNotes(checkpoint: Hex32!, fromIndex: UInt64, first: Int): CurvySyncNotesResult!
+  "Retrieve checkpoint-pinned nullifiers by dense nullifier index."
+  curvySyncNullifiers(checkpoint: Hex32!, fromIndex: UInt64, first: Int): CurvySyncNullifiersResult!
+  "Check whether a notes root is valid in the Curvy Aggregator."
+  curvyValidNotesRoot(root: Hex32!): CurvyValidNotesRootResult!
+  "Read the Curvy Vault deposit and withdrawal fees directly from chain."
+  curvyVaultFees: CurvyVaultFeesResult!
+  "Read a Curvy Vault token address and per-token gas fees directly from chain."
+  curvyVaultToken(tokenId: UInt256!): CurvyVaultTokenResult!
   """
   Health check endpoint
 
@@ -1030,12 +1152,6 @@ union SendTransactionSyncResult =
 Root subscription type providing real-time updates via Server-Sent Events (SSE)
 """
 type SubscriptionRoot {
-  "Stream indexed Curvy `PendingNotes` entries with an optional historical phase."
-  curvyPendingNote(fromBlock: UInt64): CurvyPendingNote!
-  "Stream indexed Curvy `CommittedNotes` entries with an optional historical phase."
-  curvyCommittedNote(fromBlock: UInt64): CurvyCommittedNote!
-  "Stream indexed Curvy `CommittedNullifiers` entries with an optional historical phase."
-  curvyCommittedNullifier(fromBlock: UInt64): CurvyCommittedNullifier!
   """
   Subscribe to real-time updates of account information
 
@@ -1068,6 +1184,12 @@ type SubscriptionRoot {
     "Filter by channel status"
     status: ChannelStatus
   ): Channel!
+  "Stream indexed Curvy `CommittedNotes` entries with an optional historical phase."
+  curvyCommittedNote(fromBlock: UInt64): CurvyCommittedNote!
+  "Stream indexed Curvy `CommittedNullifiers` entries with an optional historical phase."
+  curvyCommittedNullifier(fromBlock: UInt64): CurvyCommittedNullifier!
+  "Stream indexed Curvy `PendingNotes` entries with an optional historical phase."
+  curvyPendingNote(fromBlock: UInt64): CurvyPendingNote!
   """
   Subscribe to readiness-state updates for the API instance
 

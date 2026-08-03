@@ -155,6 +155,28 @@ mod tests {
         result.is_some()
     }
 
+    async fn column_exists(db: &DatabaseConnection, table_name: &str, column_name: &str) -> bool {
+        let stmt = Statement::from_string(
+            DbBackend::Sqlite,
+            format!("SELECT name FROM pragma_table_info('{table_name}') WHERE name = '{column_name}'"),
+        );
+        let result = db.query_one_raw(stmt).await.expect("Failed to query column existence");
+
+        result.is_some()
+    }
+
+    async fn column_is_not_null(db: &DatabaseConnection, table_name: &str, column_name: &str) -> bool {
+        let stmt = Statement::from_string(
+            DbBackend::Sqlite,
+            format!("SELECT \"notnull\" FROM pragma_table_info('{table_name}') WHERE name = '{column_name}'"),
+        );
+        db.query_one_raw(stmt)
+            .await
+            .expect("Failed to query column nullability")
+            .and_then(|row| row.try_get::<i64>("", "notnull").ok())
+            == Some(1)
+    }
+
     #[tokio::test]
     async fn test_all_migrations_run_successfully() {
         let db = setup_test_db().await;
@@ -163,6 +185,28 @@ mod tests {
         let result = Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None).await;
 
         assert!(result.is_ok(), "Migrations should run without errors");
+    }
+
+    #[tokio::test]
+    async fn test_curvy_event_migration_rolls_back() {
+        let db = setup_test_db().await;
+        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
+            .await
+            .unwrap();
+
+        Migrator::<{ SafeDataOrigin::NoData as u8 }>::down(&db, Some(1))
+            .await
+            .unwrap();
+
+        for table in [
+            "curvy_pending_note",
+            "curvy_committed_note",
+            "curvy_committed_nullifier",
+            "curvy_shard_root",
+            "curvy_sync_checkpoint",
+        ] {
+            assert!(!table_exists(&db, table).await, "{table} table should be removed");
+        }
     }
 
     #[tokio::test]
@@ -176,8 +220,24 @@ mod tests {
             "curvy_pending_note",
             "curvy_committed_note",
             "curvy_committed_nullifier",
+            "curvy_shard_root",
+            "curvy_sync_checkpoint",
         ] {
             assert!(table_exists(&db, table).await, "{table} table should exist");
+        }
+
+        for (table, column) in [
+            ("curvy_pending_note", "block_hash"),
+            ("curvy_committed_note", "leaf_index"),
+            ("curvy_committed_note", "block_hash"),
+            ("curvy_committed_nullifier", "nullifier_index"),
+            ("curvy_committed_nullifier", "block_hash"),
+        ] {
+            assert!(column_exists(&db, table, column).await, "{table}.{column} should exist");
+            assert!(
+                column_is_not_null(&db, table, column).await,
+                "{table}.{column} should be NOT NULL"
+            );
         }
     }
 

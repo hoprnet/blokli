@@ -159,6 +159,7 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
         mock_rpc.clone(),
         indexer_state.clone(),
         false,
+        false,
     );
 
     // Initialize logs origin data using the proper contract addresses and topics
@@ -179,6 +180,7 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
         fast_sync: false, // Disable fast sync for testing
         enable_logs_snapshot: false,
         enable_safe_indexing: false,
+        enable_curvy_indexing: false,
         logs_snapshot_url: None,
         data_directory: db_path.to_string_lossy().to_string(),
         event_bus_capacity: 1000,
@@ -245,6 +247,7 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
         mock_rpc.clone(),
         indexer_state.clone(),
         false,
+        false,
     );
 
     // Initialize logs origin data using the proper contract addresses and topics
@@ -265,6 +268,7 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
         fast_sync: true,
         enable_logs_snapshot: false, // Don't try to download snapshots
         enable_safe_indexing: false,
+        enable_curvy_indexing: false,
         logs_snapshot_url: None,
         data_directory: db_path.to_string_lossy().to_string(),
         event_bus_capacity: 1000,
@@ -431,6 +435,7 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         tracking_rpc.clone(),
         indexer_state.clone(),
         false,
+        false,
     );
 
     // Initialize logs origin data using the proper contract addresses and topics
@@ -452,6 +457,7 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         fast_sync: false,
         enable_logs_snapshot: false,
         enable_safe_indexing: false,
+        enable_curvy_indexing: false,
         logs_snapshot_url: None,
         data_directory: db_path.to_string_lossy().to_string(),
         event_bus_capacity: 1000,
@@ -539,6 +545,7 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
         mock_rpc.clone(),
         indexer_state.clone(),
         false,
+        false,
     );
 
     // Initialize logs origin data
@@ -559,6 +566,7 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
         fast_sync: false,
         enable_logs_snapshot: false,
         enable_safe_indexing: false,
+        enable_curvy_indexing: false,
         logs_snapshot_url: None,
         data_directory: db_path.to_string_lossy().to_string(),
         event_bus_capacity: 1000,

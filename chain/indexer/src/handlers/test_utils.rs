@@ -186,6 +186,7 @@ pub(super) mod test_helpers {
             rpc_operations,
             indexer_state.clone(),
             true,
+            false,
         );
 
         (handlers, indexer_state, event_receiver)

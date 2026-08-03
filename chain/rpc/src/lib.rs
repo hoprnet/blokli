@@ -260,6 +260,31 @@ pub struct Eip1559FeeEstimation {
     pub max_priority_fee_per_gas: u128,
 }
 
+/// Current Curvy Aggregator state returned by typed RPC operations.
+#[derive(Clone, Debug, Copy, PartialEq, Eq)]
+pub struct CurvyAggregatorState {
+    pub notes_tree_root: [u8; 32],
+    pub notes_batch_index: [u8; 32],
+    pub nullifiers_batch_index: [u8; 32],
+    pub note_index: [u8; 32],
+}
+
+/// Curvy per-token gas fee values returned by the Vault.
+#[derive(Clone, Debug, Copy, PartialEq, Eq)]
+pub struct CurvyGasFees {
+    pub token_id: [u8; 32],
+    pub portal_deployment: [u8; 32],
+    pub pending_note_commitment: [u8; 32],
+    pub withdrawal: [u8; 32],
+}
+
+/// Curvy Vault token metadata returned by typed RPC operations.
+#[derive(Clone, Debug, Copy, PartialEq, Eq)]
+pub struct CurvyVaultToken {
+    pub token_address: Address,
+    pub gas_fees: CurvyGasFees,
+}
+
 /// Trait defining a general set of operations an RPC provider
 /// must provide to the HOPR node.
 #[async_trait]
@@ -298,6 +323,38 @@ pub trait HoprRpcOperations {
 
     /// Retrieves EIP-1559 gas fee estimates (wei).
     async fn estimate_eip1559_fees(&self) -> Result<Eip1559FeeEstimation>;
+
+    /// Retrieves the current notes root and dense indices from the Curvy Aggregator.
+    async fn get_curvy_aggregator_state(&self) -> Result<CurvyAggregatorState>;
+
+    /// Retrieves the raw status for a Curvy note identifier.
+    async fn get_curvy_note_status(&self, note_id: [u8; 32]) -> Result<u8>;
+
+    /// Checks whether a Curvy notes root is currently accepted.
+    async fn is_curvy_notes_root_valid(&self, root: [u8; 32]) -> Result<bool>;
+
+    /// Checks whether a Curvy nullifier is already spent.
+    async fn is_curvy_nullifier_spent(&self, nullifier: [u8; 32]) -> Result<bool>;
+
+    /// Retrieves protocol-level deposit and withdrawal fees from the Curvy Vault.
+    async fn get_curvy_vault_fees(&self) -> Result<([u8; 32], [u8; 32])>;
+
+    /// Retrieves a Curvy Vault token and its configured gas fees.
+    async fn get_curvy_vault_token(&self, token_id: [u8; 32]) -> Result<CurvyVaultToken>;
+
+    /// Derives a Curvy entry portal address.
+    async fn derive_curvy_entry_portal_address(&self, owner_hash: [u8; 32], recovery: Address) -> Result<Address>;
+
+    /// Derives a Curvy exit portal address.
+    async fn derive_curvy_exit_portal_address(
+        &self,
+        exit_address: Address,
+        exit_chain_id: [u8; 32],
+        recovery: Address,
+    ) -> Result<Address>;
+
+    /// Checks whether a portal is registered with the Curvy PortalFactory.
+    async fn is_curvy_portal_registered(&self, portal_address: Address) -> Result<bool>;
 
     /// Sends transaction to the RPC provider, does not await confirmation.
     async fn send_transaction(&self, tx: TransactionRequest) -> Result<PendingTransaction>;

@@ -188,6 +188,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 fast_sync: cfg.indexer.fast_sync,
                 enable_logs_snapshot: cfg.indexer.enable_logs_snapshot,
                 enable_safe_indexing: cfg.indexer.enable_safe_indexing,
+                enable_curvy_indexing: cfg.indexer.enable_curvy_indexing,
                 logs_snapshot_url: cfg.indexer.logs_snapshot_url.clone(),
                 data_directory: cfg.data_directory.clone(),
                 event_bus_capacity: cfg.indexer.subscription.event_bus_capacity,

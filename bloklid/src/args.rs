@@ -115,6 +115,7 @@ impl Args {
             ("BLOKLI_INDEXER_FAST_SYNC", "indexer.fast_sync"),
             ("BLOKLI_INDEXER_ENABLE_LOGS_SNAPSHOT", "indexer.enable_logs_snapshot"),
             ("BLOKLI_INDEXER_ENABLE_SAFE_INDEXING", "indexer.enable_safe_indexing"),
+            ("BLOKLI_INDEXER_ENABLE_CURVY_INDEXING", "indexer.enable_curvy_indexing"),
             ("BLOKLI_INDEXER_LOGS_SNAPSHOT_URL", "indexer.logs_snapshot_url"),
             (
                 "BLOKLI_INDEXER_SUBSCRIPTION_EVENT_BUS_CAPACITY",
@@ -186,6 +187,7 @@ impl Args {
             "indexer.fast_sync",
             "indexer.enable_logs_snapshot",
             "indexer.enable_safe_indexing",
+            "indexer.enable_curvy_indexing",
             "api.enabled",
             "api.playground_enabled",
             "api.sse_keepalive.enabled",

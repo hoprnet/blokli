@@ -431,16 +431,16 @@ where
     E: EntityTrait + 'static,
     E::Model: Send + 'static,
     T: Send + 'static,
-    F: Fn(E::Model) -> Result<T> + Send + Sync + 'static,
+    F: Fn(E::Model) -> std::result::Result<T, blokli_api_types::QueryFailedError> + Send + Sync + 'static,
 {
     try_stream! {
         let mut rows = query
             .stream(&db)
             .await
-            .map_err(|error| errors::graphql_query_error(operation, error))?;
+            .map_err(|error| errors::graphql_error(errors::query_failed(operation, error)))?;
         while let Some(row) = rows.next().await {
-            let model = row.map_err(|error| errors::graphql_query_error(operation, error))?;
-            yield convert(model)?;
+            let model = row.map_err(|error| errors::graphql_error(errors::query_failed(operation, error)))?;
+            yield convert(model).map_err(errors::graphql_error)?;
         }
     }
 }
@@ -527,8 +527,11 @@ fn curvy_start_block(from_block: Option<UInt64>) -> Result<Option<CurvyStartBloc
         .map(|block| {
             Ok(CurvyStartBlock {
                 api: block.0,
-                database: i64::try_from(block.0)
-                    .map_err(|_| errors::graphql_pagination_error("fromBlock exceeds the supported database range"))?,
+                database: i64::try_from(block.0).map_err(|_| {
+                    errors::graphql_error(errors::invalid_pagination(
+                        "fromBlock exceeds the supported database range",
+                    ))
+                })?,
             })
         })
         .transpose()
@@ -1838,7 +1841,7 @@ mod tests {
 
     use async_broadcast::broadcast;
     use async_graphql::{EmptyMutation, Object, Schema};
-    use blokli_api_types::{CurvyCommittedNote, CurvyEventPosition, Hex32, RedemptionResult, UInt64, UInt256};
+    use blokli_api_types::{CurvyCommittedNote, CurvyEventPosition, Hex32, RedemptionResult, UInt64};
     use blokli_chain_indexer::state::{IndexerEvent, RedeemTicketDetailsInfo};
     use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb};
     use blokli_db_entity::{hopr_safe_contract, hopr_safe_contract_state};
@@ -1860,10 +1863,12 @@ mod tests {
 
     fn curvy_committed_note(block: u64) -> CurvyCommittedNote {
         CurvyCommittedNote {
-            batch_index: UInt256("1".to_string()),
-            note_id: UInt256(block.to_string()),
+            batch_index: Hex32(format!("0x{:064x}", 1)),
+            note_id: Hex32(format!("0x{block:064x}")),
+            leaf_index: UInt64(block),
             position: CurvyEventPosition {
                 transaction_hash: Hex32(format!("0x{:064x}", block)),
+                block_hash: Hex32(format!("0x{:064x}", block)),
                 block: UInt64(block),
                 transaction_index: UInt64(0),
                 log_index: UInt64(0),
