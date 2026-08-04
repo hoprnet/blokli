@@ -117,6 +117,9 @@ pub mod codes {
 
     /// The X-Blokli-Schema-Version header value is not a valid non-negative integer
     pub const INVALID_SCHEMA_VERSION_HEADER: &str = "INVALID_SCHEMA_VERSION_HEADER";
+
+    /// A requested optional feature is disabled in the server configuration
+    pub const FEATURE_DISABLED: &str = "FEATURE_DISABLED";
 }
 
 // ============================================================================
@@ -198,6 +201,11 @@ pub mod messages {
     /// Internal error message
     pub fn internal_error(context: &str, error: impl std::fmt::Display) -> String {
         format!("Internal error in {}: {}", context, error)
+    }
+
+    /// Optional feature disabled error message
+    pub fn feature_disabled(feature: &str) -> String {
+        format!("{} is disabled in the server configuration", feature)
     }
 
     /// Missing filter error message
@@ -529,4 +537,10 @@ pub fn unsupported_schema_version(version: u32) -> async_graphql::Error {
 pub fn invalid_schema_version_header() -> async_graphql::Error {
     async_graphql::Error::new("Invalid X-Blokli-Schema-Version header: expected a non-negative integer")
         .extend_with(|_, e| e.set("code", codes::INVALID_SCHEMA_VERSION_HEADER))
+}
+
+/// Creates an async_graphql::Error when an optional server feature is disabled
+pub fn feature_disabled(feature: &str) -> async_graphql::Error {
+    async_graphql::Error::new(messages::feature_disabled(feature))
+        .extend_with(|_, extensions| extensions.set("code", codes::FEATURE_DISABLED))
 }

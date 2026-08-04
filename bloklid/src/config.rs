@@ -613,7 +613,7 @@ mod tests {
     }
 
     #[test]
-    fn test_contract_overrides_require_curvy_aggregator() {
+    fn test_contract_overrides_default_to_disabled_curvy_indexing() {
         let config = r#"
             [contracts]
             token = "0x0101010101010101010101010101010101010101"
@@ -628,7 +628,15 @@ mod tests {
             xhopr_token = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         "#;
 
-        assert!(toml::from_str::<Config>(config).is_err());
+        let config: Config = toml::from_str(config).expect("legacy contract overrides should remain valid");
+
+        assert_eq!(
+            config
+                .contracts_override
+                .expect("contract overrides should be present")
+                .curvy_aggregator,
+            Address::default()
+        );
     }
 
     #[test]

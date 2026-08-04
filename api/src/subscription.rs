@@ -1412,6 +1412,15 @@ impl SubscriptionRoot {
         after: Option<CurvyEventCursor>,
         filter: Option<CurvyNoteEventFilter>,
     ) -> Result<impl Stream<Item = CurvyNoteEvent>> {
+        let aggregator = ctx
+            .data::<ContractAddresses>()
+            .map_err(|error| {
+                async_graphql::Error::new(errors::messages::context_error("ContractAddresses", error.message))
+            })?
+            .curvy_aggregator;
+        if aggregator == Address::default() {
+            return Err(errors::feature_disabled("Curvy note indexing"));
+        }
         let index_db = ctx.data::<DatabaseConnection>()?.clone();
         let logs_db = ctx
             .data::<LogsDatabase>()
@@ -1422,12 +1431,6 @@ impl SubscriptionRoot {
             .data::<IndexerState>()
             .map_err(|error| async_graphql::Error::new(errors::messages::context_error("IndexerState", error.message)))?
             .clone();
-        let aggregator = ctx
-            .data::<ContractAddresses>()
-            .map_err(|error| {
-                async_graphql::Error::new(errors::messages::context_error("ContractAddresses", error.message))
-            })?
-            .curvy_aggregator;
         let filter = filter.unwrap_or_default();
 
         Ok(stream! {
@@ -2092,6 +2095,36 @@ mod tests {
                     "batchIndex": "5"
                 }
             }))?
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_curvy_subscription_rejects_disabled_indexing() -> anyhow::Result<()> {
+        let schema = Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)
+            .data(ContractAddresses::default())
+            .finish();
+        let query = r#"
+            subscription {
+                curvyNoteEvents {
+                    ... on CurvyCommittedNote { cursor noteId batchIndex }
+                }
+            }
+        "#;
+        let response = schema
+            .execute_stream(query)
+            .next()
+            .await
+            .context("Curvy subscription did not return a configuration error")?;
+        let response = serde_json::to_value(response)?;
+
+        assert_eq!(
+            response["errors"][0]["message"],
+            "Curvy note indexing is disabled in the server configuration"
+        );
+        assert_eq!(
+            response["errors"][0]["extensions"]["code"],
+            errors::codes::FEATURE_DISABLED
         );
         Ok(())
     }
