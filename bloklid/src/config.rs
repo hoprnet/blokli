@@ -3,6 +3,7 @@ use std::{fmt, time::Duration};
 use blokli_chain_indexer::utils::redact_url;
 use blokli_chain_types::{ChainConfig, ContractAddresses};
 use blokli_db::utils::redact_database_url;
+use hopr_types::primitive::primitives::Address;
 
 use crate::network::Network;
 
@@ -276,6 +277,12 @@ pub struct Config {
 
     #[serde(default, rename = "contracts")]
     pub contracts_override: Option<ContractAddresses>,
+
+    /// Optional Curvy aggregator proxy address. When omitted, Curvy event indexing is disabled.
+    /// This overrides the value in `[contracts]` when both are configured.
+    #[serde_as(as = "Option<serde_with::DisplayFromStr>")]
+    #[serde(default)]
+    pub curvy_aggregator: Option<Address>,
 
     #[serde(skip)]
     #[default(None)]
@@ -622,6 +629,18 @@ mod tests {
         "#;
 
         assert!(toml::from_str::<Config>(config).is_err());
+    }
+
+    #[test]
+    fn test_curvy_aggregator_can_be_configured_independently() {
+        let config = r#"
+            curvy_aggregator = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        "#;
+
+        let config: Config = toml::from_str(config).expect("Curvy aggregator should accept a hex string");
+
+        assert_eq!(config.curvy_aggregator, Some(Address::from([0xbb; 20])));
+        assert!(config.contracts_override.is_none());
     }
 
     #[test]

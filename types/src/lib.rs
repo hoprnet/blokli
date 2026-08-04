@@ -778,9 +778,6 @@ impl async_graphql::ScalarType for CurvyEventCursor {
 pub struct CurvyNoteEventFilter {
     /// Restrict events to pending and/or committed notes.
     pub kinds: Option<Vec<CurvyNoteEventKind>>,
-    /// Restrict events to known note identifiers (decimal `uint256` strings).
-    #[graphql(name = "noteIds")]
-    pub note_ids: Option<Vec<String>>,
 }
 
 /// Metadata for one item in a Curvy `PendingNotes` event.

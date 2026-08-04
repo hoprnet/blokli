@@ -262,7 +262,9 @@ where
             let event = HoprWinningProbabilityOracleEvents::decode_log(&primitive_log)?;
             self.on_ticket_winning_probability_oracle_event(tx, event.data, is_synced)
                 .await
-        } else if log.address.eq(&self.addresses.curvy_aggregator) {
+        } else if self.addresses.curvy_aggregator != Address::default()
+            && log.address.eq(&self.addresses.curvy_aggregator)
+        {
             let event = CurvyAggregatorAlphaV2Events::decode_log(&primitive_log)?;
             let log_index = u256_to_u64(log.log_index, "log_index")?;
             crate::curvy::expand_note_event(event.data, log.block_number, log.tx_index, log_index)
@@ -311,7 +313,9 @@ where
             self.addresses.node_stake_factory,
             self.addresses.token,
         ];
-        addresses.push(self.addresses.curvy_aggregator);
+        if self.addresses.curvy_aggregator != Address::default() {
+            addresses.push(self.addresses.curvy_aggregator);
+        }
         addresses
     }
 
@@ -350,7 +354,8 @@ where
             crate::constants::topics::stake_factory()
         } else if contract.eq(&self.addresses.token) {
             crate::constants::topics::token()
-        } else if contract.eq(&self.addresses.curvy_aggregator) {
+        } else if self.addresses.curvy_aggregator != Address::default() && contract.eq(&self.addresses.curvy_aggregator)
+        {
             vec![
                 curvy_bindings::curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2::PendingNotes::SIGNATURE_HASH,
                 curvy_bindings::curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2::CommittedNotes::SIGNATURE_HASH,

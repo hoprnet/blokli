@@ -3,6 +3,7 @@ use std::{ffi::OsString, path::PathBuf};
 use ::config as config_rs;
 use blokli_chain_types::{AlloyAddressExt, ChainConfig};
 use clap::{Parser, Subcommand};
+use hopr_types::primitive::primitives::Address;
 use validator::Validate;
 
 use crate::{
@@ -91,6 +92,7 @@ impl Args {
             ("BLOKLI_RPC_URL", "rpc_url"),
             ("BLOKLI_MAX_RPC_REQUESTS_PER_SEC", "max_rpc_requests_per_sec"),
             ("BLOKLI_MAX_BLOCK_RANGE", "max_block_range"),
+            ("BLOKLI_CURVY_AGGREGATOR", "curvy_aggregator"),
             ("DATABASE_URL", "database.url"),
             ("PGHOST", "database.host"),
             ("POSTGRES_HOST", "database.host"),
@@ -285,6 +287,13 @@ impl Args {
             contracts = override_contracts;
         }
 
+        if let Some(curvy_aggregator) = config.curvy_aggregator {
+            if curvy_aggregator == Address::default() {
+                return Err(ConfigError::Parse("curvy_aggregator must not be the zero address".to_string()).into());
+            }
+            contracts.curvy_aggregator = curvy_aggregator;
+        }
+
         config.contracts = contracts;
 
         tracing::info!(
@@ -395,6 +404,61 @@ mod tests {
                 _ => panic!("Expected PostgreSQL database config"),
             }
         });
+    }
+
+    #[test]
+    fn test_curvy_aggregator_is_resolved_without_full_contract_override() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "rotsee"
+            rpc_url = "http://localhost:8545"
+            curvy_aggregator = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+        "#
+        )
+        .unwrap();
+        let args = Args {
+            verbose: 0,
+            config: Some(file.path().to_path_buf()),
+            command: None,
+        };
+
+        let config = args.load_config(false).expect("Curvy aggregator should resolve");
+
+        assert!(config.contracts_override.is_none());
+        assert_eq!(config.contracts.curvy_aggregator, Address::from([0xbb; 20]));
+    }
+
+    #[test]
+    fn test_explicit_zero_curvy_aggregator_is_rejected() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "rotsee"
+            rpc_url = "http://localhost:8545"
+            curvy_aggregator = "0x0000000000000000000000000000000000000000"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+        "#
+        )
+        .unwrap();
+        let args = Args {
+            verbose: 0,
+            config: Some(file.path().to_path_buf()),
+            command: None,
+        };
+
+        let result = args.load_config(false);
+
+        assert!(
+            matches!(result, Err(BloklidError::Config(ConfigError::Parse(message))) if message.contains("zero address"))
+        );
     }
 
     #[test]

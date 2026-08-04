@@ -129,7 +129,7 @@ pub struct ContractAddresses {
     #[serde_as(as = "DisplayFromStr")]
     #[serde(default)]
     pub xhopr_token: Address,
-    /// Curvy aggregator proxy whose raw note events should be indexed.
+    /// Curvy aggregator proxy whose raw note events should be indexed. The zero address disables Curvy indexing.
     #[serde_as(as = "DisplayFromStr")]
     pub curvy_aggregator: Address,
 }

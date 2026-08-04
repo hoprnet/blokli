@@ -24,6 +24,10 @@ max_rpc_requests_per_sec = 0
 # default 10000-block ceiling.
 max_block_range = 10000
 
+# Optional Curvy aggregator proxy. When omitted, Curvy event indexing is disabled.
+# This can be set independently without overriding all HOPR contract addresses.
+# curvy_aggregator = "0x0000000000000000000000000000000000000000"
+
 # Optional contract address overrides
 # Defaults are resolved from hopr-bindings for the selected network
 # Use this when running against a local chain with freshly deployed contracts
@@ -38,7 +42,8 @@ max_block_range = 10000
 # winning_probability_oracle = "0x0000000000000000000000000000000000000000"
 # node_stake_factory = "0x0000000000000000000000000000000000000000"
 # xhopr_token = "0x0000000000000000000000000000000000000000"
-# Curvy aggregator proxy used to index raw PendingNotes and CommittedNotes events.
+# Curvy aggregator proxy used by local full deployment overrides. Prefer the
+# top-level curvy_aggregator setting when only this address must be supplied.
 # curvy_aggregator = "0x0000000000000000000000000000000000000000"
 
 # Database configuration - supports PostgreSQL or SQLite

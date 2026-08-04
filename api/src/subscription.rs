@@ -1,6 +1,6 @@
 //! GraphQL subscription root and resolver implementations
 
-use std::{collections::HashMap, str::FromStr, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use async_broadcast::Receiver;
 use async_graphql::{Context, ID, Result, Subscription};
@@ -33,7 +33,7 @@ use curvy_bindings::curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2::CurvyAggr
 use futures::Stream;
 use hopr_bindings::exports::alloy::{
     hex,
-    primitives::{Address as AlloyAddress, B256, Log as AlloyLog, U256},
+    primitives::{Address as AlloyAddress, B256, Log as AlloyLog},
     sol_types::SolEventInterface,
 };
 use hopr_types::primitive::{
@@ -453,10 +453,6 @@ fn curvy_log_at_or_after_cursor(cursor: CurvyEventCursor) -> Result<Condition> {
 
 fn curvy_event_matches(event: &CurvyNoteEvent, filter: &CurvyNoteEventFilter) -> bool {
     filter.kinds.as_ref().is_none_or(|kinds| kinds.contains(&event.kind()))
-        && filter
-            .note_ids
-            .as_ref()
-            .is_none_or(|note_ids| note_ids.iter().any(|note_id| note_id == event.note_id()))
 }
 
 fn decode_curvy_log(model: log::Model) -> Result<Vec<CurvyNoteEvent>> {
@@ -1432,18 +1428,7 @@ impl SubscriptionRoot {
                 async_graphql::Error::new(errors::messages::context_error("ContractAddresses", error.message))
             })?
             .curvy_aggregator;
-        let mut filter = filter.unwrap_or_default();
-        if let Some(note_ids) = &mut filter.note_ids {
-            for note_id in note_ids {
-                *note_id = U256::from_str(note_id)
-                    .map_err(|error| {
-                        async_graphql::Error::new(errors::messages::validation_failed(&format!(
-                            "invalid Curvy note ID: {error}"
-                        )))
-                    })?
-                    .to_string();
-            }
-        }
+        let filter = filter.unwrap_or_default();
 
         Ok(stream! {
             let (watermark, mut event_receiver, mut shutdown_receiver) =
@@ -1813,7 +1798,7 @@ mod tests {
     use blokli_db_entity::{hopr_safe_contract, hopr_safe_contract_state};
     use curvy_bindings::curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2::{CommittedNotes, PendingNotes};
     use futures::StreamExt;
-    use hopr_bindings::exports::alloy::sol_types::private::IntoLogData;
+    use hopr_bindings::exports::alloy::{primitives::U256, sol_types::private::IntoLogData};
     use sea_orm::{ActiveModelTrait, Set};
 
     use super::*;
@@ -2007,7 +1992,6 @@ mod tests {
         .map_err(|error| anyhow::anyhow!("Curvy replay failed: {error:?}"))?;
         let filter = CurvyNoteEventFilter {
             kinds: Some(vec![CurvyNoteEventKind::Committed]),
-            note_ids: Some(vec!["11".to_string()]),
         };
         let filtered: Vec<_> = events
             .into_iter()
@@ -2016,16 +2000,28 @@ mod tests {
 
         assert_eq!(
             filtered,
-            vec![CurvyNoteEvent::Committed(CurvyCommittedNote {
-                cursor: CurvyEventCursor {
-                    block: 6,
-                    transaction_index: 0,
-                    log_index: 1,
-                    item_index: 1,
-                },
-                note_id: "11".to_string(),
-                batch_index: "3".to_string(),
-            })]
+            vec![
+                CurvyNoteEvent::Committed(CurvyCommittedNote {
+                    cursor: CurvyEventCursor {
+                        block: 6,
+                        transaction_index: 0,
+                        log_index: 1,
+                        item_index: 0,
+                    },
+                    note_id: "10".to_string(),
+                    batch_index: "3".to_string(),
+                }),
+                CurvyNoteEvent::Committed(CurvyCommittedNote {
+                    cursor: CurvyEventCursor {
+                        block: 6,
+                        transaction_index: 0,
+                        log_index: 1,
+                        item_index: 1,
+                    },
+                    note_id: "11".to_string(),
+                    batch_index: "3".to_string(),
+                }),
+            ]
         );
         Ok(())
     }
@@ -2049,7 +2045,7 @@ mod tests {
             .finish();
         let query = r#"
             subscription {
-                curvyNoteEvents(filter: { kinds: [COMMITTED], noteIds: ["11"] }) {
+                curvyNoteEvents(filter: { kinds: [COMMITTED] }) {
                     ... on CurvyCommittedNote { cursor noteId batchIndex }
                 }
             }
@@ -2091,8 +2087,8 @@ mod tests {
             data,
             async_graphql::Value::from_json(serde_json::json!({
                 "curvyNoteEvents": {
-                    "cursor": "1:2:3:5",
-                    "noteId": "11",
+                    "cursor": "1:2:3:4",
+                    "noteId": "10",
                     "batchIndex": "5"
                 }
             }))?

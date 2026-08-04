@@ -236,8 +236,6 @@ Raw indexed fields accepted by the Curvy note subscription
 input CurvyNoteEventFilter {
   "Restrict events to pending and/or committed notes"
   kinds: [CurvyNoteEventKind!]
-  "Restrict events to known note identifiers represented as decimal uint256 strings"
-  noteIds: [String!]
 }
 
 """
