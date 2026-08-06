@@ -383,6 +383,13 @@ type CurvyAddress {
   address: String!
 }
 
+"""Current Curvy Aggregator protocol fee parameters."""
+type CurvyAggregatorFees {
+  protocolFeePerThousand: UInt256!
+  commitmentFeeRoot: Hex32!
+  feeNotePublicKey: [UInt256!]!
+}
+
 """Current Curvy Aggregator indices and notes-tree root."""
 type CurvyAggregatorState {
   notesTreeRoot: Hex32!
@@ -398,12 +405,19 @@ type CurvyBooleanValue {
   value: Boolean!
 }
 
-"""Exclusive pagination cursor for indexed Curvy events."""
+"""
+Exclusive pagination cursor for indexed Curvy events.
+
+Supplying `blockHash` anchors the cursor to the branch it was issued on, so a cursor
+orphaned by a reorganization is rejected instead of silently skipping the canonical
+replacement at the same position. It is optional for backwards compatibility.
+"""
 input CurvyEventCursor {
   block: UInt64!
   transactionIndex: UInt64!
   logIndex: UInt64!
   eventItemIndex: UInt64!
+  blockHash: Hex32
 }
 
 """Position and transaction identity shared by indexed Curvy events."""
@@ -518,6 +532,11 @@ type CurvyVaultToken {
   gasFees: CurvyGasFees!
 }
 
+"""The number of tokens registered in the Curvy Vault."""
+type CurvyVaultTokenCount {
+  count: UInt256!
+}
+
 """Successful Curvy pending-note history response."""
 type CurvyPendingNotes {
   notes: [CurvyPendingNote!]!
@@ -538,6 +557,7 @@ type CurvyNoteStatus {
   status: Int!
 }
 
+union CurvyAggregatorFeesResult = CurvyAggregatorFees | QueryFailedError
 union CurvyCommittedNotesResult = CurvyCommittedNotes | QueryFailedError
 union CurvyCommittedNullifiersResult = CurvyCommittedNullifiers | QueryFailedError
 union CurvyEntryPortalAddressResult = CurvyAddress | InvalidAddressError | QueryFailedError
@@ -552,6 +572,7 @@ union CurvySyncNotesResult = CurvySyncNotePage | QueryFailedError
 union CurvySyncNullifiersResult = CurvySyncNullifierPage | QueryFailedError
 union CurvyValidNotesRootResult = CurvyBooleanValue | QueryFailedError
 union CurvyVaultFeesResult = CurvyVaultFees | QueryFailedError
+union CurvyVaultTokenCountResult = CurvyVaultTokenCount | QueryFailedError
 union CurvyVaultTokenResult = CurvyVaultToken | QueryFailedError
 
 """
@@ -702,6 +723,8 @@ type QueryRoot {
   Returns the API version and a semver requirement for compatible blokli-client releases.
   """
   compatibility: Compatibility!
+  "Read the Curvy Aggregator protocol fee, commitment fee root and fee-note public key directly from chain."
+  curvyAggregatorFees: CurvyAggregatorFeesResult!
   "Read the current Curvy Aggregator root and indices directly from chain."
   curvyAggregatorState: CurvyAggregatorStateResult!
   "Retrieve Curvy notes emitted by `CommittedNotes`, ordered by chain position."
@@ -742,6 +765,8 @@ type QueryRoot {
   curvyVaultFees: CurvyVaultFeesResult!
   "Read a Curvy Vault token address and per-token gas fees directly from chain."
   curvyVaultToken(tokenId: UInt256!): CurvyVaultTokenResult!
+  "Read how many tokens are registered in the Curvy Vault, so a client can enumerate `curvyVaultToken` over the real set."
+  curvyVaultTokenCount: CurvyVaultTokenCountResult!
   """
   Health check endpoint
 

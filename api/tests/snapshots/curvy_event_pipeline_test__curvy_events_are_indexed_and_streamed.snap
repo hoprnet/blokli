@@ -7,7 +7,7 @@ curvyCommittedNotes:
     - batchIndex: "0x0000000000000000000000000000000000000000000000000000000000000006"
       noteId: "0x0000000000000000000000000000000000000000000000000000000000000064"
       position:
-        block: "27"
+        block: "31"
         eventItemIndex: "0"
         logIndex: "0"
         transactionHash: "0x3030303030303030303030303030303030303030303030303030303030303030"
@@ -15,7 +15,7 @@ curvyCommittedNotes:
     - batchIndex: "0x0000000000000000000000000000000000000000000000000000000000000007"
       noteId: "0x0000000000000000000000000000000000000000000000000000000000000065"
       position:
-        block: "28"
+        block: "32"
         eventItemIndex: "1"
         logIndex: "0"
         transactionHash: "0x3131313131313131313131313131313131313131313131313131313131313131"
@@ -23,7 +23,7 @@ curvyCommittedNotes:
     - batchIndex: "0x0000000000000000000000000000000000000000000000000000000000000007"
       noteId: "0x0000000000000000000000000000000000000000000000000000000000000066"
       position:
-        block: "28"
+        block: "32"
         eventItemIndex: "3"
         logIndex: "0"
         transactionHash: "0x3131313131313131313131313131313131313131313131313131313131313131"
@@ -33,7 +33,7 @@ curvyCommittedNullifiers:
     - batchIndex: "0x0000000000000000000000000000000000000000000000000000000000000008"
       nullifier: "0x00000000000000000000000000000000000000000000000000000000000000c9"
       position:
-        block: "29"
+        block: "33"
         eventItemIndex: "0"
         logIndex: "0"
         transactionHash: "0x3232323232323232323232323232323232323232323232323232323232323232"
@@ -41,7 +41,7 @@ curvyCommittedNullifiers:
     - batchIndex: "0x0000000000000000000000000000000000000000000000000000000000000008"
       nullifier: "0x00000000000000000000000000000000000000000000000000000000000000ca"
       position:
-        block: "29"
+        block: "33"
         eventItemIndex: "2"
         logIndex: "0"
         transactionHash: "0x3232323232323232323232323232323232323232323232323232323232323232"
@@ -55,10 +55,10 @@ curvyPendingNotes:
       isPlaintext: true
       noteId: "0x13ea1b3b95601d96264437e145d437289f8667b1e24189e8cf79e80caf4ae361"
       position:
-        block: "26"
+        block: "30"
         eventItemIndex: "0"
         logIndex: "1"
-        transactionHash: "0x858dda83f79bde6555f9997df198578ce4b6843f39f02eca52d2a34095436c2f"
+        transactionHash: "0xa1dc8b3c94b9a9f7ca3baba6671d8f93ee8d75b19839311de5f8e87584c0feb2"
         transactionIndex: "0"
       tokenId: "1"
       viewTag: 44

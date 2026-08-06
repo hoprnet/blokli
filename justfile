@@ -233,14 +233,14 @@ docker-build:
     nix build .#docker-bloklid-x86_64-linux
     docker load < result
 
-# Build bloklid + anvil Docker image from Nix
+# Build bloklid + anvil Docker image from Nix (always includes the Curvy suite)
 docker-build-anvil:
-    nix build .#docker-bloklid-anvil-x86_64-linux
+    nix build .#docker-bloklid-anvil-curvy-x86_64-linux
     docker load < result
 
 # Run bloklid + anvil container (GraphQL API on port 8080)
 docker-run-anvil log_level="info":
-    docker run --rm -p 8080:8080 -e RUST_LOG={{ log_level }} bloklid-anvil:latest
+    docker run --rm -p 8080:8080 -e RUST_LOG={{ log_level }} bloklid-anvil-curvy:latest
 
 # Rebuild bloklid and restart Docker Compose
 docker-restart: docker-build

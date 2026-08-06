@@ -30,6 +30,8 @@ pub struct DatabaseEventCursor {
     pub transaction_index: i64,
     pub log_index: i64,
     pub event_item_index: i64,
+    /// Branch the cursor was issued on, when the client supplied one.
+    pub block_hash: Option<[u8; 32]>,
 }
 
 pub fn page_limit(first: Option<i32>) -> CurvyResult<u64> {
@@ -58,14 +60,41 @@ pub fn event_cursor(cursor: Option<CurvyEventCursor>) -> CurvyResult<Option<Data
                 i64::try_from(value.0)
                     .map_err(|_| errors::invalid_pagination("cursor exceeds the supported database range"))
             };
+            let block_hash = cursor
+                .block_hash
+                .as_ref()
+                .map(|hash| bytes32(&hex32_bytes(hash)?, "cursor blockHash"))
+                .transpose()?;
             Ok(DatabaseEventCursor {
                 block: convert(cursor.block)?,
                 transaction_index: convert(cursor.transaction_index)?,
                 log_index: convert(cursor.log_index)?,
                 event_item_index: convert(cursor.event_item_index)?,
+                block_hash,
             })
         })
         .transpose()
+}
+
+/// Rejects a cursor whose anchoring block is no longer the one at that position.
+///
+/// `stored` is the block hash currently recorded at the cursor's exact position, or
+/// `None` when no row sits there any more. Either a mismatch or an absent row means the
+/// branch the cursor was issued on was reorganized away, so continuing with an exclusive
+/// `>` comparison would silently skip the canonical replacement at that position.
+///
+/// Cursors without an anchor are accepted unchanged.
+pub fn ensure_cursor_anchor(cursor: &DatabaseEventCursor, stored: Option<&[u8]>) -> CurvyResult<()> {
+    let Some(expected) = cursor.block_hash.as_ref() else {
+        return Ok(());
+    };
+    if stored == Some(expected.as_slice()) {
+        Ok(())
+    } else {
+        Err(errors::invalid_pagination(
+            "cursor is anchored to a block that is no longer canonical; re-read the event history from an earlier position",
+        ))
+    }
 }
 
 pub fn event_cursor_condition<C>(
@@ -176,6 +205,38 @@ pub fn validate_dense_page(
         ));
     }
     Ok(())
+}
+
+/// Confirms a pinned checkpoint still exists once its page has been read.
+///
+/// Curvy rollback deletes event rows, shard roots and checkpoints at or after the first
+/// affected block in a single transaction. A checkpoint that survives that deletion is
+/// therefore older than the reorganized suffix, and every row below its counts was
+/// written before it, so nothing the page returned can have been replaced. A checkpoint
+/// that is gone pinned an orphaned branch, and its page must not be served: the dense
+/// indexes alone cannot distinguish replacement rows, because replay rebuilds them with
+/// the same values.
+///
+/// Callers must invoke this *after* reading the page, not before.
+pub async fn ensure_checkpoint_still_pinned(
+    db: &DatabaseConnection,
+    checkpoint: &DbCurvySyncCheckpoint,
+) -> CurvyResult<()> {
+    let survived = curvy_sync_checkpoint::Entity::find()
+        .filter(curvy_sync_checkpoint::Column::BlockHash.eq(checkpoint.block_hash.clone()))
+        .one(db)
+        .await
+        .map_err(|error| errors::query_failed("re-check Curvy sync checkpoint", error))?
+        .is_some();
+
+    if survived {
+        Ok(())
+    } else {
+        Err(errors::query_failed(
+            "serve checkpoint-pinned Curvy page",
+            "the pinned checkpoint was removed by a chain reorganization; re-read the checkpoint and retry",
+        ))
+    }
 }
 
 pub async fn load_checkpoint(

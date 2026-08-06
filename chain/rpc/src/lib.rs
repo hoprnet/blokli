@@ -269,6 +269,21 @@ pub struct CurvyAggregatorState {
     pub note_index: [u8; 32],
 }
 
+/// Curvy Aggregator fee configuration required to build a valid aggregation proof.
+///
+/// The aggregation-side counterpart to [`CurvyGasFees`]: the protocol fee rate, the
+/// root of the per-token commitment gas-fee tree, and the BabyJubJub public key the
+/// circuit constrains the fee note's owner to.
+#[derive(Clone, Debug, Copy, PartialEq, Eq)]
+pub struct CurvyAggregatorFees {
+    /// `protocolFeePerThousand()` — parts per thousand.
+    pub protocol_fee_per_thousand: [u8; 32],
+    /// `commitmentFeeRoot()` — root of the depth-6 per-token gas-fee tree.
+    pub commitment_fee_root: [u8; 32],
+    /// `feeNotePublicKey(0)` and `feeNotePublicKey(1)`.
+    pub fee_note_public_key: [[u8; 32]; 2],
+}
+
 /// Curvy per-token gas fee values returned by the Vault.
 #[derive(Clone, Debug, Copy, PartialEq, Eq)]
 pub struct CurvyGasFees {
@@ -339,8 +354,17 @@ pub trait HoprRpcOperations {
     /// Retrieves protocol-level deposit and withdrawal fees from the Curvy Vault.
     async fn get_curvy_vault_fees(&self) -> Result<([u8; 32], [u8; 32])>;
 
+    /// Retrieves the Curvy Aggregator's fee configuration.
+    async fn get_curvy_aggregator_fees(&self) -> Result<CurvyAggregatorFees>;
+
+    /// Retrieves the number of tokens registered in the Curvy Vault.
+    async fn get_curvy_vault_token_count(&self) -> Result<[u8; 32]>;
+
     /// Retrieves a Curvy Vault token and its configured gas fees.
-    async fn get_curvy_vault_token(&self, token_id: [u8; 32]) -> Result<CurvyVaultToken>;
+    ///
+    /// `None` means the token id is not registered. Transport and undecodable
+    /// contract failures remain errors.
+    async fn get_curvy_vault_token(&self, token_id: [u8; 32]) -> Result<Option<CurvyVaultToken>>;
 
     /// Derives a Curvy entry portal address.
     async fn derive_curvy_entry_portal_address(&self, owner_hash: [u8; 32], recovery: Address) -> Result<Address>;

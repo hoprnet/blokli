@@ -5,12 +5,13 @@ use std::{collections::HashMap, sync::Arc};
 use async_graphql::{Context, ID, Object, Result, SimpleObject, Union};
 use blokli_api_types::{
     Account, AccountsList, AccountsResult, ChainInfo, ChainInfoResult, Channel, ChannelStats, ChannelStatsResult,
-    ChannelsList, ChannelsResult, ContractAddressMap, CountResult, CurvyAddress, CurvyAggregatorState,
-    CurvyBooleanValue, CurvyCommittedNotes, CurvyCommittedNullifiers, CurvyEventCursor, CurvyGasFees, CurvyNoteStatus,
-    CurvyPendingNotes, CurvyShardRootPage, CurvySyncCheckpoint, CurvySyncNotePage, CurvySyncNullifierPage,
-    CurvyVaultFees, CurvyVaultToken, Hex32, HoprBalance, InvalidAddressError, MissingFilterError, ModuleAddress,
-    NativeBalance, QueryFailedError, RedeemedStats, RedeemedStatsFilter, Safe, SafeHoprAllowance, SafeSelectorInput,
-    SafesBalance, SafesBalanceResult, TokenValueString, TransactionCount, UInt64, UInt256,
+    ChannelsList, ChannelsResult, ContractAddressMap, CountResult, CurvyAddress, CurvyAggregatorFees,
+    CurvyAggregatorState, CurvyBooleanValue, CurvyCommittedNotes, CurvyCommittedNullifiers, CurvyEventCursor,
+    CurvyGasFees, CurvyNoteStatus, CurvyPendingNotes, CurvyShardRootPage, CurvySyncCheckpoint, CurvySyncNotePage,
+    CurvySyncNullifierPage, CurvyVaultFees, CurvyVaultToken, CurvyVaultTokenCount, Hex32, HoprBalance,
+    InvalidAddressError, MissingFilterError, ModuleAddress, NativeBalance, QueryFailedError, RedeemedStats,
+    RedeemedStatsFilter, Safe, SafeHoprAllowance, SafeSelectorInput, SafesBalance, SafesBalanceResult,
+    TokenValueString, TransactionCount, UInt64, UInt256,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_indexer::IndexerState;
@@ -177,6 +178,18 @@ pub enum CurvyNullifierSpentResult {
 #[derive(Union)]
 pub enum CurvyVaultFeesResult {
     Fees(CurvyVaultFees),
+    QueryFailed(QueryFailedError),
+}
+
+#[derive(Union)]
+pub enum CurvyAggregatorFeesResult {
+    Fees(CurvyAggregatorFees),
+    QueryFailed(QueryFailedError),
+}
+
+#[derive(Union)]
+pub enum CurvyVaultTokenCountResult {
+    Count(CurvyVaultTokenCount),
     QueryFailed(QueryFailedError),
 }
 
@@ -459,6 +472,17 @@ impl QueryRoot {
                 query = query.filter(curvy_pending_note::Column::PublishedBlock.gte(block));
             }
             if let Some(cursor) = curvy::event_cursor(after)? {
+                if cursor.block_hash.is_some() {
+                    let anchored = curvy_pending_note::Entity::find()
+                        .filter(curvy_pending_note::Column::PublishedBlock.eq(cursor.block))
+                        .filter(curvy_pending_note::Column::PublishedTxIndex.eq(cursor.transaction_index))
+                        .filter(curvy_pending_note::Column::PublishedLogIndex.eq(cursor.log_index))
+                        .filter(curvy_pending_note::Column::EventItemIndex.eq(cursor.event_item_index))
+                        .one(db)
+                        .await
+                        .map_err(|error| errors::query_failed("validate Curvy cursor anchor", error))?;
+                    curvy::ensure_cursor_anchor(&cursor, anchored.as_ref().map(|row| row.block_hash.as_slice()))?;
+                }
                 query = query.filter(curvy::event_cursor_condition(
                     curvy_pending_note::Column::PublishedBlock,
                     curvy_pending_note::Column::PublishedTxIndex,
@@ -506,6 +530,17 @@ impl QueryRoot {
                 query = query.filter(curvy_committed_note::Column::PublishedBlock.gte(block));
             }
             if let Some(cursor) = curvy::event_cursor(after)? {
+                if cursor.block_hash.is_some() {
+                    let anchored = curvy_committed_note::Entity::find()
+                        .filter(curvy_committed_note::Column::PublishedBlock.eq(cursor.block))
+                        .filter(curvy_committed_note::Column::PublishedTxIndex.eq(cursor.transaction_index))
+                        .filter(curvy_committed_note::Column::PublishedLogIndex.eq(cursor.log_index))
+                        .filter(curvy_committed_note::Column::EventItemIndex.eq(cursor.event_item_index))
+                        .one(db)
+                        .await
+                        .map_err(|error| errors::query_failed("validate Curvy cursor anchor", error))?;
+                    curvy::ensure_cursor_anchor(&cursor, anchored.as_ref().map(|row| row.block_hash.as_slice()))?;
+                }
                 query = query.filter(curvy::event_cursor_condition(
                     curvy_committed_note::Column::PublishedBlock,
                     curvy_committed_note::Column::PublishedTxIndex,
@@ -514,6 +549,7 @@ impl QueryRoot {
                     cursor,
                 ));
             }
+
             let notes = query
                 .order_by_asc(curvy_committed_note::Column::PublishedBlock)
                 .order_by_asc(curvy_committed_note::Column::PublishedTxIndex)
@@ -553,6 +589,17 @@ impl QueryRoot {
                 query = query.filter(curvy_committed_nullifier::Column::PublishedBlock.gte(block));
             }
             if let Some(cursor) = curvy::event_cursor(after)? {
+                if cursor.block_hash.is_some() {
+                    let anchored = curvy_committed_nullifier::Entity::find()
+                        .filter(curvy_committed_nullifier::Column::PublishedBlock.eq(cursor.block))
+                        .filter(curvy_committed_nullifier::Column::PublishedTxIndex.eq(cursor.transaction_index))
+                        .filter(curvy_committed_nullifier::Column::PublishedLogIndex.eq(cursor.log_index))
+                        .filter(curvy_committed_nullifier::Column::EventItemIndex.eq(cursor.event_item_index))
+                        .one(db)
+                        .await
+                        .map_err(|error| errors::query_failed("validate Curvy cursor anchor", error))?;
+                    curvy::ensure_cursor_anchor(&cursor, anchored.as_ref().map(|row| row.block_hash.as_slice()))?;
+                }
                 query = query.filter(curvy::event_cursor_condition(
                     curvy_committed_nullifier::Column::PublishedBlock,
                     curvy_committed_nullifier::Column::PublishedTxIndex,
@@ -682,6 +729,7 @@ impl QueryRoot {
                     curvy::sync_note(model, announcement)
                 })
                 .collect::<std::result::Result<Vec<_>, _>>()?;
+            curvy::ensure_checkpoint_still_pinned(db, &checkpoint_model).await?;
             let checkpoint = curvy::sync_checkpoint(checkpoint_model)?;
             Ok(CurvySyncNotePage {
                 checkpoint: checkpoint.block_hash,
@@ -739,6 +787,7 @@ impl QueryRoot {
                 .into_iter()
                 .map(curvy::committed_nullifier)
                 .collect::<std::result::Result<Vec<_>, _>>()?;
+            curvy::ensure_checkpoint_still_pinned(db, &checkpoint_model).await?;
             let checkpoint = curvy::sync_checkpoint(checkpoint_model)?;
             Ok(CurvySyncNullifierPage {
                 checkpoint: checkpoint.block_hash,
@@ -798,6 +847,7 @@ impl QueryRoot {
                 .into_iter()
                 .map(curvy::shard_root)
                 .collect::<std::result::Result<Vec<_>, _>>()?;
+            curvy::ensure_checkpoint_still_pinned(db, &checkpoint_model).await?;
             let checkpoint = curvy::sync_checkpoint(checkpoint_model)?;
             Ok(CurvyShardRootPage {
                 checkpoint: checkpoint.block_hash,
@@ -950,6 +1000,72 @@ impl QueryRoot {
         }
     }
 
+    /// Read the Curvy Aggregator fee configuration directly from chain.
+    ///
+    /// The protocol fee rate, the commitment gas-fee tree root, and the fee-note
+    /// public key are all required to build a valid aggregation proof: the circuit
+    /// constrains the fee note's owner to `feeNotePublicKey` and its amount to
+    /// `gasFee + protocolFeeQ`.
+    #[graphql(name = "curvyAggregatorFees", complexity = 50)]
+    async fn curvy_aggregator_fees(&self, ctx: &Context<'_>) -> CurvyAggregatorFeesResult {
+        let result = async {
+            let addresses = ctx
+                .data::<ContractAddresses>()
+                .map_err(|error| errors::context_error("ContractAddresses", error))?;
+            curvy::require_contract(addresses.curvy_aggregator, "Curvy Aggregator")?;
+            let rpc = ctx
+                .data::<RpcOperationsContext>()
+                .map_err(|error| errors::context_error("RpcOperationsContext", error))?;
+            let fees = rpc
+                .0
+                .get_curvy_aggregator_fees()
+                .await
+                .map_err(|error| errors::rpc_query_failed("query Curvy Aggregator fees", error))?;
+            Ok(CurvyAggregatorFees {
+                protocol_fee_per_thousand: curvy::uint256_value(fees.protocol_fee_per_thousand),
+                commitment_fee_root: Hex32::from(&fees.commitment_fee_root),
+                fee_note_public_key: fees
+                    .fee_note_public_key
+                    .iter()
+                    .map(|coordinate| curvy::uint256_value(*coordinate))
+                    .collect(),
+            })
+        }
+        .await;
+        match result {
+            Ok(fees) => CurvyAggregatorFeesResult::Fees(fees),
+            Err(error) => CurvyAggregatorFeesResult::QueryFailed(error),
+        }
+    }
+
+    /// Read how many tokens are registered in the Curvy Vault, so a client can
+    /// enumerate `curvyVaultToken` over the real set instead of probing ids.
+    #[graphql(name = "curvyVaultTokenCount", complexity = 50)]
+    async fn curvy_vault_token_count(&self, ctx: &Context<'_>) -> CurvyVaultTokenCountResult {
+        let result = async {
+            let addresses = ctx
+                .data::<ContractAddresses>()
+                .map_err(|error| errors::context_error("ContractAddresses", error))?;
+            curvy::require_contract(addresses.curvy_vault, "Curvy Vault")?;
+            let rpc = ctx
+                .data::<RpcOperationsContext>()
+                .map_err(|error| errors::context_error("RpcOperationsContext", error))?;
+            let count = rpc
+                .0
+                .get_curvy_vault_token_count()
+                .await
+                .map_err(|error| errors::rpc_query_failed("query Curvy Vault token count", error))?;
+            Ok(CurvyVaultTokenCount {
+                count: curvy::uint256_value(count),
+            })
+        }
+        .await;
+        match result {
+            Ok(count) => CurvyVaultTokenCountResult::Count(count),
+            Err(error) => CurvyVaultTokenCountResult::QueryFailed(error),
+        }
+    }
+
     /// Read a Curvy Vault token address and per-token gas fees directly from chain.
     #[graphql(name = "curvyVaultToken", complexity = 50)]
     async fn curvy_vault_token(
@@ -969,7 +1085,8 @@ impl QueryRoot {
                 .0
                 .get_curvy_vault_token(curvy::uint256_bytes(&token_id, "token ID")?)
                 .await
-                .map_err(|error| errors::rpc_query_failed("query Curvy Vault token", error))?;
+                .map_err(|error| errors::rpc_query_failed("query Curvy Vault token", error))?
+                .ok_or_else(|| errors::not_found("Curvy Vault token", &token_id.0))?;
             Ok(CurvyVaultToken {
                 token_address: token.token_address.to_hex(),
                 gas_fees: CurvyGasFees {

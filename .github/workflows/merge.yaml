@@ -98,12 +98,12 @@ jobs:
           {
             "runner": "depot-ubuntu-24.04-4",
             "architecture": "x86_64-linux",
-            "build_command": "nix build -L .#docker-bloklid-anvil-x86_64-linux"
+            "build_command": "nix build -L .#docker-bloklid-anvil-curvy-x86_64-linux"
           }
         ]
       cachix_cache_name: blokli
       build_file: bloklid/Cargo.toml
-      docker_image_name: bloklid-anvil
+      docker_image_name: bloklid-anvil-curvy
       docker_image_format: skopeo
       concurrency_group_suffix: anvil
     secrets:

@@ -13,6 +13,7 @@ use curvy_bindings::{
     curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2, curvy_vault_v2::CurvyVaultV2, portal_factory::PortalFactory,
 };
 use hopr_bindings::exports::alloy::{
+    contract::Error as AlloyContractError,
     primitives::{Address as AlloyAddress, FixedBytes, U256},
     providers::{
         Identity, PendingTransaction, Provider, ProviderBuilder, RootProvider,
@@ -36,7 +37,7 @@ use validator::Validate;
 
 // use crate::middleware::GnosisScan;
 use crate::{
-    CurvyAggregatorState, CurvyGasFees, CurvyVaultToken, Eip1559FeeEstimation, HoprRpcOperations,
+    CurvyAggregatorFees, CurvyAggregatorState, CurvyGasFees, CurvyVaultToken, Eip1559FeeEstimation, HoprRpcOperations,
     client::GasOracleFiller,
     errors::{Result, RpcError},
     transport::HttpRequestor,
@@ -47,6 +48,10 @@ fn configured_contract(address: Address, name: &str) -> Result<AlloyAddress> {
         return Err(RpcError::Other(format!("{name} contract address is not configured")));
     }
     Ok(AlloyAddress::from_hopr_address(address))
+}
+
+fn is_curvy_token_not_registered(error: &AlloyContractError) -> bool {
+    error.as_decoded_error::<CurvyVaultV2::TokenNotRegistered>().is_some()
 }
 
 // define basic safe abi
@@ -749,17 +754,53 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
         ))
     }
 
-    async fn get_curvy_vault_token(&self, token_id: [u8; 32]) -> Result<CurvyVaultToken> {
+    async fn get_curvy_aggregator_fees(&self) -> Result<CurvyAggregatorFees> {
+        let contract = CurvyAggregatorAlphaV2::new(
+            configured_contract(self.cfg.contract_addrs.curvy_aggregator, "Curvy Aggregator")?,
+            self.provider.clone(),
+        );
+        let (protocol_fee_per_thousand, commitment_fee_root, fee_note_public_key_x, fee_note_public_key_y) = futures::try_join!(
+            async { contract.protocolFeePerThousand().call().await },
+            async { contract.commitmentFeeRoot().call().await },
+            async { contract.feeNotePublicKey(U256::ZERO).call().await },
+            async { contract.feeNotePublicKey(U256::ONE).call().await },
+        )?;
+        Ok(CurvyAggregatorFees {
+            protocol_fee_per_thousand: U256::from(protocol_fee_per_thousand).to_be_bytes(),
+            commitment_fee_root: U256::from(commitment_fee_root).to_be_bytes(),
+            fee_note_public_key: [
+                U256::from(fee_note_public_key_x).to_be_bytes(),
+                U256::from(fee_note_public_key_y).to_be_bytes(),
+            ],
+        })
+    }
+
+    async fn get_curvy_vault_token_count(&self) -> Result<[u8; 32]> {
+        let count = CurvyVaultV2::new(
+            configured_contract(self.cfg.contract_addrs.curvy_vault, "Curvy Vault")?,
+            self.provider.clone(),
+        )
+        .getNumberOfTokens()
+        .call()
+        .await?;
+        Ok(U256::from(count).to_be_bytes())
+    }
+
+    async fn get_curvy_vault_token(&self, token_id: [u8; 32]) -> Result<Option<CurvyVaultToken>> {
         let contract = CurvyVaultV2::new(
             configured_contract(self.cfg.contract_addrs.curvy_vault, "Curvy Vault")?,
             self.provider.clone(),
         );
         let token_id = U256::from_be_bytes(token_id);
-        let (token_address, fees) =
-            futures::try_join!(async { contract.getTokenAddress(token_id).call().await }, async {
-                contract.perTokenGasFees(token_id).call().await
-            },)?;
-        Ok(CurvyVaultToken {
+        let token_address = match contract.getTokenAddress(token_id).call().await {
+            Ok(token_address) => token_address,
+            Err(error) if is_curvy_token_not_registered(&error) => {
+                return Ok(None);
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let fees = contract.perTokenGasFees(token_id).call().await?;
+        Ok(Some(CurvyVaultToken {
             token_address: token_address.to_hopr_address(),
             gas_fees: CurvyGasFees {
                 token_id: fees.tokenId.to_be_bytes(),
@@ -767,7 +808,7 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
                 pending_note_commitment: fees.pendingNoteCommitment.to_be_bytes(),
                 withdrawal: fees.withdrawal.to_be_bytes(),
             },
-        })
+        }))
     }
 
     async fn derive_curvy_entry_portal_address(&self, owner_hash: [u8; 32], recovery: Address) -> Result<Address> {
@@ -887,11 +928,16 @@ mod tests {
     use std::borrow::Cow;
 
     use hopr_bindings::exports::alloy::{
+        contract::Error as AlloyContractError,
         rpc::json_rpc::ErrorPayload,
         transports::{RpcError as AlloyRpcError, TransportErrorKind},
     };
+    use serde_json::value::RawValue;
 
-    use super::{DEFAULT_AUTO_LOG_BLOCK_RANGE_CAP, LogBlockRangeLimit, is_log_block_range_limit_error};
+    use super::{
+        DEFAULT_AUTO_LOG_BLOCK_RANGE_CAP, LogBlockRangeLimit, is_curvy_token_not_registered,
+        is_log_block_range_limit_error,
+    };
     use crate::errors::RpcError;
 
     fn rpc_error_response(code: i64, message: &'static str) -> RpcError {
@@ -900,6 +946,20 @@ mod tests {
             message: Cow::Borrowed(message),
             data: None,
         }))
+    }
+
+    #[test]
+    fn test_curvy_token_not_registered_decodes_only_its_custom_error() {
+        let revert_data = RawValue::from_string("\"0x259ba1ad\"".to_string()).expect("valid raw JSON");
+        let error = AlloyContractError::TransportError(AlloyRpcError::<TransportErrorKind>::ErrorResp(
+            ErrorPayload {
+                code: 3,
+                message: Cow::Borrowed("execution reverted"),
+                data: Some(revert_data),
+            },
+        ));
+
+        assert!(is_curvy_token_not_registered(&error));
     }
 
     fn converge_limit(cap: u64, allowed_limit: u64) -> LogBlockRangeLimit {

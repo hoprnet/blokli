@@ -143,7 +143,14 @@ impl ScalarType for UInt256 {
 }
 
 /// Exclusive pagination cursor for indexed Curvy events.
-#[derive(InputObject, Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// The numeric position alone is not reorg-safe: a reorganization can place a different
+/// canonical event at the same block/transaction/log/item position, and an exclusive
+/// `>` comparison would skip it. Supplying `blockHash` anchors the cursor to the branch
+/// it was issued on, so a cursor that has been orphaned is rejected instead of silently
+/// skipping the replacement. It is optional for backwards compatibility; clients that
+/// omit it keep the previous, unchecked behaviour.
+#[derive(InputObject, Clone, Debug, PartialEq, Eq)]
 pub struct CurvyEventCursor {
     pub block: UInt64,
     #[graphql(name = "transactionIndex")]
@@ -152,6 +159,10 @@ pub struct CurvyEventCursor {
     pub log_index: UInt64,
     #[graphql(name = "eventItemIndex")]
     pub event_item_index: UInt64,
+    /// Block hash the cursor position was observed on, as returned in the event's
+    /// `position.blockHash`.
+    #[graphql(name = "blockHash")]
+    pub block_hash: Option<Hex32>,
 }
 
 /// Position and transaction identity shared by indexed Curvy events.
@@ -324,6 +335,31 @@ pub struct CurvyVaultFees {
     pub deposit_fee: UInt256,
     #[graphql(name = "withdrawalFee")]
     pub withdrawal_fee: UInt256,
+}
+
+/// Curvy Aggregator fee configuration needed to build a valid aggregation proof.
+///
+/// `commitmentFeeRoot` is rendered as `Hex32` to match the other Curvy tree roots
+/// (`notesTreeRoot`, shard roots); the fee rate and the BabyJubJub fee-note key are
+/// `UInt256` like the Vault fees and `ephemeralKey`.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyAggregatorFees {
+    #[graphql(name = "protocolFeePerThousand")]
+    pub protocol_fee_per_thousand: UInt256,
+    #[graphql(name = "commitmentFeeRoot")]
+    pub commitment_fee_root: Hex32,
+    /// `[x, y]` of the key the circuit constrains the fee note's owner to.
+    #[graphql(name = "feeNotePublicKey")]
+    pub fee_note_public_key: Vec<UInt256>,
+}
+
+/// The number of tokens registered in the Curvy Vault.
+///
+/// Lets a client enumerate `curvyVaultToken(tokenId)` over the real token set instead
+/// of probing every id the gas-fee tree could hold.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyVaultTokenCount {
+    pub count: UInt256,
 }
 
 /// A Curvy Vault token and its configured gas fees.

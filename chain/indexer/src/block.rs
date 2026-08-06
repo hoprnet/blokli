@@ -197,7 +197,7 @@ where
 
         // Check that the contract addresses and topics are consistent with what is in the logs DB,
         // or if the DB is empty, prime it with the given addresses and topics.
-        db.ensure_logs_origin(address_topics).await?;
+        db.ensure_logs_origin(address_topics.clone()).await?;
 
         let is_synced = Arc::new(AtomicBool::new(false));
         let chain_head = Arc::new(AtomicU64::new(0));
@@ -219,6 +219,17 @@ where
 
         // Pre-start operations to ensure the indexer is ready, including snapshot fetching
         self.pre_start().await?;
+
+        // Re-check the origin after pre-start. Importing a logs snapshot replaces the log and
+        // topic tables wholesale, discarding whatever was primed above, and indexing then resumes
+        // from the snapshot's watermark. A snapshot that does not cover every configured contract
+        // would therefore skip that contract's entire pre-watermark history with no other symptom.
+        // For Curvy that is unrecoverable rather than merely incomplete: dense leaf indices are a
+        // function of every preceding note, so missing history yields a tree whose roots disagree
+        // with the aggregator's, surfacing only when a wallet's witness fails to verify. The
+        // address/topic set is derived from the enabled contracts, so this is inert unless a
+        // configured contract is genuinely absent from the snapshot.
+        db.ensure_logs_origin(address_topics).await?;
 
         #[derive(PartialEq, Eq)]
         enum FastSyncMode {
