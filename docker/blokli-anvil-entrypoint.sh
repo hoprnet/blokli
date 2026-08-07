@@ -58,8 +58,6 @@ if [ -n "${ANVIL_DEPLOYER_PRIVATE_KEY:-}" ]; then
 fi
 if [ "${BLOKLI_DEPLOY_CURVY}" = "true" ]; then
   CURVY_JSON_PATH="${CURVY_JSON_PATH:-${DATA_DIR}/curvy_deployed_addresses.json}"
-  # The default lives under DATA_DIR (already created above), but an overridden
-  # CURVY_JSON_PATH may point somewhere that does not exist yet.
   mkdir -p "$(dirname "${CURVY_JSON_PATH}")"
   DEPLOYER_ARGS+=(--with-curvy --curvy-json-out "${CURVY_JSON_PATH}")
 fi
@@ -88,6 +86,7 @@ max_connections = 10
 [indexer]
 fast_sync = false
 enable_logs_snapshot = false
+enable_curvy_indexing = ${BLOKLI_DEPLOY_CURVY}
 
 [indexer.subscription]
 event_bus_capacity = 100

@@ -322,6 +322,10 @@ impl Config {
             "  indexer.enable_safe_indexing: {}\n",
             self.indexer.enable_safe_indexing
         ));
+        output.push_str(&format!(
+            "  indexer.enable_curvy_indexing: {}\n",
+            self.indexer.enable_curvy_indexing
+        ));
 
         if let Some(snapshot_url) = &self.indexer.logs_snapshot_url {
             output.push_str(&format!("  indexer.logs_snapshot_url: {}\n", redact_url(snapshot_url)));
@@ -396,6 +400,10 @@ pub struct IndexerConfig {
     #[default(false)]
     #[serde(default = "default_false")]
     pub enable_safe_indexing: bool,
+
+    #[default(false)]
+    #[serde(default = "default_false")]
+    pub enable_curvy_indexing: bool,
 
     #[serde(default)]
     pub logs_snapshot_url: Option<String>,

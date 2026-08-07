@@ -112,6 +112,9 @@ pub mod codes {
     /// Request exceeds an allowed resource limit
     pub const LIMIT_EXCEEDED: &str = "LIMIT_EXCEEDED";
 
+    /// A subscription receiver fell behind its event source.
+    pub const SUBSCRIPTION_LAGGED: &str = "SUBSCRIPTION_LAGGED";
+
     /// Requested schema version is not supported by this server
     pub const UNSUPPORTED_SCHEMA_VERSION: &str = "UNSUPPORTED_SCHEMA_VERSION";
 
@@ -233,6 +236,11 @@ pub mod messages {
         format!("Invalid pagination parameters: {}", reason)
     }
 
+    /// Subscription lag error message.
+    pub fn subscription_lagged(stream: &str, missed: impl std::fmt::Display) -> String {
+        format!("{stream} lagged and missed {missed} events; reconnect to resume from a persisted position")
+    }
+
     /// Resource limit exceeded message
     pub fn limit_exceeded(resource: &str, actual: impl std::fmt::Display, max: impl std::fmt::Display) -> String {
         format!(
@@ -256,11 +264,28 @@ pub mod messages {
 // GraphQL Error Builder Functions
 // ============================================================================
 
-/// Creates a QueryFailedError for context retrieval failures
-pub fn context_error(context_type: &str, error: impl std::fmt::Display) -> QueryFailedError {
+/// Value accepted by the context-error builder.
+pub trait ContextErrorMessage {
+    fn context_error_message(self) -> String;
+}
+
+impl ContextErrorMessage for String {
+    fn context_error_message(self) -> String {
+        self
+    }
+}
+
+impl ContextErrorMessage for async_graphql::Error {
+    fn context_error_message(self) -> String {
+        self.message
+    }
+}
+
+/// Creates a QueryFailedError for context retrieval failures.
+pub fn context_error(context_type: &str, error: impl ContextErrorMessage) -> QueryFailedError {
     QueryFailedError {
         code: codes::CONTEXT_ERROR.to_string(),
-        message: messages::context_error(context_type, error),
+        message: messages::context_error(context_type, error.context_error_message()),
     }
 }
 
@@ -537,6 +562,18 @@ pub fn unsupported_schema_version(version: u32) -> async_graphql::Error {
 pub fn invalid_schema_version_header() -> async_graphql::Error {
     async_graphql::Error::new("Invalid X-Blokli-Schema-Version header: expected a non-negative integer")
         .extend_with(|_, e| e.set("code", codes::INVALID_SCHEMA_VERSION_HEADER))
+}
+
+/// Adapts the shared query-error taxonomy for GraphQL surfaces that cannot return unions.
+pub fn graphql_error(error: QueryFailedError) -> async_graphql::Error {
+    let code = error.code;
+    async_graphql::Error::new(error.message).extend_with(|_, extensions| extensions.set("code", code))
+}
+
+/// Creates a top-level error when a subscription cannot guarantee lossless delivery.
+pub fn graphql_subscription_lagged_error(stream: &str, missed: impl std::fmt::Display) -> async_graphql::Error {
+    async_graphql::Error::new(messages::subscription_lagged(stream, missed))
+        .extend_with(|_, extensions| extensions.set("code", codes::SUBSCRIPTION_LAGGED))
 }
 
 /// Creates an async_graphql::Error when an optional server feature is disabled

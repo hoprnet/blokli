@@ -120,6 +120,10 @@ logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz"
 # Safe discovery via registry/stake-factory events remains enabled regardless
 enable_safe_indexing = false
 
+# Enable note/nullifier indexing from the configured Curvy Aggregator.
+# Requires contracts.curvy_aggregator to be non-zero.
+enable_curvy_indexing = false
+
 # GraphQL subscription behavior configuration
 [indexer.subscription]
 # Capacity of the event bus buffer for channel events

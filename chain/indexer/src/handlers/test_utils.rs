@@ -185,11 +185,14 @@ pub(super) mod test_helpers {
                 node_stake_factory: Default::default(),
                 xhopr_token: *XHOPR_TOKEN_ADDR,
                 curvy_aggregator: Default::default(),
+                curvy_vault: Default::default(),
+                curvy_portal_factory: Default::default(),
             },
             db,
             rpc_operations,
             indexer_state.clone(),
             true,
+            false,
         );
 
         (handlers, indexer_state, event_receiver)

@@ -11,7 +11,7 @@ use curvy_bindings::curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2::CurvyAggr
 use hopr_bindings::{
     exports::alloy::{
         primitives::{Address as AlloyAddress, B256, Log as AlloyLog},
-        sol_types::{SolEvent, SolEventInterface},
+        sol_types::SolEventInterface,
     },
     hopr_announcements::HoprAnnouncements::HoprAnnouncementsEvents,
     hopr_channels::HoprChannels::HoprChannelsEvents,
@@ -39,6 +39,7 @@ use crate::{
 mod announcements;
 mod channel_utils;
 mod channels;
+mod curvy;
 mod helpers;
 mod node_safe_registry;
 mod oracles;
@@ -82,6 +83,7 @@ pub struct ContractEventHandlers<T, Db> {
     /// indexer state for publishing events to subscribers
     pub(super) indexer_state: IndexerState,
     pub(super) enable_safe_indexing: bool,
+    pub(super) enable_curvy_indexing: bool,
 }
 
 impl<T, Db> Debug for ContractEventHandlers<T, Db> {
@@ -119,6 +121,7 @@ where
         rpc_operations: T,
         indexer_state: IndexerState,
         enable_safe_indexing: bool,
+        enable_curvy_indexing: bool,
     ) -> Self {
         Self {
             addresses: Arc::new(addresses),
@@ -126,6 +129,7 @@ where
             _rpc_operations: rpc_operations,
             indexer_state,
             enable_safe_indexing,
+            enable_curvy_indexing,
         }
     }
 
@@ -262,12 +266,9 @@ where
             let event = HoprWinningProbabilityOracleEvents::decode_log(&primitive_log)?;
             self.on_ticket_winning_probability_oracle_event(tx, event.data, is_synced)
                 .await
-        } else if self.addresses.curvy_aggregator != Address::default()
-            && log.address.eq(&self.addresses.curvy_aggregator)
-        {
+        } else if self.enable_curvy_indexing && log.address.eq(&self.addresses.curvy_aggregator) {
             let event = CurvyAggregatorAlphaV2Events::decode_log(&primitive_log)?;
-            let log_index = u256_to_u64(log.log_index, "log_index")?;
-            crate::curvy::expand_note_event(event.data, log.block_number, log.tx_index, log_index)
+            self.on_curvy_aggregator_event(tx, &log, event.data).await
         } else {
             #[cfg(all(feature = "telemetry", not(test)))]
             increment_indexer_contract_log_count("unknown");
@@ -313,7 +314,7 @@ where
             self.addresses.node_stake_factory,
             self.addresses.token,
         ];
-        if self.addresses.curvy_aggregator != Address::default() {
+        if self.enable_curvy_indexing {
             addresses.push(self.addresses.curvy_aggregator);
         }
         addresses
@@ -354,12 +355,8 @@ where
             crate::constants::topics::stake_factory()
         } else if contract.eq(&self.addresses.token) {
             crate::constants::topics::token()
-        } else if self.addresses.curvy_aggregator != Address::default() && contract.eq(&self.addresses.curvy_aggregator)
-        {
-            vec![
-                curvy_bindings::curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2::PendingNotes::SIGNATURE_HASH,
-                curvy_bindings::curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2::CommittedNotes::SIGNATURE_HASH,
-            ]
+        } else if contract.eq(&self.addresses.curvy_aggregator) {
+            crate::constants::topics::curvy_aggregator()
         } else {
             panic!("use of unsupported contract address: {contract}");
         }
@@ -400,6 +397,10 @@ where
         }
 
         Ok(())
+    }
+
+    async fn revert_block_derived_state(&self, from_block: u64) -> Result<()> {
+        self.revert_curvy_state(from_block).await
     }
 }
 

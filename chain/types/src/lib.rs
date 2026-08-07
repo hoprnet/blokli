@@ -31,6 +31,7 @@ pub mod actions;
 pub mod chain_events;
 pub mod channel;
 pub mod constants;
+pub mod curvy_tree;
 pub mod errors;
 // Various (mostly testing related) utility functions
 pub mod utils;
@@ -133,11 +134,24 @@ pub struct ContractAddresses {
     #[serde_as(as = "DisplayFromStr")]
     #[serde(default)]
     pub curvy_aggregator: Address,
+    /// Curvy Vault proxy used by typed contract-read queries.
+    #[serde_as(as = "DisplayFromStr")]
+    #[serde(default)]
+    pub curvy_vault: Address,
+    /// Curvy PortalFactory used by typed portal queries.
+    #[serde_as(as = "DisplayFromStr")]
+    #[serde(default)]
+    pub curvy_portal_factory: Address,
 }
 
 impl ContractAddresses {
     /// Combines HOPR and Curvy deployment outputs into the runtime address set.
-    pub fn new(hopr: &HoprContractAddresses, curvy_aggregator: Address) -> Self {
+    pub fn new(
+        hopr: &HoprContractAddresses,
+        curvy_aggregator: Address,
+        curvy_vault: Address,
+        curvy_portal_factory: Address,
+    ) -> Self {
         Self {
             token: hopr.token.to_hopr_address(),
             channels: hopr.channels.to_hopr_address(),
@@ -150,6 +164,8 @@ impl ContractAddresses {
             node_stake_factory: hopr.node_stake_factory.to_hopr_address(),
             xhopr_token: hopr.xhopr_token.to_hopr_address(),
             curvy_aggregator,
+            curvy_vault,
+            curvy_portal_factory,
         }
     }
 }
@@ -338,6 +354,8 @@ where
             node_stake_factory: instances.node_stake_factory.address().to_hopr_address(),
             xhopr_token: instances.xhopr_token.address().to_hopr_address(),
             curvy_aggregator: Address::default(),
+            curvy_vault: Address::default(),
+            curvy_portal_factory: Address::default(),
         }
     }
 }

@@ -221,7 +221,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let curvy_instances = CurvyContractInstances::deploy_for_testing(provider, signer_address).await?;
             let curvy_contracts = CurvyContractAddresses::from(&curvy_instances);
             let output = ContractsOutput {
-                contracts: BlokliContractAddresses::new(&contracts, h2a(curvy_contracts.aggregator_proxy)),
+                contracts: BlokliContractAddresses::new(
+                    &contracts,
+                    h2a(curvy_contracts.aggregator_proxy),
+                    h2a(curvy_contracts.vault_proxy),
+                    h2a(curvy_contracts.portal_factory),
+                ),
             };
             tracing::info!(
                 aggregator = %curvy_contracts.aggregator_proxy,

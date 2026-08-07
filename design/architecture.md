@@ -986,10 +986,17 @@ The IndexerState uses an RwLock to ensure no events are missed between the snaps
 3. Subscribe to event channels
 4. Release read lock
 
-The Curvy note subscription replays raw logs rather than a derived wallet view. Its cursor includes the block, transaction, log, and array
-item positions and is exclusive. Historical and live items share one raw-field filter. Event-bus overflow or a reorganization terminates the
-stream so the client can resume from its last processed cursor instead of accepting silent loss. 5. Events published during this time are
-buffered in the channel
+The Curvy note subscription retains the raw block, transaction, log, and array-item position as an exclusive resume cursor. Zero-padded
+contract array slots are not emitted, but their raw item positions are preserved, so cursor ordering stays identical to chain ordering.
+Committed non-zero notes also carry a separate dense leaf index; clients must never derive that index from the raw item position.
+
+While processing each committed-note log, the indexer transactionally appends its non-zero notes to the depth-30 Poseidon frontier and
+stores the leaves, the compact frontier checkpoint and root, and any completed level-14 (16,384-leaf) shard root. This state is global and
+key-independent: ownership detection and witness construction remain local to the node. Reorg handling deletes Curvy leaves, checkpoints,
+and shard roots from the first affected block before subscriptions are terminated and resumed against canonical state.
+
+Historical and live items share one raw-field filter. Event-bus overflow or a reorganization terminates the stream so the client can resume
+from its last processed cursor instead of accepting silent loss. Events published during watermark capture are buffered in the channel.
 
 **Overflow Handling**:
 

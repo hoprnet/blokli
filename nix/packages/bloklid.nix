@@ -55,7 +55,7 @@ let
       "${name}-curvy" = builders.${platform}.callPackage nixLib.mkRustPackage (
         args
         // {
-          cargoExtraArgs = "-p bloklid --bins --features curvy-test-deployment";
+          cargoExtraArgs = "-p bloklid --bins --locked --features curvy-test-deployment";
         }
       );
     };

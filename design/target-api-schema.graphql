@@ -212,12 +212,14 @@ union CountResult = Count | MissingFilterError | QueryFailedError
 One item in a Curvy `CommittedNotes` event
 """
 type CurvyCommittedNote {
-  "Curvy commitment batch index as a decimal uint256 string"
-  batchIndex: String!
+  "Curvy commitment batch index as a fixed-width 32-byte hex value"
+  batchIndex: Hex32!
   "Exclusive resume cursor for this item"
   cursor: CurvyEventCursor!
-  "Note identifier as a decimal uint256 string"
-  noteId: String!
+  "Dense zero-based position in the note commitment tree"
+  leafIndex: UInt64!
+  "Note identifier as a fixed-width 32-byte hex value"
+  noteId: Hex32!
 }
 
 """
@@ -260,8 +262,8 @@ type CurvyPendingNote {
   ephemeralKey: [String!]!
   "Whether the note payload is plaintext"
   isPlaintext: Boolean!
-  "Note identifier as a decimal uint256 string"
-  noteId: String!
+  "Note identifier as a fixed-width 32-byte hex value"
+  noteId: Hex32!
   "Raw token identifier as a decimal uint256 string"
   token: String!
   "View tag used for local ownership detection"

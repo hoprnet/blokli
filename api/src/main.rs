@@ -105,6 +105,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             node_stake_factory: Address::default(),
                             xhopr_token: Address::default(),
                             curvy_aggregator: Address::default(),
+                            curvy_vault: Address::default(),
+                            curvy_portal_factory: Address::default(),
                         },
                         ..Default::default()
                     },

@@ -66,6 +66,34 @@ CREATE TABLE "channel_state" (
     FOREIGN KEY ("channel_id") REFERENCES "channel" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
+CREATE TABLE "curvy_note" (
+    "leaf_index" integer NOT NULL PRIMARY KEY,
+    "note_id" blob (32) NOT NULL UNIQUE,
+    "batch_index" blob (32) NOT NULL,
+    "published_block" integer NOT NULL,
+    "published_tx_index" integer NOT NULL,
+    "published_log_index" integer NOT NULL,
+    "item_index" integer NOT NULL
+);
+
+CREATE TABLE "curvy_shard_root" (
+    "shard_index" integer NOT NULL PRIMARY KEY,
+    "root" blob (32) NOT NULL,
+    "completed_block" integer NOT NULL,
+    "completed_tx_index" integer NOT NULL,
+    "completed_log_index" integer NOT NULL
+);
+
+CREATE TABLE "curvy_tree_checkpoint" (
+    "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "published_block" integer NOT NULL,
+    "published_tx_index" integer NOT NULL,
+    "published_log_index" integer NOT NULL,
+    "leaf_count" integer NOT NULL,
+    "root" blob (32) NOT NULL,
+    "frontier" blob (1) NOT NULL
+);
+
 CREATE TABLE "hopr_balance" (
     "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
     "address" blob (20) NOT NULL UNIQUE,
@@ -393,6 +421,10 @@ CREATE INDEX "idx_channel_state_status_position" ON "channel_state" ("status", "
 CREATE UNIQUE INDEX "idx_channel_state_unique_position" ON "channel_state" ("channel_id", "published_block", "published_tx_index", "published_log_index");
 
 CREATE UNIQUE INDEX "idx_contract_log_topic" ON "log_topic_info" ("address", "topic");
+
+CREATE UNIQUE INDEX "idx_curvy_checkpoint_position" ON "curvy_tree_checkpoint" ("published_block", "published_tx_index", "published_log_index");
+
+CREATE UNIQUE INDEX "idx_curvy_note_event_position" ON "curvy_note" ("published_block", "published_tx_index", "published_log_index", "item_index");
 
 CREATE INDEX "idx_hopr_balance_last_changed_block" ON "hopr_balance" ("last_changed_block");
 

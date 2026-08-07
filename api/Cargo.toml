@@ -6,7 +6,7 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
 name        = "blokli-api"
 repository  = "https://github.com/hoprnet/hoprnet"
-version     = "0.23.4"
+version     = "0.23.3"
 
 [lints]
 workspace = true
@@ -87,6 +87,7 @@ lazy_static = { workspace = true, optional = true }
 [dev-dependencies]
 base64ct            = { workspace = true, features = ["alloc"] }
 blokli-db-migration = { path = "../db/migration" }
+curvy-bindings      = { workspace = true }
 env_logger          = { workspace = true }
 hopr-types          = { workspace = true, features = ["internal"] }
 insta               = { workspace = true, features = ["redactions", "yaml"] }
