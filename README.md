@@ -55,6 +55,12 @@ just run
 just export-schema-sqlite
 ```
 
+Regenerate the checked-in database and GraphQL schema documents with:
+
+```bash
+just export-generated-schemas
+```
+
 ## Docker Images
 
 ### Blokli + Anvil (single container)
@@ -205,7 +211,7 @@ Blokli implements a temporal database system for tracking blockchain state chang
 - **[TESTING.md](TESTING.md)** - Comprehensive testing guide
 - **[docs/guide-internal-tx-debugging.md](docs/guide-internal-tx-debugging.md)** - Debugging Safe internal transactions with `cast`
 - **`design/architecture.md`** - System architecture and data flows
-- **`design/target-api-schema.graphql`** - Target GraphQL schema reference
+- **`design/target-api-schema.graphql`** - Generated GraphQL API schema reference
 - **`design/target-db-schema.mmd`** - Target database schema reference
 
 ## Configuration

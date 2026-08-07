@@ -616,6 +616,8 @@ mod tests {
                 node_stake_factory: Address::from([9; 20]),
                 xhopr_token: Address::from([0xaa; 20]),
                 curvy_aggregator: Address::from([0xbb; 20]),
+                curvy_vault: Address::from([0xcc; 20]),
+                curvy_portal_factory: Address::from([0xdd; 20]),
             })
         );
     }

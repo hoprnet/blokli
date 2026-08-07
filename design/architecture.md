@@ -296,7 +296,8 @@ management, and connection pooling. The trait-based design allows transaction-ag
 
 **GraphQL Schema Structure**:
 
-The target schema reference lives in `design/target-api-schema.graphql` and should remain consistent with the implemented API surface.
+The generated schema reference lives in `design/target-api-schema.graphql`. The `export-target-api-schema` recipe regenerates it directly
+from the implemented API surface.
 
 The schema is organized into three root types following GraphQL best practices:
 
