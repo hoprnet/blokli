@@ -10,7 +10,7 @@ use blokli_api_types::{
     CurvyGasFees, CurvyNoteStatus, CurvyPendingNotes, CurvyShardRootPage, CurvySyncCheckpoint, CurvySyncNotePage,
     CurvySyncNullifierPage, CurvyVaultFees, CurvyVaultToken, CurvyVaultTokenCount, Hex32, HoprBalance,
     InvalidAddressError, MissingFilterError, ModuleAddress, NativeBalance, QueryFailedError, RedeemedStats,
-    RedeemedStatsFilter, Safe, SafeHoprAllowance, SafeSelectorInput, SafesBalance, SafesBalanceResult,
+    RedeemedStatsFilter, Safe, SafeHoprAllowance, SafeSelectorInput, SafesBalance, SafesBalanceResult, Token,
     TokenValueString, TransactionCount, UInt64, UInt256,
 };
 use blokli_chain_api::transaction_store::TransactionStore;

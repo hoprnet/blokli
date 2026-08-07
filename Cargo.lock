@@ -2062,7 +2062,6 @@ dependencies = [
  "blokli-db-entity",
  "chrono",
  "curvy-bindings",
- "curvy-core",
  "futures",
  "futures-util",
  "hex-literal",
