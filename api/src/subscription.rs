@@ -548,7 +548,11 @@ impl SubscriptionRoot {
     async fn curvy_pending_note(
         &self,
         ctx: &Context<'_>,
-        #[graphql(name = "fromBlock")] from_block: Option<UInt64>,
+        #[graphql(
+            name = "fromBlock",
+            desc = "Earliest block number to replay before live streaming starts"
+        )]
+        from_block: Option<UInt64>,
     ) -> Result<impl Stream<Item = Result<CurvyPendingNote>>> {
         let db = ctx.data::<DatabaseConnection>()?.clone();
         let indexer_state = ctx.data::<IndexerState>()?.clone();
@@ -587,7 +591,11 @@ impl SubscriptionRoot {
     async fn curvy_committed_note(
         &self,
         ctx: &Context<'_>,
-        #[graphql(name = "fromBlock")] from_block: Option<UInt64>,
+        #[graphql(
+            name = "fromBlock",
+            desc = "Earliest block number to replay before live streaming starts"
+        )]
+        from_block: Option<UInt64>,
     ) -> Result<impl Stream<Item = Result<CurvyCommittedNote>>> {
         let db = ctx.data::<DatabaseConnection>()?.clone();
         let indexer_state = ctx.data::<IndexerState>()?.clone();
@@ -626,7 +634,11 @@ impl SubscriptionRoot {
     async fn curvy_committed_nullifier(
         &self,
         ctx: &Context<'_>,
-        #[graphql(name = "fromBlock")] from_block: Option<UInt64>,
+        #[graphql(
+            name = "fromBlock",
+            desc = "Earliest block number to replay before live streaming starts"
+        )]
+        from_block: Option<UInt64>,
     ) -> Result<impl Stream<Item = Result<CurvyCommittedNullifier>>> {
         let db = ctx.data::<DatabaseConnection>()?.clone();
         let indexer_state = ctx.data::<IndexerState>()?.clone();

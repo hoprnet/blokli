@@ -109,96 +109,112 @@ pub enum SafeByResult {
     QueryFailed(QueryFailedError),
 }
 
+/// Result type for the indexed Curvy pending-notes query.
 #[derive(Union)]
 pub enum CurvyPendingNotesResult {
     Notes(CurvyPendingNotes),
     QueryFailed(QueryFailedError),
 }
 
+/// Result type for the indexed Curvy committed-notes query.
 #[derive(Union)]
 pub enum CurvyCommittedNotesResult {
     Notes(CurvyCommittedNotes),
     QueryFailed(QueryFailedError),
 }
 
+/// Result type for the indexed Curvy committed-nullifiers query.
 #[derive(Union)]
 pub enum CurvyCommittedNullifiersResult {
     Nullifiers(CurvyCommittedNullifiers),
     QueryFailed(QueryFailedError),
 }
 
+/// Result type for the Curvy synchronization-checkpoint query.
 #[derive(Union)]
 pub enum CurvySyncCheckpointResult {
     Checkpoint(CurvySyncCheckpoint),
     QueryFailed(QueryFailedError),
 }
 
+/// Result type for the checkpoint-pinned Curvy notes query.
 #[derive(Union)]
 pub enum CurvySyncNotesResult {
     Page(CurvySyncNotePage),
     QueryFailed(QueryFailedError),
 }
 
+/// Result type for the checkpoint-pinned Curvy nullifiers query.
 #[derive(Union)]
 pub enum CurvySyncNullifiersResult {
     Page(CurvySyncNullifierPage),
     QueryFailed(QueryFailedError),
 }
 
+/// Result type for the checkpoint-pinned Curvy shard-root query.
 #[derive(Union)]
 pub enum CurvyShardRootsResult {
     Page(CurvyShardRootPage),
     QueryFailed(QueryFailedError),
 }
 
+/// Result type for the Curvy Aggregator state query.
 #[derive(Union)]
 pub enum CurvyAggregatorStateResult {
     State(CurvyAggregatorState),
     QueryFailed(QueryFailedError),
 }
 
+/// Result type for the Curvy note-status query.
 #[derive(Union)]
 pub enum CurvyNoteStatusResult {
     Status(CurvyNoteStatus),
     QueryFailed(QueryFailedError),
 }
 
+/// Result type for the Curvy valid-notes-root check.
 #[derive(Union)]
 pub enum CurvyValidNotesRootResult {
     Valid(CurvyBooleanValue),
     QueryFailed(QueryFailedError),
 }
 
+/// Result type for the Curvy nullifier-spent check.
 #[derive(Union)]
 pub enum CurvyNullifierSpentResult {
     Spent(CurvyBooleanValue),
     QueryFailed(QueryFailedError),
 }
 
+/// Result type for the Curvy Vault fee query.
 #[derive(Union)]
 pub enum CurvyVaultFeesResult {
     Fees(CurvyVaultFees),
     QueryFailed(QueryFailedError),
 }
 
+/// Result type for the Curvy Aggregator fee query.
 #[derive(Union)]
 pub enum CurvyAggregatorFeesResult {
     Fees(CurvyAggregatorFees),
     QueryFailed(QueryFailedError),
 }
 
+/// Result type for the Curvy Vault token-count query.
 #[derive(Union)]
 pub enum CurvyVaultTokenCountResult {
     Count(CurvyVaultTokenCount),
     QueryFailed(QueryFailedError),
 }
 
+/// Result type for a Curvy Vault token query.
 #[derive(Union)]
 pub enum CurvyVaultTokenResult {
     Token(CurvyVaultToken),
     QueryFailed(QueryFailedError),
 }
 
+/// Result type for a derived Curvy entry portal address.
 #[derive(Union)]
 pub enum CurvyEntryPortalAddressResult {
     Address(CurvyAddress),
@@ -206,6 +222,7 @@ pub enum CurvyEntryPortalAddressResult {
     QueryFailed(QueryFailedError),
 }
 
+/// Result type for a derived Curvy exit portal address.
 #[derive(Union)]
 pub enum CurvyExitPortalAddressResult {
     Address(CurvyAddress),
@@ -213,6 +230,7 @@ pub enum CurvyExitPortalAddressResult {
     QueryFailed(QueryFailedError),
 }
 
+/// Result type for the Curvy portal-registration check.
 #[derive(Union)]
 pub enum CurvyPortalRegisteredResult {
     Registered(CurvyBooleanValue),
@@ -459,9 +477,9 @@ impl QueryRoot {
     async fn curvy_pending_notes(
         &self,
         ctx: &Context<'_>,
-        #[graphql(name = "fromBlock")] from_block: Option<UInt64>,
-        after: Option<CurvyEventCursor>,
-        first: Option<i32>,
+        #[graphql(name = "fromBlock", desc = "Earliest block number to include")] from_block: Option<UInt64>,
+        #[graphql(desc = "Exclusive event cursor after which results start")] after: Option<CurvyEventCursor>,
+        #[graphql(desc = "Maximum number of notes to return")] first: Option<i32>,
     ) -> CurvyPendingNotesResult {
         let result = async {
             let db = ctx
@@ -517,9 +535,9 @@ impl QueryRoot {
     async fn curvy_committed_notes(
         &self,
         ctx: &Context<'_>,
-        #[graphql(name = "fromBlock")] from_block: Option<UInt64>,
-        after: Option<CurvyEventCursor>,
-        first: Option<i32>,
+        #[graphql(name = "fromBlock", desc = "Earliest block number to include")] from_block: Option<UInt64>,
+        #[graphql(desc = "Exclusive event cursor after which results start")] after: Option<CurvyEventCursor>,
+        #[graphql(desc = "Maximum number of notes to return")] first: Option<i32>,
     ) -> CurvyCommittedNotesResult {
         let result = async {
             let db = ctx
@@ -576,9 +594,9 @@ impl QueryRoot {
     async fn curvy_committed_nullifiers(
         &self,
         ctx: &Context<'_>,
-        #[graphql(name = "fromBlock")] from_block: Option<UInt64>,
-        after: Option<CurvyEventCursor>,
-        first: Option<i32>,
+        #[graphql(name = "fromBlock", desc = "Earliest block number to include")] from_block: Option<UInt64>,
+        #[graphql(desc = "Exclusive event cursor after which results start")] after: Option<CurvyEventCursor>,
+        #[graphql(desc = "Maximum number of nullifiers to return")] first: Option<i32>,
     ) -> CurvyCommittedNullifiersResult {
         let result = async {
             let db = ctx
@@ -634,7 +652,11 @@ impl QueryRoot {
     async fn curvy_sync_checkpoint(
         &self,
         ctx: &Context<'_>,
-        #[graphql(name = "blockHash")] block_hash: Option<Hex32>,
+        #[graphql(
+            name = "blockHash",
+            desc = "Finalized block hash to pin, or null for the latest checkpoint"
+        )]
+        block_hash: Option<Hex32>,
     ) -> CurvySyncCheckpointResult {
         let result = async {
             let db = ctx
@@ -661,9 +683,9 @@ impl QueryRoot {
     async fn curvy_sync_notes(
         &self,
         ctx: &Context<'_>,
-        checkpoint: Hex32,
-        #[graphql(name = "fromIndex")] from_index: Option<UInt64>,
-        first: Option<i32>,
+        #[graphql(desc = "Block hash identifying the synchronization checkpoint")] checkpoint: Hex32,
+        #[graphql(name = "fromIndex", desc = "Dense leaf index from which results start")] from_index: Option<UInt64>,
+        #[graphql(desc = "Maximum number of notes to return")] first: Option<i32>,
     ) -> CurvySyncNotesResult {
         let result = async {
             let db = ctx
@@ -750,9 +772,11 @@ impl QueryRoot {
     async fn curvy_sync_nullifiers(
         &self,
         ctx: &Context<'_>,
-        checkpoint: Hex32,
-        #[graphql(name = "fromIndex")] from_index: Option<UInt64>,
-        first: Option<i32>,
+        #[graphql(desc = "Block hash identifying the synchronization checkpoint")] checkpoint: Hex32,
+        #[graphql(name = "fromIndex", desc = "Dense nullifier index from which results start")] from_index: Option<
+            UInt64,
+        >,
+        #[graphql(desc = "Maximum number of nullifiers to return")] first: Option<i32>,
     ) -> CurvySyncNullifiersResult {
         let result = async {
             let db = ctx
@@ -808,9 +832,9 @@ impl QueryRoot {
     async fn curvy_shard_roots(
         &self,
         ctx: &Context<'_>,
-        checkpoint: Hex32,
-        #[graphql(name = "fromIndex")] from_index: Option<UInt64>,
-        first: Option<i32>,
+        #[graphql(desc = "Block hash identifying the synchronization checkpoint")] checkpoint: Hex32,
+        #[graphql(name = "fromIndex", desc = "Dense shard index from which results start")] from_index: Option<UInt64>,
+        #[graphql(desc = "Maximum number of shard roots to return")] first: Option<i32>,
     ) -> CurvyShardRootsResult {
         let result = async {
             let db = ctx
@@ -898,7 +922,7 @@ impl QueryRoot {
     async fn curvy_note_status(
         &self,
         ctx: &Context<'_>,
-        #[graphql(name = "noteId")] note_id: Hex32,
+        #[graphql(name = "noteId", desc = "Identifier of the note to inspect")] note_id: Hex32,
     ) -> CurvyNoteStatusResult {
         let result = async {
             let addresses = ctx
@@ -926,7 +950,11 @@ impl QueryRoot {
 
     /// Check whether a notes root is valid in the Curvy Aggregator.
     #[graphql(name = "curvyValidNotesRoot", complexity = 50)]
-    async fn curvy_valid_notes_root(&self, ctx: &Context<'_>, root: Hex32) -> CurvyValidNotesRootResult {
+    async fn curvy_valid_notes_root(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Notes-tree root to validate")] root: Hex32,
+    ) -> CurvyValidNotesRootResult {
         let result = async {
             let addresses = ctx
                 .data::<ContractAddresses>()
@@ -950,7 +978,11 @@ impl QueryRoot {
 
     /// Check whether a nullifier is already present in the Curvy Aggregator.
     #[graphql(name = "curvyNullifierSpent", complexity = 50)]
-    async fn curvy_nullifier_spent(&self, ctx: &Context<'_>, nullifier: Hex32) -> CurvyNullifierSpentResult {
+    async fn curvy_nullifier_spent(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Nullifier value to inspect")] nullifier: Hex32,
+    ) -> CurvyNullifierSpentResult {
         let result = async {
             let addresses = ctx
                 .data::<ContractAddresses>()
@@ -1071,7 +1103,7 @@ impl QueryRoot {
     async fn curvy_vault_token(
         &self,
         ctx: &Context<'_>,
-        #[graphql(name = "tokenId")] token_id: UInt256,
+        #[graphql(name = "tokenId", desc = "Identifier of the vault token to read")] token_id: UInt256,
     ) -> CurvyVaultTokenResult {
         let result = async {
             let addresses = ctx
@@ -1109,8 +1141,8 @@ impl QueryRoot {
     async fn curvy_entry_portal_address(
         &self,
         ctx: &Context<'_>,
-        #[graphql(name = "ownerHash")] owner_hash: UInt256,
-        recovery: String,
+        #[graphql(name = "ownerHash", desc = "Hash of the entry portal owner identity")] owner_hash: UInt256,
+        #[graphql(desc = "Recovery address configured for the portal")] recovery: String,
     ) -> CurvyEntryPortalAddressResult {
         let recovery = match curvy::address(&recovery) {
             Ok(address) => address,
@@ -1144,9 +1176,9 @@ impl QueryRoot {
     async fn curvy_exit_portal_address(
         &self,
         ctx: &Context<'_>,
-        #[graphql(name = "exitAddress")] exit_address: String,
-        #[graphql(name = "exitChainId")] exit_chain_id: UInt256,
-        recovery: String,
+        #[graphql(name = "exitAddress", desc = "Exit owner address configured for the portal")] exit_address: String,
+        #[graphql(name = "exitChainId", desc = "Chain identifier on which the exit operates")] exit_chain_id: UInt256,
+        #[graphql(desc = "Recovery address configured for the portal")] recovery: String,
     ) -> CurvyExitPortalAddressResult {
         let exit_address = match curvy::address(&exit_address) {
             Ok(address) => address,
@@ -1188,7 +1220,7 @@ impl QueryRoot {
     async fn curvy_portal_registered(
         &self,
         ctx: &Context<'_>,
-        #[graphql(name = "portalAddress")] portal_address: String,
+        #[graphql(name = "portalAddress", desc = "Portal address to inspect")] portal_address: String,
     ) -> CurvyPortalRegisteredResult {
         let portal_address = match curvy::address(&portal_address) {
             Ok(address) => address,

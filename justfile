@@ -167,8 +167,9 @@ export-schema-sqlite output="schema.graphql":
 export-target-api-schema output="design/target-api-schema.graphql":
     #!/usr/bin/env bash
     set -euo pipefail
-    tmp_db=$(mktemp /tmp/blokli_api_schema_export.XXXXXX.db)
-    trap 'rm -f "$tmp_db"' EXIT
+    tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/blokli_api_schema_export.XXXXXX")
+    tmp_db="$tmp_dir/blokli.db"
+    trap 'rm -f "$tmp_db"; rmdir "$tmp_dir"' EXIT
     {{ cargo_native }} run --bin migration -- up -u "sqlite://${tmp_db}?mode=rwc"
     {{ cargo_native }} run --bin blokli-api -- export-schema -d "sqlite://${tmp_db}" -o {{ output }}
     echo "Target GraphQL schema exported to {{ output }}"
@@ -178,8 +179,9 @@ export-target-api-schema output="design/target-api-schema.graphql":
 export-db-schema output="design/db-schema.sql":
     #!/usr/bin/env bash
     set -euo pipefail
-    tmp_db=$(mktemp /tmp/blokli_schema_export.XXXXXX.db)
-    trap 'rm -f "$tmp_db"' EXIT
+    tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/blokli_schema_export.XXXXXX")
+    tmp_db="$tmp_dir/blokli.db"
+    trap 'rm -f "$tmp_db"; rmdir "$tmp_dir"' EXIT
     # Run migrations on a temporary SQLite database
     {{ cargo_native }} run --bin migration -- up -u "sqlite://${tmp_db}?mode=rwc"
     # Query sqlite_schema directly. Sort order: tables (0) → views (1) → indexes (2), then by name.
