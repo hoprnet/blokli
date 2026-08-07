@@ -1327,7 +1327,7 @@ mod tests {
         internal::account::{AccountEntry, AccountType},
         primitive::prelude::*,
     };
-    use mockall::mock;
+    use mockall::{mock, predicate};
     use multiaddr::Multiaddr;
 
     use super::*;
@@ -2445,6 +2445,16 @@ mod tests {
 
     // ==================== Reorg Handling Tests ====================
 
+    fn create_reorg_log_handler(from_block: u64) -> MockChainLogHandler {
+        let mut logs_handler = MockChainLogHandler::new();
+        logs_handler
+            .expect_revert_block_derived_state()
+            .with(predicate::eq(from_block))
+            .times(1)
+            .returning(|_| Ok(()));
+        logs_handler
+    }
+
     // Helper function to create a test channel
     async fn create_test_channel(db: &BlokliDb, channel_id: i64) -> anyhow::Result<()> {
         let conn = db.conn(TargetDb::Index);
@@ -2563,7 +2573,7 @@ mod tests {
 
         // Handle the reorg
         let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
-            &MockChainLogHandler::new(),
+            &create_reorg_log_handler(100),
             &db,
             &reorg_info,
             200,
@@ -2641,7 +2651,7 @@ mod tests {
 
         // Handle the reorg
         let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
-            &MockChainLogHandler::new(),
+            &create_reorg_log_handler(90),
             &db,
             &reorg_info,
             150,
@@ -2715,7 +2725,7 @@ mod tests {
 
         // Handle the reorg
         let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
-            &MockChainLogHandler::new(),
+            &create_reorg_log_handler(90),
             &db,
             &reorg_info,
             150,
@@ -2761,7 +2771,7 @@ mod tests {
 
         // Handle the reorg
         let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
-            &MockChainLogHandler::new(),
+            &create_reorg_log_handler(100),
             &db,
             &reorg_info,
             150,
@@ -2799,7 +2809,7 @@ mod tests {
         };
 
         let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
-            &MockChainLogHandler::new(),
+            &create_reorg_log_handler(100),
             &db,
             &reorg_info,
             200,
@@ -2856,7 +2866,7 @@ mod tests {
         };
 
         Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
-            &MockChainLogHandler::new(),
+            &create_reorg_log_handler(100),
             &db,
             &reorg_info,
             200,
@@ -2922,7 +2932,7 @@ mod tests {
         };
 
         let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
-            &MockChainLogHandler::new(),
+            &create_reorg_log_handler(100),
             &db,
             &reorg_info,
             250,
@@ -2965,7 +2975,7 @@ mod tests {
         };
 
         let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
-            &MockChainLogHandler::new(),
+            &create_reorg_log_handler(95),
             &db,
             &reorg_info,
             150,
@@ -3009,7 +3019,7 @@ mod tests {
         };
 
         Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
-            &MockChainLogHandler::new(),
+            &create_reorg_log_handler(100),
             &db,
             &reorg_info,
             200,
@@ -3059,7 +3069,7 @@ mod tests {
         };
 
         Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
-            &MockChainLogHandler::new(),
+            &create_reorg_log_handler(100),
             &db,
             &reorg_info,
             200,
@@ -3098,7 +3108,7 @@ mod tests {
 
         // First correction
         let count1 = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
-            &MockChainLogHandler::new(),
+            &create_reorg_log_handler(100),
             &db,
             &reorg_info,
             200,
@@ -3112,7 +3122,7 @@ mod tests {
 
         // Second correction attempt at different canonical block
         let count2 = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
-            &MockChainLogHandler::new(),
+            &create_reorg_log_handler(100),
             &db,
             &reorg_info,
             201,
@@ -3154,7 +3164,7 @@ mod tests {
         };
 
         let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
-            &MockChainLogHandler::new(),
+            &create_reorg_log_handler(100),
             &db,
             &reorg_info,
             200,
@@ -3202,7 +3212,7 @@ mod tests {
         };
 
         Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
-            &MockChainLogHandler::new(),
+            &create_reorg_log_handler(200),
             &db,
             &reorg_info,
             250,
@@ -3249,7 +3259,7 @@ mod tests {
         };
 
         Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
-            &MockChainLogHandler::new(),
+            &create_reorg_log_handler(100),
             &db,
             &reorg_info,
             200,
