@@ -167,10 +167,9 @@ in
     // {
       runCoverage = true;
       cargoLlvmCovCommand = "nextest";
-      # Nix renders nextest's in-place progress bar as repeated, truncated log lines.
-      NEXTEST_SHOW_PROGRESS = "none";
       testCargoProfile = "ci-test";
-      cargoExtraArgs = "";
+      # Nix renders nextest's in-place progress bar as repeated, truncated log lines.
+      cargoExtraArgs = "--show-progress=none";
       extraNativeBuildInputs = [
         pkgs.cargo-nextest
         pkgs.foundry-bin
