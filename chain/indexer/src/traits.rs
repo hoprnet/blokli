@@ -85,7 +85,6 @@ mock! {
         fn contract_addresses_map(&self) -> Arc<ContractAddresses>;
         fn contract_address_topics(&self, contract: Address) -> Vec<B256>;
         async fn collect_log_event(&self, log: SerializableLog, is_synced: bool) -> Result<()>;
-        fn should_process_log(&self, log: &SerializableLog) -> bool;
         async fn revert_block_derived_state(&self, from_block: u64) -> Result<()>;
     }
 }

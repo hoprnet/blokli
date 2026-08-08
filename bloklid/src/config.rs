@@ -598,6 +598,8 @@ mod tests {
             node_stake_factory = "0x0909090909090909090909090909090909090909"
             xhopr_token = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             curvy_aggregator = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            curvy_vault = "0xcccccccccccccccccccccccccccccccccccccccc"
+            curvy_portal_factory = "0xdddddddddddddddddddddddddddddddddddddddd"
         "#;
 
         let config: Config = toml::from_str(config).expect("contracts should accept hex strings");

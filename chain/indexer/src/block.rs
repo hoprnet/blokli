@@ -1465,6 +1465,78 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Default)]
+    struct RejectingLogHandler {
+        collect_called: Arc<StdAtomicBool>,
+    }
+
+    #[async_trait]
+    impl ChainLogHandler for RejectingLogHandler {
+        fn contract_addresses(&self) -> Vec<Address> {
+            Vec::new()
+        }
+
+        fn contract_addresses_map(&self) -> Arc<ContractAddresses> {
+            Arc::new(ContractAddresses::default())
+        }
+
+        fn contract_address_topics(&self, _contract: Address) -> Vec<B256> {
+            Vec::new()
+        }
+
+        async fn collect_log_event(&self, _log: SerializableLog, _is_synced: bool) -> crate::errors::Result<()> {
+            self.collect_called.store(true, StdOrdering::SeqCst);
+            Ok(())
+        }
+
+        fn should_process_log(&self, _log: &SerializableLog) -> bool {
+            false
+        }
+    }
+
+    #[tokio::test]
+    async fn test_process_block_marks_rejected_log_processed_without_dispatching() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let handler = RejectingLogHandler::default();
+        let log = SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: vec![Hash::create(&[b"my topic"]).into()],
+            data: vec![1, 2, 3],
+            tx_hash: Hash::create(&[b"my tx hash"]).into(),
+            block_hash: Hash::create(&[b"my block hash"]).into(),
+            tx_index: 1,
+            block_number: 100,
+            log_index: 2,
+            ..Default::default()
+        };
+        db.store_log(log.clone()).await?;
+
+        let result = Indexer::<MockHoprIndexerOps, RejectingLogHandler, BlokliDb>::process_block(
+            &db,
+            &handler,
+            BlockWithLogs {
+                block_id: log.block_number,
+                logs: BTreeSet::from([log.clone()]),
+            },
+            false,
+            false,
+            &IndexerState::default(),
+            false,
+        )
+        .await;
+
+        assert!(result.is_some());
+        assert!(!handler.collect_called.load(StdOrdering::SeqCst));
+        assert_eq!(
+            db.get_log(log.block_number, log.tx_index, log.log_index)
+                .await?
+                .processed,
+            Some(true)
+        );
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_indexer_refreshes_safe_filters_after_safe_discovery() -> anyhow::Result<()> {
         let mut rpc = MockHoprIndexerOps::new();
@@ -1713,6 +1785,10 @@ mod tests {
             .return_once(move |_, _, _| Ok(Box::pin(rx)));
 
         let head_block = 1000;
+        rpc.expect_try_stream_logs()
+            .times(1)
+            .withf(move |x: &u64, _y: &FilterSet, is_synced: &bool| *x == head_block + 1 && *is_synced)
+            .return_once(move |_, _, _| Ok(Box::pin(futures::stream::empty())));
         rpc.expect_block_number().returning(move || Ok(head_block));
 
         rpc.expect_get_hopr_balance()
@@ -2016,15 +2092,8 @@ mod tests {
             .return_once(move |_, _, _| Ok(Box::pin(rx)));
         rpc.expect_try_stream_logs()
             .times(1)
-            .withf(move |x: &u64, _y: &FilterSet, is_synced: &bool| *x == head_block + 2 && *is_synced)
+            .withf(move |x: &u64, _y: &FilterSet, is_synced: &bool| *x == head_block + 1 && *is_synced)
             .return_once(move |_, _, _| Ok(Box::pin(futures::stream::empty())));
-        rpc.expect_get_hopr_balance()
-            .once()
-            .return_once(move |_| Ok(HoprBalance::zero()));
-        rpc.expect_get_hopr_allowance()
-            .once()
-            .return_once(move |_, _| Ok(HoprBalance::zero()));
-
         let block_numbers = [head_block - 1, head_block, head_block + 1];
 
         let blocks: Vec<BlockWithLogs> = block_numbers
@@ -2102,16 +2171,8 @@ mod tests {
             .return_once(move |_, _, _| Ok(Box::pin(futures::stream::empty())));
 
         rpc.expect_block_number()
-            .times(3)
+            .times(2)
             .returning(move || Ok(last_processed_block + 1));
-
-        rpc.expect_get_hopr_balance()
-            .once()
-            .return_once(move |_| Ok(HoprBalance::zero()));
-
-        rpc.expect_get_hopr_allowance()
-            .once()
-            .return_once(move |_, _| Ok(HoprBalance::zero()));
 
         let block = BlockWithLogs {
             block_id: last_processed_block + 1,
