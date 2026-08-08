@@ -74,6 +74,27 @@ fn decode_event<E: SolEvent>(log: &Log) -> anyhow::Result<E> {
     .map_err(Into::into)
 }
 
+/// Sorts every object key so snapshots assert on data instead of scheduling.
+///
+/// GraphQL resolves the root query fields concurrently and `serde_json` is built with
+/// `preserve_order`, so a multi-field response keeps whichever order the resolvers happened to
+/// finish in. Under load that order changes between runs and the snapshot fails spuriously.
+fn with_sorted_keys(value: Value) -> Value {
+    match value {
+        Value::Object(fields) => {
+            let mut entries: Vec<(String, Value)> = fields.into_iter().collect();
+            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+            entries
+                .into_iter()
+                .map(|(key, field)| (key, with_sorted_keys(field)))
+                .collect::<serde_json::Map<_, _>>()
+                .into()
+        }
+        Value::Array(items) => Value::Array(items.into_iter().map(with_sorted_keys).collect()),
+        other => other,
+    }
+}
+
 fn event_position(log: &Log, event_item_index: usize) -> Value {
     json!({
         "block": log.block_number.to_string(),
@@ -374,7 +395,7 @@ async fn test_curvy_events_are_indexed_and_streamed() -> anyhow::Result<()> {
         .await
         .into_result()
         .map_err(|errors| anyhow::anyhow!("GraphQL query errors: {errors:?}"))?;
-    let history_data = history_response.data.into_json()?;
+    let history_data = with_sorted_keys(history_response.data.into_json()?);
     insta::assert_yaml_snapshot!(history_data);
 
     let cursor_page_response = schema
@@ -402,7 +423,7 @@ async fn test_curvy_events_are_indexed_and_streamed() -> anyhow::Result<()> {
         .map_err(|errors| anyhow::anyhow!("GraphQL cursor query errors: {errors:?}"))?;
     insta::assert_yaml_snapshot!(
         "curvy_cursor_continues_within_log",
-        cursor_page_response.data.into_json()?
+        with_sorted_keys(cursor_page_response.data.into_json()?)
     );
 
     handlers
