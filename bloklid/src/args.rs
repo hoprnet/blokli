@@ -3,6 +3,7 @@ use std::{ffi::OsString, path::PathBuf};
 use ::config as config_rs;
 use blokli_chain_types::{AlloyAddressExt, ChainConfig};
 use clap::{Parser, Subcommand};
+use hopr_types::primitive::primitives::Address;
 use validator::Validate;
 
 use crate::{
@@ -91,6 +92,7 @@ impl Args {
             ("BLOKLI_RPC_URL", "rpc_url"),
             ("BLOKLI_MAX_RPC_REQUESTS_PER_SEC", "max_rpc_requests_per_sec"),
             ("BLOKLI_MAX_BLOCK_RANGE", "max_block_range"),
+            ("BLOKLI_CURVY_AGGREGATOR", "curvy_aggregator"),
             ("DATABASE_URL", "database.url"),
             ("PGHOST", "database.host"),
             ("POSTGRES_HOST", "database.host"),
@@ -115,6 +117,7 @@ impl Args {
             ("BLOKLI_INDEXER_FAST_SYNC", "indexer.fast_sync"),
             ("BLOKLI_INDEXER_ENABLE_LOGS_SNAPSHOT", "indexer.enable_logs_snapshot"),
             ("BLOKLI_INDEXER_ENABLE_SAFE_INDEXING", "indexer.enable_safe_indexing"),
+            ("BLOKLI_INDEXER_ENABLE_CURVY_INDEXING", "indexer.enable_curvy_indexing"),
             ("BLOKLI_INDEXER_LOGS_SNAPSHOT_URL", "indexer.logs_snapshot_url"),
             (
                 "BLOKLI_INDEXER_SUBSCRIPTION_EVENT_BUS_CAPACITY",
@@ -186,6 +189,7 @@ impl Args {
             "indexer.fast_sync",
             "indexer.enable_logs_snapshot",
             "indexer.enable_safe_indexing",
+            "indexer.enable_curvy_indexing",
             "api.enabled",
             "api.playground_enabled",
             "api.sse_keepalive.enabled",
@@ -278,10 +282,20 @@ impl Args {
             winning_probability_oracle: network_config.addresses.winning_probability_oracle.to_hopr_address(),
             node_stake_factory: network_config.addresses.node_stake_factory.to_hopr_address(),
             xhopr_token: network_config.addresses.xhopr_token.to_hopr_address(),
+            curvy_aggregator: Default::default(),
+            curvy_vault: Default::default(),
+            curvy_portal_factory: Default::default(),
         };
 
         if let Some(override_contracts) = config.contracts_override {
             contracts = override_contracts;
+        }
+
+        if let Some(curvy_aggregator) = config.curvy_aggregator {
+            if curvy_aggregator == Address::default() {
+                return Err(ConfigError::Parse("curvy_aggregator must not be the zero address".to_string()).into());
+            }
+            contracts.curvy_aggregator = curvy_aggregator;
         }
 
         config.contracts = contracts;
@@ -394,6 +408,61 @@ mod tests {
                 _ => panic!("Expected PostgreSQL database config"),
             }
         });
+    }
+
+    #[test]
+    fn test_curvy_aggregator_is_resolved_without_full_contract_override() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "rotsee"
+            rpc_url = "http://localhost:8545"
+            curvy_aggregator = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+        "#
+        )
+        .unwrap();
+        let args = Args {
+            verbose: 0,
+            config: Some(file.path().to_path_buf()),
+            command: None,
+        };
+
+        let config = args.load_config(false).expect("Curvy aggregator should resolve");
+
+        assert!(config.contracts_override.is_none());
+        assert_eq!(config.contracts.curvy_aggregator, Address::from([0xbb; 20]));
+    }
+
+    #[test]
+    fn test_explicit_zero_curvy_aggregator_is_rejected() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "rotsee"
+            rpc_url = "http://localhost:8545"
+            curvy_aggregator = "0x0000000000000000000000000000000000000000"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+        "#
+        )
+        .unwrap();
+        let args = Args {
+            verbose: 0,
+            config: Some(file.path().to_path_buf()),
+            command: None,
+        };
+
+        let result = args.load_config(false);
+
+        assert!(
+            matches!(result, Err(BloklidError::Config(ConfigError::Parse(message))) if message.contains("zero address"))
+        );
     }
 
     #[test]

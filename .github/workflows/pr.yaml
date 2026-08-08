@@ -181,7 +181,7 @@ jobs:
           {
             "runner": "depot-ubuntu-24.04-4",
             "architecture": "x86_64-linux",
-            "build_command": "nix build -L .#docker-bloklid-x86_64-linux",
+            "build_command": "nix build -L --option fallback true .#docker-bloklid-x86_64-linux",
             "smoke_test_command": "nix develop -c just smoke-test"
           }
         ]
@@ -209,7 +209,7 @@ jobs:
           {
             "runner": "depot-ubuntu-24.04-4",
             "architecture": "x86_64-linux",
-            "build_command": "nix build -L .#docker-bloklid-anvil-curvy-x86_64-linux",
+            "build_command": "nix build -L --option fallback true .#docker-bloklid-anvil-curvy-x86_64-linux",
             "smoke_test_command": "nix develop -c just smoke-test-curvy"
           }
         ]

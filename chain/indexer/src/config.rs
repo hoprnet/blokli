@@ -32,6 +32,10 @@ pub struct IndexerConfig {
     #[default(false)]
     pub enable_safe_indexing: bool,
 
+    /// Whether to index note and nullifier events from the configured Curvy Aggregator.
+    #[default(false)]
+    pub enable_curvy_indexing: bool,
+
     /// URL to download logs snapshot from.
     /// This should point to a publicly accessible tar.xz file containing
     /// the SQLite logs database files.
@@ -84,6 +88,7 @@ impl IndexerConfig {
         fast_sync: bool,
         enable_logs_snapshot: bool,
         enable_safe_indexing: bool,
+        enable_curvy_indexing: bool,
         logs_snapshot_url: Option<String>,
         data_directory: String,
         event_bus_capacity: usize,
@@ -94,6 +99,7 @@ impl IndexerConfig {
             fast_sync,
             enable_logs_snapshot,
             enable_safe_indexing,
+            enable_curvy_indexing,
             logs_snapshot_url,
             data_directory,
             event_bus_capacity,
@@ -179,6 +185,7 @@ mod tests {
             true,
             true,
             false,
+            false,
             Some(logs_snapshot_url),
             data_directory.into(),
             1000,
@@ -191,7 +198,17 @@ mod tests {
 
     #[test]
     fn test_disabled_snapshot_config() {
-        let cfg = IndexerConfig::new(0, true, false, false, Some("".to_string()), "".to_string(), 1000, 10);
+        let cfg = IndexerConfig::new(
+            0,
+            true,
+            false,
+            false,
+            false,
+            Some("".to_string()),
+            "".to_string(),
+            1000,
+            10,
+        );
 
         assert!(
             cfg.validate().is_ok(),
@@ -201,7 +218,7 @@ mod tests {
 
     #[test]
     fn test_missing_snapshot_url() {
-        let cfg = IndexerConfig::new(0, true, true, false, None, "".to_string(), 1000, 10);
+        let cfg = IndexerConfig::new(0, true, true, false, false, None, "".to_string(), 1000, 10);
 
         assert!(
             cfg.validate().is_err(),

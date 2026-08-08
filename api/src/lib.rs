@@ -5,6 +5,7 @@
 
 pub mod config;
 pub mod conversions;
+pub mod curvy;
 pub mod errors;
 pub mod logging;
 pub mod metrics;
@@ -140,7 +141,7 @@ pub async fn start_server(network: String, finality: u16, config: ApiConfig) -> 
 
     // Build the application
     let app = server::build_app(
-        db,
+        server::ApiDatabases::single(db),
         network,
         config.clone(),
         config.expected_block_time,

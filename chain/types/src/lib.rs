@@ -20,6 +20,7 @@ use hopr_bindings::{
     hopr_winning_probability_oracle::HoprWinningProbabilityOracle::{self, HoprWinningProbabilityOracleInstance},
 };
 use hopr_types::{
+    chain::ContractAddresses as HoprContractAddresses,
     crypto::keypairs::{ChainKeypair, Keypair},
     primitive::primitives::Address,
 };
@@ -30,6 +31,7 @@ pub mod actions;
 pub mod chain_events;
 pub mod channel;
 pub mod constants;
+pub mod curvy_tree;
 pub mod errors;
 // Various (mostly testing related) utility functions
 pub mod utils;
@@ -128,6 +130,44 @@ pub struct ContractAddresses {
     #[serde_as(as = "DisplayFromStr")]
     #[serde(default)]
     pub xhopr_token: Address,
+    /// Curvy aggregator proxy whose raw note events should be indexed. The zero address disables Curvy indexing.
+    #[serde_as(as = "DisplayFromStr")]
+    #[serde(default)]
+    pub curvy_aggregator: Address,
+    /// Curvy Vault proxy used by typed contract-read queries.
+    #[serde_as(as = "DisplayFromStr")]
+    #[serde(default)]
+    pub curvy_vault: Address,
+    /// Curvy PortalFactory used by typed portal queries.
+    #[serde_as(as = "DisplayFromStr")]
+    #[serde(default)]
+    pub curvy_portal_factory: Address,
+}
+
+impl ContractAddresses {
+    /// Combines HOPR and Curvy deployment outputs into the runtime address set.
+    pub fn new(
+        hopr: &HoprContractAddresses,
+        curvy_aggregator: Address,
+        curvy_vault: Address,
+        curvy_portal_factory: Address,
+    ) -> Self {
+        Self {
+            token: hopr.token.to_hopr_address(),
+            channels: hopr.channels.to_hopr_address(),
+            announcements: hopr.announcements.to_hopr_address(),
+            module_implementation: hopr.module_implementation.to_hopr_address(),
+            node_safe_migration: hopr.node_safe_migration.to_hopr_address(),
+            node_safe_registry: hopr.node_safe_registry.to_hopr_address(),
+            ticket_price_oracle: hopr.ticket_price_oracle.to_hopr_address(),
+            winning_probability_oracle: hopr.winning_probability_oracle.to_hopr_address(),
+            node_stake_factory: hopr.node_stake_factory.to_hopr_address(),
+            xhopr_token: hopr.xhopr_token.to_hopr_address(),
+            curvy_aggregator,
+            curvy_vault,
+            curvy_portal_factory,
+        }
+    }
 }
 
 /// Holds instances to contracts.
@@ -313,6 +353,9 @@ where
             winning_probability_oracle: instances.winning_probability_oracle.address().to_hopr_address(),
             node_stake_factory: instances.node_stake_factory.address().to_hopr_address(),
             xhopr_token: instances.xhopr_token.address().to_hopr_address(),
+            curvy_aggregator: Address::default(),
+            curvy_vault: Address::default(),
+            curvy_portal_factory: Address::default(),
         }
     }
 }
