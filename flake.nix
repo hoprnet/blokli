@@ -245,23 +245,29 @@
               ];
             };
 
-          # Helper: build the bloklid-anvil Docker image for a target platform.
+          # Build the stock or Curvy-enabled local Anvil image.
           mkBloklidAnvilDocker =
-            targetPlatform:
+            targetPlatform: withCurvy:
             let
               platformPkgs = platformPkgsMap.${targetPlatform};
-              binary = bloklidPackages."binary-bloklid-${targetPlatform}";
+              binarySuffix = if withCurvy then "-curvy" else "";
+              binary = bloklidPackages."binary-bloklid-${targetPlatform}${binarySuffix}";
               anvilEntrypoint = mkBlokliAnvilEntrypoint targetPlatform;
             in
             nixLib.mkDockerImage {
-              name = "bloklid-anvil";
+              name = "bloklid-anvil${if withCurvy then "-curvy" else ""}";
               Entrypoint = [ "/bin/blokli-anvil-entrypoint" ];
               pkgsLinux = platformPkgs;
-              env = [ "SSL_CERT_FILE=${platformPkgs.cacert}/etc/ssl/certs/ca-bundle.crt" ];
+              env = [
+                "SSL_CERT_FILE=${platformPkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+              ]
+              ++ lib.optionals withCurvy [ "BLOKLI_DEPLOY_CURVY=true" ];
               extraContents = [
                 binary
                 platformPkgs.curl
-                platformPkgs.foundry
+                # The Nixpkgs Foundry 1.7.1 package embeds vulnerable quinn-proto
+                # 0.11.14. The pinned foundry.nix nightly uses 0.11.16.
+                platformPkgs.foundry-bin
                 (mkStaticEntrypoint {
                   pkgs = platformPkgs;
                   binary = anvilEntrypoint;
@@ -274,10 +280,12 @@
           bloklidDocker = {
             docker-bloklid-x86_64-linux = mkBloklidDocker "x86_64-linux" null;
             docker-bloklid-x86_64-linux-dev = mkBloklidDocker "x86_64-linux" "dev";
-            docker-bloklid-anvil-x86_64-linux = mkBloklidAnvilDocker "x86_64-linux";
+            docker-bloklid-anvil-x86_64-linux = mkBloklidAnvilDocker "x86_64-linux" false;
+            docker-bloklid-anvil-curvy-x86_64-linux = mkBloklidAnvilDocker "x86_64-linux" true;
             docker-bloklid-aarch64-linux = mkBloklidDocker "aarch64-linux" null;
             docker-bloklid-aarch64-linux-dev = mkBloklidDocker "aarch64-linux" "dev";
-            docker-bloklid-anvil-aarch64-linux = mkBloklidAnvilDocker "aarch64-linux";
+            docker-bloklid-anvil-aarch64-linux = mkBloklidAnvilDocker "aarch64-linux" false;
+            docker-bloklid-anvil-curvy-aarch64-linux = mkBloklidAnvilDocker "aarch64-linux" true;
           };
 
           # Combine all packages
