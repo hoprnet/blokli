@@ -1488,6 +1488,14 @@ threshold.
 **Configuration Flow**: Finality is defined by the selected network, propagated through runtime configuration into the RPC layer, and reused
 by the readiness checks.
 
+## Local Contract Deployment Variants
+
+The standard local Anvil image deploys and indexes only the HOPR contract suite. An explicitly named Curvy development variant compiles an
+optional deployment dependency and deploys Curvy on the same chain with the same signer after HOPR deployment.
+
+Curvy addresses are emitted as a separate client-facing artifact. They are not added to Blokli configuration, indexing filters, GraphQL
+schema, or production images. A failure in either requested deployment prevents final address/configuration artifacts from being published.
+
 ## Design Principles and Patterns
 
 ### Event Sourcing

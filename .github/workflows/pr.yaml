@@ -217,3 +217,31 @@ jobs:
       concurrency_group_suffix: anvil
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+  # Build the Curvy image and exercise its deployment path end to end.
+  build-docker-anvil-curvy:
+    name: Docker anvil curvy
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@25898d13dab1b3fbf4c33c394e7c581578a2b0d7 # build-docker-v3.2.0
+    needs: build-binaries
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    with:
+      source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
+      version_type: commit
+      build_matrix: >-
+        [
+          {
+            "runner": "depot-ubuntu-24.04-4",
+            "architecture": "x86_64-linux",
+            "build_command": "nix build -L .#docker-bloklid-anvil-curvy-x86_64-linux",
+            "smoke_test_command": "nix develop -c just smoke-test-curvy"
+          }
+        ]
+      cachix_cache_name: blokli
+      build_file: bloklid/Cargo.toml
+      docker_image_name: bloklid-anvil-curvy
+      docker_image_format: skopeo
+      concurrency_group_suffix: anvil-curvy
+    secrets:
+      cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
