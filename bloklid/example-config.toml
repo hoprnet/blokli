@@ -5,7 +5,7 @@
 data_directory = "data"
 
 # Network identifier - specifies which HOPR network to connect to
-# Supported networks: rotsee (default, testnet), jura (staging), anvil-localhost (local development)
+# Supported networks: jura-dev (default, development), jura-prod (production), piz-palu-dev (development), piz-palu-staging (staging), anvil-localhost (local development)
 # Case-insensitive: anvil_localhost, anvil-localhost, and localhost are also accepted
 network = "jura-dev"
 
