@@ -353,7 +353,7 @@ mod tests {
         let db = BlokliDb::new_in_memory().await?;
 
         // For SQLite, check the unified Migrator status
-        Migrator::<{ SafeDataOrigin::Jura as u8 }>::status(db.conn(TargetDb::Index)).await?;
+        Migrator::<{ SafeDataOrigin::JuraProd as u8 }>::status(db.conn(TargetDb::Index)).await?;
 
         Ok(())
     }

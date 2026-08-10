@@ -25,8 +25,8 @@ pub enum BackendType {
 pub enum SafeDataOrigin {
     /// Do not import any v3 Safe data.
     NoData = 0,
-    /// Import v3 Jura Safe data.
-    Jura = 1,
+    /// Import v3 jura-prod Safe data.
+    JuraProd = 1,
 }
 
 /// Contains all migrations for non-SQLite databases (e.g. Postgres) and also
@@ -53,7 +53,7 @@ impl MigratorTrait for Migrator<{ SafeDataOrigin::NoData as u8 }> {
 }
 
 #[async_trait::async_trait]
-impl MigratorTrait for Migrator<{ SafeDataOrigin::Jura as u8 }> {
+impl MigratorTrait for Migrator<{ SafeDataOrigin::JuraProd as u8 }> {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         Self::base_migrations()
     }
@@ -85,7 +85,7 @@ impl MigratorTrait for MigratorIndex<{ SafeDataOrigin::NoData as u8 }> {
 }
 
 #[async_trait::async_trait]
-impl MigratorTrait for MigratorIndex<{ SafeDataOrigin::Jura as u8 }> {
+impl MigratorTrait for MigratorIndex<{ SafeDataOrigin::JuraProd as u8 }> {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         Self::base_migrations()
     }

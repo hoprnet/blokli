@@ -112,9 +112,9 @@ run-config config_path:
 run-release:
     cargo run --release --bin bloklid -F runtime-tokio
 
-# Run bloklid in debug mode against rotsee network with log output
-run-local-rotsee:
-    cargo run -p bloklid -- -c config.toml | tee rotsee.logs
+# Run bloklid in debug mode against jura-dev network with log output
+run-local-jura-dev:
+    cargo run -p bloklid -- -c config.toml | tee jura-dev.logs
 
 # Run bloklid daemon with SQLite database (local testing)
 run-sqlite:

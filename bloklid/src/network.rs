@@ -170,6 +170,8 @@ mod tests {
         assert_eq!("jura-dev".parse::<Network>().unwrap(), Network::JuraDev);
         assert_eq!("JURA-DEV".parse::<Network>().unwrap(), Network::JuraDev);
         assert_eq!("jura-prod".parse::<Network>().unwrap(), Network::JuraProd);
+        assert_eq!("piz-palu-dev".parse::<Network>().unwrap(), Network::PizPaluDev);
+        assert_eq!("piz-palu-staging".parse::<Network>().unwrap(), Network::PizPaluStaging);
         assert_eq!("anvil-localhost".parse::<Network>().unwrap(), Network::AnvilLocalhost);
         assert_eq!("localhost".parse::<Network>().unwrap(), Network::AnvilLocalhost);
     }
@@ -202,8 +204,8 @@ mod tests {
         assert!(networks.contains(&Network::AnvilLocalhost));
         assert!(networks.contains(&Network::JuraDev));
         assert!(networks.contains(&Network::JuraProd));
-        assert!(networks.contains(&Network::PizPaluStaging));
         assert!(networks.contains(&Network::PizPaluDev));
+        assert!(networks.contains(&Network::PizPaluStaging));
     }
 
     #[test]
