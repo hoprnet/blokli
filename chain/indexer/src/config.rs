@@ -130,6 +130,7 @@ impl IndexerConfig {
     ///     true,
     ///     true,
     ///     false,
+    ///     true,
     ///     Some("https://example.com/snapshot.tar.xz".to_string()),
     ///     "/tmp/hopr_data".to_string(),
     ///     100,
