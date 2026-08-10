@@ -25,7 +25,7 @@ pub struct BlokliDbConfig {
     pub max_connections: u32,
     #[default(Duration::from_secs(5))]
     pub log_slow_queries: Duration,
-    #[default("jura")]
+    #[default("jura-prod")]
     pub network_name: String,
 }
 

@@ -7,7 +7,7 @@ data_directory = "data"
 # Network identifier - specifies which HOPR network to connect to
 # Supported networks: rotsee (default, testnet), jura (staging), anvil-localhost (local development)
 # Case-insensitive: anvil_localhost, anvil-localhost, and localhost are also accepted
-network = "rotsee"
+network = "jura-dev"
 
 # RPC endpoint URL for connecting to the blockchain
 # Overrides the default RPC endpoint for the selected network
