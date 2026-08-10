@@ -1875,7 +1875,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-api"
-version = "0.23.4"
+version = "0.23.5"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1926,7 +1926,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-api-types"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "async-graphql",
  "blokli-chain-types",
@@ -2059,7 +2059,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-db"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -2089,7 +2089,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-db-entity"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "anyhow",
  "blokli-db-migration",
@@ -2107,7 +2107,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-db-migration"
-version = "0.12.2"
+version = "0.13.0"
 dependencies = [
  "hopr-types",
  "sea-orm",
