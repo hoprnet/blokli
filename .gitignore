@@ -38,7 +38,7 @@ result
 /.pre-commit-config.yaml
 /schema.graphql
 
-data
+/data
 api/tests/contracts/build
 *.tgz
 local/
