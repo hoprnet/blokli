@@ -182,22 +182,28 @@ mod tests {
         assert!(err.to_string().contains("invalid-network"));
         assert!(err.to_string().contains("jura-dev"));
         assert!(err.to_string().contains("jura-prod"));
+        assert!(err.to_string().contains("piz-palu-dev"));
+        assert!(err.to_string().contains("piz-palu-staging"));
     }
 
     #[test]
     fn test_network_display() {
-        assert_eq!(Network::JuraDev.to_string(), "jura-dev");
         assert_eq!(Network::AnvilLocalhost.to_string(), "anvil-localhost");
+        assert_eq!(Network::JuraDev.to_string(), "jura-dev");
         assert_eq!(Network::JuraProd.to_string(), "jura-prod");
+        assert_eq!(Network::PizPaluDev.to_string(), "piz-palu-dev");
+        assert_eq!(Network::PizPaluStaging.to_string(), "piz-palu-staging");
     }
 
     #[test]
     fn test_network_all() {
         let networks = Network::all();
-        assert_eq!(networks.len(), 3);
+        assert_eq!(networks.len(), 5);
         assert!(networks.contains(&Network::AnvilLocalhost));
         assert!(networks.contains(&Network::JuraDev));
         assert!(networks.contains(&Network::JuraProd));
+        assert!(networks.contains(&Network::PizPaluStaging));
+        assert!(networks.contains(&Network::PizPaluDev));
     }
 
     #[test]
@@ -209,17 +215,31 @@ mod tests {
     fn test_network_resolve() {
         // Test that networks can be resolved
         // Note: This test depends on hopr-bindings having these networks defined
-        let jura_dev = Network::JuraDev.resolve();
-        assert!(jura_dev.is_some(), "JuraDev network should be defined in hopr-bindings");
         let anvil = Network::AnvilLocalhost.resolve();
         assert!(
             anvil.is_some(),
             "AnvilLocalhost network should be defined in hopr-bindings"
         );
+
+        let jura_dev = Network::JuraDev.resolve();
+        assert!(jura_dev.is_some(), "JuraDev network should be defined in hopr-bindings");
+
         let jura_prod = Network::JuraProd.resolve();
         assert!(
             jura_prod.is_some(),
             "JuraProd network should be defined in hopr-bindings"
+        );
+
+        let piz_palu_dev = Network::PizPaluDev.resolve();
+        assert!(
+            piz_palu_dev.is_some(),
+            "PizPaluDev network should be defined in hopr-bindings"
+        );
+
+        let piz_palu_staging = Network::PizPaluStaging.resolve();
+        assert!(
+            piz_palu_staging.is_some(),
+            "PizPaluStaging network should be defined in hopr-bindings"
         );
     }
 }
