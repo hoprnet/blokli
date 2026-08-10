@@ -5,9 +5,9 @@
 data_directory = "data"
 
 # Network identifier - specifies which HOPR network to connect to
-# Supported networks: rotsee (default, testnet), jura (staging), anvil-localhost (local development)
+# Supported networks: jura-dev (default testnet), jura-prod (current production network), anvil-localhost (local development)
 # Case-insensitive: anvil_localhost, anvil-localhost, and localhost are also accepted
-network = "rotsee"
+network = "jura-dev"
 
 # RPC endpoint URL for connecting to the blockchain
 # Overrides the default RPC endpoint for the selected network
@@ -170,7 +170,7 @@ text = "keep-alive"
 # This limit is compared against finality-adjusted blocks from the RPC:
 #   lag = (rpc_block - finality) - indexed_block
 #
-# For Rotsee (Gnosis), finality=3 blocks. So with max_indexer_lag=10:
+# For jura-dev (Gnosis), finality=3 blocks. So with max_indexer_lag=10:
 # - The indexer can be up to 13 blocks behind the RPC chain head
 # - But must be within 10 blocks of confirmed blocks (with 3 confirmations)
 #

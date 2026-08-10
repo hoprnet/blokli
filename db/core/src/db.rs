@@ -25,7 +25,7 @@ pub struct BlokliDbConfig {
     pub max_connections: u32,
     #[default(Duration::from_secs(5))]
     pub log_slow_queries: Duration,
-    #[default("jura")]
+    #[default("jura-prod")]
     pub network_name: String,
 }
 
@@ -353,7 +353,7 @@ mod tests {
         let db = BlokliDb::new_in_memory().await?;
 
         // For SQLite, check the unified Migrator status
-        Migrator::<{ SafeDataOrigin::Jura as u8 }>::status(db.conn(TargetDb::Index)).await?;
+        Migrator::<{ SafeDataOrigin::JuraProd as u8 }>::status(db.conn(TargetDb::Index)).await?;
 
         Ok(())
     }

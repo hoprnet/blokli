@@ -26,7 +26,7 @@ database:
   password: "SomePassword"
   maxConnections: 20
 config:
-  network: "jura"
+  network: "jura-prod"
   rpcUrl: "https://rpc.gnosischain.com"
   maxRpcRequestsPerSec: 0
   # Indexer settings

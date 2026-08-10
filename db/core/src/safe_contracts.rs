@@ -170,10 +170,10 @@ where
 }
 
 fn preseeded_csv_for_network(network_name: &str) -> Option<&'static str> {
-    if network_name.eq_ignore_ascii_case("rotsee") {
-        Some(include_str!("../../migration/src/data/safe-v3-rotsee.csv"))
-    } else if network_name.eq_ignore_ascii_case("jura") {
-        Some(include_str!("../../migration/src/data/safe-v3-jura.csv"))
+    if network_name.eq_ignore_ascii_case("jura-dev") {
+        Some(include_str!("../../migration/src/data/safe-v3-jura-dev.csv"))
+    } else if network_name.eq_ignore_ascii_case("jura-prod") {
+        Some(include_str!("../../migration/src/data/safe-v3-jura-prod.csv"))
     } else {
         None
     }
@@ -857,10 +857,10 @@ mod tests {
 
     #[test]
     fn test_preseeded_csv_for_network() {
-        assert!(preseeded_csv_for_network("rotsee").is_some());
-        assert!(preseeded_csv_for_network("ROTSEE").is_some());
+        assert!(preseeded_csv_for_network("jura-dev").is_some());
+        assert!(preseeded_csv_for_network("JURA-DEV").is_some());
         assert!(preseeded_csv_for_network("unknown").is_none());
-        assert!(preseeded_csv_for_network("jURA").is_some());
+        assert!(preseeded_csv_for_network("JURA-PROD").is_some());
     }
 
     #[tokio::test]
