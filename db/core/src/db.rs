@@ -4,7 +4,7 @@ use blokli_db_entity::{
     chain_info,
     prelude::{Account, Announcement, ChainInfo},
 };
-use migration::{Migrator, MigratorChainLogs, MigratorIndex, MigratorTrait, SafeDataOrigin};
+use migration::{Migrator, MigratorChainLogs, MigratorIndex, MigratorTrait};
 use sea_orm::{ConnectOptions, Database, EntityTrait, Set, SqlxSqliteConnector, sea_query::OnConflict};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tracing::log::LevelFilter;
@@ -196,7 +196,7 @@ impl BlokliDb {
         if is_sqlite {
             if let Some(logs_db) = &logs_db {
                 // For SQLite with dual databases: run separate migrations on each database
-                MigratorIndex::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
+                MigratorIndex::up(&db, None)
                     .await
                     .map_err(|e| DbSqlError::Construction(format!("cannot apply index migrations: {e}")))?;
 
@@ -204,12 +204,12 @@ impl BlokliDb {
                     .await
                     .map_err(|e| DbSqlError::Construction(format!("cannot apply logs migrations: {e}")))?;
             } else {
-                Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
+                Migrator::up(&db, None)
                     .await
                     .map_err(|e| DbSqlError::Construction(format!("cannot apply migrations: {e}")))?;
             }
         } else {
-            Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
+            Migrator::up(&db, None)
                 .await
                 .map_err(|e| DbSqlError::Construction(format!("cannot apply migrations: {e}")))?;
         }
@@ -343,7 +343,7 @@ impl BlokliDbAllOperations for BlokliDb {}
 #[cfg(test)]
 mod tests {
     use blokli_db_entity::prelude::ChainInfo;
-    use migration::{Migrator, MigratorTrait, SafeDataOrigin};
+    use migration::{Migrator, MigratorTrait};
     use sea_orm::{EntityTrait, PaginatorTrait};
 
     use crate::{BlokliDbGeneralModelOperations, SINGULAR_TABLE_FIXED_ID, TargetDb, db::BlokliDb};
@@ -353,7 +353,7 @@ mod tests {
         let db = BlokliDb::new_in_memory().await?;
 
         // For SQLite, check the unified Migrator status
-        Migrator::<{ SafeDataOrigin::JuraProd as u8 }>::status(db.conn(TargetDb::Index)).await?;
+        Migrator::status(db.conn(TargetDb::Index)).await?;
 
         Ok(())
     }

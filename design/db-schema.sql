@@ -227,50 +227,64 @@ CREATE TABLE "schema_version" (
 
 CREATE VIEW account_current AS
 SELECT
-    s.id,
+    acs.id,
     a.id AS account_id,
     a.chain_key,
     a.packet_key,
-    s.safe_address,
-    s.published_block,
-    s.published_tx_index,
-    s.published_log_index
+    acs.safe_address,
+    acs.published_block,
+    acs.published_tx_index,
+    acs.published_log_index
 FROM
     account a
-    JOIN (
+    JOIN account_state acs ON acs.account_id = a.id
+WHERE
+    acs.id = (
         SELECT
-            acs.*,
-            ROW_NUMBER() OVER (PARTITION BY acs.account_id ORDER BY acs.published_block DESC, acs.published_tx_index DESC, acs.published_log_index DESC) AS rn
+            s2.id
         FROM
-            account_state acs) s ON s.account_id = a.id
-        AND s.rn = 1;
+            account_state s2
+        WHERE
+            s2.account_id = a.id
+        ORDER BY
+            s2.published_block DESC,
+            s2.published_tx_index DESC,
+            s2.published_log_index DESC
+        LIMIT 1);
 
 CREATE VIEW channel_current AS
 SELECT
-    s.id,
+    cs.id,
     c.id AS channel_id,
     c.concrete_channel_id,
     c.source,
     c.destination,
-    s.balance,
-    s.status,
-    s.epoch,
-    s.ticket_index,
-    s.closure_time,
-    s.corrupted_state,
-    s.published_block,
-    s.published_tx_index,
-    s.published_log_index,
-    s.reorg_correction
+    cs.balance,
+    cs.status,
+    cs.epoch,
+    cs.ticket_index,
+    cs.closure_time,
+    cs.corrupted_state,
+    cs.published_block,
+    cs.published_tx_index,
+    cs.published_log_index,
+    cs.reorg_correction
 FROM
     channel c
-    JOIN (
+    JOIN channel_state cs ON cs.channel_id = c.id
+WHERE
+    cs.id = (
         SELECT
-            cs.*,
-            ROW_NUMBER() OVER (PARTITION BY cs.channel_id ORDER BY cs.published_block DESC, cs.published_tx_index DESC, cs.published_log_index DESC) AS rn
+            s2.id
         FROM
-            channel_state cs) s ON s.channel_id = c.id
-        AND s.rn = 1;
+            channel_state s2
+        WHERE
+            s2.channel_id = c.id
+        ORDER BY
+            s2.published_block DESC,
+            s2.published_tx_index DESC,
+            s2.published_log_index DESC
+        LIMIT 1);
 
 CREATE VIEW safe_contract_current AS
 SELECT
