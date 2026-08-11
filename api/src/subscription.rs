@@ -4,10 +4,11 @@ use std::{collections::HashMap, sync::Arc};
 
 use async_broadcast::Receiver;
 use async_graphql::{Context, ID, Result, Subscription};
-use async_stream::stream;
+use async_stream::{stream, try_stream};
 use blokli_api_types::{
-    Account, Channel, ChannelUpdate, Hex32, OpenedChannelsGraphEntry, RedeemTicketDetails, Safe, TicketParameters,
-    TokenValueString, Transaction, UInt64,
+    Account, Channel, ChannelUpdate, CurvyCommittedNote, CurvyCommittedNullifier, CurvyEventPosition, CurvyPendingNote,
+    Hex32, OpenedChannelsGraphEntry, RedeemTicketDetails, Safe, TicketParameters, TokenValueString, Transaction,
+    UInt64,
 };
 use blokli_chain_api::transaction_store::{
     TransactionEvent, TransactionStatus as StoreTransactionStatus, TransactionStore,
@@ -24,10 +25,10 @@ use blokli_db_entity::{
         account_aggregation::{fetch_accounts_by_keyids, fetch_accounts_with_filters},
         safe_aggregation::{CurrentSafe, fetch_safe_by_address, fetch_safe_threshold_by_address},
     },
-    hopr_node_safe_registration,
+    curvy_committed_note, curvy_committed_nullifier, curvy_pending_note, hopr_node_safe_registration,
 };
 use chrono::Utc;
-use futures::Stream;
+use futures::{Stream, StreamExt, pin_mut};
 use hopr_bindings::exports::alloy::hex;
 use hopr_types::primitive::{
     prelude::HoprBalance as PrimitiveHoprBalance,
@@ -35,13 +36,13 @@ use hopr_types::primitive::{
     traits::{IntoEndian, ToHex},
 };
 use rand::seq::SliceRandom;
-use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Select};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::{
     conversions::{convert_safe_execution, convert_transaction_status},
-    errors,
+    curvy, errors,
     query::owners_for_safe,
     readiness::{ReadinessChecker, ReadinessState},
 };
@@ -112,11 +113,11 @@ async fn capture_watermark_synchronized(
     Ok((watermark, event_receiver, shutdown_receiver))
 }
 
-/// Queries all non-closed channels at a specific watermark
+/// Queries all open channels at a specific watermark
 ///
 /// This implements the Phase 1 historical snapshot by querying all channels
-/// that were open or pending-to-close at the watermark position. Uses temporal
-/// queries to get the state as it existed at that exact point in time.
+/// that were open at the watermark position. Uses temporal queries to get
+/// the state as it existed at that exact point in time.
 ///
 /// Channels are returned in batches for efficient processing.
 ///
@@ -166,18 +167,18 @@ async fn query_channels_at_watermark(
         state_map.entry(state.channel_id).or_insert(state);
     }
 
-    // Filter out CLOSED channels (status != 0)
-    let non_closed_channels: Vec<_> = channels
+    // Filter to only OPEN channels (status = 1)
+    let open_channels: Vec<_> = channels
         .into_iter()
-        .filter(|c| state_map.get(&c.id).map(|s| s.status != 0).unwrap_or(false))
+        .filter(|c| state_map.get(&c.id).map(|s| s.status == 1).unwrap_or(false))
         .collect();
 
-    if non_closed_channels.is_empty() {
+    if open_channels.is_empty() {
         return Ok(Vec::new());
     }
 
     // Collect all unique account IDs we need to fetch
-    let mut account_ids: Vec<i64> = non_closed_channels
+    let mut account_ids: Vec<i64> = open_channels
         .iter()
         .flat_map(|c| vec![c.source, c.destination])
         .collect();
@@ -194,7 +195,7 @@ async fn query_channels_at_watermark(
 
     // Build ChannelUpdate objects
     let mut results = Vec::new();
-    for channel in non_closed_channels {
+    for channel in open_channels {
         let state = match state_map.get(&channel.id) {
             Some(s) => s,
             None => {
@@ -398,12 +399,279 @@ fn watermark_condition(watermark: &Watermark) -> Condition {
     Condition::all().add(channel_state::Column::PublishedBlock.lte(watermark.block))
 }
 
+trait CurvyPositioned {
+    fn position(&self) -> &CurvyEventPosition;
+}
+
+impl CurvyPositioned for CurvyPendingNote {
+    fn position(&self) -> &CurvyEventPosition {
+        &self.position
+    }
+}
+
+impl CurvyPositioned for CurvyCommittedNote {
+    fn position(&self) -> &CurvyEventPosition {
+        &self.position
+    }
+}
+
+impl CurvyPositioned for CurvyCommittedNullifier {
+    fn position(&self) -> &CurvyEventPosition {
+        &self.position
+    }
+}
+
+fn curvy_history_stream<E, T, F>(
+    db: DatabaseConnection,
+    query: Select<E>,
+    operation: &'static str,
+    convert: F,
+) -> impl Stream<Item = Result<T>>
+where
+    E: EntityTrait + 'static,
+    E::Model: Send + 'static,
+    T: Send + 'static,
+    F: Fn(E::Model) -> std::result::Result<T, blokli_api_types::QueryFailedError> + Send + Sync + 'static,
+{
+    try_stream! {
+        let mut rows = query
+            .stream(&db)
+            .await
+            .map_err(|error| errors::graphql_error(errors::query_failed(operation, error)))?;
+        while let Some(row) = rows.next().await {
+            let model = row.map_err(|error| errors::graphql_error(errors::query_failed(operation, error)))?;
+            yield convert(model).map_err(errors::graphql_error)?;
+        }
+    }
+}
+
+fn curvy_event_stream<T, H, F>(
+    historical: H,
+    mut event_receiver: Receiver<IndexerEvent>,
+    mut shutdown_receiver: Receiver<()>,
+    start_block: Option<u64>,
+    select: F,
+) -> impl Stream<Item = Result<T>>
+where
+    T: CurvyPositioned + Send + 'static,
+    H: Stream<Item = Result<T>> + Send + 'static,
+    F: Fn(IndexerEvent) -> Option<T> + Send + Sync + 'static,
+{
+    try_stream! {
+        pin_mut!(historical);
+        loop {
+            let historical_event: Option<Result<T>> = tokio::select! {
+                biased;
+                shutdown_result = shutdown_receiver.recv() => {
+                    match shutdown_result {
+                        Ok(_) | Err(async_broadcast::RecvError::Closed) => return,
+                        Err(async_broadcast::RecvError::Overflowed(count)) => {
+                            Err(errors::graphql_subscription_lagged_error(
+                                "Curvy subscription shutdown signal",
+                                count,
+                            ))
+                        }
+                    }
+                }
+                historical_event = historical.next() => Ok(historical_event),
+            }?;
+            match historical_event {
+                Some(event) => yield event?,
+                None => break,
+            }
+        }
+        loop {
+            let event = tokio::select! {
+                biased;
+                shutdown_result = shutdown_receiver.recv() => {
+                    match shutdown_result {
+                        Ok(_) | Err(async_broadcast::RecvError::Closed) => return,
+                        Err(async_broadcast::RecvError::Overflowed(count)) => {
+                            Err(errors::graphql_subscription_lagged_error(
+                                "Curvy subscription shutdown signal",
+                                count,
+                            ))
+                        }
+                    }
+                }
+                event_result = event_receiver.recv() => {
+                    match event_result {
+                        Ok(event) => Ok(event),
+                        Err(async_broadcast::RecvError::Closed) => return,
+                        Err(async_broadcast::RecvError::Overflowed(count)) => {
+                            Err(errors::graphql_subscription_lagged_error(
+                                "Curvy subscription event bus",
+                                count,
+                            ))
+                        }
+                    }
+                }
+            }?;
+            if let Some(event) = select(event)
+                && start_block.is_none_or(|start_block| event.position().block.0 >= start_block)
+            {
+                yield event;
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct CurvyStartBlock {
+    api: u64,
+    database: i64,
+}
+
+fn curvy_start_block(from_block: Option<UInt64>) -> Result<Option<CurvyStartBlock>> {
+    from_block
+        .map(|block| {
+            Ok(CurvyStartBlock {
+                api: block.0,
+                database: i64::try_from(block.0).map_err(|_| {
+                    errors::graphql_error(errors::invalid_pagination(
+                        "fromBlock exceeds the supported database range",
+                    ))
+                })?,
+            })
+        })
+        .transpose()
+}
+
 /// fetch_channel_update is no longer needed - events now contain complete data
 /// Root subscription type providing real-time updates via Server-Sent Events (SSE)
 pub struct SubscriptionRoot;
 
 #[Subscription]
 impl SubscriptionRoot {
+    /// Stream indexed Curvy `PendingNotes` entries with an optional historical phase.
+    #[graphql(name = "curvyPendingNote")]
+    async fn curvy_pending_note(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            name = "fromBlock",
+            desc = "Earliest block number to replay before live streaming starts"
+        )]
+        from_block: Option<UInt64>,
+    ) -> Result<impl Stream<Item = Result<CurvyPendingNote>>> {
+        let db = ctx.data::<DatabaseConnection>()?.clone();
+        let indexer_state = ctx.data::<IndexerState>()?.clone();
+        let (watermark, event_receiver, shutdown_receiver) =
+            capture_watermark_synchronized(&indexer_state, &db).await?;
+        let start_block = curvy_start_block(from_block)?;
+        let mut query =
+            curvy_pending_note::Entity::find().filter(curvy_pending_note::Column::PublishedBlock.lte(watermark.block));
+        if let Some(start_block) = start_block {
+            query = query.filter(curvy_pending_note::Column::PublishedBlock.gte(start_block.database));
+        }
+        let historical = curvy_history_stream(
+            db,
+            query
+                .order_by_asc(curvy_pending_note::Column::PublishedBlock)
+                .order_by_asc(curvy_pending_note::Column::PublishedTxIndex)
+                .order_by_asc(curvy_pending_note::Column::PublishedLogIndex)
+                .order_by_asc(curvy_pending_note::Column::EventItemIndex),
+            "fetch Curvy pending-note history",
+            curvy::pending_note,
+        );
+        Ok(curvy_event_stream(
+            historical,
+            event_receiver,
+            shutdown_receiver,
+            start_block.map(|start_block| start_block.api),
+            |event| match event {
+                IndexerEvent::CurvyPendingNote(event) => Some(event),
+                _ => None,
+            },
+        ))
+    }
+
+    /// Stream indexed Curvy `CommittedNotes` entries with an optional historical phase.
+    #[graphql(name = "curvyCommittedNote")]
+    async fn curvy_committed_note(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            name = "fromBlock",
+            desc = "Earliest block number to replay before live streaming starts"
+        )]
+        from_block: Option<UInt64>,
+    ) -> Result<impl Stream<Item = Result<CurvyCommittedNote>>> {
+        let db = ctx.data::<DatabaseConnection>()?.clone();
+        let indexer_state = ctx.data::<IndexerState>()?.clone();
+        let (watermark, event_receiver, shutdown_receiver) =
+            capture_watermark_synchronized(&indexer_state, &db).await?;
+        let start_block = curvy_start_block(from_block)?;
+        let mut query = curvy_committed_note::Entity::find()
+            .filter(curvy_committed_note::Column::PublishedBlock.lte(watermark.block));
+        if let Some(start_block) = start_block {
+            query = query.filter(curvy_committed_note::Column::PublishedBlock.gte(start_block.database));
+        }
+        let historical = curvy_history_stream(
+            db,
+            query
+                .order_by_asc(curvy_committed_note::Column::PublishedBlock)
+                .order_by_asc(curvy_committed_note::Column::PublishedTxIndex)
+                .order_by_asc(curvy_committed_note::Column::PublishedLogIndex)
+                .order_by_asc(curvy_committed_note::Column::EventItemIndex),
+            "fetch Curvy committed-note history",
+            curvy::committed_note,
+        );
+        Ok(curvy_event_stream(
+            historical,
+            event_receiver,
+            shutdown_receiver,
+            start_block.map(|start_block| start_block.api),
+            |event| match event {
+                IndexerEvent::CurvyCommittedNote(event) => Some(event),
+                _ => None,
+            },
+        ))
+    }
+
+    /// Stream indexed Curvy `CommittedNullifiers` entries with an optional historical phase.
+    #[graphql(name = "curvyCommittedNullifier")]
+    async fn curvy_committed_nullifier(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            name = "fromBlock",
+            desc = "Earliest block number to replay before live streaming starts"
+        )]
+        from_block: Option<UInt64>,
+    ) -> Result<impl Stream<Item = Result<CurvyCommittedNullifier>>> {
+        let db = ctx.data::<DatabaseConnection>()?.clone();
+        let indexer_state = ctx.data::<IndexerState>()?.clone();
+        let (watermark, event_receiver, shutdown_receiver) =
+            capture_watermark_synchronized(&indexer_state, &db).await?;
+        let start_block = curvy_start_block(from_block)?;
+        let mut query = curvy_committed_nullifier::Entity::find()
+            .filter(curvy_committed_nullifier::Column::PublishedBlock.lte(watermark.block));
+        if let Some(start_block) = start_block {
+            query = query.filter(curvy_committed_nullifier::Column::PublishedBlock.gte(start_block.database));
+        }
+        let historical = curvy_history_stream(
+            db,
+            query
+                .order_by_asc(curvy_committed_nullifier::Column::PublishedBlock)
+                .order_by_asc(curvy_committed_nullifier::Column::PublishedTxIndex)
+                .order_by_asc(curvy_committed_nullifier::Column::PublishedLogIndex)
+                .order_by_asc(curvy_committed_nullifier::Column::EventItemIndex),
+            "fetch Curvy committed-nullifier history",
+            curvy::committed_nullifier,
+        );
+        Ok(curvy_event_stream(
+            historical,
+            event_receiver,
+            shutdown_receiver,
+            start_block.map(|start_block| start_block.api),
+            |event| match event {
+                IndexerEvent::CurvyCommittedNullifier(event) => Some(event),
+                _ => None,
+            },
+        ))
+    }
+
     /// Subscribe to health status updates of the API
     ///
     /// Provides updates whenever the server state changes.
@@ -573,6 +841,9 @@ impl SubscriptionRoot {
                             Ok(IndexerEvent::TicketRedeemed(_)) => {
                                 // Ticket redeemed don't affect this subscription
                             }
+                            Ok(_) => {
+                                // Curvy events don't affect this subscription
+                            }
                             Err(async_broadcast::RecvError::Closed) => {
                                 info!("Event bus closed, ending channelUpdated subscription");
                                 return;
@@ -591,9 +862,9 @@ impl SubscriptionRoot {
     /// Subscribe to the opened payment channels graph with real-time updates
     ///
     /// **Streaming Behavior:**
-    /// - Emits one OpenedChannelsGraphEntry per non-closed channel
+    /// - Emits one OpenedChannelsGraphEntry per open channel
     /// - Each entry contains a single channel with its source and destination accounts
-    /// - On subscription start, emits all existing open and pending-to-close channels as separate entries
+    /// - On subscription start, emits all existing open channels as separate entries
     /// - Subsequently, emits updates when any channel changes, including non-open states
     ///
     /// **Phase 1 Ordering:**
@@ -641,7 +912,7 @@ impl SubscriptionRoot {
         const BATCH_SIZE: usize = 100;
 
         Ok(stream! {
-            // Phase 1: Stream historical snapshot of all non-closed channels at watermark
+            // Phase 1: Stream historical snapshot of all open channels at watermark
             match query_channels_at_watermark(&db, &watermark, BATCH_SIZE).await {
                 Ok(mut historical_channels) => {
                     historical_channels.shuffle(&mut rand::rng());
@@ -701,6 +972,9 @@ impl SubscriptionRoot {
                             }
                             Ok(IndexerEvent::TicketRedeemed(_)) => {
                                 // Ticket redeemed don't affect this subscription
+                            }
+                            Ok(_) => {
+                                // Curvy events don't affect this subscription
                             }
                             Err(async_broadcast::RecvError::Closed) => {
                                 info!("Event bus closed, ending subscription");
@@ -893,6 +1167,9 @@ impl SubscriptionRoot {
                             Ok(IndexerEvent::TicketRedeemed(_)) => {
                                 // Ticket redeemed don't affect this subscription
                             }
+                            Ok(_) => {
+                                // Curvy events don't affect this subscription
+                            }
                             Err(async_broadcast::RecvError::Closed) => {
                                 info!("Event bus closed, ending ticketParametersUpdated subscription");
                                 return;
@@ -1000,6 +1277,9 @@ impl SubscriptionRoot {
                             }
                             Ok(IndexerEvent::TicketRedeemed(_)) => {
                                 // Ticket redeemed don't affect this subscription
+                            }
+                            Ok(_) => {
+                                // Curvy events don't affect this subscription
                             }
                             Err(async_broadcast::RecvError::Closed) => {
                                 info!("Event bus closed, ending keyBindingFeeUpdated subscription");
@@ -1571,12 +1851,13 @@ fn matches_channel_filters(
 mod tests {
     use std::time::Duration;
 
+    use async_broadcast::broadcast;
     use async_graphql::{EmptyMutation, Object, Schema};
-    use blokli_api_types::RedemptionResult;
+    use blokli_api_types::{CurvyCommittedNote, CurvyEventPosition, Hex32, RedemptionResult, UInt64};
     use blokli_chain_indexer::state::{IndexerEvent, RedeemTicketDetailsInfo};
     use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb};
     use blokli_db_entity::{hopr_safe_contract, hopr_safe_contract_state};
-    use futures::StreamExt;
+    use futures::{StreamExt, pin_mut, stream};
     use sea_orm::{ActiveModelTrait, Set};
 
     use super::*;
@@ -1590,6 +1871,80 @@ mod tests {
         async fn dummy(&self) -> bool {
             true
         }
+    }
+
+    fn curvy_committed_note(block: u64) -> CurvyCommittedNote {
+        CurvyCommittedNote {
+            batch_index: Hex32(format!("0x{:064x}", 1)),
+            note_id: Hex32(format!("0x{block:064x}")),
+            leaf_index: UInt64(block),
+            position: CurvyEventPosition {
+                transaction_hash: Hex32(format!("0x{:064x}", block)),
+                block_hash: Hex32(format!("0x{:064x}", block)),
+                block: UInt64(block),
+                transaction_index: UInt64(0),
+                log_index: UInt64(0),
+                event_item_index: UInt64(0),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn test_curvy_event_stream_reports_event_bus_lag() -> anyhow::Result<()> {
+        let (mut event_sender, event_receiver) = broadcast(1);
+        event_sender.set_overflow(true);
+        let (_shutdown_sender, shutdown_receiver) = broadcast(1);
+        event_sender
+            .try_broadcast(IndexerEvent::CurvyCommittedNote(curvy_committed_note(1)))
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        event_sender
+            .try_broadcast(IndexerEvent::CurvyCommittedNote(curvy_committed_note(2)))
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+
+        let events = curvy_event_stream(
+            stream::empty(),
+            event_receiver,
+            shutdown_receiver,
+            None,
+            |event| match event {
+                IndexerEvent::CurvyCommittedNote(event) => Some(event),
+                _ => None,
+            },
+        );
+        pin_mut!(events);
+        let error = events
+            .next()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Curvy event stream ended without reporting lag"))?
+            .expect_err("overflow must terminate the Curvy subscription with an error");
+
+        assert!(error.message.contains("missed 1 events"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_curvy_event_stream_observes_shutdown_during_history() -> anyhow::Result<()> {
+        let (_event_sender, event_receiver) = broadcast(1);
+        let (shutdown_sender, shutdown_receiver) = broadcast(1);
+        shutdown_sender
+            .try_broadcast(())
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let historical = stream::iter([Ok::<_, async_graphql::Error>(curvy_committed_note(1))]);
+
+        let events = curvy_event_stream(
+            historical,
+            event_receiver,
+            shutdown_receiver,
+            None,
+            |event| match event {
+                IndexerEvent::CurvyCommittedNote(event) => Some(event),
+                _ => None,
+            },
+        );
+        pin_mut!(events);
+
+        assert!(events.next().await.is_none());
+        Ok(())
     }
 
     // Helper: Create test channel in database
@@ -1834,55 +2189,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_query_channels_at_watermark_includes_pending_to_close_channels() {
-        let db = BlokliDb::new_in_memory().await.unwrap();
-
-        // Create accounts
-        let source_id = create_test_account(db.conn(blokli_db::TargetDb::Index), vec![1; 20], "peer1")
-            .await
-            .unwrap();
-        let dest_id = create_test_account(db.conn(blokli_db::TargetDb::Index), vec![2; 20], "peer2")
-            .await
-            .unwrap();
-
-        // Create channel
-        let channel_id = create_test_channel(db.conn(blokli_db::TargetDb::Index), source_id, dest_id, "0xabc123")
-            .await
-            .unwrap();
-
-        // Insert PENDING_TO_CLOSE channel state (status = 2) at block 50
-        insert_channel_state(
-            db.conn(blokli_db::TargetDb::Index),
-            channel_id,
-            50,
-            0,
-            0,
-            vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-            2, // PENDING_TO_CLOSE status
-        )
-        .await
-        .unwrap();
-
-        let watermark = Watermark {
-            block: 100,
-            tx_index: 0,
-            log_index: 0,
-        };
-
-        let result = query_channels_at_watermark(db.conn(blokli_db::TargetDb::Index), &watermark, 100)
-            .await
-            .unwrap();
-
-        // Pending-to-close channel should be returned in the initial snapshot
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].channel.concrete_channel_id, "0xabc123");
-        assert_eq!(
-            result[0].channel.status,
-            blokli_api_types::ChannelStatus::PendingToClose
-        );
-    }
-
-    #[tokio::test]
     async fn test_query_channels_at_watermark_excludes_closed_channels() {
         let db = BlokliDb::new_in_memory().await.unwrap();
 
@@ -1899,7 +2205,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Insert CLOSED channel state (status = 0)
+        // Insert CLOSED channel state (status = 2)
         insert_channel_state(
             db.conn(blokli_db::TargetDb::Index),
             channel_id,
@@ -1907,7 +2213,7 @@ mod tests {
             0,
             0,
             vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-            0, // CLOSED status
+            2, // CLOSED status
         )
         .await
         .unwrap();

@@ -24,4 +24,12 @@ ignore = [
   # Status: Build-time proc-macro only; no runtime impact. Track upstream for a maintained replacement.
   # Review by: 2026-06-30
   "RUSTSEC-2026-0173",
+
+  # RUSTSEC-2026-0235
+  # Crate: rkyv 0.7.46
+  # Transitive: sea-orm -> rust_decimal
+  # Status: Insufficient archive validation can cause out-of-bounds reads in archives containing Rc/Arc
+  # Review by: 2026-06-30
+  "RUSTSEC-2026-0235",
+
 ]

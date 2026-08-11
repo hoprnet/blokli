@@ -55,7 +55,7 @@ let
       "${name}-curvy" = builders.${platform}.callPackage nixLib.mkRustPackage (
         args
         // {
-          cargoExtraArgs = "-p bloklid --bins --features curvy-test-deployment";
+          cargoExtraArgs = "-p bloklid --bins --locked --features curvy-test-deployment";
         }
       );
     };
@@ -168,7 +168,8 @@ in
       runCoverage = true;
       cargoLlvmCovCommand = "nextest";
       testCargoProfile = "ci-test";
-      cargoExtraArgs = "";
+      # Nix renders nextest's in-place progress bar as repeated, truncated log lines.
+      cargoExtraArgs = "--show-progress=none";
       extraNativeBuildInputs = [
         pkgs.cargo-nextest
         pkgs.foundry-bin

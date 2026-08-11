@@ -135,3 +135,38 @@ mod contract_address_map_tests {
         assert!(result.is_err(), "Should reject invalid JSON string");
     }
 }
+
+#[cfg(test)]
+mod uint256_tests {
+    use async_graphql::{ScalarType, Value};
+
+    use crate::UInt256;
+
+    #[test]
+    fn test_uint256_accepts_and_normalizes_decimal_values() {
+        let parsed = UInt256::parse(Value::String("00042".to_string())).unwrap();
+
+        assert_eq!(parsed, UInt256("42".to_string()));
+        assert_eq!(parsed.to_value(), Value::String("42".to_string()));
+    }
+
+    #[test]
+    fn test_uint256_accepts_maximum_value() {
+        let maximum = "115792089237316195423570985008687907853269984665640564039457584007913129639935";
+
+        assert_eq!(
+            UInt256::parse(Value::String(maximum.to_string())).unwrap(),
+            UInt256(maximum.to_string())
+        );
+    }
+
+    #[test]
+    fn test_uint256_rejects_out_of_range_and_non_decimal_values() {
+        let too_large = "115792089237316195423570985008687907853269984665640564039457584007913129639936";
+
+        assert!(UInt256::parse(Value::String(too_large.to_string())).is_err());
+        assert!(UInt256::parse(Value::String(String::new())).is_err());
+        assert!(UInt256::parse(Value::String("-1".to_string())).is_err());
+        assert!(UInt256::parse(Value::String("0x2a".to_string())).is_err());
+    }
+}

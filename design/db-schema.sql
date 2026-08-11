@@ -66,6 +66,85 @@ CREATE TABLE "channel_state" (
     FOREIGN KEY ("channel_id") REFERENCES "channel" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
+CREATE TABLE "curvy_committed_note" (
+    "id" integer PRIMARY KEY AUTOINCREMENT,
+    "batch_index" blob (32) NOT NULL,
+    "note_id" blob (32) NOT NULL,
+    "event_item_index" integer NOT NULL,
+    "chain_tx_hash" blob (32) NOT NULL,
+    "block_hash" blob (32) NOT NULL,
+    "published_block" integer NOT NULL,
+    "published_tx_index" integer NOT NULL,
+    "published_log_index" integer NOT NULL,
+    "leaf_index" integer NOT NULL,
+    CONSTRAINT "idx_curvy_committed_note_unique_position" UNIQUE ("published_block", "published_tx_index", "published_log_index", "event_item_index"),
+    CONSTRAINT "idx_curvy_committed_note_leaf_index" UNIQUE ("leaf_index")
+);
+
+CREATE TABLE "curvy_committed_nullifier" (
+    "id" integer PRIMARY KEY AUTOINCREMENT,
+    "batch_index" blob (32) NOT NULL,
+    "nullifier" blob (32) NOT NULL,
+    "event_item_index" integer NOT NULL,
+    "chain_tx_hash" blob (32) NOT NULL,
+    "block_hash" blob (32) NOT NULL,
+    "published_block" integer NOT NULL,
+    "published_tx_index" integer NOT NULL,
+    "published_log_index" integer NOT NULL,
+    "nullifier_index" integer NOT NULL,
+    CONSTRAINT "idx_curvy_committed_nullifier_unique_position" UNIQUE ("published_block", "published_tx_index", "published_log_index", "event_item_index"),
+    CONSTRAINT "idx_curvy_committed_nullifier_index" UNIQUE ("nullifier_index")
+);
+
+CREATE TABLE "curvy_pending_note" (
+    "id" integer PRIMARY KEY AUTOINCREMENT,
+    "note_id" blob (32) NOT NULL,
+    "ephemeral_key_x" blob (32) NOT NULL,
+    "ephemeral_key_y" blob (32) NOT NULL,
+    "view_tag" integer NOT NULL,
+    "token_id" blob (32) NOT NULL,
+    "amount" blob (32) NOT NULL,
+    "is_plaintext" boolean NOT NULL,
+    "event_item_index" integer NOT NULL,
+    "chain_tx_hash" blob (32) NOT NULL,
+    "block_hash" blob (32) NOT NULL,
+    "published_block" integer NOT NULL,
+    "published_tx_index" integer NOT NULL,
+    "published_log_index" integer NOT NULL,
+    CONSTRAINT "idx_curvy_pending_note_unique_position" UNIQUE ("published_block", "published_tx_index", "published_log_index", "event_item_index")
+);
+
+CREATE TABLE "curvy_shard_root" (
+    "id" integer PRIMARY KEY AUTOINCREMENT,
+    "tree_version" integer NOT NULL,
+    "shard_height" integer NOT NULL,
+    "shard_index" integer NOT NULL,
+    "root" blob (32) NOT NULL,
+    "block_hash" blob (32) NOT NULL,
+    "chain_tx_hash" blob (32) NOT NULL,
+    "completion_block" integer NOT NULL,
+    "completion_tx_index" integer NOT NULL,
+    "completion_log_index" integer NOT NULL,
+    "completion_event_item_index" integer NOT NULL,
+    CONSTRAINT "idx_curvy_shard_root_geometry_index" UNIQUE ("tree_version", "shard_height", "shard_index")
+);
+
+CREATE TABLE "curvy_sync_checkpoint" (
+    "id" integer PRIMARY KEY AUTOINCREMENT,
+    "block_number" integer NOT NULL,
+    "block_hash" blob (32) NOT NULL UNIQUE,
+    "aggregator_address" blob (20) NOT NULL,
+    "tree_version" integer NOT NULL,
+    "tree_depth" integer NOT NULL,
+    "shard_height" integer NOT NULL,
+    "leaf_count" integer NOT NULL,
+    "nullifier_count" integer NOT NULL,
+    "shard_count" integer NOT NULL,
+    "root" blob (32) NOT NULL,
+    "frontier_snapshot" blob NOT NULL,
+    CONSTRAINT "idx_curvy_sync_checkpoint_block" UNIQUE ("block_number")
+);
+
 CREATE TABLE "hopr_balance" (
     "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
     "address" blob (20) NOT NULL UNIQUE,
@@ -227,50 +306,64 @@ CREATE TABLE "schema_version" (
 
 CREATE VIEW account_current AS
 SELECT
-    s.id,
+    acs.id,
     a.id AS account_id,
     a.chain_key,
     a.packet_key,
-    s.safe_address,
-    s.published_block,
-    s.published_tx_index,
-    s.published_log_index
+    acs.safe_address,
+    acs.published_block,
+    acs.published_tx_index,
+    acs.published_log_index
 FROM
     account a
-    JOIN (
+    JOIN account_state acs ON acs.account_id = a.id
+WHERE
+    acs.id = (
         SELECT
-            acs.*,
-            ROW_NUMBER() OVER (PARTITION BY acs.account_id ORDER BY acs.published_block DESC, acs.published_tx_index DESC, acs.published_log_index DESC) AS rn
+            s2.id
         FROM
-            account_state acs) s ON s.account_id = a.id
-        AND s.rn = 1;
+            account_state s2
+        WHERE
+            s2.account_id = a.id
+        ORDER BY
+            s2.published_block DESC,
+            s2.published_tx_index DESC,
+            s2.published_log_index DESC
+        LIMIT 1);
 
 CREATE VIEW channel_current AS
 SELECT
-    s.id,
+    cs.id,
     c.id AS channel_id,
     c.concrete_channel_id,
     c.source,
     c.destination,
-    s.balance,
-    s.status,
-    s.epoch,
-    s.ticket_index,
-    s.closure_time,
-    s.corrupted_state,
-    s.published_block,
-    s.published_tx_index,
-    s.published_log_index,
-    s.reorg_correction
+    cs.balance,
+    cs.status,
+    cs.epoch,
+    cs.ticket_index,
+    cs.closure_time,
+    cs.corrupted_state,
+    cs.published_block,
+    cs.published_tx_index,
+    cs.published_log_index,
+    cs.reorg_correction
 FROM
     channel c
-    JOIN (
+    JOIN channel_state cs ON cs.channel_id = c.id
+WHERE
+    cs.id = (
         SELECT
-            cs.*,
-            ROW_NUMBER() OVER (PARTITION BY cs.channel_id ORDER BY cs.published_block DESC, cs.published_tx_index DESC, cs.published_log_index DESC) AS rn
+            s2.id
         FROM
-            channel_state cs) s ON s.channel_id = c.id
-        AND s.rn = 1;
+            channel_state s2
+        WHERE
+            s2.channel_id = c.id
+        ORDER BY
+            s2.published_block DESC,
+            s2.published_tx_index DESC,
+            s2.published_log_index DESC
+        LIMIT 1);
 
 CREATE VIEW safe_contract_current AS
 SELECT
@@ -379,6 +472,10 @@ CREATE INDEX "idx_channel_state_status_position" ON "channel_state" ("status", "
 CREATE UNIQUE INDEX "idx_channel_state_unique_position" ON "channel_state" ("channel_id", "published_block", "published_tx_index", "published_log_index");
 
 CREATE UNIQUE INDEX "idx_contract_log_topic" ON "log_topic_info" ("address", "topic");
+
+CREATE INDEX "idx_curvy_committed_note_note_id" ON "curvy_committed_note" ("note_id");
+
+CREATE INDEX "idx_curvy_pending_note_note_id" ON "curvy_pending_note" ("note_id");
 
 CREATE INDEX "idx_hopr_balance_last_changed_block" ON "hopr_balance" ("last_changed_block");
 

@@ -48,7 +48,8 @@ blokli-db-migration = { path = "db/migration" }
 chrono = "0.4.45"
 clap = { version = "4.6.1", features = ["derive", "env", "string"] }
 config = "0.15.23"
-curvy-bindings = { version = "=1.0.0-rc-1" }
+curvy-bindings = { version = "1.0.0-rc-1" }
+curvy-core = { version = "0.1.0-rc.3" }
 dashmap = "6.2.1"
 env_logger = "0.11.10"
 flagset = "0.4.7"
@@ -86,7 +87,7 @@ reqwest = { version = "0.13.4", features = ["json"] }
 rstest = "0.26.1"
 rust-stream-ext-concurrent = "2.0.0"
 rustls = { version = "0.23.40", default-features = false, features = ["std"] }
-sea-orm = { version = "2.0.0-rc.40", default-features = false, features = [
+sea-orm = { version = "2.0.1", default-features = false, features = [
   "debug-print",
   "macros",
   "runtime-tokio-rustls",
@@ -94,11 +95,11 @@ sea-orm = { version = "2.0.0-rc.40", default-features = false, features = [
   "with-chrono",
   "with-json",
 ] }
-sea-orm-cli = { version = "2.0.0-rc.40", default-features = false, features = [
+sea-orm-cli = { version = "2.0.1", default-features = false, features = [
   "codegen",
   "runtime-tokio-rustls",
 ] }
-sea-orm-migration = { version = "2.0.0-rc.40", default-features = false, features = [
+sea-orm-migration = { version = "2.0.1", default-features = false, features = [
   "cli",
   "sqlx-postgres",
   "with-chrono",
@@ -181,11 +182,6 @@ lto           = "fat"
 opt-level     = 3
 panic         = "abort"
 strip         = true
-
-# humantime-serde used only via #[serde(with = "humantime_serde")] string attrs,
-# which cargo-shear cannot detect through static analysis.
-[workspace.metadata.cargo-shear]
-ignored = ["humantime-serde"]
 
 # Workspace-level lints to prevent common issues
 [workspace.lints.clippy]

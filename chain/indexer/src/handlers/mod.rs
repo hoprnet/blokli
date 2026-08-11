@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, Log};
 use blokli_chain_types::{AlloyAddressExt, ContractAddresses};
 use blokli_db::{BlokliDbAllOperations, OpenTransaction};
+use curvy_bindings::curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2::CurvyAggregatorAlphaV2Events;
 use hopr_bindings::{
     exports::alloy::{
         primitives::{Address as AlloyAddress, B256, Log as AlloyLog},
@@ -38,6 +39,7 @@ use crate::{
 mod announcements;
 mod channel_utils;
 mod channels;
+mod curvy;
 mod helpers;
 mod node_safe_registry;
 mod oracles;
@@ -81,6 +83,7 @@ pub struct ContractEventHandlers<T, Db> {
     /// indexer state for publishing events to subscribers
     pub(super) indexer_state: IndexerState,
     pub(super) enable_safe_indexing: bool,
+    pub(super) enable_curvy_indexing: bool,
 }
 
 impl<T, Db> Debug for ContractEventHandlers<T, Db> {
@@ -118,6 +121,7 @@ where
         rpc_operations: T,
         indexer_state: IndexerState,
         enable_safe_indexing: bool,
+        enable_curvy_indexing: bool,
     ) -> Self {
         Self {
             addresses: Arc::new(addresses),
@@ -125,6 +129,7 @@ where
             _rpc_operations: rpc_operations,
             indexer_state,
             enable_safe_indexing,
+            enable_curvy_indexing,
         }
     }
 
@@ -261,6 +266,9 @@ where
             let event = HoprWinningProbabilityOracleEvents::decode_log(&primitive_log)?;
             self.on_ticket_winning_probability_oracle_event(tx, event.data, is_synced)
                 .await
+        } else if self.enable_curvy_indexing && log.address.eq(&self.addresses.curvy_aggregator) {
+            let event = CurvyAggregatorAlphaV2Events::decode_log(&primitive_log)?;
+            self.on_curvy_aggregator_event(tx, &log, event.data).await
         } else {
             #[cfg(all(feature = "telemetry", not(test)))]
             increment_indexer_contract_log_count("unknown");
@@ -297,7 +305,7 @@ where
     /// // node_safe_registry, node_stake_factory, token
     /// ```
     fn contract_addresses(&self) -> Vec<Address> {
-        vec![
+        let mut addresses = vec![
             self.addresses.announcements,
             self.addresses.channels,
             self.addresses.ticket_price_oracle,
@@ -305,11 +313,19 @@ where
             self.addresses.node_safe_registry,
             self.addresses.node_stake_factory,
             self.addresses.token,
-        ]
+        ];
+        if self.enable_curvy_indexing {
+            addresses.push(self.addresses.curvy_aggregator);
+        }
+        addresses
     }
 
     fn contract_addresses_map(&self) -> Arc<ContractAddresses> {
         self.addresses.clone()
+    }
+
+    fn should_process_log(&self, log: &SerializableLog) -> bool {
+        !(log.removed && log.address == self.addresses.curvy_aggregator)
     }
 
     /// Map a contract address to its associated event topics.
@@ -343,6 +359,8 @@ where
             crate::constants::topics::stake_factory()
         } else if contract.eq(&self.addresses.token) {
             crate::constants::topics::token()
+        } else if contract.eq(&self.addresses.curvy_aggregator) {
+            crate::constants::topics::curvy_aggregator()
         } else {
             panic!("use of unsupported contract address: {contract}");
         }
@@ -384,6 +402,10 @@ where
 
         Ok(())
     }
+
+    async fn revert_block_derived_state(&self, from_block: u64) -> Result<()> {
+        self.revert_curvy_state(from_block).await
+    }
 }
 
 #[cfg(test)]
@@ -409,11 +431,41 @@ mod tests {
     use crate::{
         handlers::test_utils::test_helpers::{
             ClonableMockOperations, MockIndexerRpcOperations, SAFE_INSTANCE_ADDR, SELF_CHAIN_ADDRESS, SELF_PRIV_KEY,
-            init_handlers_with_events, test_log,
+            init_handlers, init_handlers_with_events, test_log,
         },
         state::IndexerEvent,
         traits::ChainLogHandler,
     };
+
+    #[tokio::test]
+    async fn test_removed_curvy_logs_are_not_processed() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let rpc_operations = ClonableMockOperations {
+            inner: Arc::new(MockIndexerRpcOperations::new()),
+        };
+        let handlers = init_handlers(rpc_operations, db);
+
+        let removed_curvy_log = SerializableLog {
+            address: handlers.addresses.curvy_aggregator,
+            removed: true,
+            ..test_log()
+        };
+        assert!(!handlers.should_process_log(&removed_curvy_log));
+
+        let canonical_curvy_log = SerializableLog {
+            removed: false,
+            ..removed_curvy_log.clone()
+        };
+        assert!(handlers.should_process_log(&canonical_curvy_log));
+
+        let removed_hopr_log = SerializableLog {
+            address: handlers.addresses.channels,
+            ..removed_curvy_log
+        };
+        assert!(handlers.should_process_log(&removed_hopr_log));
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_collect_log_event_publishes_after_transaction_commit() -> anyhow::Result<()> {

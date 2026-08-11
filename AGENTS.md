@@ -19,7 +19,7 @@ Blokli is a Rust workspace project: an on-chain indexer of HOPR smart contracts 
 - `README.md` — High-level overview and quickstart
 - `TESTING.md` — Test strategy and commands
 - `design/architecture.md` — System architecture (conceptual, no code snippets)
-- `design/target-api-schema.graphql` — Target GraphQL schema
+- `design/target-api-schema.graphql` — Generated GraphQL API schema
 - `design/target-db-schema.mmd` — Target database schema
 
 ## Build Commands
@@ -99,8 +99,8 @@ Use prelude modules: `hopr_types::primitive::prelude`, `hopr_types::crypto::prel
 
 ### GraphQL API
 
-- Target schema: `design/target-api-schema.graphql`
-- Generate actual schema: `just export-schema-sqlite` → `schema.graphql`
+- Checked-in generated schema: `just export-target-api-schema` → `design/target-api-schema.graphql`
+- Generate a local schema copy: `just export-schema-sqlite` → `schema.graphql`
 - Use DataLoader pattern for N+1 prevention
 - Subscriptions via SSE with keep-alive
 
