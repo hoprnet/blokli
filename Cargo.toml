@@ -57,7 +57,7 @@ futures-util = "0.3.32"
 hex = "0.4.3"
 hex-literal = "1.1.0"
 hopli = { git = "https://github.com/hoprnet/hopli", branch = "main" }
-hopr-bindings = "4.12.0"
+hopr-bindings = "4.13.0"
 hopr-types = "2.0.2"
 
 http = "1.4.2"
@@ -149,9 +149,6 @@ tracing-subscriber = { version = "0.3.23", features = [
 url = { version = "2.5.8", features = ["serde"] }
 uuid = { version = "1.23.3", features = ["serde", "v4"] }
 validator = { version = "0.20.0", features = ["derive"] }
-
-[patch.crates-io]
-hopr-bindings = { git = 'https://github.com/hoprnet/contracts/', rev = "a6f8e5e81779ced5b68ef100f2fc30734eca19f4" }
 
 [profile.dev]
 panic = "abort"

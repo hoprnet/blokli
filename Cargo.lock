@@ -4029,8 +4029,9 @@ dependencies = [
 
 [[package]]
 name = "hopr-bindings"
-version = "4.12.2"
-source = "git+https://github.com/hoprnet/contracts/?rev=a6f8e5e81779ced5b68ef100f2fc30734eca19f4#a6f8e5e81779ced5b68ef100f2fc30734eca19f4"
+version = "4.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8be6fd9b90421c230f80c6ba872cd02c65cfd5e84cdb99956edbd8a6dac6334c"
 dependencies = [
  "alloy",
  "anyhow",
@@ -7916,7 +7917,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
