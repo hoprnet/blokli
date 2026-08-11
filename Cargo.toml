@@ -57,7 +57,7 @@ futures-util = "0.3.32"
 hex = "0.4.3"
 hex-literal = "1.1.0"
 hopli = { git = "https://github.com/hoprnet/hopli", branch = "main" }
-hopr-bindings = "4.12.0"
+hopr-bindings = "4.13.0"
 hopr-types = "2.0.2"
 
 http = "1.4.2"
@@ -85,7 +85,7 @@ reqwest = { version = "0.13.4", features = ["json"] }
 rstest = "0.26.1"
 rust-stream-ext-concurrent = "2.0.0"
 rustls = { version = "0.23.40", default-features = false, features = ["std"] }
-sea-orm = { version = "2.0.0-rc.40", default-features = false, features = [
+sea-orm = { version = "2.0.1", default-features = false, features = [
   "debug-print",
   "macros",
   "runtime-tokio-rustls",
@@ -93,11 +93,11 @@ sea-orm = { version = "2.0.0-rc.40", default-features = false, features = [
   "with-chrono",
   "with-json",
 ] }
-sea-orm-cli = { version = "2.0.0-rc.40", default-features = false, features = [
+sea-orm-cli = { version = "2.0.1", default-features = false, features = [
   "codegen",
   "runtime-tokio-rustls",
 ] }
-sea-orm-migration = { version = "2.0.0-rc.40", default-features = false, features = [
+sea-orm-migration = { version = "2.0.1", default-features = false, features = [
   "cli",
   "sqlx-postgres",
   "with-chrono",

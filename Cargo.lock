@@ -1875,7 +1875,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-api"
-version = "0.23.4"
+version = "0.23.5"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1926,7 +1926,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-api-types"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "async-graphql",
  "blokli-chain-types",
@@ -2059,7 +2059,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-db"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -2089,7 +2089,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-db-entity"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "anyhow",
  "blokli-db-migration",
@@ -2107,7 +2107,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-db-migration"
-version = "0.12.2"
+version = "0.13.0"
 dependencies = [
  "hopr-types",
  "sea-orm",
@@ -4029,9 +4029,9 @@ dependencies = [
 
 [[package]]
 name = "hopr-bindings"
-version = "4.12.0"
+version = "4.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0375fb0dc90a31484ae7620ce71681203f5ed1ee670cab51e02fb3b7a9d351dc"
+checksum = "8be6fd9b90421c230f80c6ba872cd02c65cfd5e84cdb99956edbd8a6dac6334c"
 dependencies = [
  "alloy",
  "anyhow",
@@ -6797,9 +6797,9 @@ dependencies = [
 
 [[package]]
 name = "sea-orm"
-version = "2.0.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "549c6d29a2e7a84e35c5dfbc06370a62c4d35f2328c31005267bec586b34f682"
+checksum = "e29e1a2e2e6da3d2486086f9d96b4bf5b7d8bf344e16c48bd87ce7977b8d0154"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -6845,9 +6845,9 @@ dependencies = [
 
 [[package]]
 name = "sea-orm-cli"
-version = "2.0.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ec4b7c39c90efa92b8bb0b91ac7159684b9fa0d6371ce39bfab0a9793ce7394"
+checksum = "53cc7731b9472864d21bc6223c6747de539c5ec0cfe29bbd92aac0537c22812c"
 dependencies = [
  "chrono",
  "clap",
@@ -6866,9 +6866,9 @@ dependencies = [
 
 [[package]]
 name = "sea-orm-codegen"
-version = "2.0.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2086a0a47b3935b3a471341985447f3ba97f998f72baff8dea270264a6f847a"
+checksum = "2c33561217f8cb833103289ff079aedc677433749131154551da0a71de18c3ba"
 dependencies = [
  "heck 0.5.0",
  "pluralizer",
@@ -6882,9 +6882,9 @@ dependencies = [
 
 [[package]]
 name = "sea-orm-macros"
-version = "2.0.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4cbb7ae053b9b37c919ea944a3bc52f7830a90c223f8a765c908293bca8f22d"
+checksum = "88a6fd7ae2932a838d3bc7ca1e5483ffa10d6b25e4c43c8aebb4cd14773c2d08"
 dependencies = [
  "heck 0.5.0",
  "itertools 0.14.0",
@@ -6898,9 +6898,9 @@ dependencies = [
 
 [[package]]
 name = "sea-orm-migration"
-version = "2.0.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef3576c5301b67ea7d2ce4515858d700066e51911c7d228a439c00ff258695c8"
+checksum = "95ae369463e80e8a75e57434ba10dd9008a1010d81ec66cba5909561add7223f"
 dependencies = [
  "async-trait",
  "clap",
