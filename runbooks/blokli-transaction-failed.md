@@ -7,10 +7,9 @@
 Fires when transaction failures (`reverted`, `timeout`, or `submission_failed` — a well-formed transaction that Blokli genuinely attempted
 to submit, e.g. a channel-funding tx) spike above their recent baseline, per `monitoring.prometheusRule.rules.transactionFailed.*`.
 
-It's spike-based rather than "any failure fires"
-Instead it requires the recent rate (`windowMinutes`, default 15m) to be `spikeMultiplier`x (default 3x) the rate over `baselineWindowHours`
-(default 6h), with an absolute floor (`minFailures`, default 3) so 1-2 failures against a near-zero baseline don't count as a "spike" on
-their own.
+It's spike-based rather than "any failure fires". Instead it requires the recent rate (`windowMinutes`, default 15m) to be
+`spikeMultiplier`x (default 3x) the rate over `baselineWindowHours` (default 6h), with an absolute floor (`minFailures`, default 3) so 1-2
+failures against a near-zero baseline don't count as a "spike" on their own.
 
 ## Impact
 

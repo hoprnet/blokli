@@ -56,8 +56,8 @@ spec:
           outage, DB write failure, or a panic loop).
         runbook_url: https://github.com/hoprnet/blokli/blob/main/runbooks/blokli-indexer-stalled.md
       expr: |-
-        increase(blokli_indexer_block_number{job="{{ $fullname }}"}[{{ .windowMinutes }}m]) == 0
-        and increase(blokli_chain_head_block_number{job="{{ $fullname }}"}[{{ .windowMinutes }}m]) > 0
+        delta(blokli_indexer_block_number{job="{{ $fullname }}"}[{{ .windowMinutes }}m]) == 0
+        and delta(blokli_chain_head_block_number{job="{{ $fullname }}"}[{{ .windowMinutes }}m]) > 0
       for: {{ .for }}
       labels:
         severity: critical
@@ -116,7 +116,7 @@ spec:
           sum(rate(blokli_transaction_status_total{status=~"reverted|timeout|submission_failed", job="{{ $fullname }}"}[{{ .baselineWindowHours }}h]))
         ) > {{ .spikeMultiplier }}
         and
-        sum(increase(blokli_transaction_status_total{status=~"reverted|timeout|submission_failed", job="{{ $fullname }}"}[{{ .windowMinutes }}m])) > {{ .minFailures }}
+        sum(increase(blokli_transaction_status_total{status=~"reverted|timeout|submission_failed", job="{{ $fullname }}"}[{{ .windowMinutes }}m])) >= {{ .minFailures }}
       for: {{ .for }}
       labels:
         severity: warning
@@ -135,11 +135,11 @@ spec:
         description: >-
           {{`{{ $value }}`}} transactions submitted through the Blokli API in network {{ $network }} failed
           local validation (e.g. targeting a disallowed contract/function) in the last {{ .windowMinutes }}m —
-          above the {{ .minFailures }} floor. Usually a caller/integration issue rather than an on-chain
+          at or above the {{ .minFailures }} floor. Usually a caller/integration issue rather than an on-chain
           failure.
         runbook_url: https://github.com/hoprnet/blokli/blob/main/runbooks/blokli-transaction-validation-failed.md
       expr: |-
-        sum(increase(blokli_transaction_status_total{status="validation_failed", job="{{ $fullname }}"}[{{ .windowMinutes }}m])) > {{ .minFailures }}
+        sum(increase(blokli_transaction_status_total{status="validation_failed", job="{{ $fullname }}"}[{{ .windowMinutes }}m])) >= {{ .minFailures }}
       for: {{ .for }}
       labels:
         severity: warning

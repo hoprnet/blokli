@@ -407,7 +407,7 @@ database:
   maxConnections: 10
 # Bloklid configuration
 config:
-  ## @param config.network HOPR network to index (e.g., dufour, jura-dev, jura-prod)
+  ## @param config.network HOPR network to index (anvil-localhost, jura-dev, jura-prod, piz-palu-dev, piz-palu-staging)
   ##
   network: "jura-prod"
   ## @param config.rpcUrl Blockchain RPC URL

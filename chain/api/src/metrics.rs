@@ -2,10 +2,18 @@
 //!
 //! The following metric is exported (when the `telemetry` feature is enabled):
 //!
-//! - `blokli_transaction_status_total`: Counter of terminal outcomes for transactions submitted through the raw
+//! - `blokli_transaction_status_total`: Counter of terminal outcomes for raw-transaction attempts processed by the raw
 //!   transaction executor, labelled by `status`.
 
 /// All terminal transaction outcome label values for `blokli_transaction_status_total`.
+///
+/// # Examples
+///
+/// ```
+/// use blokli_chain_api::metrics::{STATUS_CONFIRMED, record_transaction_status};
+///
+/// record_transaction_status(STATUS_CONFIRMED);
+/// ```
 pub const STATUS_CONFIRMED: &str = "confirmed";
 pub const STATUS_REVERTED: &str = "reverted";
 pub const STATUS_TIMEOUT: &str = "timeout";
@@ -22,13 +30,21 @@ lazy_static::lazy_static! {
     static ref METRIC_BLOKLI_TRANSACTION_STATUS_TOTAL: hopr_metrics::MultiCounter =
         hopr_metrics::MultiCounter::new(
             "blokli_transaction_status_total",
-            "Total number of raw transactions submitted through the blokli API, by terminal outcome",
+            "Total number of raw-transaction attempts processed by the blokli API, by terminal outcome",
             &["status"],
         )
         .unwrap();
 }
 
 /// Increment the `blokli_transaction_status_total` counter for the given terminal outcome.
+///
+/// # Examples
+///
+/// ```
+/// use blokli_chain_api::metrics::{STATUS_SUBMISSION_FAILED, record_transaction_status};
+///
+/// record_transaction_status(STATUS_SUBMISSION_FAILED);
+/// ```
 #[allow(unused_variables)]
 pub fn record_transaction_status(status: &str) {
     #[cfg(all(feature = "telemetry", not(test)))]

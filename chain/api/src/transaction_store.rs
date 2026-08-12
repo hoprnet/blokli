@@ -13,6 +13,11 @@ use hopr_types::{crypto::types::Hash, primitive::traits::ToHex};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::metrics::{
+    STATUS_CONFIRMED, STATUS_REVERTED, STATUS_SUBMISSION_FAILED, STATUS_TIMEOUT, STATUS_VALIDATION_FAILED,
+    record_transaction_status,
+};
+
 /// Errors that can occur when working with the transaction store
 #[derive(Error, Debug, Clone, PartialEq)]
 pub enum TransactionStoreError {
@@ -74,11 +79,11 @@ impl TransactionStatus {
     fn metric_label(self) -> Option<&'static str> {
         match self {
             TransactionStatus::Submitted => None,
-            TransactionStatus::Confirmed => Some(crate::metrics::STATUS_CONFIRMED),
-            TransactionStatus::Reverted => Some(crate::metrics::STATUS_REVERTED),
-            TransactionStatus::Timeout => Some(crate::metrics::STATUS_TIMEOUT),
-            TransactionStatus::ValidationFailed => Some(crate::metrics::STATUS_VALIDATION_FAILED),
-            TransactionStatus::SubmissionFailed => Some(crate::metrics::STATUS_SUBMISSION_FAILED),
+            TransactionStatus::Confirmed => Some(STATUS_CONFIRMED),
+            TransactionStatus::Reverted => Some(STATUS_REVERTED),
+            TransactionStatus::Timeout => Some(STATUS_TIMEOUT),
+            TransactionStatus::ValidationFailed => Some(STATUS_VALIDATION_FAILED),
+            TransactionStatus::SubmissionFailed => Some(STATUS_SUBMISSION_FAILED),
         }
     }
 }
@@ -248,7 +253,7 @@ impl TransactionStore {
             .ok_or(TransactionStoreError::NotFound(id))?;
 
         if let Some(label) = status.metric_label() {
-            crate::metrics::record_transaction_status(label);
+            record_transaction_status(label);
         }
 
         // Publish event to subscribers with delta fields only
@@ -289,7 +294,7 @@ impl TransactionStore {
             })
             .ok_or(TransactionStoreError::NotFound(id))?;
 
-        crate::metrics::record_transaction_status(crate::metrics::STATUS_CONFIRMED);
+        record_transaction_status(STATUS_CONFIRMED);
 
         // Broadcast event so subscribers are notified of the confirmation
         let _ = self.event_bus.try_broadcast(TransactionEvent::StatusUpdated {

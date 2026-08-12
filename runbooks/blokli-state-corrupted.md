@@ -18,7 +18,7 @@ GraphQL API are at risk of serving incorrect data or failing outright.
 
 ## Diagnosis
 
-- Check database connectivity from the pod:
+- Check database connectivity from the pod.
 - Check recent application logs for the specific query error:
   - `kubectl -n blokli logs deployment/blokli-<networkName> | grep -i -E "error|corrupt|sql|database"`
 - Confirm the database schema matches what this `bloklid` version expects — check for pending or failed migrations (`db/migration/`).

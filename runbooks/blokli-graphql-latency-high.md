@@ -23,8 +23,10 @@ downstream even though Blokli itself is still serving requests.
 
 - Break down latency by request type:
   - `histogram_quantile(0.95, sum by (le, type) (rate(blokli_request_duration_seconds_bucket[5m])))`
-- Check whether latency correlates with database load — GraphQL resolvers query PostgreSQL directly; check for missing indexes, N+1 query
-  patterns, or connection pool exhaustion (`database.maxConnections`).
+- Check whether latency correlates with database load — GraphQL resolvers query the configured database (`database.type`: PostgreSQL or
+  SQLite) directly; check for missing indexes, N+1 query patterns, or connection pool exhaustion (`database.maxConnections`). For
+  PostgreSQL, inspect `pg_stat_activity` for long-running queries or lock contention. SQLite deployments have no connection pool and are
+  more sensitive to write contention under concurrent load.
 - Check pod CPU/memory usage for resource starvation:
   - `kubectl -n blokli top pod <pod-name>`
 - Check whether specific queries are unusually expensive (e.g. large pagination windows, deeply nested selections) — consider whether

@@ -15,6 +15,10 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
+    metrics::{
+        STATUS_CONFIRMED, STATUS_REVERTED, STATUS_SUBMISSION_FAILED, STATUS_TIMEOUT, STATUS_VALIDATION_FAILED,
+        record_transaction_status,
+    },
     transaction_monitor::{ReceiptProvider, SafeAddressChecker, enrich_safe_execution},
     transaction_store::{TransactionRecord, TransactionStatus, TransactionStore, TransactionStoreError},
     transaction_validator::{TransactionValidator, ValidationError},
@@ -29,10 +33,28 @@ pub enum TransactionExecutorError {
     RpcError(String),
     #[error("Transaction store error: {0}")]
     StoreError(#[from] TransactionStoreError),
-    #[error("Transaction timed out")]
-    Timeout,
+    #[error("Transaction timed out: {0}")]
+    Timeout(String),
     #[error("Transaction execution failed: {0}")]
     ExecutionFailed(String),
+}
+
+/// Terminal outcome of waiting for a submitted transaction's confirmation.
+///
+/// Distinguishes failures that occur before the transaction is submitted from
+/// failures that occur while waiting for it to be mined, so callers can record
+/// the correct `blokli_transaction_status_total` label for each case.
+#[derive(Error, Debug, Clone)]
+pub enum ConfirmationError {
+    /// The transaction was never accepted by the RPC node.
+    #[error("submission failed: {0}")]
+    SubmissionFailed(String),
+    /// The transaction was mined but reverted (receipt status = failure).
+    #[error("transaction reverted: {0}")]
+    Reverted(String),
+    /// The transaction was not mined within the configured timeout.
+    #[error("confirmation timed out: {0}")]
+    Timeout(String),
 }
 
 /// Trait for RPC operations needed by the transaction executor
@@ -49,7 +71,7 @@ pub trait RpcClient: Send + Sync {
         raw_tx: Vec<u8>,
         confirmations: u64,
         timeout: Option<Duration>,
-    ) -> Result<Hash, String>;
+    ) -> Result<Hash, ConfirmationError>;
 }
 
 /// Configuration for the raw transaction executor
@@ -158,7 +180,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
     pub async fn send_raw_transaction(&self, raw_tx: Vec<u8>) -> Result<Hash, TransactionExecutorError> {
         // Validate transaction
         if let Err(e) = self.validator.validate_raw_transaction(&raw_tx) {
-            crate::metrics::record_transaction_status(crate::metrics::STATUS_VALIDATION_FAILED);
+            record_transaction_status(STATUS_VALIDATION_FAILED);
             return Err(e.into());
         }
 
@@ -166,7 +188,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         let tx_hash = match self.rpc_client.send_raw_transaction(raw_tx).await {
             Ok(hash) => hash,
             Err(e) => {
-                crate::metrics::record_transaction_status(crate::metrics::STATUS_SUBMISSION_FAILED);
+                record_transaction_status(STATUS_SUBMISSION_FAILED);
                 return Err(TransactionExecutorError::RpcError(e));
             }
         };
@@ -185,7 +207,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
     pub async fn send_raw_transaction_async(&self, raw_tx: Vec<u8>) -> Result<Uuid, TransactionExecutorError> {
         // Validate transaction
         if let Err(e) = self.validator.validate_raw_transaction(&raw_tx) {
-            crate::metrics::record_transaction_status(crate::metrics::STATUS_VALIDATION_FAILED);
+            record_transaction_status(STATUS_VALIDATION_FAILED);
             return Err(e.into());
         }
 
@@ -193,7 +215,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         let tx_hash = match self.rpc_client.send_raw_transaction(raw_tx.clone()).await {
             Ok(hash) => hash,
             Err(e) => {
-                crate::metrics::record_transaction_status(crate::metrics::STATUS_SUBMISSION_FAILED);
+                record_transaction_status(STATUS_SUBMISSION_FAILED);
                 return Err(TransactionExecutorError::RpcError(e));
             }
         };
@@ -229,7 +251,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
     ) -> Result<TransactionRecord, TransactionExecutorError> {
         // Validate transaction
         if let Err(e) = self.validator.validate_raw_transaction(&raw_tx) {
-            crate::metrics::record_transaction_status(crate::metrics::STATUS_VALIDATION_FAILED);
+            record_transaction_status(STATUS_VALIDATION_FAILED);
             return Err(e.into());
         }
 
@@ -243,9 +265,17 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             .await
         {
             Ok(hash) => hash,
-            Err(e) => {
-                crate::metrics::record_transaction_status(crate::metrics::STATUS_SUBMISSION_FAILED);
+            Err(ConfirmationError::SubmissionFailed(e)) => {
+                record_transaction_status(STATUS_SUBMISSION_FAILED);
                 return Err(TransactionExecutorError::RpcError(e));
+            }
+            Err(ConfirmationError::Reverted(e)) => {
+                record_transaction_status(STATUS_REVERTED);
+                return Err(TransactionExecutorError::ExecutionFailed(e));
+            }
+            Err(ConfirmationError::Timeout(e)) => {
+                record_transaction_status(STATUS_TIMEOUT);
+                return Err(TransactionExecutorError::Timeout(e));
             }
         };
 
@@ -269,7 +299,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         }
 
         self.transaction_store.insert(record.clone())?;
-        crate::metrics::record_transaction_status(crate::metrics::STATUS_CONFIRMED);
+        record_transaction_status(STATUS_CONFIRMED);
         Ok(record)
     }
 
@@ -344,15 +374,17 @@ mod tests {
             _raw_tx: Vec<u8>,
             _confirmations: u64,
             _timeout: Option<Duration>,
-        ) -> Result<Hash, String> {
+        ) -> Result<Hash, ConfirmationError> {
             *self.call_count.lock().unwrap() += 1;
 
             if self.should_fail {
-                return Err("RPC error: transaction failed".to_string());
+                return Err(ConfirmationError::SubmissionFailed("transaction failed".to_string()));
             }
 
             if self.should_timeout {
-                return Err("RPC error: timeout waiting for confirmation".to_string());
+                return Err(ConfirmationError::Timeout(
+                    "timed out waiting for confirmation".to_string(),
+                ));
             }
 
             Ok(test_tx_hash())
@@ -456,7 +488,7 @@ mod tests {
         let raw_tx = vec![0x01, 0x02, 0x03];
 
         let result = executor.send_raw_transaction_sync(raw_tx, None).await;
-        assert!(matches!(result, Err(TransactionExecutorError::RpcError(_))));
+        assert!(matches!(result, Err(TransactionExecutorError::Timeout(_))));
 
         // Verify no record was created on RPC failure
         assert_eq!(executor.transaction_store().count(), 0);
