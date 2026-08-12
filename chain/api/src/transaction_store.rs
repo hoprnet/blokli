@@ -68,6 +68,21 @@ pub enum TransactionStatus {
     SubmissionFailed,
 }
 
+impl TransactionStatus {
+    /// The `blokli_transaction_status_total` metric label for this status, or `None` for the
+    /// non-terminal `Submitted` state.
+    fn metric_label(self) -> Option<&'static str> {
+        match self {
+            TransactionStatus::Submitted => None,
+            TransactionStatus::Confirmed => Some(crate::metrics::STATUS_CONFIRMED),
+            TransactionStatus::Reverted => Some(crate::metrics::STATUS_REVERTED),
+            TransactionStatus::Timeout => Some(crate::metrics::STATUS_TIMEOUT),
+            TransactionStatus::ValidationFailed => Some(crate::metrics::STATUS_VALIDATION_FAILED),
+            TransactionStatus::SubmissionFailed => Some(crate::metrics::STATUS_SUBMISSION_FAILED),
+        }
+    }
+}
+
 /// Event type for transaction status updates
 ///
 /// Represents transaction status changes that should be broadcast to subscribers.
@@ -232,6 +247,10 @@ impl TransactionStore {
             })
             .ok_or(TransactionStoreError::NotFound(id))?;
 
+        if let Some(label) = status.metric_label() {
+            crate::metrics::record_transaction_status(label);
+        }
+
         // Publish event to subscribers with delta fields only
         let _ = self.event_bus.try_broadcast(TransactionEvent::StatusUpdated {
             id,
@@ -269,6 +288,8 @@ impl TransactionStore {
                 record.confirmed_at
             })
             .ok_or(TransactionStoreError::NotFound(id))?;
+
+        crate::metrics::record_transaction_status(crate::metrics::STATUS_CONFIRMED);
 
         // Broadcast event so subscribers are notified of the confirmation
         let _ = self.event_bus.try_broadcast(TransactionEvent::StatusUpdated {

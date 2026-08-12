@@ -157,14 +157,19 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
     /// - Does NOT wait for confirmation
     pub async fn send_raw_transaction(&self, raw_tx: Vec<u8>) -> Result<Hash, TransactionExecutorError> {
         // Validate transaction
-        self.validator.validate_raw_transaction(&raw_tx)?;
+        if let Err(e) = self.validator.validate_raw_transaction(&raw_tx) {
+            crate::metrics::record_transaction_status(crate::metrics::STATUS_VALIDATION_FAILED);
+            return Err(e.into());
+        }
 
         // Submit to RPC
-        let tx_hash = self
-            .rpc_client
-            .send_raw_transaction(raw_tx)
-            .await
-            .map_err(TransactionExecutorError::RpcError)?;
+        let tx_hash = match self.rpc_client.send_raw_transaction(raw_tx).await {
+            Ok(hash) => hash,
+            Err(e) => {
+                crate::metrics::record_transaction_status(crate::metrics::STATUS_SUBMISSION_FAILED);
+                return Err(TransactionExecutorError::RpcError(e));
+            }
+        };
 
         Ok(tx_hash)
     }
@@ -179,14 +184,19 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
     /// - Background monitor handles confirmation tracking
     pub async fn send_raw_transaction_async(&self, raw_tx: Vec<u8>) -> Result<Uuid, TransactionExecutorError> {
         // Validate transaction
-        self.validator.validate_raw_transaction(&raw_tx)?;
+        if let Err(e) = self.validator.validate_raw_transaction(&raw_tx) {
+            crate::metrics::record_transaction_status(crate::metrics::STATUS_VALIDATION_FAILED);
+            return Err(e.into());
+        }
 
         // Submit to RPC first to get transaction hash
-        let tx_hash = self
-            .rpc_client
-            .send_raw_transaction(raw_tx.clone())
-            .await
-            .map_err(TransactionExecutorError::RpcError)?;
+        let tx_hash = match self.rpc_client.send_raw_transaction(raw_tx.clone()).await {
+            Ok(hash) => hash,
+            Err(e) => {
+                crate::metrics::record_transaction_status(crate::metrics::STATUS_SUBMISSION_FAILED);
+                return Err(TransactionExecutorError::RpcError(e));
+            }
+        };
 
         // Create transaction record with hash and Submitted status
         let id = Uuid::new_v4();
@@ -218,17 +228,26 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         confirmations: Option<u64>,
     ) -> Result<TransactionRecord, TransactionExecutorError> {
         // Validate transaction
-        self.validator.validate_raw_transaction(&raw_tx)?;
+        if let Err(e) = self.validator.validate_raw_transaction(&raw_tx) {
+            crate::metrics::record_transaction_status(crate::metrics::STATUS_VALIDATION_FAILED);
+            return Err(e.into());
+        }
 
         let confirmations = confirmations.unwrap_or(self.config.default_confirmations);
         let submitted_at = Utc::now();
 
         // Submit to RPC with confirmation wait
-        let tx_hash = self
+        let tx_hash = match self
             .rpc_client
             .send_raw_transaction_with_confirm(raw_tx.clone(), confirmations, Some(self.config.confirmation_timeout))
             .await
-            .map_err(TransactionExecutorError::RpcError)?;
+        {
+            Ok(hash) => hash,
+            Err(e) => {
+                crate::metrics::record_transaction_status(crate::metrics::STATUS_SUBMISSION_FAILED);
+                return Err(TransactionExecutorError::RpcError(e));
+            }
+        };
 
         // Attempt Safe execution enrichment if dependencies are available
         let mut record = TransactionRecord {
@@ -250,6 +269,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         }
 
         self.transaction_store.insert(record.clone())?;
+        crate::metrics::record_transaction_status(crate::metrics::STATUS_CONFIRMED);
         Ok(record)
     }
 

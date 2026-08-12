@@ -1955,6 +1955,7 @@ dependencies = [
  "hopr-bindings",
  "hopr-types",
  "insta",
+ "lazy_static",
  "rand 0.10.2",
  "serde",
  "serde_json",
