@@ -1,6 +1,7 @@
 use blokli_db_entity::prelude::{
     Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, HoprBalance, HoprNodeSafeRegistration,
     HoprSafeContract, HoprSafeContractState, HoprSafeRedeemedStats, Log, LogStatus, LogTopicInfo, NativeBalance,
+    ServiceEntry, ServiceEntryState, ServiceRegistryConfig, ServiceType as ServiceTypeEntity, ServiceTypeState,
 };
 use migration::{Migrator, MigratorChainLogs, MigratorIndex, MigratorTrait, SafeDataOrigin};
 use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait, Statement};
@@ -29,7 +30,8 @@ use crate::errors::{DbSqlError, Result};
 /// - `"1.1.0"`: Initial schema (consolidated from prior migration stack)
 /// - `"1.2.0"`:
 /// - `"1.3.0"`: SC set updated through a binding update.
-pub const SCHEMA_VERSION: &str = "1.3.0";
+/// - `"1.4.0"`: Service registry contract added to the indexed set.
+pub const SCHEMA_VERSION: &str = "1.4.0";
 
 /// The singleton ID used for the schema_version table.
 const SCHEMA_VERSION_TABLE_ID: i64 = 1;
@@ -256,6 +258,12 @@ async fn clear_index_data(db: &DatabaseConnection) -> Result<()> {
 
     HoprNodeSafeRegistration::delete_many().exec(db).await?;
 
+    ServiceEntryState::delete_many().exec(db).await?;
+    ServiceEntry::delete_many().exec(db).await?;
+    ServiceTypeState::delete_many().exec(db).await?;
+    ServiceTypeEntity::delete_many().exec(db).await?;
+    ServiceRegistryConfig::delete_many().exec(db).await?;
+
     ChainInfo::delete_many().exec(db).await?;
 
     Ok(())
@@ -276,7 +284,10 @@ async fn clear_logs_data(db: &DatabaseConnection) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use blokli_db_entity::{chain_info, log, prelude::HoprSafeContract};
+    use blokli_db_entity::{
+        chain_info, log, prelude::HoprSafeContract, service_entry, service_entry_state, service_type,
+        service_type_state,
+    };
     use sea_orm::{ActiveModelTrait, DbBackend, EntityTrait, PaginatorTrait, Set, Statement};
 
     use super::*;
@@ -418,6 +429,123 @@ mod tests {
         );
         assert_eq!(chain_info_after.last_indexed_tx_index, None);
         assert_eq!(chain_info_after.last_indexed_log_index, None);
+
+        Ok(())
+    }
+
+    /// The `1.3.0` -> `1.4.0` upgrade adds the service registry to the indexed contract set, so
+    /// the stored logs no longer cover every `(address, topic)` pair the indexer asks for. The
+    /// minor bump must therefore clear the logs *and* the service registry tables, letting
+    /// `ensure_logs_origin` prime the new topic set on an empty logs database.
+    #[tokio::test]
+    async fn test_service_registry_upgrade_clears_logs_and_service_data() -> anyhow::Result<()> {
+        /// The schema version that shipped before the service registry was indexed.
+        const PRE_SERVICE_REGISTRY_VERSION: &str = "1.3.0";
+
+        let temp_dir = tempfile::tempdir()?;
+        let index_url = format!(
+            "sqlite://{}?mode=rwc",
+            temp_dir.path().join("test_service_index.db").display()
+        );
+        let logs_url = format!(
+            "sqlite://{}?mode=rwc",
+            temp_dir.path().join("test_service_logs.db").display()
+        );
+
+        let db = BlokliDb::new(&index_url, Some(&logs_url), Default::default()).await?;
+        db.ensure_singletons().await?;
+
+        let index_conn = db.conn(crate::TargetDb::Index);
+        let logs_conn = db.conn(crate::TargetDb::Logs);
+
+        let service_type_id = service_type::ActiveModel {
+            service_type: Set(vec![0xAA; 32]),
+            ..Default::default()
+        }
+        .insert(index_conn)
+        .await?
+        .id;
+
+        service_type_state::ActiveModel {
+            service_type_id: Set(service_type_id),
+            owner_address: Set(Some(vec![0x11; 20])),
+            requirement_address: Set(None),
+            registration_burn: Set(vec![0u8; 32]),
+            update_burn: Set(vec![0u8; 32]),
+            published_block: Set(10),
+            published_tx_index: Set(0),
+            published_log_index: Set(0),
+            ..Default::default()
+        }
+        .insert(index_conn)
+        .await?;
+
+        let service_entry_id = service_entry::ActiveModel {
+            service_type_id: Set(service_type_id),
+            node_address: Set(vec![0x22; 20]),
+            ..Default::default()
+        }
+        .insert(index_conn)
+        .await?
+        .id;
+
+        service_entry_state::ActiveModel {
+            service_entry_id: Set(service_entry_id),
+            safe_address: Set(Some(vec![0x33; 20])),
+            metadata: Set(Some(vec![1, 2, 3])),
+            registered_at: Set(None),
+            updated_at: Set(None),
+            deregistered: Set(false),
+            published_block: Set(10),
+            published_tx_index: Set(0),
+            published_log_index: Set(1),
+            ..Default::default()
+        }
+        .insert(index_conn)
+        .await?;
+
+        log::ActiveModel {
+            transaction_hash: Set(vec![0u8; 32]),
+            tx_index: Set(0),
+            log_index: Set(0),
+            block_number: Set(10),
+            block_hash: Set(vec![0u8; 32]),
+            address: Set(vec![0u8; 20]),
+            data: Set(vec![]),
+            topics: Set(vec![]),
+            ..Default::default()
+        }
+        .insert(logs_conn)
+        .await?;
+
+        // The singleton config row is created by `ensure_singletons`.
+        assert_eq!(ServiceRegistryConfig::find().count(index_conn).await?, 1);
+
+        let stored = Version::parse(PRE_SERVICE_REGISTRY_VERSION)?;
+        assert!(
+            stored.minor < code_version().minor,
+            "the pre-service-registry version must be older than the code version"
+        );
+        set_schema_version(index_conn, PRE_SERVICE_REGISTRY_VERSION).await?;
+
+        let was_reset = check_and_reset_if_needed(index_conn, Some(logs_conn)).await?;
+        assert!(was_reset, "a minor version increase should clear the data");
+
+        assert_eq!(ServiceEntryState::find().count(index_conn).await?, 0);
+        assert_eq!(ServiceEntry::find().count(index_conn).await?, 0);
+        assert_eq!(ServiceTypeState::find().count(index_conn).await?, 0);
+        assert_eq!(ServiceTypeEntity::find().count(index_conn).await?, 0);
+        assert_eq!(ServiceRegistryConfig::find().count(index_conn).await?, 0);
+
+        assert_eq!(Log::find().count(logs_conn).await?, 0);
+        assert_eq!(LogStatus::find().count(logs_conn).await?, 0);
+        assert_eq!(LogTopicInfo::find().count(logs_conn).await?, 0);
+
+        assert_eq!(get_stored_version(index_conn).await?, code_version());
+
+        // Production recreates the singletons after a reset.
+        db.ensure_singletons().await?;
+        assert_eq!(ServiceRegistryConfig::find().count(index_conn).await?, 1);
 
         Ok(())
     }

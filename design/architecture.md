@@ -160,6 +160,7 @@ RPC Endpoint
      ├── Channels (open/close/balance updates)
      ├── Token (HOPR token transfers/approvals)
      ├── SafeRegistry (Safe address linking)
+     ├── ServiceRegistry (service entries and service type configuration)
      └── Oracles (ticket price, win probability)
      │
      ▼
@@ -193,6 +194,9 @@ RPC Endpoint
 - **HoprNodeStakeFactory**: Safe contract deployment events with module and owner tracking
 - **HoprTicketPriceOracle**: Network-wide ticket price updates
 - **HoprWinningProbabilityOracle**: Network-wide winning probability updates
+- **HoprServiceRegistry**: Permissionless registry of the services nodes offer, together with the configuration of each service type. The
+  contract is optional: a network that has not deployed it carries the zero address, and the indexer then leaves that address out of the
+  filter set entirely rather than filtering logs on the null address.
 
 ### 4. Database Layer
 
@@ -307,6 +311,8 @@ The schema is organized into three root types following GraphQL best practices:
 - Safe contract queries by address or chain key (owner)
 - Balance queries by address (works for any Ethereum address)
 - Chain information and network parameters
+- Service registry queries: entries with mandatory filtering, an entry count, the service type configuration, and the registry-wide
+  configuration
 - Transaction status queries by UUID
 - Health check and version endpoints
 
@@ -322,7 +328,13 @@ The schema is organized into three root types following GraphQL best practices:
 - Channel updates: Real-time changes to payment channel states
 - Safe deployments: Real-time notifications when new Safe contracts are deployed
 - Network topology: Opened channel graph updates for routing decisions
+- Service registry updates: registrations, updates and deregistrations of entries, and changes to service type or registry-wide
+  configuration
 - Transaction updates: Status changes for submitted transactions
+
+The service registry subscriptions carry no initial snapshot. The set of entries is permissionless and attacker-growable, so the
+corresponding query refuses an unfiltered listing, and replaying the set to every subscriber would give away exactly what that refusal
+protects. A client reads current state from the queries and then follows the stream.
 
 **Error Handling**: Uses GraphQL union types to return domain-specific error types (InvalidAddressError, ContractNotAllowedError, etc.)
 alongside success types, providing structured error responses with codes and context.

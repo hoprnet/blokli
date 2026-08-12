@@ -14,7 +14,8 @@ use std::sync::{
 
 use async_broadcast::{Receiver, Sender, broadcast};
 use blokli_api_types::{
-    Account, ChannelUpdate, RedeemTicketDetails, RedemptionResult, TicketParameters, TokenValueString, UInt64,
+    Account, ChannelUpdate, RedeemTicketDetails, RedemptionResult, ServiceTypeUpdate, ServiceUpdate, TicketParameters,
+    TokenValueString, UInt64,
 };
 use hopr_types::primitive::prelude::Address;
 use tokio::sync::RwLock;
@@ -103,6 +104,15 @@ pub enum IndexerEvent {
     /// Carries all fields needed to identify the ticket and report the outcome.
     /// Subscribers filter by channel ID, issuer, or recipient address.
     TicketRedeemed(RedeemTicketDetailsInfo),
+
+    /// A service registry entry was registered, updated or deregistered.
+    ///
+    /// Carries the kind of change explicitly, because a deregistration leaves no entry behind
+    /// and a registration is not distinguishable from an update by its timestamps alone.
+    ServiceEntryUpdated(ServiceUpdate),
+
+    /// Service-type or registry-wide configuration changed.
+    ServiceTypeUpdated(ServiceTypeUpdate),
 }
 
 /// Shared state for coordinating indexer operations with subscriptions

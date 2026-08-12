@@ -2,7 +2,8 @@ use std::{path::Path, time::Duration};
 
 use blokli_db_entity::{
     chain_info,
-    prelude::{Account, Announcement, ChainInfo},
+    prelude::{Account, Announcement, ChainInfo, ServiceRegistryConfig},
+    service_registry_config,
 };
 use migration::{Migrator, MigratorChainLogs, MigratorIndex, MigratorTrait, SafeDataOrigin};
 use sea_orm::{ConnectOptions, Database, EntityTrait, Set, SqlxSqliteConnector, sea_query::OnConflict};
@@ -286,10 +287,11 @@ impl BlokliDb {
         self.logs_db.as_ref().unwrap_or(&self.db)
     }
 
-    /// Initialize ChainInfo singleton entry if it doesn't exist.
+    /// Initialize the ChainInfo and ServiceRegistryConfig singleton entries if they don't exist.
     ///
-    /// This ensures the required singleton row exists in the chain_info table.
-    /// This row is created during startup after migrations complete.
+    /// This ensures the required singleton rows exist in the `chain_info` and
+    /// `service_registry_config` tables. These rows are created during startup after migrations
+    /// complete.
     ///
     /// This operation uses ON CONFLICT DO NOTHING for idempotency.
     ///
@@ -308,6 +310,21 @@ impl BlokliDb {
                     };
                     ChainInfo::insert(chain_info_model)
                         .on_conflict(OnConflict::column(chain_info::Column::Id).do_nothing().to_owned())
+                        .exec_without_returning(tx.as_ref())
+                        .await?;
+
+                    // Insert the ServiceRegistryConfig singleton the same way; the registry-wide
+                    // values it holds stay at their defaults until the first config event.
+                    let service_registry_config_model = service_registry_config::ActiveModel {
+                        id: Set(SINGULAR_TABLE_FIXED_ID),
+                        ..Default::default()
+                    };
+                    ServiceRegistryConfig::insert(service_registry_config_model)
+                        .on_conflict(
+                            OnConflict::column(service_registry_config::Column::Id)
+                                .do_nothing()
+                                .to_owned(),
+                        )
                         .exec_without_returning(tx.as_ref())
                         .await?;
 

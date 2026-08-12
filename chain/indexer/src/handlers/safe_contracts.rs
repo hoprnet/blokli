@@ -27,6 +27,7 @@ fn to_hopr_contract_addresses(addresses: &BlokliContractAddresses) -> HoprContra
         winning_probability_oracle: AlloyAddress::from_hopr_address(addresses.winning_probability_oracle),
         node_stake_factory: AlloyAddress::from_hopr_address(addresses.node_stake_factory),
         xhopr_token: AlloyAddress::from_hopr_address(addresses.xhopr_token),
+        service_registry: AlloyAddress::from_hopr_address(addresses.service_registry),
     }
 }
 
@@ -417,8 +418,8 @@ mod tests {
         custom_abis::safe_contract_events::SafeContract,
         handlers::test_utils::test_helpers::{
             ANNOUNCEMENTS_ADDR, CHANNELS_ADDR, ClonableMockOperations, MockIndexerRpcOperations,
-            NODE_SAFE_REGISTRY_ADDR, SELF_CHAIN_KEYPAIR, TICKET_PRICE_ORACLE_ADDR, TOKEN_ADDR, WIN_PROB_ORACLE_ADDR,
-            init_handlers,
+            NODE_SAFE_REGISTRY_ADDR, SELF_CHAIN_KEYPAIR, SERVICE_REGISTRY_ADDR, TICKET_PRICE_ORACLE_ADDR, TOKEN_ADDR,
+            WIN_PROB_ORACLE_ADDR, init_handlers,
         },
     };
 
@@ -446,6 +447,7 @@ mod tests {
             winning_probability_oracle: AlloyAddress::from_hopr_address(*WIN_PROB_ORACLE_ADDR),
             node_stake_factory: alloy_address_with_byte(0),
             xhopr_token: alloy_address_with_byte(0),
+            service_registry: AlloyAddress::from_hopr_address(*SERVICE_REGISTRY_ADDR),
         }
     }
 

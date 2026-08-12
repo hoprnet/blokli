@@ -6,8 +6,8 @@ use async_broadcast::Receiver;
 use async_graphql::{Context, ID, Result, Subscription};
 use async_stream::stream;
 use blokli_api_types::{
-    Account, Channel, ChannelUpdate, Hex32, OpenedChannelsGraphEntry, RedeemTicketDetails, Safe, TicketParameters,
-    TokenValueString, Transaction, UInt64,
+    Account, Channel, ChannelUpdate, Hex32, OpenedChannelsGraphEntry, RedeemTicketDetails, Safe, ServiceTypeUpdate,
+    ServiceUpdate, TicketParameters, TokenValueString, Transaction, UInt64,
 };
 use blokli_chain_api::transaction_store::{
     TransactionEvent, TransactionStatus as StoreTransactionStatus, TransactionStore,
@@ -44,6 +44,7 @@ use crate::{
     errors,
     query::owners_for_safe,
     readiness::{ReadinessChecker, ReadinessState},
+    validation::{parse_service_type, validate_eth_address},
 };
 
 /// Watermark representing the last fully processed blockchain position
@@ -573,6 +574,12 @@ impl SubscriptionRoot {
                             Ok(IndexerEvent::TicketRedeemed(_)) => {
                                 // Ticket redeemed don't affect this subscription
                             }
+                            Ok(IndexerEvent::ServiceEntryUpdated(_)) => {
+                                // Service registry entry updates don't affect this subscription
+                            }
+                            Ok(IndexerEvent::ServiceTypeUpdated(_)) => {
+                                // Service type configuration updates don't affect this subscription
+                            }
                             Err(async_broadcast::RecvError::Closed) => {
                                 info!("Event bus closed, ending channelUpdated subscription");
                                 return;
@@ -702,6 +709,12 @@ impl SubscriptionRoot {
                             Ok(IndexerEvent::TicketRedeemed(_)) => {
                                 // Ticket redeemed don't affect this subscription
                             }
+                            Ok(IndexerEvent::ServiceEntryUpdated(_)) => {
+                                // Service registry entry updates don't affect this subscription
+                            }
+                            Ok(IndexerEvent::ServiceTypeUpdated(_)) => {
+                                // Service type configuration updates don't affect this subscription
+                            }
                             Err(async_broadcast::RecvError::Closed) => {
                                 info!("Event bus closed, ending subscription");
                                 return;
@@ -809,6 +822,168 @@ impl SubscriptionRoot {
         })
     }
 
+    /// Subscribe to real-time changes of service registry entries
+    ///
+    /// Emits on registration, update and deregistration. Optional filters restrict the stream to
+    /// a single service type, a single node, or both.
+    ///
+    /// Uses the IndexerState event bus for real-time notifications:
+    /// - Streams changes when `IndexerEvent::ServiceEntryUpdated` events are received
+    /// - Automatically shuts down on blockchain reorganization
+    ///
+    /// **No initial snapshot.** The stream carries changes only. Current state comes from the
+    /// `services` query, which is where the mandatory-filter rule lives: the entry table is
+    /// permissionless and attacker-growable, so replaying it to every subscriber would hand out
+    /// the enumeration that query refuses.
+    #[graphql(name = "serviceUpdated")]
+    async fn service_updated(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Filter by service type - ASCII name such as gvpn:exit, or 0x-prefixed hex")]
+        service_type: Option<String>,
+        #[graphql(desc = "Filter by node chain address (hexadecimal format)")] node: Option<String>,
+    ) -> Result<impl Stream<Item = ServiceUpdate>> {
+        let db = ctx.data::<DatabaseConnection>()?.clone();
+        let indexer_state = ctx
+            .data::<IndexerState>()
+            .map_err(|e| async_graphql::Error::new(errors::messages::context_error("IndexerState", e.message)))?
+            .clone();
+
+        // Both filters are normalized once, so that the comparison against every event is a plain
+        // string equality and a hex filter matches an entry the schema renders by its ASCII name.
+        let service_type_filter = service_type
+            .as_deref()
+            .map(parse_service_type)
+            .transpose()?
+            .map(|parsed| parsed.to_string());
+        let node_filter = normalize_node_filter(node.as_deref())?;
+
+        // Subscribe under the coordination lock rather than mid-block, so that the stream starts
+        // at a block boundary and cannot observe half of a block's events.
+        let (_watermark, mut event_receiver, mut shutdown_receiver) =
+            capture_watermark_synchronized(&indexer_state, &db).await?;
+
+        Ok(stream! {
+            loop {
+                tokio::select! {
+                    biased;
+
+                    shutdown_result = shutdown_receiver.recv() => {
+                        match shutdown_result {
+                            Ok(_) => {
+                                info!("serviceUpdated subscription shutting down due to reorg");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Closed) => {
+                                warn!("Shutdown channel closed for serviceUpdated");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Overflowed(n)) => {
+                                warn!("Shutdown signal overflowed ({}), continuing", n);
+                            }
+                        }
+                    }
+                    event_result = event_receiver.recv() => {
+                        match event_result {
+                            Ok(IndexerEvent::ServiceEntryUpdated(update)) => {
+                                if matches_service_filters(&update, service_type_filter.as_deref(), node_filter.as_deref()) {
+                                    yield update;
+                                }
+                            }
+                            Ok(_) => {
+                                // Other events (AccountUpdated, ChannelUpdated, etc.) - ignore
+                            }
+                            Err(async_broadcast::RecvError::Closed) => {
+                                info!("Event bus closed, ending serviceUpdated subscription");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Overflowed(n)) => {
+                                warn!("Event bus overflowed ({}); serviceUpdated may miss events", n);
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    /// Subscribe to real-time changes of service type and registry-wide configuration
+    ///
+    /// Uses the IndexerState event bus for real-time notifications:
+    /// - Streams changes when `IndexerEvent::ServiceTypeUpdated` events are received
+    /// - Automatically shuts down on blockchain reorganization
+    ///
+    /// **No initial snapshot**, matching `serviceUpdated`. Current state comes from the
+    /// `serviceTypes` and `serviceRegistryConfig` queries.
+    ///
+    /// The two registry-wide kinds carry no service type, so a `serviceType` filter excludes them.
+    #[graphql(name = "serviceTypeUpdated")]
+    async fn service_type_updated(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Filter by service type - ASCII name such as gvpn:exit, or 0x-prefixed hex")]
+        service_type: Option<String>,
+    ) -> Result<impl Stream<Item = ServiceTypeUpdate>> {
+        let db = ctx.data::<DatabaseConnection>()?.clone();
+        let indexer_state = ctx
+            .data::<IndexerState>()
+            .map_err(|e| async_graphql::Error::new(errors::messages::context_error("IndexerState", e.message)))?
+            .clone();
+
+        let service_type_filter = service_type
+            .as_deref()
+            .map(parse_service_type)
+            .transpose()?
+            .map(|parsed| parsed.to_string());
+
+        // Subscribe under the coordination lock, for the same reason as `serviceUpdated`.
+        let (_watermark, mut event_receiver, mut shutdown_receiver) =
+            capture_watermark_synchronized(&indexer_state, &db).await?;
+
+        Ok(stream! {
+            loop {
+                tokio::select! {
+                    biased;
+
+                    shutdown_result = shutdown_receiver.recv() => {
+                        match shutdown_result {
+                            Ok(_) => {
+                                info!("serviceTypeUpdated subscription shutting down due to reorg");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Closed) => {
+                                warn!("Shutdown channel closed for serviceTypeUpdated");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Overflowed(n)) => {
+                                warn!("Shutdown signal overflowed ({}), continuing", n);
+                            }
+                        }
+                    }
+                    event_result = event_receiver.recv() => {
+                        match event_result {
+                            Ok(IndexerEvent::ServiceTypeUpdated(update)) => {
+                                if matches_service_type_filter(&update, service_type_filter.as_deref()) {
+                                    yield update;
+                                }
+                            }
+                            Ok(_) => {
+                                // Other events (AccountUpdated, ChannelUpdated, etc.) - ignore
+                            }
+                            Err(async_broadcast::RecvError::Closed) => {
+                                info!("Event bus closed, ending serviceTypeUpdated subscription");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Overflowed(n)) => {
+                                warn!("Event bus overflowed ({}); serviceTypeUpdated may miss events", n);
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    }
+
     /// Subscribe to real-time updates of ticket price and winning probability
     ///
     /// Provides updates whenever there is a change in the ticket price or minimum
@@ -892,6 +1067,12 @@ impl SubscriptionRoot {
                             }
                             Ok(IndexerEvent::TicketRedeemed(_)) => {
                                 // Ticket redeemed don't affect this subscription
+                            }
+                            Ok(IndexerEvent::ServiceEntryUpdated(_)) => {
+                                // Service registry entry updates don't affect this subscription
+                            }
+                            Ok(IndexerEvent::ServiceTypeUpdated(_)) => {
+                                // Service type configuration updates don't affect this subscription
                             }
                             Err(async_broadcast::RecvError::Closed) => {
                                 info!("Event bus closed, ending ticketParametersUpdated subscription");
@@ -1000,6 +1181,12 @@ impl SubscriptionRoot {
                             }
                             Ok(IndexerEvent::TicketRedeemed(_)) => {
                                 // Ticket redeemed don't affect this subscription
+                            }
+                            Ok(IndexerEvent::ServiceEntryUpdated(_)) => {
+                                // Service registry entry updates don't affect this subscription
+                            }
+                            Ok(IndexerEvent::ServiceTypeUpdated(_)) => {
+                                // Service type configuration updates don't affect this subscription
                             }
                             Err(async_broadcast::RecvError::Closed) => {
                                 info!("Event bus closed, ending keyBindingFeeUpdated subscription");
@@ -1403,6 +1590,40 @@ impl SubscriptionRoot {
             .collect();
 
         Ok(result)
+    }
+}
+
+/// Normalizes an optional node chain address filter into lowercase `0x` hex.
+///
+/// Normalizing once at subscription start makes every later comparison a plain string equality,
+/// and rejects a malformed address before the stream is handed to the client rather than silently
+/// matching nothing.
+fn normalize_node_filter(node: Option<&str>) -> Result<Option<String>> {
+    node.map(|value| {
+        validate_eth_address(value)?;
+        Address::from_hex(value)
+            .map(|address| address.to_hex())
+            .map_err(|e| async_graphql::Error::new(errors::messages::invalid_address(value, e)))
+    })
+    .transpose()
+}
+
+/// Check whether a registry entry change matches the subscription filters.
+///
+/// Filters are ANDed and both are compared against the already normalized form the payload
+/// carries, so an absent filter matches everything.
+fn matches_service_filters(update: &ServiceUpdate, service_type: Option<&str>, node: Option<&str>) -> bool {
+    service_type.is_none_or(|filter| update.service_type == filter) && node.is_none_or(|filter| update.node == filter)
+}
+
+/// Check whether a service type or registry-wide change matches the subscription filter.
+///
+/// The two registry-wide kinds carry no service type, so a filter excludes them: a client asking
+/// for one type is not asking for registry-wide configuration.
+fn matches_service_type_filter(update: &ServiceTypeUpdate, service_type: Option<&str>) -> bool {
+    match service_type {
+        None => true,
+        Some(filter) => update.service_type.as_deref() == Some(filter),
     }
 }
 

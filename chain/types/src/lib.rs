@@ -1,6 +1,7 @@
 //! This crate contains various on-chain related modules and types.
 use constants::{ERC_1820_DEPLOYER, ERC_1820_REGISTRY_DEPLOY_CODE, ETH_VALUE_FOR_ERC1820_DEPLOYER};
 use hopr_bindings::{
+    constants::{INIT_ADMIN_DELAY, INIT_TYPE_REGISTRATION_FEE},
     erc677_mock::ERC677Mock::{self, ERC677MockInstance},
     exports::alloy::{
         contract::Result as ContractResult,
@@ -15,6 +16,7 @@ use hopr_bindings::{
     hopr_node_safe_migration::HoprNodeSafeMigration::HoprNodeSafeMigrationInstance,
     hopr_node_safe_registry::HoprNodeSafeRegistry::{self, HoprNodeSafeRegistryInstance},
     hopr_node_stake_factory::HoprNodeStakeFactory::{self, HoprNodeStakeFactoryInstance},
+    hopr_service_registry::HoprServiceRegistry::{self, HoprServiceRegistryInstance},
     hopr_ticket_price_oracle::HoprTicketPriceOracle::{self, HoprTicketPriceOracleInstance},
     hopr_token::HoprToken::{self, HoprTokenInstance},
     hopr_winning_probability_oracle::HoprWinningProbabilityOracle::{self, HoprWinningProbabilityOracleInstance},
@@ -128,6 +130,14 @@ pub struct ContractAddresses {
     #[serde_as(as = "DisplayFromStr")]
     #[serde(default)]
     pub xhopr_token: Address,
+    /// Service registry contract.
+    ///
+    /// The zero address means the registry is not deployed on this network - `jura`,
+    /// `debug-staging` and `rotsee` are in that state - and every consumer must skip the
+    /// contract rather than filter logs on the null address.
+    #[serde_as(as = "DisplayFromStr")]
+    #[serde(default)]
+    pub service_registry: Address,
 }
 
 /// Holds instances to contracts.
@@ -144,6 +154,7 @@ pub struct ContractInstances<P> {
     pub ticket_price_oracle: HoprTicketPriceOracleInstance<P>,
     pub winning_probability_oracle: HoprWinningProbabilityOracleInstance<P>,
     pub node_stake_factory: HoprNodeStakeFactoryInstance<P>,
+    pub service_registry: HoprServiceRegistryInstance<P>,
 }
 
 /// Amount of xHOPR (18 decimals) minted to the deployer in the testing deployment.
@@ -195,6 +206,10 @@ where
             ),
             node_stake_factory: HoprNodeStakeFactoryInstance::new(
                 AlloyAddress::from_hopr_address(contract_addresses.node_stake_factory),
+                provider.clone(),
+            ),
+            service_registry: HoprServiceRegistryInstance::new(
+                AlloyAddress::from_hopr_address(contract_addresses.service_registry),
                 provider.clone(),
             ),
         }
@@ -268,6 +283,21 @@ where
         // In production, these addresses are loaded from hopr-bindings network configuration.
         let node_safe_migration = HoprNodeSafeMigrationInstance::new(AlloyAddress::ZERO, provider.clone());
 
+        // CAUTION: the service registry must stay LAST. Deploy addresses are nonce-derived
+        // CREATE, so a deployment in any other position churns every `anvil-localhost` address
+        // that follows it. `DeployAll.s.sol` and `hopr-bindings`' own testing deploy both put the
+        // registry after everything that came before it.
+        let service_registry = HoprServiceRegistry::deploy(
+            provider.clone(),
+            *token.address(),
+            *safe_registry.address(),
+            INIT_ADMIN_DELAY,
+            self_address,
+            self_address,
+            INIT_TYPE_REGISTRATION_FEE,
+        )
+        .await?;
+
         Ok(Self {
             token,
             xhopr_token,
@@ -279,6 +309,7 @@ where
             ticket_price_oracle: price_oracle,
             winning_probability_oracle: win_prob_oracle,
             node_stake_factory: stake_factory,
+            service_registry,
         })
     }
 
@@ -313,6 +344,7 @@ where
             winning_probability_oracle: instances.winning_probability_oracle.address().to_hopr_address(),
             node_stake_factory: instances.node_stake_factory.address().to_hopr_address(),
             xhopr_token: instances.xhopr_token.address().to_hopr_address(),
+            service_registry: instances.service_registry.address().to_hopr_address(),
         }
     }
 }

@@ -10,13 +10,14 @@ mod tests;
 pub use async_graphql::ID;
 use async_graphql::{Enum, InputObject, InputValueError, Scalar, ScalarType, SimpleObject, Union, Value};
 use hopr_types::{crypto::types::Hash, primitive::prelude::ToHex};
+use serde::Serialize;
 
 /// Token value represented as a string to maintain precision
 ///
 /// This scalar type represents token amounts as decimal strings to avoid
 /// floating-point precision issues. Values are typically represented in
 /// the token's base unit (e.g., wei for native tokens, smallest unit for HOPR).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TokenValueString(pub String);
 
 #[Scalar]
@@ -83,7 +84,7 @@ impl From<hopr_types::crypto::types::Hash> for Hex32 {
 /// This scalar type represents u64 values as strings in GraphQL to avoid
 /// JavaScript's Number precision loss (JS Number is only safe up to 2^53-1).
 /// The maximum value is 18,446,744,073,709,551,615.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct UInt64(pub u64);
 
 #[Scalar(name = "UInt64")]
@@ -115,7 +116,11 @@ impl ScalarType for UInt64 {
 /// This scalar type represents a mapping from contract identifier strings
 /// (e.g., "token", "channels") to their deployed addresses in hexadecimal format.
 /// Keys: token, channels, announcements, module_implementation, node_safe_migration, node_safe_registry,
-/// ticket_price_oracle, winning_probability_oracle, node_stake_factory
+/// ticket_price_oracle, winning_probability_oracle, node_stake_factory, xhopr_token, service_registry
+///
+/// The keys match the field names of `hopr_types::chain::ContractAddresses`, because consumers
+/// deserialize this map straight into that struct. Dropping a key breaks them at runtime, not at
+/// compile time.
 ///
 /// Serialized as a stringified JSON object. For example:
 /// `{"token":"0x123abc","channels":"0x456def","announcements":"0x789ghi"}`
@@ -310,6 +315,178 @@ pub enum AccountsResult {
     Accounts(AccountsList),
     /// Missing required filter parameter
     MissingFilter(MissingFilterError),
+    /// Query failed
+    QueryFailed(QueryFailedError),
+}
+
+/// A single entry in the on-chain service registry: one node offering one service type
+///
+/// The registry treats the metadata as opaque bytes: its schema belongs to the service type, not
+/// to the registry, so it is exposed as hex rather than parsed.
+#[derive(SimpleObject, Clone, Debug, PartialEq, Serialize)]
+pub struct ServiceEntry {
+    /// Service type identifier - ASCII name, or 0x-prefixed hex when the id is not printable ASCII
+    #[graphql(name = "serviceType")]
+    pub service_type: String,
+    /// Chain address of the node offering the service in hexadecimal format
+    pub node: String,
+    /// Safe that performed the last write to this entry, in hexadecimal format
+    pub safe: String,
+    /// Opaque metadata as 0x-prefixed hex
+    pub metadata: String,
+    /// Unix timestamp in seconds at which the entry was registered
+    ///
+    /// A `UInt64` rather than an `Int`: the on-chain source is a `uint48`, which a signed 32-bit
+    /// GraphQL `Int` cannot carry past 2038.
+    #[graphql(name = "registeredAt")]
+    pub registered_at: UInt64,
+    /// Unix timestamp in seconds at which the entry was last updated
+    #[graphql(name = "updatedAt")]
+    pub updated_at: UInt64,
+}
+
+/// Configuration of a single service type
+#[derive(SimpleObject, Clone, Debug, PartialEq, Serialize)]
+pub struct ServiceTypeInfo {
+    /// Service type identifier - ASCII name, or 0x-prefixed hex
+    #[graphql(name = "serviceType")]
+    pub service_type: String,
+    /// Owner of the type; null once the type has been abandoned, which is one-way
+    pub owner: Option<String>,
+    /// Requirement contract gating registration; null for an open type
+    pub requirement: Option<String>,
+    /// wxHOPR burned on self-registration
+    #[graphql(name = "registrationBurn")]
+    pub registration_burn: TokenValueString,
+    /// wxHOPR burned on self-update
+    #[graphql(name = "updateBurn")]
+    pub update_burn: TokenValueString,
+}
+
+/// Registry-wide configuration, shared by every service type
+#[derive(SimpleObject, Clone, Debug, PartialEq, Serialize)]
+pub struct ServiceRegistryConfig {
+    /// wxHOPR burned to register a new service type
+    #[graphql(name = "typeRegistrationFee")]
+    pub type_registration_fee: TokenValueString,
+    /// Node-safe registry the service registry resolves node bindings against, in hexadecimal format
+    #[graphql(name = "nodeSafeRegistry")]
+    pub node_safe_registry: String,
+}
+
+/// Kind of change to a single registry entry
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug, Serialize)]
+pub enum ServiceUpdateKind {
+    /// The entry was created
+    #[graphql(name = "REGISTERED")]
+    Registered,
+    /// An existing entry changed
+    #[graphql(name = "UPDATED")]
+    Updated,
+    /// The entry was removed
+    #[graphql(name = "DEREGISTERED")]
+    Deregistered,
+}
+
+/// Kind of change to service-type or registry-wide configuration
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug, Serialize)]
+pub enum ServiceTypeUpdateKind {
+    /// A new service type was registered
+    #[graphql(name = "REGISTERED")]
+    Registered,
+    /// Type ownership moved, or the type was abandoned
+    #[graphql(name = "OWNER_CHANGED")]
+    OwnerChanged,
+    /// The requirement contract gating the type changed
+    #[graphql(name = "REQUIREMENT_CHANGED")]
+    RequirementChanged,
+    /// The self-registration burn of the type changed
+    #[graphql(name = "REGISTRATION_BURN_CHANGED")]
+    RegistrationBurnChanged,
+    /// The self-update burn of the type changed
+    #[graphql(name = "UPDATE_BURN_CHANGED")]
+    UpdateBurnChanged,
+    /// The registry-wide type registration fee changed
+    #[graphql(name = "REGISTRATION_FEE_CHANGED")]
+    RegistrationFeeChanged,
+    /// The node-safe registry the service registry points at changed
+    #[graphql(name = "REGISTRY_POINTER_CHANGED")]
+    RegistryPointerChanged,
+}
+
+/// A change to one registry entry
+///
+/// The kind is explicit rather than inferred from the timestamps: registration sets `updatedAt`
+/// to `registeredAt`, and so does an update landing in the registration block, so the two are
+/// not distinguishable from the entry alone. Deregistration carries no entry at all.
+#[derive(SimpleObject, Clone, Debug, PartialEq, Serialize)]
+pub struct ServiceUpdate {
+    /// What happened to the entry
+    pub kind: ServiceUpdateKind,
+    /// Service type the entry belongs to
+    #[graphql(name = "serviceType")]
+    pub service_type: String,
+    /// Node the entry belongs to, in hexadecimal format
+    pub node: String,
+    /// Entry state after the change; null for `DEREGISTERED`, where the entry no longer exists
+    pub entry: Option<ServiceEntry>,
+}
+
+/// A change to service-type or registry-wide configuration
+#[derive(SimpleObject, Clone, Debug, PartialEq, Serialize)]
+pub struct ServiceTypeUpdate {
+    /// What changed
+    pub kind: ServiceTypeUpdateKind,
+    /// Service type affected; null for the two registry-wide kinds
+    #[graphql(name = "serviceType")]
+    pub service_type: Option<String>,
+    /// Type configuration after the change; null for the two registry-wide kinds
+    pub config: Option<ServiceTypeInfo>,
+    /// Registry-wide configuration after the change; null for the five per-type kinds
+    #[graphql(name = "registryConfig")]
+    pub registry_config: Option<ServiceRegistryConfig>,
+}
+
+/// Success response for the services query
+#[derive(SimpleObject, Clone, Debug)]
+pub struct ServicesList {
+    /// Matching registry entries
+    pub services: Vec<ServiceEntry>,
+}
+
+/// Success response for the serviceTypes query
+#[derive(SimpleObject, Clone, Debug)]
+pub struct ServiceTypesList {
+    /// Matching service types
+    #[graphql(name = "serviceTypes")]
+    pub service_types: Vec<ServiceTypeInfo>,
+}
+
+/// Result type for the services list query
+#[derive(Union, Clone, Debug)]
+pub enum ServicesResult {
+    /// Successful services list
+    Services(ServicesList),
+    /// Missing required filter parameter
+    MissingFilter(MissingFilterError),
+    /// Query failed
+    QueryFailed(QueryFailedError),
+}
+
+/// Result type for the registry-wide configuration query
+#[derive(Union, Clone, Debug)]
+pub enum ServiceRegistryConfigResult {
+    /// The current registry-wide configuration
+    Config(ServiceRegistryConfig),
+    /// Query failed
+    QueryFailed(QueryFailedError),
+}
+
+/// Result type for the service types query
+#[derive(Union, Clone, Debug)]
+pub enum ServiceTypesResult {
+    /// Successful service type list
+    ServiceTypes(ServiceTypesList),
     /// Query failed
     QueryFailed(QueryFailedError),
 }
@@ -835,6 +1012,7 @@ impl From<&blokli_chain_types::ContractAddresses> for ContractAddressMap {
             ("winning_probability_oracle", &addresses.winning_probability_oracle),
             ("node_stake_factory", &addresses.node_stake_factory),
             ("xhopr_token", &addresses.xhopr_token),
+            ("service_registry", &addresses.service_registry),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))

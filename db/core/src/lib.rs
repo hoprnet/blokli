@@ -19,6 +19,7 @@ mod numeric;
 pub mod safe_contracts;
 pub mod safe_history;
 pub mod safe_redeemed_stats;
+pub mod services;
 pub mod snapshot;
 pub mod state_queries;
 pub mod utils;
@@ -43,6 +44,7 @@ use crate::{
     safe_contracts::BlokliDbSafeContractOperations,
     safe_history::BlokliDbSafeHistoryOperations,
     safe_redeemed_stats::BlokliDbSafeRedeemedStatsOperations,
+    services::BlokliDbServiceOperations,
     snapshot::LogsSnapshotInfo,
 };
 
@@ -283,6 +285,7 @@ pub trait BlokliDbAllOperations:
     + BlokliDbSafeRedeemedStatsOperations
     + BlokliDbSafeContractOperations
     + BlokliDbSafeHistoryOperations
+    + BlokliDbServiceOperations
 {
 }
 
@@ -301,6 +304,7 @@ pub mod prelude {
         safe_contracts::*,
         safe_history::*,
         safe_redeemed_stats::*,
+        services::*,
         state_queries::*,
     };
 }
