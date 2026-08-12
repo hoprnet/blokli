@@ -56,10 +56,9 @@ futures-timer = "3.0.4"
 futures-util = "0.3.32"
 hex = "0.4.3"
 hex-literal = "1.1.0"
-hopli = { git = "https://github.com/hoprnet/hopli", branch = "main" }
-hopr-bindings = "4.12.2"
-hopr-types = "2.3.0"
-
+hopli = { git = "https://github.com/hoprnet/hopli", rev = "048be10bdd1b1296cc87966394bdfab33998906b" }
+hopr-bindings = { git = "https://github.com/hoprnet/contracts", rev = "6ce45eb5e7d433545d82ea32e27562eb0fc329c3" }
+hopr-types = { git = "https://github.com/hoprnet/hopr-types", rev = "2a3bb391f1f98475d033b105c69090d050aaff0c" }
 http = "1.4.2"
 humantime-serde = "1.1.1"
 insta = { version = "1.47.2", features = ["yaml"] }
@@ -197,18 +196,3 @@ cast_sign_loss           = "deny"
 [profile.dev.package]
 insta.opt-level   = 3
 similar.opt-level = 3
-
-# TODO: revert to the crates.io / git versions once contracts publishes hopr-bindings 4.12.2,
-# hopr-types publishes 2.3.0 and hopli publishes the service-registry commands. Mirrors the
-# TODO in hopr-types/Cargo.toml.
-[patch.crates-io]
-hopr-bindings = { path = "../contracts/ethereum/bindings" }
-hopr-types    = { path = "../hopr-types" }
-
-# hopr-types pins hopr-bindings to a contracts git rev, so patching crates.io alone leaves two
-# copies of the crate in the graph and their alloy types stop unifying.
-[patch."https://github.com/hoprnet/contracts"]
-hopr-bindings = { path = "../contracts/ethereum/bindings" }
-
-[patch."https://github.com/hoprnet/hopli"]
-hopli = { path = "../hopli" }
