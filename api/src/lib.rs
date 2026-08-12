@@ -28,7 +28,7 @@ use blokli_chain_api::{
     transaction_validator::TransactionValidator,
 };
 use blokli_chain_rpc::{
-    client::DefaultRetryPolicy,
+    client::{DefaultRetryPolicy, MetricsLayer},
     rpc::{RpcOperations, RpcOperationsConfig},
     transport::ReqwestClient,
 };
@@ -115,6 +115,7 @@ pub async fn start_server(network: String, finality: u16, config: ApiConfig) -> 
             100,
             DefaultRetryPolicy::default(),
         ))
+        .layer(MetricsLayer)
         .transport(transport_client.clone(), transport_client.guess_local());
 
     let rpc_operations = RpcOperations::new(

@@ -17,7 +17,11 @@ runtime-tokio = [
   "blokli-chain-indexer/runtime-tokio",
   "blokli-db/runtime-tokio",
 ]
-telemetry = ["dep:lazy_static", "hopr-types/telemetry"]
+telemetry = [
+  "blokli-chain-rpc/telemetry",
+  "dep:lazy_static",
+  "hopr-types/telemetry",
+]
 
 [dependencies]
 # Async runtime

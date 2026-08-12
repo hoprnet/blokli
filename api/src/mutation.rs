@@ -214,9 +214,7 @@ fn executor_error_to_sync_result(error: TransactionExecutorError) -> SendTransac
         TransactionExecutorError::RpcError(msg) => {
             SendTransactionSyncResult::RpcError(errors::rpc_error_with_message(msg))
         }
-        TransactionExecutorError::Timeout => SendTransactionSyncResult::Timeout(errors::timeout_error(
-            "Transaction was not confirmed within the timeout window",
-        )),
+        TransactionExecutorError::Timeout(msg) => SendTransactionSyncResult::Timeout(errors::timeout_error(msg)),
         _ => SendTransactionSyncResult::RpcError(errors::rpc_internal_error(&error)),
     }
 }

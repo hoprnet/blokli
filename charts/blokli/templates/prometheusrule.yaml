@@ -1,0 +1,268 @@
+{{- if .Values.monitoring.prometheusRule.enabled }}
+{{- $fullname := include "blokli.fullname" . }}
+{{- $network := .Values.config.network }}
+{{- $r := .Values.monitoring.prometheusRule.rules }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ $fullname }}
+  {{- if .Values.monitoring.prometheusRule.namespace }}
+  namespace: {{ .Values.monitoring.prometheusRule.namespace }}
+  {{- else }}
+  namespace: {{ .Release.Namespace }}
+  {{- end }}
+  labels:
+    {{- include "blokli.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  groups:
+  - name: blokli
+    rules:
+    # Every expression below is scoped to this release's own targets via job="{{ $fullname }}".
+    # This chart may be installed multiple times in the same namespace (one release per network),
+    # and without this filter an expression would aggregate metrics across all of them, and the
+    # static "network" alert label would then mislabel alerts that actually belong to another
+    # release's network.
+    {{- with $r.indexerLagHigh }}
+    {{- if .enabled }}
+    - alert: blokli-indexer-lag-high
+      annotations:
+        summary: Blokli indexer is falling behind the chain head.
+        description: >-
+          The Blokli indexer in network {{ $network }} is more than {{ .thresholdBlocks }} blocks behind the
+          chain head (currently {{`{{ $value }}`}} blocks) for over {{ .for }}. Data served by the GraphQL API
+          may be stale.
+        runbook_url: https://github.com/hoprnet/blokli/blob/main/runbooks/blokli-indexer-lag-high.md
+      expr: |-
+        blokli_chain_head_block_number{job="{{ $fullname }}"} - blokli_indexer_block_number{job="{{ $fullname }}"} > {{ .thresholdBlocks }}
+      for: {{ .for }}
+      labels:
+        severity: warning
+        network: {{ $network }}
+    {{- end }}
+    {{- end }}
+    {{- with $r.indexerStalled }}
+    {{- if .enabled }}
+    - alert: blokli-indexer-stalled
+      annotations:
+        summary: Blokli indexer has stopped making progress.
+        description: >-
+          The Blokli indexer in network {{ $network }} has not advanced in the last {{ .windowMinutes }}m
+          while the chain head is still advancing, for over {{ .for }}. The indexer may be stuck (e.g. RPC
+          outage, DB write failure, or a panic loop).
+        runbook_url: https://github.com/hoprnet/blokli/blob/main/runbooks/blokli-indexer-stalled.md
+      expr: |-
+        delta(blokli_indexer_block_number{job="{{ $fullname }}"}[{{ .windowMinutes }}m]) == 0
+        and delta(blokli_chain_head_block_number{job="{{ $fullname }}"}[{{ .windowMinutes }}m]) > 0
+      for: {{ .for }}
+      labels:
+        severity: critical
+        network: {{ $network }}
+    {{- end }}
+    {{- end }}
+    {{- with $r.unhealthy }}
+    {{- if .enabled }}
+    - alert: blokli-unhealthy
+      annotations:
+        summary: Blokli readiness check is not reporting healthy.
+        description: >-
+          The Blokli readiness check in network {{ $network }} has not reported the "ok" status for over
+          {{ .for }}. This gates the /readyz endpoint and mirrors config.api.health.maxIndexerLag.
+        runbook_url: https://github.com/hoprnet/blokli/blob/main/runbooks/blokli-unhealthy.md
+      expr: blokli_health{status="ok", job="{{ $fullname }}"} == 0
+      for: {{ .for }}
+      labels:
+        severity: critical
+        network: {{ $network }}
+    {{- end }}
+    {{- end }}
+    {{- with $r.stateCorrupted }}
+    {{- if .enabled }}
+    - alert: blokli-state-corrupted
+      annotations:
+        summary: Blokli reports corrupted database state.
+        description: >-
+          The Blokli readiness check in network {{ $network }} reported a "corrupted" status for over
+          {{ .for }}, indicating a database query error during the health check.
+        runbook_url: https://github.com/hoprnet/blokli/blob/main/runbooks/blokli-state-corrupted.md
+      expr: blokli_health{status="corrupted", job="{{ $fullname }}"} == 1
+      for: {{ .for }}
+      labels:
+        severity: critical
+        network: {{ $network }}
+    {{- end }}
+    {{- end }}
+    {{- with $r.transactionFailed }}
+    {{- if .enabled }}
+    - alert: blokli-transaction-failed
+      annotations:
+        summary: Spike in Blokli transaction failures (reverted/timeout/submission_failed).
+        # A flat ">0" trigger pages on every isolated RPC blip, which this app doesn't yet handle
+        # gracefully — so instead this fires on a spike: the recent failure rate well above its own
+        # recent baseline, with an absolute floor (minFailures) so 1-2 failures against a near-zero
+        # baseline don't count as a "spike" on their own.
+        description: >-
+          Transaction failures in network {{ $network }} are running at {{`{{ $value | printf "%.1f" }}`}}x
+          their {{ .baselineWindowHours }}h baseline rate.
+        runbook_url: https://github.com/hoprnet/blokli/blob/main/runbooks/blokli-transaction-failed.md
+      expr: |-
+        (
+          sum(rate(blokli_transaction_status_total{status=~"reverted|timeout|submission_failed", job="{{ $fullname }}"}[{{ .windowMinutes }}m]))
+          /
+          sum(rate(blokli_transaction_status_total{status=~"reverted|timeout|submission_failed", job="{{ $fullname }}"}[{{ .baselineWindowHours }}h]))
+        ) > {{ .spikeMultiplier }}
+        and
+        sum(increase(blokli_transaction_status_total{status=~"reverted|timeout|submission_failed", job="{{ $fullname }}"}[{{ .windowMinutes }}m])) >= {{ .minFailures }}
+      for: {{ .for }}
+      labels:
+        severity: warning
+        network: {{ $network }}
+    {{- end }}
+    {{- end }}
+    {{- with $r.transactionValidationFailed }}
+    {{- if .enabled }}
+    - alert: blokli-transaction-validation-failed
+      annotations:
+        summary: Repeated transactions submitted to Blokli were rejected before reaching the chain.
+        # minFailures is an absolute floor, not a spike/baseline ratio (unlike blokli-transaction-failed):
+        # validation_failed is deterministic local-allowlist rejection, not RPC-driven, so there's no
+        # legitimate nonzero "normal" rate to compare against. The floor just tolerates a handful of
+        # one-off bad requests (stale client, a few scanner probes) without paging on the first one.
+        description: >-
+          {{`{{ $value }}`}} transactions submitted through the Blokli API in network {{ $network }} failed
+          local validation (e.g. targeting a disallowed contract/function) in the last {{ .windowMinutes }}m —
+          at or above the {{ .minFailures }} floor. Usually a caller/integration issue rather than an on-chain
+          failure.
+        runbook_url: https://github.com/hoprnet/blokli/blob/main/runbooks/blokli-transaction-validation-failed.md
+      expr: |-
+        sum(increase(blokli_transaction_status_total{status="validation_failed", job="{{ $fullname }}"}[{{ .windowMinutes }}m])) >= {{ .minFailures }}
+      for: {{ .for }}
+      labels:
+        severity: warning
+        network: {{ $network }}
+    {{- end }}
+    {{- end }}
+    {{- with $r.rpcFailureRateHigh }}
+    {{- if .enabled }}
+    - alert: blokli-rpc-failure-rate-high
+      annotations:
+        summary: Blokli RPC call failure rate is high.
+        description: >-
+          More than {{ mulf .thresholdRatio 100 }}% of Blokli RPC calls in network {{ $network }} failed
+          over the last 5m (currently {{`{{ $value | humanizePercentage }}`}}), sustained for over {{ .for }}.
+          The upstream RPC provider may be degraded or rate-limiting.
+        runbook_url: https://github.com/hoprnet/blokli/blob/main/runbooks/blokli-rpc-failure-rate-high.md
+      expr: |-
+        sum(rate(blokli_rpc_call_count{result="failure", job="{{ $fullname }}"}[5m])) / sum(rate(blokli_rpc_call_count{job="{{ $fullname }}"}[5m])) > {{ .thresholdRatio }}
+      for: {{ .for }}
+      labels:
+        severity: warning
+        network: {{ $network }}
+    {{- end }}
+    {{- end }}
+    {{- with $r.rpcCallLatencyHigh }}
+    {{- if .enabled }}
+    - alert: blokli-rpc-call-latency-high
+      annotations:
+        summary: Blokli RPC call latency is high.
+        # Informational, not warning: elevated latency on its own is a leading/diagnostic signal, not
+        # something that needs a human paged. A genuine outage cascades into blokli-rpc-failure-rate-high
+        # and eventually blokli-unhealthy, which are more specific and already carry warning/critical severity.
+        description: >-
+          The p95 Blokli RPC call latency in network {{ $network }} has been above {{ .thresholdSeconds }}s
+          for over {{ .for }}. The upstream RPC provider may be slow or overloaded.
+        runbook_url: https://github.com/hoprnet/blokli/blob/main/runbooks/blokli-rpc-call-latency-high.md
+      expr: |-
+        histogram_quantile(0.95, sum(rate(blokli_rpc_call_time_sec_bucket{job="{{ $fullname }}"}[5m])) by (le)) > {{ .thresholdSeconds }}
+      for: {{ .for }}
+      labels:
+        severity: info
+        network: {{ $network }}
+    {{- end }}
+    {{- end }}
+    {{- with $r.rpcRetriesHigh }}
+    {{- if .enabled }}
+    - alert: blokli-rpc-retries-high
+      annotations:
+        summary: Blokli RPC calls are retrying excessively.
+        description: >-
+          The p95 number of retries per Blokli RPC call in network {{ $network }} has been above
+          {{ .thresholdRetries }} for over {{ .for }}. This usually points at a flaky or rate-limiting RPC
+          endpoint.
+        runbook_url: https://github.com/hoprnet/blokli/blob/main/runbooks/blokli-rpc-retries-high.md
+      expr: |-
+        histogram_quantile(0.95, sum(rate(blokli_retries_per_rpc_call_bucket{job="{{ $fullname }}"}[5m])) by (le)) > {{ .thresholdRetries }}
+      for: {{ .for }}
+      labels:
+        severity: warning
+        network: {{ $network }}
+    {{- end }}
+    {{- end }}
+    {{- with $r.graphqlErrorRateHigh }}
+    {{- if .enabled }}
+    - alert: blokli-graphql-error-rate-high
+      annotations:
+        summary: Blokli GraphQL API error rate is high.
+        # blokli_request_count is only incremented for requests that parsed as valid GraphQL (query/mutation/
+        # subscription); invalid_request errors have no matching request_count entry, so a plain
+        # errors/requests ratio would be skewed by them. Subscriptions are counted once per connection opened
+        # but can emit many errored push messages over that one connection's lifetime, so a ratio doesn't mean
+        # "error rate per request" for them either. Each type family therefore gets its own condition, unioned
+        # with "or" and tagged via the "reason" label so the firing alert says which one triggered.
+        description: >-
+          Blokli GraphQL errors in network {{ $network }} breached the "{{`{{ $labels.reason }}`}}" condition
+          (current value: {{`{{ $value }}`}}), sustained for over {{ .for }}. query_mutation_error_ratio means
+          more than {{ mulf .thresholdRatio 100 }}% of query/mutation requests errored over the last 5m.
+          invalid_request_count means at least {{ .thresholdInvalidRequestCount }} malformed/unparseable
+          GraphQL requests were received in the last 5m. subscription_error_count means at least
+          {{ .thresholdSubscriptionErrorCount }} errored messages were pushed over subscription connections in
+          the last 5m.
+        runbook_url: https://github.com/hoprnet/blokli/blob/main/runbooks/blokli-graphql-error-rate-high.md
+      expr: |-
+        label_replace(
+          (
+            sum(rate(blokli_errors_total{type=~"query|mutation", job="{{ $fullname }}"}[5m]))
+            /
+            sum(rate(blokli_request_count{type=~"query|mutation", job="{{ $fullname }}"}[5m]))
+          ) > {{ .thresholdRatio }},
+          "reason", "query_mutation_error_ratio", "", ""
+        )
+        or
+        label_replace(
+          sum(increase(blokli_errors_total{type="invalid_request", job="{{ $fullname }}"}[5m])) > {{ .thresholdInvalidRequestCount }},
+          "reason", "invalid_request_count", "", ""
+        )
+        or
+        label_replace(
+          sum(increase(blokli_errors_total{type="subscription", job="{{ $fullname }}"}[5m])) > {{ .thresholdSubscriptionErrorCount }},
+          "reason", "subscription_error_count", "", ""
+        )
+      for: {{ .for }}
+      labels:
+        severity: warning
+        network: {{ $network }}
+    {{- end }}
+    {{- end }}
+    {{- with $r.graphqlLatencyHigh }}
+    {{- if .enabled }}
+    - alert: blokli-graphql-latency-high
+      annotations:
+        summary: Blokli GraphQL API latency is high.
+        description: >-
+          The p95 Blokli GraphQL request latency in network {{ $network }} has been above
+          {{ .thresholdSeconds }}s for over {{ .for }}. Clients querying the API will experience slow
+          responses.
+        runbook_url: https://github.com/hoprnet/blokli/blob/main/runbooks/blokli-graphql-latency-high.md
+      expr: |-
+        histogram_quantile(0.95, sum(rate(blokli_request_duration_seconds_bucket{job="{{ $fullname }}"}[5m])) by (le)) > {{ .thresholdSeconds }}
+      for: {{ .for }}
+      labels:
+        severity: warning
+        network: {{ $network }}
+    {{- end }}
+    {{- end }}
+{{- end }}

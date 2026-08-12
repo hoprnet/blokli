@@ -195,6 +195,140 @@ monitoring:
     ## @param monitoring.serviceMonitor.path Metrics path exposed by the embedded API server
     ##
     path: /metrics
+  prometheusRule:
+    ## @param monitoring.prometheusRule.enabled Enable PrometheusRule (alerting rules) creation. Requires the Prometheus Operator CRDs
+    ##
+    enabled: false
+    ## @param monitoring.prometheusRule.namespace PrometheusRule namespace (defaults to release namespace)
+    ##
+    namespace: ""
+    ## @param monitoring.prometheusRule.labels Additional labels on the PrometheusRule resource (e.g. to match a Prometheus Operator ruleSelector)
+    ##
+    labels: {}
+    # Alerting rule thresholds. Each rule can be disabled independently; runbooks are documented under /runbooks
+    rules:
+      indexerLagHigh:
+        ## @param monitoring.prometheusRule.rules.indexerLagHigh.enabled Enable the blokli-indexer-lag-high alert
+        ##
+        enabled: true
+        ## @param monitoring.prometheusRule.rules.indexerLagHigh.thresholdBlocks Number of blocks the indexer may lag behind the chain head before firing
+        ##
+        thresholdBlocks: 15
+        ## @param monitoring.prometheusRule.rules.indexerLagHigh.for How long the lag must stay above the threshold before firing
+        ##
+        for: 5m
+      indexerStalled:
+        ## @param monitoring.prometheusRule.rules.indexerStalled.enabled Enable the blokli-indexer-stalled alert
+        ##
+        enabled: true
+        ## @param monitoring.prometheusRule.rules.indexerStalled.windowMinutes Look-back window (minutes) used to detect indexer progress against chain head progress
+        ##
+        windowMinutes: 5
+        ## @param monitoring.prometheusRule.rules.indexerStalled.for How long the stalled condition must persist before firing
+        ##
+        for: 2m
+      unhealthy:
+        ## @param monitoring.prometheusRule.rules.unhealthy.enabled Enable the blokli-unhealthy alert
+        ##
+        enabled: true
+        ## @param monitoring.prometheusRule.rules.unhealthy.for How long readiness must report unhealthy before firing
+        ##
+        for: 5m
+      stateCorrupted:
+        ## @param monitoring.prometheusRule.rules.stateCorrupted.enabled Enable the blokli-state-corrupted alert
+        ##
+        enabled: true
+        ## @param monitoring.prometheusRule.rules.stateCorrupted.for How long the corrupted status must persist before firing
+        ##
+        for: 1m
+      transactionFailed:
+        ## @param monitoring.prometheusRule.rules.transactionFailed.enabled Enable the blokli-transaction-failed alert
+        ##
+        enabled: true
+        ## @param monitoring.prometheusRule.rules.transactionFailed.windowMinutes Short look-back window (minutes) for the recent failure rate
+        ##
+        windowMinutes: 15
+        ## @param monitoring.prometheusRule.rules.transactionFailed.minFailures Minimum absolute number of failures in windowMinutes before this counts as a spike at all, regardless of ratio
+        ##
+        minFailures: 3
+        ## @param monitoring.prometheusRule.rules.transactionFailed.baselineWindowHours Longer look-back window (hours) establishing the "normal" recent failure rate to compare against
+        ##
+        baselineWindowHours: 6
+        ## @param monitoring.prometheusRule.rules.transactionFailed.spikeMultiplier How many times higher than the baseline rate the recent rate must be to count as a spike
+        ##
+        spikeMultiplier: 3
+        ## @param monitoring.prometheusRule.rules.transactionFailed.for How long the spike must persist across evaluations before firing
+        ##
+        for: 1m
+      transactionValidationFailed:
+        ## @param monitoring.prometheusRule.rules.transactionValidationFailed.enabled Enable the blokli-transaction-validation-failed alert
+        ##
+        enabled: true
+        ## @param monitoring.prometheusRule.rules.transactionValidationFailed.windowMinutes Look-back window (minutes) used to detect transactions rejected before submission (malformed/disallowed raw transactions)
+        ##
+        windowMinutes: 15
+        ## @param monitoring.prometheusRule.rules.transactionValidationFailed.minFailures Minimum number of validation failures in windowMinutes before firing, so a handful of one-off bad requests (a stale client, a few scanner probes) doesn't page on its own
+        ##
+        minFailures: 5
+        ## @param monitoring.prometheusRule.rules.transactionValidationFailed.for How long the failure must persist across evaluations before firing
+        ##
+        for: 5m
+      rpcFailureRateHigh:
+        ## @param monitoring.prometheusRule.rules.rpcFailureRateHigh.enabled Enable the blokli-rpc-failure-rate-high alert
+        ##
+        enabled: true
+        ## @param monitoring.prometheusRule.rules.rpcFailureRateHigh.thresholdRatio Fraction (0-1) of failed RPC calls over the evaluation window before firing
+        ##
+        thresholdRatio: 0.1
+        ## @param monitoring.prometheusRule.rules.rpcFailureRateHigh.for How long the failure ratio must stay above the threshold before firing
+        ##
+        for: 10m
+      rpcCallLatencyHigh:
+        ## @param monitoring.prometheusRule.rules.rpcCallLatencyHigh.enabled Enable the blokli-rpc-call-latency-high alert
+        ##
+        enabled: true
+        ## @param monitoring.prometheusRule.rules.rpcCallLatencyHigh.thresholdSeconds p95 RPC call latency (seconds) before firing
+        ##
+        thresholdSeconds: 5
+        ## @param monitoring.prometheusRule.rules.rpcCallLatencyHigh.for How long the p95 latency must stay above the threshold before firing
+        ##
+        for: 10m
+      rpcRetriesHigh:
+        ## @param monitoring.prometheusRule.rules.rpcRetriesHigh.enabled Enable the blokli-rpc-retries-high alert. Defaults to disabled: blokli_retries_per_rpc_call has no code path that ever records it yet (blocked on TODO(#7140) in chain/rpc/src/client.rs), so this alert cannot fire regardless of the threshold until that lands. See runbooks/blokli-rpc-retries-high.md
+        ##
+        enabled: false
+        ## @param monitoring.prometheusRule.rules.rpcRetriesHigh.thresholdRetries p95 retries per RPC call before firing
+        ##
+        thresholdRetries: 3
+        ## @param monitoring.prometheusRule.rules.rpcRetriesHigh.for How long the p95 retries must stay above the threshold before firing
+        ##
+        for: 10m
+      graphqlErrorRateHigh:
+        ## @param monitoring.prometheusRule.rules.graphqlErrorRateHigh.enabled Enable the blokli-graphql-error-rate-high alert
+        ##
+        enabled: true
+        ## @param monitoring.prometheusRule.rules.graphqlErrorRateHigh.thresholdRatio Fraction (0-1) of query/mutation requests resulting in errors over the evaluation window before firing. Does not apply to invalid_request or subscription, which have no meaningful request-count denominator (see thresholdInvalidRequestCount / thresholdSubscriptionErrorCount)
+        ##
+        thresholdRatio: 0.05
+        ## @param monitoring.prometheusRule.rules.graphqlErrorRateHigh.thresholdInvalidRequestCount Number of malformed/unparseable GraphQL requests over a 5m window before firing
+        ##
+        thresholdInvalidRequestCount: 5
+        ## @param monitoring.prometheusRule.rules.graphqlErrorRateHigh.thresholdSubscriptionErrorCount Number of errored messages pushed over GraphQL subscription connections over a 5m window before firing
+        ##
+        thresholdSubscriptionErrorCount: 5
+        ## @param monitoring.prometheusRule.rules.graphqlErrorRateHigh.for How long any one of the three conditions above must stay breached before firing
+        ##
+        for: 10m
+      graphqlLatencyHigh:
+        ## @param monitoring.prometheusRule.rules.graphqlLatencyHigh.enabled Enable the blokli-graphql-latency-high alert
+        ##
+        enabled: true
+        ## @param monitoring.prometheusRule.rules.graphqlLatencyHigh.thresholdSeconds p95 GraphQL request latency (seconds) before firing
+        ##
+        thresholdSeconds: 2
+        ## @param monitoring.prometheusRule.rules.graphqlLatencyHigh.for How long the p95 latency must stay above the threshold before firing
+        ##
+        for: 10m
 ## @param extraEnv Additional environment variables
 ##
 extraEnv: []
@@ -273,7 +407,7 @@ database:
   maxConnections: 10
 # Bloklid configuration
 config:
-  ## @param config.network HOPR network to index (e.g., dufour, jura-dev, jura-prod)
+  ## @param config.network HOPR network to index (anvil-localhost, jura-dev, jura-prod, piz-palu-dev, piz-palu-staging)
   ##
   network: "jura-prod"
   ## @param config.rpcUrl Blockchain RPC URL
