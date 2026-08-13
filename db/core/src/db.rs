@@ -131,9 +131,13 @@ impl BlokliDb {
                 .connect_timeout(Duration::from_secs(8))
                 .idle_timeout(Duration::from_secs(300))
                 .max_lifetime(Duration::from_secs(1800))
-                .sqlx_logging(cfg.log_slow_queries.as_secs() > 0)
-                .sqlx_logging_level(LevelFilter::Debug)
-                .sqlx_slow_statements_logging_settings(LevelFilter::Warn, cfg.log_slow_queries);
+                .sqlx_logging(true)
+                .sqlx_logging_level(LevelFilter::Debug);
+            // A zero duration means slow-query warnings are disabled; leave the setting at
+            // its default (Off) rather than warning on every statement.
+            if !cfg.log_slow_queries.is_zero() {
+                opt.sqlx_slow_statements_logging_settings(LevelFilter::Warn, cfg.log_slow_queries);
+            }
             opt
         };
 
