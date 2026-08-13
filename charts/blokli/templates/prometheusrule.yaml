@@ -1,6 +1,7 @@
 {{- if .Values.monitoring.prometheusRule.enabled }}
 {{- $fullname := include "blokli.fullname" . }}
 {{- $network := .Values.config.network }}
+{{- $namespace := .Release.Namespace }}
 {{- $r := .Values.monitoring.prometheusRule.rules }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
@@ -13,6 +14,7 @@ metadata:
   {{- end }}
   labels:
     {{- include "blokli.labels" . | nindent 4 }}
+    prometheus_rule: "true"
     {{- with .Values.monitoring.prometheusRule.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
@@ -43,6 +45,7 @@ spec:
       labels:
         severity: warning
         network: {{ $network }}
+        namespace: {{ $namespace }}
     {{- end }}
     {{- end }}
     {{- with $r.indexerStalled }}
@@ -62,6 +65,7 @@ spec:
       labels:
         severity: critical
         network: {{ $network }}
+        namespace: {{ $namespace }}
     {{- end }}
     {{- end }}
     {{- with $r.unhealthy }}
@@ -78,6 +82,7 @@ spec:
       labels:
         severity: critical
         network: {{ $network }}
+        namespace: {{ $namespace }}
     {{- end }}
     {{- end }}
     {{- with $r.stateCorrupted }}
@@ -94,6 +99,7 @@ spec:
       labels:
         severity: critical
         network: {{ $network }}
+        namespace: {{ $namespace }}
     {{- end }}
     {{- end }}
     {{- with $r.transactionFailed }}
@@ -121,6 +127,7 @@ spec:
       labels:
         severity: warning
         network: {{ $network }}
+        namespace: {{ $namespace }}
     {{- end }}
     {{- end }}
     {{- with $r.transactionValidationFailed }}
@@ -144,6 +151,7 @@ spec:
       labels:
         severity: warning
         network: {{ $network }}
+        namespace: {{ $namespace }}
     {{- end }}
     {{- end }}
     {{- with $r.rpcFailureRateHigh }}
@@ -162,6 +170,7 @@ spec:
       labels:
         severity: warning
         network: {{ $network }}
+        namespace: {{ $namespace }}
     {{- end }}
     {{- end }}
     {{- with $r.rpcCallLatencyHigh }}
@@ -182,6 +191,7 @@ spec:
       labels:
         severity: info
         network: {{ $network }}
+        namespace: {{ $namespace }}
     {{- end }}
     {{- end }}
     {{- with $r.rpcRetriesHigh }}
@@ -200,6 +210,7 @@ spec:
       labels:
         severity: warning
         network: {{ $network }}
+        namespace: {{ $namespace }}
     {{- end }}
     {{- end }}
     {{- with $r.graphqlErrorRateHigh }}
@@ -245,6 +256,7 @@ spec:
       labels:
         severity: warning
         network: {{ $network }}
+        namespace: {{ $namespace }}
     {{- end }}
     {{- end }}
     {{- with $r.graphqlLatencyHigh }}
@@ -263,6 +275,7 @@ spec:
       labels:
         severity: warning
         network: {{ $network }}
+        namespace: {{ $namespace }}
     {{- end }}
     {{- end }}
 {{- end }}
