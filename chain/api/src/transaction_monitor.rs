@@ -178,7 +178,12 @@ impl<R: ReceiptProvider, S: SafeAddressChecker> TransactionMonitor<R, S> {
                     TransactionStatus::Timeout,
                     Some("Transaction timed out waiting for confirmation".to_string()),
                 ) {
-                    error!(id = %record.id, tx_hash = %tx_hash, "Failed to update transaction status to Timeout: {e}");
+                    error!(
+                        id = %record.id,
+                        tx_hash = %tx_hash,
+                        error = %e,
+                        "Failed to update transaction status to Timeout"
+                    );
                 }
                 continue;
             }
@@ -196,7 +201,7 @@ impl<R: ReceiptProvider, S: SafeAddressChecker> TransactionMonitor<R, S> {
                         .transaction_store
                         .confirm_with_safe_execution(record.id, safe_execution)
                     {
-                        error!(id = %record.id, tx_hash = %tx_hash, "Failed to confirm transaction: {e}");
+                        error!(id = %record.id, tx_hash = %tx_hash, error = %e, "Failed to confirm transaction");
                     }
                 }
                 Ok(Some(false)) => {
@@ -206,7 +211,12 @@ impl<R: ReceiptProvider, S: SafeAddressChecker> TransactionMonitor<R, S> {
                         TransactionStatus::Reverted,
                         Some("Transaction reverted on-chain".to_string()),
                     ) {
-                        error!(id = %record.id, tx_hash = %tx_hash, "Failed to update transaction status to Reverted: {e}");
+                        error!(
+                            id = %record.id,
+                            tx_hash = %tx_hash,
+                            error = %e,
+                            "Failed to update transaction status to Reverted"
+                        );
                     }
                 }
                 Ok(None) => {
@@ -214,7 +224,7 @@ impl<R: ReceiptProvider, S: SafeAddressChecker> TransactionMonitor<R, S> {
                     debug!(id = %record.id, tx_hash = %tx_hash, "Transaction still pending");
                 }
                 Err(e) => {
-                    error!(id = %record.id, tx_hash = %tx_hash, "Error checking transaction: {e}");
+                    error!(id = %record.id, tx_hash = %tx_hash, error = %e, "Error checking transaction");
                 }
             }
 

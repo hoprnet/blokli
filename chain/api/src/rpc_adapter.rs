@@ -43,7 +43,8 @@ impl<R: HttpRequestor + 'static + Clone> RpcClient for RpcAdapter<R> {
     /// Converts the raw transaction bytes to alloy Bytes format and submits to the RPC provider.
     /// Returns the transaction hash immediately without waiting for confirmation.
     async fn send_raw_transaction(&self, raw_tx: Vec<u8>) -> Result<Hash, String> {
-        debug!(length = raw_tx.len(), "sending raw transaction");
+        let raw_tx_len = raw_tx.len();
+        debug!(length = raw_tx_len, "sending raw transaction");
 
         // Convert Vec<u8> to alloy Bytes
         let bytes = Bytes::from(raw_tx);
@@ -59,7 +60,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcClient for RpcAdapter<R> {
                 Ok(hash)
             }
             Err(e) => {
-                error!(error = %e, "failed to send raw transaction");
+                error!(raw_tx_len, error = %e, "failed to send raw transaction");
                 Err(format!("RPC error: {}", e))
             }
         }
@@ -75,8 +76,9 @@ impl<R: HttpRequestor + 'static + Clone> RpcClient for RpcAdapter<R> {
         confirmations: u64,
         timeout: Option<Duration>,
     ) -> Result<Hash, ConfirmationError> {
+        let raw_tx_len = raw_tx.len();
         debug!(
-            raw_tx_len = raw_tx.len(),
+            raw_tx_len,
             confirmations, "sending raw transaction and waiting for confirmations"
         );
 
@@ -125,7 +127,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcClient for RpcAdapter<R> {
                 }
             }
             Err(e) => {
-                error!(error = %e, "failed to send raw transaction");
+                error!(raw_tx_len, error = %e, "failed to send raw transaction");
                 Err(ConfirmationError::SubmissionFailed(format!("RPC error: {}", e)))
             }
         }
