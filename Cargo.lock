@@ -342,9 +342,9 @@ dependencies = [
 
 [[package]]
 name = "alloy-json-rpc"
-version = "2.2.0"
+version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24d7ff4d7f1503d12edda9b241904a309d6e1d5bcee3f0ffdc4d3d3f16f366b8"
+checksum = "7e5722ea29a9a85ecdba2516c58f50d71e77cd25f8ce7e9f4ee8570ddeee6df1"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
@@ -708,9 +708,9 @@ dependencies = [
 
 [[package]]
 name = "alloy-transport"
-version = "2.2.0"
+version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "830c87b05870c80c8d2cfb9245feaff36468893f19fc124c7ff563cabda6386c"
+checksum = "06f4ca8484d6295d5165f67de8fdb00ae630ba585efb606f003171286b56441c"
 dependencies = [
  "alloy-json-rpc",
  "auto_impl",
@@ -731,9 +731,9 @@ dependencies = [
 
 [[package]]
 name = "alloy-transport-http"
-version = "2.2.0"
+version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23ecd298fb0e6a31bd90c72efba2728e3d7569f1c89a3719576fb0e4e40b0fc8"
+checksum = "8342aa5a7f8dee6d606307eebbc847d9799a823c7e4f37b9c1e32b08715f73c8"
 dependencies = [
  "alloy-json-rpc",
  "alloy-transport",
@@ -861,9 +861,20 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d69eab57e8d2663efa5c63135b2af4f396d66424f88954c21104125ab6b3e6bc"
 dependencies = [
- "ark-ec",
+ "ark-ec 0.5.0",
  "ark-ff 0.5.0",
  "ark-std 0.5.0",
+]
+
+[[package]]
+name = "ark-bn254"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6bc66f96ebe2a17a499475b4f94791d379817592ef494171586967ffdc6f95db"
+dependencies = [
+ "ark-ec 0.6.0",
+ "ark-ff 0.6.0",
+ "ark-std 0.6.0",
 ]
 
 [[package]]
@@ -874,13 +885,34 @@ checksum = "43d68f2d516162846c1238e755a7c4d131b892b70cc70c471a8e3ca3ed818fce"
 dependencies = [
  "ahash 0.8.12",
  "ark-ff 0.5.0",
- "ark-poly",
+ "ark-poly 0.5.0",
  "ark-serialize 0.5.0",
  "ark-std 0.5.0",
  "educe",
  "fnv",
  "hashbrown 0.15.5",
  "itertools 0.13.0",
+ "num-bigint",
+ "num-integer",
+ "num-traits",
+ "zeroize",
+]
+
+[[package]]
+name = "ark-ec"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8352a2b2aedf6ba2cc38f7520fc51191d518dde96175c729af19f2d059f191c4"
+dependencies = [
+ "ahash 0.8.12",
+ "ark-ff 0.6.0",
+ "ark-poly 0.6.0",
+ "ark-serialize 0.6.0",
+ "ark-std 0.6.0",
+ "educe",
+ "fnv",
+ "hashbrown 0.17.1",
+ "itertools 0.14.0",
  "num-bigint",
  "num-integer",
  "num-traits",
@@ -1066,6 +1098,21 @@ dependencies = [
  "educe",
  "fnv",
  "hashbrown 0.15.5",
+]
+
+[[package]]
+name = "ark-poly"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75f55af10b672002b8d953e230282c51206842e20e5791a94432219b4201de5c"
+dependencies = [
+ "ahash 0.8.12",
+ "ark-ff 0.6.0",
+ "ark-serialize 0.6.0",
+ "ark-std 0.6.0",
+ "educe",
+ "fnv",
+ "hashbrown 0.17.1",
 ]
 
 [[package]]
@@ -1691,7 +1738,7 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "70e657c11493f07dd18f0c6055b58e77ca71e30ed34f2804468b22f89e36dc0a"
 dependencies = [
- "ark-ec",
+ "ark-ec 0.5.0",
  "ark-ff 0.5.0",
  "ark-serialize 0.5.0",
  "elliptic-curve 0.14.1",
@@ -2431,7 +2478,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3387,7 +3434,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3908,6 +3955,7 @@ version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 dependencies = [
+ "allocator-api2",
  "foldhash",
  "serde",
  "serde_core",
@@ -4009,7 +4057,7 @@ dependencies = [
 [[package]]
 name = "hopli"
 version = "0.19.0"
-source = "git+https://github.com/hoprnet/hopli?rev=048be10bdd1b1296cc87966394bdfab33998906b#048be10bdd1b1296cc87966394bdfab33998906b"
+source = "git+https://github.com/hoprnet/hopli?rev=32116320754e2897a3fb72ca8aff1ec8dae6a85e#32116320754e2897a3fb72ca8aff1ec8dae6a85e"
 dependencies = [
  "alloy-transport-http",
  "anyhow",
@@ -4032,8 +4080,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-bindings"
-version = "4.12.2"
-source = "git+https://github.com/hoprnet/contracts?rev=6ce45eb5e7d433545d82ea32e27562eb0fc329c3#6ce45eb5e7d433545d82ea32e27562eb0fc329c3"
+version = "4.14.0"
+source = "git+https://github.com/hoprnet/contracts?rev=0eea1981c67343e65ff4e5ecb0b81b9ddc201b14#0eea1981c67343e65ff4e5ecb0b81b9ddc201b14"
 dependencies = [
  "alloy",
  "anyhow",
@@ -4050,11 +4098,15 @@ dependencies = [
 [[package]]
 name = "hopr-types"
 version = "2.3.0"
-source = "git+https://github.com/hoprnet/hopr-types?rev=2a3bb391f1f98475d033b105c69090d050aaff0c#2a3bb391f1f98475d033b105c69090d050aaff0c"
+source = "git+https://github.com/hoprnet/hopr-types?rev=68d626ba041da06fde90c9c3c51a4d53c5ab0c4c#68d626ba041da06fde90c9c3c51a4d53c5ab0c4c"
 dependencies = [
  "aes",
  "anyhow",
  "aquamarine",
+ "ark-bn254 0.6.0",
+ "ark-ec 0.6.0",
+ "ark-ff 0.6.0",
+ "ark-serialize 0.6.0",
  "arrayvec",
  "async-trait",
  "babyjubjub-ec",
@@ -5143,7 +5195,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6081,7 +6133,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6621,7 +6673,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6680,7 +6732,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7884,8 +7936,8 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55b5a2cc31c90e79778c4f6375e5d9828171d320db3f8c911a8ad47af4a70069"
 dependencies = [
- "ark-bn254",
- "ark-ec",
+ "ark-bn254 0.5.0",
+ "ark-ec 0.5.0",
  "ark-ff 0.5.0",
  "ark-std 0.5.0",
 ]
@@ -7921,7 +7973,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -8808,7 +8860,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
