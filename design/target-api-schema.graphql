@@ -682,9 +682,8 @@ type QueryRoot {
   """
   Retrieve the registry-wide service configuration
 
-  These two values belong to no single service type, and they are otherwise only observable
-  through serviceTypeUpdated: a client that starts after the last change would never learn them
-  from the event stream alone.
+  Provides one-shot access to the same complete state emitted first by
+  serviceRegistryConfigUpdated.
   """
   serviceRegistryConfig: ServiceRegistryConfigResult!
   """
@@ -698,17 +697,24 @@ type QueryRoot {
     serviceType: String
   ): ServiceTypesResult!
   """
-  Retrieve service registry entries with required filtering
+  Retrieve a stable, paginated view of service registry entries.
 
-  **At least one filter parameter must be provided** (serviceType or node).
-  Returns Error with code MISSING_FILTER if no filters are specified: the registry is
-  permissionless and attacker-growable, so a bare enumeration is not offered.
+  Omitting filters enumerates the entire registry. Continuation pages must pass the watermark
+  returned by the first page so concurrent chain updates cannot shift the result set.
   """
   services(
+    "Cursor returned by the previous page"
+    after: UInt64
+    "Maximum entries in this page (1-1000)"
+    first: Int! = 100
+    "Only entries whose node is bound in the registry's current NodeSafeRegistry"
+    liveOnly: Boolean! = false
     "Filter by node chain address (hexadecimal format)"
     node: String
     "Filter by service type - ASCII name such as gvpn:exit, or 0x-prefixed hex"
     serviceType: String
+    "Watermark returned by the first page; required for a stable continuation"
+    watermark: UInt64
   ): ServicesResult!
   """
   Retrieve aggregated TicketRedeemed statistics filtered by safe and/or node address
@@ -1073,8 +1079,12 @@ enum ServiceUpdateKind {
 Success response for the services query
 """
 type ServicesList {
+  "Cursor to pass as after, or null on the final page"
+  nextCursor: UInt64
   "Matching registry entries"
   services: [ServiceEntry!]!
+  "Indexer block at which this page is evaluated"
+  watermark: UInt64!
 }
 
 """
@@ -1205,11 +1215,17 @@ type SubscriptionRoot {
   """
   safeDeployed: Safe!
   """
+  Subscribe to the complete registry-wide configuration
+
+  Emits the current type registration fee and node-safe registry pointer atomically when the
+  subscription starts, then emits the complete configuration after either value changes.
+  """
+  serviceRegistryConfigUpdated: ServiceRegistryConfig!
+  """
   Subscribe to real-time changes of service type and registry-wide configuration
 
-  Streams changes only; there is no initial snapshot. Current state comes from the serviceTypes
-  and serviceRegistryConfig queries. The two registry-wide kinds carry no service type, so a
-  serviceType filter excludes them.
+  Emits the complete current configuration of every matching type before later changes. The two
+  registry-wide kinds carry no service type, so a serviceType filter excludes them.
   """
   serviceTypeUpdated(
     "Filter by service type - ASCII name such as gvpn:exit, or 0x-prefixed hex"
@@ -1218,9 +1234,9 @@ type SubscriptionRoot {
   """
   Subscribe to real-time changes of service registry entries
 
-  Emits on registration, update and deregistration. Optional filters restrict the stream to a
-  single service type, a single node, or both. Streams changes only; there is no initial
-  snapshot, and current state comes from the services query.
+  Optional filters restrict the stream to a single service type, a single node, or both. Every
+  stream emits the complete matching snapshot at a captured indexer watermark before later
+  registrations, updates and deregistrations.
   """
   serviceUpdated(
     "Filter by node chain address (hexadecimal format)"

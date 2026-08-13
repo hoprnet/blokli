@@ -452,6 +452,11 @@ pub struct ServiceTypeUpdate {
 pub struct ServicesList {
     /// Matching registry entries
     pub services: Vec<ServiceEntry>,
+    /// Fully indexed block at which this page is evaluated. Pass it unchanged for later pages.
+    pub watermark: UInt64,
+    /// Immutable service-entry id after which the next page starts, or null at the end.
+    #[graphql(name = "nextCursor")]
+    pub next_cursor: Option<UInt64>,
 }
 
 /// Success response for the serviceTypes query

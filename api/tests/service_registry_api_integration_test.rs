@@ -18,7 +18,7 @@ use anyhow::Context as _;
 use blokli_chain_indexer::{handlers::ContractEventHandlers, traits::ChainLogHandler};
 use blokli_chain_rpc::{HoprIndexerRpcOperations, client::create_rpc_client_to_anvil};
 use blokli_chain_types::{AlloyAddressExt, ContractAddresses, ContractInstances, utils::create_anvil};
-use blokli_db::{db::BlokliDb, services::BlokliDbServiceOperations};
+use blokli_db::{db::BlokliDb, info::BlokliDbInfoOperations, services::BlokliDbServiceOperations};
 use futures::StreamExt;
 use hopr_bindings::{
     exports::alloy::primitives::{Address as AlloyAddress, B256, Bytes, U256},
@@ -183,6 +183,7 @@ async fn test_service_registration_reaches_query_and_subscription() -> anyhow::R
         stored.is_some(),
         "the registration must be indexed; {log_count} registry logs were processed"
     );
+    db.set_indexer_state_info(None, u32::try_from(head)?).await?;
 
     let update = update
         .context("serviceUpdated must emit within the timeout")?
@@ -238,10 +239,9 @@ async fn test_service_registration_reaches_query_and_subscription() -> anyhow::R
     Ok(())
 }
 
-/// A bare `services` call must be refused: the entry table is permissionless and
-/// attacker-growable, so it is never enumerated in full.
+/// A bare `services` call is safe because it returns one bounded page at a stable watermark.
 #[tokio::test]
-async fn test_services_without_a_filter_is_refused() -> anyhow::Result<()> {
+async fn test_services_without_a_filter_is_paginated() -> anyhow::Result<()> {
     let db = BlokliDb::new_in_memory().await?;
     let (schema, _indexer_state) = common::create_test_schema(&db);
 
@@ -251,7 +251,7 @@ async fn test_services_without_a_filter_is_refused() -> anyhow::Result<()> {
             query {
                 services {
                     __typename
-                    ... on MissingFilterError { code }
+                    ... on ServicesList { services { node } watermark nextCursor }
                 }
             }
             "#,
@@ -259,7 +259,7 @@ async fn test_services_without_a_filter_is_refused() -> anyhow::Result<()> {
         .await;
 
     assert!(response.errors.is_empty(), "query errors: {:?}", response.errors);
-    insta::assert_yaml_snapshot!("services_missing_filter", sorted(response.data.into_json()?));
+    assert_eq!(response.data.into_json()?["services"]["__typename"], "ServicesList");
 
     Ok(())
 }

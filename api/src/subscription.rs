@@ -6,8 +6,9 @@ use async_broadcast::Receiver;
 use async_graphql::{Context, ID, Result, Subscription};
 use async_stream::stream;
 use blokli_api_types::{
-    Account, Channel, ChannelUpdate, Hex32, OpenedChannelsGraphEntry, RedeemTicketDetails, Safe, ServiceTypeUpdate,
-    ServiceUpdate, TicketParameters, TokenValueString, Transaction, UInt64,
+    Account, Channel, ChannelUpdate, Hex32, OpenedChannelsGraphEntry, RedeemTicketDetails, Safe, ServiceRegistryConfig,
+    ServiceTypeUpdate, ServiceTypeUpdateKind, ServiceUpdate, ServiceUpdateKind, TicketParameters, TokenValueString,
+    Transaction, UInt64,
 };
 use blokli_chain_api::transaction_store::{
     TransactionEvent, TransactionStatus as StoreTransactionStatus, TransactionStore,
@@ -23,16 +24,21 @@ use blokli_db_entity::{
     conversions::{
         account_aggregation::{fetch_accounts_by_keyids, fetch_accounts_with_filters},
         safe_aggregation::{CurrentSafe, fetch_safe_by_address, fetch_safe_threshold_by_address},
+        service_aggregation::{fetch_service_entries_page_at, fetch_service_types, fetch_service_types_by_id},
     },
     hopr_node_safe_registration,
+    prelude::ServiceRegistryConfig as ServiceRegistryConfigEntity,
 };
 use chrono::Utc;
 use futures::Stream;
 use hopr_bindings::exports::alloy::hex;
-use hopr_types::primitive::{
-    prelude::HoprBalance as PrimitiveHoprBalance,
-    primitives::Address,
-    traits::{IntoEndian, ToHex},
+use hopr_types::{
+    internal::prelude::ServiceType,
+    primitive::{
+        prelude::HoprBalance as PrimitiveHoprBalance,
+        primitives::Address,
+        traits::{IntoEndian, ToHex},
+    },
 };
 use rand::seq::SliceRandom;
 use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
@@ -40,12 +46,102 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::{
-    conversions::{convert_safe_execution, convert_transaction_status},
+    conversions::{
+        convert_safe_execution, convert_transaction_status, service_entry_from_aggregate,
+        service_registry_config_from_model, service_type_from_aggregate,
+    },
     errors,
     query::owners_for_safe,
     readiness::{ReadinessChecker, ReadinessState},
     validation::{parse_service_type, validate_eth_address},
 };
+
+/// Captures the current registry-wide configuration and subscribes to later changes atomically.
+///
+/// The indexer takes the corresponding write lock while committing a block and publishing its
+/// events. Reading the singleton row and registering both receivers while holding this read lock
+/// therefore gives the stream a stable initial value followed by every later update.
+async fn capture_service_registry_config_synchronized(
+    indexer_state: &IndexerState,
+    db: &DatabaseConnection,
+) -> Result<(ServiceRegistryConfig, Receiver<IndexerEvent>, Receiver<()>)> {
+    let _lock = indexer_state.acquire_watermark_lock().await;
+
+    let model = ServiceRegistryConfigEntity::find()
+        .one(db)
+        .await
+        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("service registry config query", e)))?
+        .ok_or_else(|| {
+            async_graphql::Error::new(errors::messages::not_found(
+                "service_registry_config",
+                "not initialized",
+            ))
+        })?;
+    let config = service_registry_config_from_model(model).map_err(|e| async_graphql::Error::new(e.message))?;
+
+    let event_receiver = indexer_state.subscribe_to_events();
+    let shutdown_receiver = indexer_state.subscribe_to_shutdown();
+
+    Ok((config, event_receiver, shutdown_receiver))
+}
+
+async fn query_service_entries_at_watermark(
+    db: &DatabaseConnection,
+    watermark: &Watermark,
+    service_type: Option<&[u8]>,
+    node: Option<&[u8]>,
+) -> Result<Vec<ServiceUpdate>> {
+    let mut cursor = None;
+    let mut updates = Vec::new();
+    loop {
+        let page = fetch_service_entries_page_at(db, service_type, node, watermark.block, cursor, 1000)
+            .await
+            .map_err(|e| async_graphql::Error::new(errors::messages::query_error("service snapshot", e)))?;
+        for entry in page.entries {
+            let entry = service_entry_from_aggregate(entry).map_err(|e| async_graphql::Error::new(e.message))?;
+            updates.push(ServiceUpdate {
+                kind: ServiceUpdateKind::Registered,
+                service_type: entry.service_type.clone(),
+                node: entry.node.clone(),
+                entry: Some(entry),
+            });
+        }
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            return Ok(updates);
+        }
+    }
+}
+
+async fn capture_service_types_synchronized(
+    indexer_state: &IndexerState,
+    db: &DatabaseConnection,
+    service_type: Option<&ServiceType>,
+) -> Result<(Vec<ServiceTypeUpdate>, Receiver<IndexerEvent>, Receiver<()>)> {
+    let _lock = indexer_state.acquire_watermark_lock().await;
+    let aggregates = match service_type {
+        Some(service_type) => fetch_service_types_by_id(db, &[service_type.as_ref().to_vec()]).await,
+        None => fetch_service_types(db).await,
+    }
+    .map_err(|e| async_graphql::Error::new(errors::messages::query_error("service type snapshot", e)))?;
+
+    let mut initial = Vec::with_capacity(aggregates.len());
+    for aggregate in aggregates {
+        let config = service_type_from_aggregate(aggregate).map_err(|e| async_graphql::Error::new(e.message))?;
+        initial.push(ServiceTypeUpdate {
+            kind: ServiceTypeUpdateKind::Registered,
+            service_type: Some(config.service_type.clone()),
+            config: Some(config),
+            registry_config: None,
+        });
+    }
+
+    Ok((
+        initial,
+        indexer_state.subscribe_to_events(),
+        indexer_state.subscribe_to_shutdown(),
+    ))
+}
 
 /// Watermark representing the last fully processed blockchain position
 ///
@@ -831,10 +927,9 @@ impl SubscriptionRoot {
     /// - Streams changes when `IndexerEvent::ServiceEntryUpdated` events are received
     /// - Automatically shuts down on blockchain reorganization
     ///
-    /// **No initial snapshot.** The stream carries changes only. Current state comes from the
-    /// `services` query, which is where the mandatory-filter rule lives: the entry table is
-    /// permissionless and attacker-growable, so replaying it to every subscriber would hand out
-    /// the enumeration that query refuses.
+    /// Before live changes, every subscription emits each matching entry present at its captured
+    /// watermark as `REGISTERED`. The snapshot is page-walked, so an unfiltered subscription does
+    /// not require one unbounded database response.
     #[graphql(name = "serviceUpdated")]
     async fn service_updated(
         &self,
@@ -851,19 +946,31 @@ impl SubscriptionRoot {
 
         // Both filters are normalized once, so that the comparison against every event is a plain
         // string equality and a hex filter matches an entry the schema renders by its ASCII name.
-        let service_type_filter = service_type
-            .as_deref()
-            .map(parse_service_type)
-            .transpose()?
-            .map(|parsed| parsed.to_string());
+        let parsed_service_type = service_type.as_deref().map(parse_service_type).transpose()?;
+        let service_type_filter = parsed_service_type.as_ref().map(ToString::to_string);
         let node_filter = normalize_node_filter(node.as_deref())?;
+        let node_address = node_filter
+            .as_deref()
+            .map(Address::from_hex)
+            .transpose()
+            .map_err(|e| async_graphql::Error::new(format!("invalid node filter: {e}")))?;
 
         // Subscribe under the coordination lock rather than mid-block, so that the stream starts
         // at a block boundary and cannot observe half of a block's events.
-        let (_watermark, mut event_receiver, mut shutdown_receiver) =
+        let (watermark, mut event_receiver, mut shutdown_receiver) =
             capture_watermark_synchronized(&indexer_state, &db).await?;
+        let initial = query_service_entries_at_watermark(
+            &db,
+            &watermark,
+            parsed_service_type.as_ref().map(AsRef::as_ref),
+            node_address.as_ref().map(AsRef::as_ref),
+        )
+        .await?;
 
         Ok(stream! {
+            for update in initial {
+                yield update;
+            }
             loop {
                 tokio::select! {
                     biased;
@@ -879,7 +986,8 @@ impl SubscriptionRoot {
                                 return;
                             }
                             Err(async_broadcast::RecvError::Overflowed(n)) => {
-                                warn!("Shutdown signal overflowed ({}), continuing", n);
+                                warn!("Shutdown signal overflowed ({}), terminating serviceUpdated for resync", n);
+                                return;
                             }
                         }
                     }
@@ -898,7 +1006,8 @@ impl SubscriptionRoot {
                                 return;
                             }
                             Err(async_broadcast::RecvError::Overflowed(n)) => {
-                                warn!("Event bus overflowed ({}); serviceUpdated may miss events", n);
+                                warn!("Event bus overflowed ({}); terminating serviceUpdated for resync", n);
+                                return;
                             }
                         }
                     }
@@ -913,8 +1022,8 @@ impl SubscriptionRoot {
     /// - Streams changes when `IndexerEvent::ServiceTypeUpdated` events are received
     /// - Automatically shuts down on blockchain reorganization
     ///
-    /// **No initial snapshot**, matching `serviceUpdated`. Current state comes from the
-    /// `serviceTypes` and `serviceRegistryConfig` queries.
+    /// Emits current complete type configurations before switching to live changes. Use
+    /// `serviceRegistryConfigUpdated` for the separate registry-wide configuration.
     ///
     /// The two registry-wide kinds carry no service type, so a `serviceType` filter excludes them.
     #[graphql(name = "serviceTypeUpdated")]
@@ -930,17 +1039,16 @@ impl SubscriptionRoot {
             .map_err(|e| async_graphql::Error::new(errors::messages::context_error("IndexerState", e.message)))?
             .clone();
 
-        let service_type_filter = service_type
-            .as_deref()
-            .map(parse_service_type)
-            .transpose()?
-            .map(|parsed| parsed.to_string());
+        let parsed_service_type = service_type.as_deref().map(parse_service_type).transpose()?;
+        let service_type_filter = parsed_service_type.as_ref().map(ToString::to_string);
 
-        // Subscribe under the coordination lock, for the same reason as `serviceUpdated`.
-        let (_watermark, mut event_receiver, mut shutdown_receiver) =
-            capture_watermark_synchronized(&indexer_state, &db).await?;
+        let (initial, mut event_receiver, mut shutdown_receiver) =
+            capture_service_types_synchronized(&indexer_state, &db, parsed_service_type.as_ref()).await?;
 
         Ok(stream! {
+            for update in initial {
+                yield update;
+            }
             loop {
                 tokio::select! {
                     biased;
@@ -956,7 +1064,8 @@ impl SubscriptionRoot {
                                 return;
                             }
                             Err(async_broadcast::RecvError::Overflowed(n)) => {
-                                warn!("Shutdown signal overflowed ({}), continuing", n);
+                                warn!("Shutdown signal overflowed ({}), terminating serviceTypeUpdated for resync", n);
+                                return;
                             }
                         }
                     }
@@ -975,7 +1084,72 @@ impl SubscriptionRoot {
                                 return;
                             }
                             Err(async_broadcast::RecvError::Overflowed(n)) => {
-                                warn!("Event bus overflowed ({}); serviceTypeUpdated may miss events", n);
+                                warn!("Event bus overflowed ({}); terminating serviceTypeUpdated for resync", n);
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    /// Subscribe to the complete registry-wide configuration.
+    ///
+    /// The first item is an atomic snapshot of the current type registration fee and node-safe
+    /// registry pointer. Later items contain the complete configuration after either value changes.
+    #[graphql(name = "serviceRegistryConfigUpdated")]
+    async fn service_registry_config_updated(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<impl Stream<Item = ServiceRegistryConfig>> {
+        let db = ctx.data::<DatabaseConnection>()?.clone();
+        let indexer_state = ctx
+            .data::<IndexerState>()
+            .map_err(|e| async_graphql::Error::new(errors::messages::context_error("IndexerState", e.message)))?
+            .clone();
+
+        let (initial, mut event_receiver, mut shutdown_receiver) =
+            capture_service_registry_config_synchronized(&indexer_state, &db).await?;
+
+        Ok(stream! {
+            yield initial;
+
+            loop {
+                tokio::select! {
+                    biased;
+
+                    shutdown_result = shutdown_receiver.recv() => {
+                        match shutdown_result {
+                            Ok(_) => {
+                                info!("serviceRegistryConfigUpdated subscription shutting down due to reorg");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Closed) => {
+                                warn!("Shutdown channel closed for serviceRegistryConfigUpdated");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Overflowed(n)) => {
+                                warn!("Shutdown signal overflowed ({}), terminating serviceRegistryConfigUpdated for resync", n);
+                                return;
+                            }
+                        }
+                    }
+                    event_result = event_receiver.recv() => {
+                        match event_result {
+                            Ok(IndexerEvent::ServiceTypeUpdated(update)) => {
+                                if let Some(config) = update.registry_config {
+                                    yield config;
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(async_broadcast::RecvError::Closed) => {
+                                info!("Event bus closed, ending serviceRegistryConfigUpdated subscription");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Overflowed(n)) => {
+                                warn!("Event bus overflowed ({}); terminating serviceRegistryConfigUpdated for resync", n);
+                                return;
                             }
                         }
                     }
@@ -1796,8 +1970,9 @@ mod tests {
     use blokli_api_types::RedemptionResult;
     use blokli_chain_indexer::state::{IndexerEvent, RedeemTicketDetailsInfo};
     use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb};
-    use blokli_db_entity::{hopr_safe_contract, hopr_safe_contract_state};
+    use blokli_db_entity::{hopr_safe_contract, hopr_safe_contract_state, service_registry_config};
     use futures::StreamExt;
+    use hopr_types::primitive::traits::BytesRepresentable;
     use sea_orm::{ActiveModelTrait, Set};
 
     use super::*;
@@ -2891,6 +3066,71 @@ mod tests {
 
         // Should timeout because non-SafeDeployed events are ignored
         assert!(timeout_result.is_err(), "Stream should ignore non-SafeDeployed events");
+    }
+
+    #[tokio::test]
+    async fn service_registry_config_subscription_emits_snapshot_then_updates() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+        let conn = db.conn(blokli_db::TargetDb::Index);
+        service_registry_config::ActiveModel {
+            id: Set(1),
+            type_registration_fee: Set(vec![0; 32]),
+            node_safe_registry: Set(Some(vec![0x11; Address::SIZE])),
+            last_changed_block: Set(0),
+            last_changed_tx_index: Set(0),
+            last_changed_log_index: Set(0),
+        }
+        .update(conn)
+        .await
+        .unwrap();
+
+        let indexer_state = IndexerState::new(10, 100);
+        let schema = Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)
+            .data(conn.clone())
+            .data(indexer_state.clone())
+            .data(GasMultiplier(1.0))
+            .finish();
+        let mut stream = schema
+            .execute_stream("subscription { serviceRegistryConfigUpdated { typeRegistrationFee nodeSafeRegistry } }")
+            .boxed();
+
+        let initial = tokio::time::timeout(Duration::from_secs(2), stream.next())
+            .await
+            .expect("timeout waiting for initial configuration")
+            .expect("subscription ended before initial configuration")
+            .into_result()
+            .expect("initial configuration response failed")
+            .data
+            .into_json()
+            .expect("initial configuration must be JSON");
+        assert_eq!(
+            initial["serviceRegistryConfigUpdated"]["nodeSafeRegistry"],
+            Address::from([0x11; Address::SIZE]).to_hex()
+        );
+
+        indexer_state.publish_event(IndexerEvent::ServiceTypeUpdated(ServiceTypeUpdate {
+            kind: blokli_api_types::ServiceTypeUpdateKind::RegistryPointerChanged,
+            service_type: None,
+            config: None,
+            registry_config: Some(ServiceRegistryConfig {
+                type_registration_fee: TokenValueString("1 wxHOPR".to_string()),
+                node_safe_registry: Address::from([0x22; Address::SIZE]).to_hex(),
+            }),
+        }));
+
+        let updated = tokio::time::timeout(Duration::from_secs(2), stream.next())
+            .await
+            .expect("timeout waiting for updated configuration")
+            .expect("subscription ended before updated configuration")
+            .into_result()
+            .expect("updated configuration response failed")
+            .data
+            .into_json()
+            .expect("updated configuration must be JSON");
+        assert_eq!(
+            updated["serviceRegistryConfigUpdated"]["nodeSafeRegistry"],
+            Address::from([0x22; Address::SIZE]).to_hex()
+        );
     }
 
     /// Helper to collect Phase 1 items from a subscription stream.

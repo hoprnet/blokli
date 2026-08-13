@@ -328,13 +328,14 @@ The schema is organized into three root types following GraphQL best practices:
 - Channel updates: Real-time changes to payment channel states
 - Safe deployments: Real-time notifications when new Safe contracts are deployed
 - Network topology: Opened channel graph updates for routing decisions
-- Service registry updates: registrations, updates and deregistrations of entries, and changes to service type or registry-wide
-  configuration
+- Service registry updates: snapshot-first streams of entries, service types and registry-wide configuration followed by live changes
 - Transaction updates: Status changes for submitted transactions
 
-The service registry subscriptions carry no initial snapshot. The set of entries is permissionless and attacker-growable, so the
-corresponding query refuses an unfiltered listing, and replaying the set to every subscriber would give away exactly what that refusal
-protects. A client reads current state from the queries and then follows the stream.
+Registry entry queries use bounded cursor pages pinned to the first page's indexer watermark, including unfiltered enumeration. Entry
+subscriptions capture that same kind of watermark while registering their event receivers, page through the matching historical snapshot,
+and then stream later changes. Service-type and registry-wide configuration subscriptions likewise emit complete current state before live
+changes. Broadcast overflow ends the server stream; the client reconnects and receives a fresh snapshot, turning possible silent loss into a
+deterministic resynchronization.
 
 **Error Handling**: Uses GraphQL union types to return domain-specific error types (InvalidAddressError, ContractNotAllowedError, etc.)
 alongside success types, providing structured error responses with codes and context.

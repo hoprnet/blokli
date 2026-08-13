@@ -16,6 +16,7 @@ use blokli_chain_rpc::{HoprIndexerRpcOperations, HoprRpcOperations, rpc::RpcOper
 use blokli_chain_types::ContractAddresses;
 use blokli_db_entity::{
     account, chain_info,
+    chain_info::Entity as ChainInfoEntity,
     conversions::{
         account_aggregation::fetch_accounts_with_filters,
         channel_aggregation::{fetch_channel_stats as fetch_channel_stats_db, fetch_channels_with_state},
@@ -26,10 +27,7 @@ use blokli_db_entity::{
             fetch_safe_by_address as fetch_safe_by_address_db, fetch_safe_owners, fetch_safe_owners_for_safes,
             fetch_safes_by_chain_key as fetch_safes_by_chain_key_db, fetch_safes_by_owner as fetch_safes_by_owner_db,
         },
-        service_aggregation::{
-            fetch_service_entries_for_nodes, fetch_service_entries_for_type, fetch_service_types,
-            fetch_service_types_by_id,
-        },
+        service_aggregation::{fetch_service_entries_page_at, fetch_service_types, fetch_service_types_by_id},
     },
     hopr_node_safe_registration,
     prelude::ServiceRegistryConfig as ServiceRegistryConfigEntity,
@@ -366,6 +364,7 @@ fn parse_node_filter(node: Option<&str>) -> std::result::Result<Option<Address>,
 #[derive(Default)]
 pub struct QueryRoot;
 
+#[allow(clippy::too_many_arguments)]
 #[Object]
 impl QueryRoot {
     /// Retrieve accounts from the database with required filtering
@@ -495,27 +494,24 @@ impl QueryRoot {
         CountResult::Count(blokli_api_types::Count { count })
     }
 
-    /// Retrieve service registry entries with required filtering
-    ///
-    /// **At least one filter parameter must be provided** (serviceType or node).
-    /// Returns Error with code MISSING_FILTER if no filters are specified: the registry is
-    /// permissionless and attacker-growable, so a bare enumeration is not offered.
+    /// Retrieve a stable, paginated view of service registry entries.
     async fn services(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "Filter by service type - ASCII name such as gvpn:exit, or 0x-prefixed hex")]
         service_type: Option<String>,
         #[graphql(desc = "Filter by node chain address (hexadecimal format)")] node: Option<String>,
+        #[graphql(desc = "Maximum entries in this page (1-1000)", default = 100)] first: i32,
+        #[graphql(desc = "Cursor returned by the previous page")] after: Option<UInt64>,
+        #[graphql(desc = "Watermark returned by the first page; required for a stable continuation")] watermark: Option<
+            UInt64,
+        >,
+        #[graphql(
+            desc = "Only entries whose node is bound in the registry's current NodeSafeRegistry",
+            default = false
+        )]
+        live_only: bool,
     ) -> ServicesResult {
-        // The entry table grows with attacker-controlled registrations, so an unfiltered listing
-        // is refused rather than paginated (RFC section 9.5).
-        if service_type.is_none() && node.is_none() {
-            return ServicesResult::MissingFilter(errors::missing_filter_error(
-                "serviceType or node",
-                "services query. Example: services(serviceType: \"gvpn:exit\") or services(node: \"0x1234...\")",
-            ));
-        }
-
         let filter_type = match parse_service_type_filter(service_type.as_deref()) {
             Ok(filter) => filter,
             Err(e) => return ServicesResult::QueryFailed(e),
@@ -533,32 +529,81 @@ impl QueryRoot {
             }
         };
 
-        let aggregated = match (filter_type, filter_node) {
-            (Some(service_type), Some(node)) => {
-                // A node offers few services, so the node is the narrower key of the two; the
-                // service type is applied to that small result rather than in a second query.
-                match fetch_service_entries_for_nodes(db, &[node.as_ref().to_vec()]).await {
-                    Ok(by_node) => by_node
-                        .into_values()
-                        .flatten()
-                        .filter(|entry| entry.service_type == service_type.as_ref())
-                        .collect(),
-                    Err(e) => return ServicesResult::QueryFailed(errors::query_failed("fetch services", e)),
-                }
-            }
-            (Some(service_type), None) => match fetch_service_entries_for_type(db, service_type.as_ref()).await {
-                Ok(entries) => entries,
-                Err(e) => return ServicesResult::QueryFailed(errors::query_failed("fetch services", e)),
-            },
-            (None, Some(node)) => match fetch_service_entries_for_nodes(db, &[node.as_ref().to_vec()]).await {
-                Ok(by_node) => by_node.into_values().flatten().collect(),
-                Err(e) => return ServicesResult::QueryFailed(errors::query_failed("fetch services", e)),
-            },
-            // Unreachable: the missing-filter guard above rejects a call with neither filter.
-            (None, None) => Vec::new(),
+        if !(1..=1000).contains(&first) {
+            return ServicesResult::QueryFailed(errors::query_failed(
+                "fetch services",
+                "first must be between 1 and 1000",
+            ));
+        }
+        let first = match u64::try_from(first) {
+            Ok(first) => first,
+            Err(_) => unreachable!("the range check above guarantees a positive page size"),
         };
 
-        let services = match aggregated
+        let current_watermark = match ChainInfoEntity::find().one(db).await {
+            Ok(Some(info)) => info.last_indexed_block,
+            Ok(None) => {
+                return ServicesResult::QueryFailed(errors::not_found("chain_info", "not initialized"));
+            }
+            Err(e) => return ServicesResult::QueryFailed(errors::query_failed("fetch chain watermark", e)),
+        };
+        let watermark = match watermark {
+            Some(value) => match i64::try_from(value.0) {
+                Ok(value) if value <= current_watermark => value,
+                _ => {
+                    return ServicesResult::QueryFailed(errors::query_failed(
+                        "fetch services",
+                        "watermark is ahead of the indexer or does not fit in i64",
+                    ));
+                }
+            },
+            None => current_watermark,
+        };
+        let output_watermark = match u64::try_from(watermark) {
+            Ok(watermark) => watermark,
+            Err(_) => {
+                return ServicesResult::QueryFailed(errors::query_failed(
+                    "fetch services",
+                    "chain watermark is negative",
+                ));
+            }
+        };
+        let after = match after.map(|value| i64::try_from(value.0)).transpose() {
+            Ok(after) => after,
+            Err(_) => {
+                return ServicesResult::QueryFailed(errors::query_failed(
+                    "fetch services",
+                    "cursor does not fit in i64",
+                ));
+            }
+        };
+
+        let page = match fetch_service_entries_page_at(
+            db,
+            filter_type.as_ref().map(AsRef::as_ref),
+            filter_node.as_ref().map(AsRef::as_ref),
+            watermark,
+            after,
+            first,
+        )
+        .await
+        {
+            Ok(page) => page,
+            Err(e) => return ServicesResult::QueryFailed(errors::query_failed("fetch services", e)),
+        };
+
+        let next_cursor = match page.next_cursor.map(u64::try_from).transpose() {
+            Ok(cursor) => cursor.map(UInt64),
+            Err(_) => {
+                return ServicesResult::QueryFailed(errors::query_failed(
+                    "fetch services",
+                    "database returned a negative service cursor",
+                ));
+            }
+        };
+
+        let mut services = match page
+            .entries
             .into_iter()
             .map(service_entry_from_aggregate)
             .collect::<Result<Vec<_>, _>>()
@@ -567,7 +612,50 @@ impl QueryRoot {
             Err(e) => return ServicesResult::QueryFailed(e),
         };
 
-        ServicesResult::Services(ServicesList { services })
+        if live_only {
+            let config = match ServiceRegistryConfigEntity::find().one(db).await {
+                Ok(Some(config)) => config,
+                Ok(None) => {
+                    return ServicesResult::QueryFailed(errors::not_found(
+                        "service_registry_config",
+                        "not initialized",
+                    ));
+                }
+                Err(e) => return ServicesResult::QueryFailed(errors::query_failed("fetch registry pointer", e)),
+            };
+            let registry = match config.node_safe_registry.as_deref().map(Address::try_from).transpose() {
+                Ok(Some(registry)) => registry,
+                Ok(None) => {
+                    return ServicesResult::QueryFailed(errors::not_found(
+                        "service_registry_config.node_safe_registry",
+                        "not initialized",
+                    ));
+                }
+                Err(e) => return ServicesResult::QueryFailed(errors::query_failed("parse registry pointer", e)),
+            };
+            let rpc = match ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>() {
+                Ok(rpc) => rpc,
+                Err(e) => return ServicesResult::QueryFailed(errors::context_error("RpcOperations", e.message)),
+            };
+            let checked = try_join_all(services.into_iter().map(|entry| async {
+                let node = Address::from_hex(&entry.node).map_err(|e| errors::query_failed("parse service node", e))?;
+                HoprRpcOperations::get_safe_from_node_safe_registry_at(&**rpc, registry, node)
+                    .await
+                    .map(|safe| (!safe.is_zero()).then_some(entry))
+                    .map_err(|e| errors::query_failed("resolve service liveness", e))
+            }))
+            .await;
+            services = match checked {
+                Ok(entries) => entries.into_iter().flatten().collect(),
+                Err(e) => return ServicesResult::QueryFailed(e),
+            };
+        }
+
+        ServicesResult::Services(ServicesList {
+            services,
+            watermark: UInt64(output_watermark),
+            next_cursor,
+        })
     }
 
     /// Count service registry entries matching optional filters

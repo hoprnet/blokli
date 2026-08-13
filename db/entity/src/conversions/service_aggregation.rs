@@ -9,10 +9,13 @@
 use std::collections::HashMap;
 
 use hopr_types::primitive::{primitives::Address, traits::ToHex};
-use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, entity::prelude::DateTimeWithTimeZone};
+use sea_orm::{
+    ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
+    entity::prelude::DateTimeWithTimeZone,
+};
 
 use crate::{
-    codegen::account,
+    codegen::{account, service_entry, service_entry_state, service_type},
     views::{service_entry_current, service_type_current},
 };
 
@@ -24,6 +27,120 @@ fn bytes_to_address_hex(bytes: &[u8]) -> Result<String, sea_orm::DbErr> {
         ))
     })?;
     Ok(Address::new(&addr_bytes).to_hex())
+}
+
+/// A stable page of service entries as they existed after one fully indexed block.
+#[derive(Debug, Clone)]
+pub struct ServiceEntryPage {
+    pub entries: Vec<AggregatedServiceEntry>,
+    pub next_cursor: Option<i64>,
+}
+
+/// Fetches one cursor page pinned to `watermark_block`.
+///
+/// The cursor is the immutable `service_entry.id`, not an offset into a mutable result. State is
+/// reconstructed from the latest state row at or before the watermark, so later updates cannot
+/// move or replace rows while a client walks the pages.
+pub async fn fetch_service_entries_page_at<C>(
+    conn: &C,
+    service_type_filter: Option<&[u8]>,
+    node_filter: Option<&[u8]>,
+    watermark_block: i64,
+    after: Option<i64>,
+    limit: u64,
+) -> Result<ServiceEntryPage, sea_orm::DbErr>
+where
+    C: ConnectionTrait,
+{
+    let mut identities = service_entry::Entity::find()
+        .filter(service_entry::Column::Id.gt(after.unwrap_or(0)))
+        .order_by_asc(service_entry::Column::Id)
+        .limit(limit.saturating_add(1));
+
+    if let Some(raw_type) = service_type_filter {
+        let Some(type_row) = service_type::Entity::find()
+            .filter(service_type::Column::ServiceType.eq(raw_type.to_vec()))
+            .one(conn)
+            .await?
+        else {
+            return Ok(ServiceEntryPage {
+                entries: Vec::new(),
+                next_cursor: None,
+            });
+        };
+        identities = identities.filter(service_entry::Column::ServiceTypeId.eq(type_row.id));
+    }
+    if let Some(node) = node_filter {
+        identities = identities.filter(service_entry::Column::NodeAddress.eq(node.to_vec()));
+    }
+
+    let mut identities = identities.all(conn).await?;
+    let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+    let has_more = identities.len() > limit;
+    if has_more {
+        identities.truncate(limit);
+    }
+    let next_cursor = has_more.then(|| identities.last().map(|entry| entry.id)).flatten();
+    if identities.is_empty() {
+        return Ok(ServiceEntryPage {
+            entries: Vec::new(),
+            next_cursor,
+        });
+    }
+
+    let entry_ids = identities.iter().map(|entry| entry.id).collect::<Vec<_>>();
+    let states = service_entry_state::Entity::find()
+        .filter(service_entry_state::Column::ServiceEntryId.is_in(entry_ids))
+        .filter(service_entry_state::Column::PublishedBlock.lte(watermark_block))
+        .order_by_desc(service_entry_state::Column::PublishedBlock)
+        .order_by_desc(service_entry_state::Column::PublishedTxIndex)
+        .order_by_desc(service_entry_state::Column::PublishedLogIndex)
+        .all(conn)
+        .await?;
+    let mut latest_state = HashMap::new();
+    for state in states {
+        latest_state.entry(state.service_entry_id).or_insert(state);
+    }
+
+    let type_ids = identities.iter().map(|entry| entry.service_type_id).collect::<Vec<_>>();
+    let types = service_type::Entity::find()
+        .filter(service_type::Column::Id.is_in(type_ids))
+        .all(conn)
+        .await?
+        .into_iter()
+        .map(|service_type| (service_type.id, service_type.service_type))
+        .collect::<HashMap<_, _>>();
+
+    let current = identities
+        .into_iter()
+        .filter_map(|identity| {
+            let state = latest_state.remove(&identity.id)?;
+            if state.deregistered {
+                return None;
+            }
+            let raw_type = types.get(&identity.service_type_id)?.clone();
+            Some(service_entry_current::Model {
+                id: state.id,
+                service_entry_id: identity.id,
+                service_type_id: identity.service_type_id,
+                service_type: raw_type,
+                node_address: identity.node_address,
+                safe_address: state.safe_address,
+                metadata: state.metadata,
+                registered_at: state.registered_at,
+                updated_at: state.updated_at,
+                deregistered: state.deregistered,
+                published_block: state.published_block,
+                published_tx_index: state.published_tx_index,
+                published_log_index: state.published_log_index,
+            })
+        })
+        .collect();
+
+    Ok(ServiceEntryPage {
+        entries: aggregate_service_entries(conn, current).await?,
+        next_cursor,
+    })
 }
 
 /// Reports a live entry row that is missing a column only a deregistration tombstone may omit.
