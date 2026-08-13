@@ -370,6 +370,11 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         })
     }
 
+    /// Get the configuration this instance was created with
+    pub fn config(&self) -> &RpcOperationsConfig {
+        &self.cfg
+    }
+
     /// Get the current block number from the RPC endpoint, adjusted for finality
     ///
     /// This method returns the block number minus the configured finality window

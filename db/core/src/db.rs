@@ -132,7 +132,8 @@ impl BlokliDb {
                 .idle_timeout(Duration::from_secs(300))
                 .max_lifetime(Duration::from_secs(1800))
                 .sqlx_logging(cfg.log_slow_queries.as_secs() > 0)
-                .sqlx_logging_level(LevelFilter::Warn);
+                .sqlx_logging_level(LevelFilter::Debug)
+                .sqlx_slow_statements_logging_settings(LevelFilter::Warn, cfg.log_slow_queries);
             opt
         };
 
