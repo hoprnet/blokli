@@ -137,6 +137,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             tokenAddress: *instances.token.address(),
             defaultTokenAllowance: network.defaultTokenAllowance,
             defaultAnnouncementTarget: network.defaultAnnouncementTarget,
+            serviceRegistryAddress: *instances.service_registry.address(),
         })
         .send()
         .await?
