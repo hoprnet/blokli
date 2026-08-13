@@ -34,11 +34,6 @@ spec:
           - __meta_kubernetes_pod_label_app_kubernetes_io_instance
         targetLabel: app_kubernetes_io_instance
       - action: replace
-        sourceLabels:
-          - __meta_kubernetes_pod_label_app_kubernetes_io_component
-        regex: (.+)
-        targetLabel: app_kubernetes_io_component
-      - action: replace
         targetLabel: network
         replacement: {{ .Values.config.network | quote }}
 {{- end }}
