@@ -6,7 +6,7 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
 name        = "blokli-api"
 repository  = "https://github.com/hoprnet/hoprnet"
-version     = "0.23.4"
+version     = "0.23.5"
 
 [lints]
 workspace = true
@@ -17,7 +17,11 @@ runtime-tokio = [
   "blokli-chain-indexer/runtime-tokio",
   "blokli-db/runtime-tokio",
 ]
-telemetry = ["dep:lazy_static", "hopr-types/telemetry"]
+telemetry = [
+  "blokli-chain-rpc/telemetry",
+  "dep:lazy_static",
+  "hopr-types/telemetry",
+]
 
 [dependencies]
 # Async runtime

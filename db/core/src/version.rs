@@ -3,7 +3,7 @@ use blokli_db_entity::prelude::{
     HoprSafeContract, HoprSafeContractState, HoprSafeRedeemedStats, Log, LogStatus, LogTopicInfo, NativeBalance,
     ServiceEntry, ServiceEntryState, ServiceRegistryConfig, ServiceType as ServiceTypeEntity, ServiceTypeState,
 };
-use migration::{Migrator, MigratorChainLogs, MigratorIndex, MigratorTrait, SafeDataOrigin};
+use migration::{Migrator, MigratorChainLogs, MigratorIndex, MigratorTrait};
 use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait, Statement};
 use semver::Version;
 use tracing::info;
@@ -150,13 +150,13 @@ async fn reset_database_schema_and_migrations(
 ) -> Result<()> {
     if matches!(db.get_database_backend(), sea_orm::DbBackend::Sqlite) {
         if let Some(logs_conn) = logs_db {
-            MigratorIndex::<{ SafeDataOrigin::NoData as u8 }>::fresh(db).await?;
+            MigratorIndex::fresh(db).await?;
             MigratorChainLogs::fresh(logs_conn).await?;
             return Ok(());
         }
     }
 
-    Migrator::<{ SafeDataOrigin::NoData as u8 }>::fresh(db).await?;
+    Migrator::fresh(db).await?;
     Ok(())
 }
 

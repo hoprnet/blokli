@@ -16,7 +16,7 @@ use hopr_types::crypto::types::Hash;
 use tracing::{debug, error, warn};
 
 use crate::{
-    transaction_executor::RpcClient,
+    transaction_executor::{ConfirmationError, RpcClient},
     transaction_monitor::{ReceiptLog, ReceiptProvider},
 };
 
@@ -74,7 +74,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcClient for RpcAdapter<R> {
         raw_tx: Vec<u8>,
         confirmations: u64,
         timeout: Option<Duration>,
-    ) -> Result<Hash, String> {
+    ) -> Result<Hash, ConfirmationError> {
         debug!(
             raw_tx_len = raw_tx.len(),
             confirmations, "sending raw transaction and waiting for confirmations"
@@ -105,22 +105,28 @@ impl<R: HttpRequestor + 'static + Clone> RpcClient for RpcAdapter<R> {
                             Ok(hash)
                         } else {
                             error!(?tx_hash, "Transaction reverted");
-                            Err(format!("Transaction reverted: {:?}", tx_hash))
+                            Err(ConfirmationError::Reverted(format!("{:?}", tx_hash)))
                         }
                     }
                     Ok(Err(e)) => {
                         error!(error = %e, "error waiting for transaction confirmation");
-                        Err(format!("Confirmation error: {}", e))
+                        Err(ConfirmationError::SubmissionFailed(format!(
+                            "Confirmation error: {}",
+                            e
+                        )))
                     }
                     Err(_) => {
                         error!(?timeout_duration, ?tx_hash, "Transaction timed out");
-                        Err(format!("Transaction timeout: timed out after {:?}", timeout_duration))
+                        Err(ConfirmationError::Timeout(format!(
+                            "timed out after {:?}",
+                            timeout_duration
+                        )))
                     }
                 }
             }
             Err(e) => {
                 error!(error = %e, "failed to send raw transaction");
-                Err(format!("RPC error: {}", e))
+                Err(ConfirmationError::SubmissionFailed(format!("RPC error: {}", e)))
             }
         }
     }

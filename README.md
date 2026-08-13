@@ -251,7 +251,7 @@ priority over their canonical database aliases when both are set. Boolean enviro
 | Config Key                 | Default                 | Environment Variable              | Description                                                               |
 | :------------------------- | :---------------------- | :-------------------------------- | :------------------------------------------------------------------------ |
 | `data_directory`           | `data`                  | `BLOKLI_DATA_DIRECTORY`           | Directory for daemon data                                                 |
-| `network`                  | `rotsee`                | `BLOKLI_NETWORK`                  | `rotsee`, `jura`, or `anvil-localhost` (`localhost` is an alias)          |
+| `network`                  | `jura-dev`              | `BLOKLI_NETWORK`                  | `jura-dev`, `jura-prod`, or `anvil-localhost` (`localhost` is an alias)   |
 | `rpc_url`                  | `http://localhost:8545` | `BLOKLI_RPC_URL`                  | Chain JSON-RPC endpoint                                                   |
 | `max_rpc_requests_per_sec` | `100`                   | `BLOKLI_MAX_RPC_REQUESTS_PER_SEC` | Maximum request rate; `0` means unlimited                                 |
 | `max_block_range`          | `10000`                 | `BLOKLI_MAX_BLOCK_RANGE`          | Ceiling for adaptive `eth_getLogs` ranges; `0` auto-discovers up to 10000 |

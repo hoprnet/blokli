@@ -44,14 +44,14 @@ struct Args {
     private_key: String,
 
     /// Minimum ticket price to set on the deployed HoprTicketPriceOracle.
-    /// Defaults to the live rotsee value so the local cluster behaves like rotsee.
+    /// Defaults to the live jura-dev value so the local cluster behaves like jura-dev.
     /// Read once via: cast call 0xca2c60433eC6a10dDEabBbE3Ce7f9737b1a0628C
     ///   "currentTicketPrice()(uint256)" --rpc-url https://rpc.gnosischain.com
     #[arg(long, env = "BLOKLI_DEPLOYER_TICKET_PRICE", default_value = "100 wei wxHOPR")]
     ticket_price: HoprBalance,
 
     /// Minimum winning probability to set on the deployed HoprWinningProbabilityOracle.
-    /// Defaults to the live rotsee value so the local cluster behaves like rotsee.
+    /// Defaults to the live jura-dev value so the local cluster behaves like jura-dev.
     /// Read once via: cast call 0x5136Bac09C78af89bDA56F5086A3F3E2Ee4EAfCa
     ///   "currentWinProb()(uint56)" --rpc-url https://rpc.gnosischain.com
     /// Use 1.0 to restore the legacy "always wins" behaviour.

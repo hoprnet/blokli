@@ -21,21 +21,13 @@ pub enum BackendType {
     Postgres,
 }
 
-/// Indicates from which network the v3 Safe data should be imported.
-#[repr(u8)]
-pub enum SafeDataOrigin {
-    /// Do not import any v3 Safe data.
-    NoData = 0,
-    /// Import v3 Jura Safe data.
-    Jura = 1,
-}
-
 /// Contains all migrations for non-SQLite databases (e.g. Postgres) and also
 /// for SQLite when a single unified database file is used (no separate logs DB).
-pub struct Migrator<const NETWORK: u8>;
+pub struct Migrator;
 
-impl<const NETWORK: u8> Migrator<NETWORK> {
-    fn base_migrations() -> Vec<Box<dyn MigrationTrait>> {
+#[async_trait::async_trait]
+impl MigratorTrait for Migrator {
+    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         vec![
             Box::new(m001_initial_schema::Migration),
             Box::new(m002_initial_log_schema::Migration),
@@ -47,29 +39,16 @@ impl<const NETWORK: u8> Migrator<NETWORK> {
     }
 }
 
-#[async_trait::async_trait]
-impl MigratorTrait for Migrator<{ SafeDataOrigin::NoData as u8 }> {
-    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        Self::base_migrations()
-    }
-}
-
-#[async_trait::async_trait]
-impl MigratorTrait for Migrator<{ SafeDataOrigin::Jura as u8 }> {
-    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        Self::base_migrations()
-    }
-}
-
 /// SQLite does not allow writing lock tables only, and the write lock
 /// will apply to the entire database file. It is therefore beneficial
 /// to place components that need concurrent exclusive write access into
 /// separate database files so that multiple write locks can be used over
 /// different parts of the database.
-pub struct MigratorIndex<const NETWORK: u8>;
+pub struct MigratorIndex;
 
-impl<const NETWORK: u8> MigratorIndex<NETWORK> {
-    fn base_migrations() -> Vec<Box<dyn MigrationTrait>> {
+#[async_trait::async_trait]
+impl MigratorTrait for MigratorIndex {
+    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         vec![
             Box::new(m001_initial_schema::Migration),
             Box::new(m003_safe_history_schema::Migration),
@@ -77,20 +56,6 @@ impl<const NETWORK: u8> MigratorIndex<NETWORK> {
             Box::new(m005_optimize_current_views::Migration),
             Box::new(m006_service_registry_schema::Migration),
         ]
-    }
-}
-
-#[async_trait::async_trait]
-impl MigratorTrait for MigratorIndex<{ SafeDataOrigin::NoData as u8 }> {
-    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        Self::base_migrations()
-    }
-}
-
-#[async_trait::async_trait]
-impl MigratorTrait for MigratorIndex<{ SafeDataOrigin::Jura as u8 }> {
-    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        Self::base_migrations()
     }
 }
 
@@ -163,7 +128,7 @@ mod tests {
         let db = setup_test_db().await;
 
         // Run all migrations
-        let result = Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None).await;
+        let result = Migrator::up(&db, None).await;
 
         assert!(result.is_ok(), "Migrations should run without errors");
     }
@@ -171,9 +136,7 @@ mod tests {
     #[tokio::test]
     async fn test_account_state_table_created() {
         let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
-            .await
-            .unwrap();
+        Migrator::up(&db, None).await.unwrap();
 
         // Verify account_state table exists
         assert!(
@@ -209,9 +172,7 @@ mod tests {
     #[tokio::test]
     async fn test_channel_state_table_created() {
         let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
-            .await
-            .unwrap();
+        Migrator::up(&db, None).await.unwrap();
 
         // Verify channel_state table exists
         assert!(
@@ -262,9 +223,7 @@ mod tests {
     #[tokio::test]
     async fn test_account_state_unique_position_index_created() {
         let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
-            .await
-            .unwrap();
+        Migrator::up(&db, None).await.unwrap();
 
         // Verify unique index exists
         assert!(
@@ -309,9 +268,7 @@ mod tests {
     #[tokio::test]
     async fn test_channel_state_unique_position_index_created() {
         let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
-            .await
-            .unwrap();
+        Migrator::up(&db, None).await.unwrap();
 
         // Verify unique index exists
         assert!(
@@ -373,9 +330,7 @@ mod tests {
     #[tokio::test]
     async fn test_views_created() {
         let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
-            .await
-            .unwrap();
+        Migrator::up(&db, None).await.unwrap();
 
         assert!(
             view_exists(&db, "channel_current").await,

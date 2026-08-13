@@ -802,7 +802,7 @@ mod tests {
     #[test]
     fn test_config_without_database_section() {
         let config = r#"
-         network = "rotsee"
+         network = "jura-dev"
          rpc_url = "http://localhost:8545"
      "#;
         let res: Result<Config, _> = toml::from_str(config);
@@ -826,7 +826,7 @@ mod tests {
         let config: Config = toml::from_str(&config_content).expect("Failed to parse example-config.toml");
 
         // Basic verification that values are loaded correctly
-        assert_eq!(config.network, Network::Rotsee);
+        assert_eq!(config.network, Network::JuraDev);
 
         // Check database config (should be present in example-config.toml)
         match &config.database {

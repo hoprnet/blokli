@@ -369,7 +369,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "rotsee"
+            network = "jura-dev"
             rpc_url = "http://localhost:8545"
             [database]
             type = "postgresql"
@@ -403,7 +403,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "rotsee"
+            network = "jura-dev"
             rpc_url = "http://localhost:8545"
             [database]
             type = "postgresql"
@@ -437,7 +437,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "rotsee"
+            network = "jura-dev"
             rpc_url = "http://localhost:8545"
         "#
         )
@@ -477,7 +477,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "rotsee"
+            network = "jura-dev"
             rpc_url = "http://localhost:8545"
         "#
         )
@@ -508,7 +508,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "rotsee"
+            network = "jura-dev"
             rpc_url = "http://localhost:8545"
             [database]
             type = "postgresql"
@@ -518,7 +518,7 @@ mod tests {
         .unwrap();
         let path = file.path().to_path_buf();
 
-        temp_env::with_var("BLOKLI_NETWORK", Some("rotsee"), || {
+        temp_env::with_var("BLOKLI_NETWORK", Some("jura-dev"), || {
             let args = Args {
                 verbose: 0,
                 config: Some(path),
@@ -526,7 +526,11 @@ mod tests {
             };
 
             let config = args.load_config(false).expect("Failed to load config");
-            assert_eq!(config.network, Network::Rotsee, "String env var should override config");
+            assert_eq!(
+                config.network,
+                Network::JuraDev,
+                "String env var should override config"
+            );
         });
     }
 
@@ -536,7 +540,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "rotsee"
+            network = "jura-dev"
             rpc_url = "http://localhost:8545"
             [database]
             type = "postgresql"
@@ -570,7 +574,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "rotsee"
+            network = "jura-dev"
             rpc_url = "http://localhost:8545"
             [database]
             type = "postgresql"
@@ -608,7 +612,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "rotsee"
+            network = "jura-dev"
             rpc_url = "http://localhost:8545"
             [database]
             type = "sqlite"
@@ -643,7 +647,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "rotsee"
+            network = "jura-dev"
             rpc_url = "http://localhost:8545"
             [database]
             type = "postgresql"
@@ -680,7 +684,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "rotsee"
+            network = "jura-dev"
             rpc_url = "http://localhost:8545"
             [database]
             type = "sqlite"
@@ -718,7 +722,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "rotsee"
+            network = "jura-dev"
             rpc_url = "http://localhost:8545"
             [database]
             type = "postgresql"
@@ -751,7 +755,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "rotsee"
+            network = "jura-dev"
             rpc_url = "http://localhost:8545"
             [database]
             type = "postgresql"
@@ -784,7 +788,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "rotsee"
+            network = "jura-dev"
             rpc_url = "http://localhost:8545"
             [database]
             type = "postgresql"
@@ -817,7 +821,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "rotsee"
+            network = "jura-dev"
             rpc_url = "http://localhost:8545"
             [database]
             type = "postgresql"
@@ -850,7 +854,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "rotsee"
+            network = "jura-dev"
             rpc_url = "http://localhost:8545"
             [database]
             type = "postgresql"
@@ -883,7 +887,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "rotsee"
+            network = "jura-dev"
             rpc_url = "http://localhost:8545"
             [database]
             type = "postgresql"
@@ -916,7 +920,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "rotsee"
+            network = "jura-dev"
             rpc_url = "http://localhost:8545"
             [database]
             type = "postgresql"
@@ -949,7 +953,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "rotsee"
+            network = "jura-dev"
             rpc_url = "http://localhost:8545"
             [database]
             type = "postgresql"
@@ -985,7 +989,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "rotsee"
+            network = "jura-dev"
             rpc_url = "http://localhost:8545"
             [database]
             type = "postgresql"
@@ -1013,7 +1017,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "rotsee"
+            network = "jura-dev"
             rpc_url = "http://localhost:8545"
             max_block_range = 5000
             [database]
@@ -1045,7 +1049,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "rotsee"
+            network = "jura-dev"
             rpc_url = "http://localhost:8545"
             max_block_range = 5000
             [database]
@@ -1077,7 +1081,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "rotsee"
+            network = "jura-dev"
             rpc_url = "http://localhost:8545"
             max_block_range = 0
             [database]
@@ -1106,7 +1110,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "rotsee"
+            network = "jura-dev"
             rpc_url = "http://localhost:8545"
             max_rpc_requests_per_sec = 0
             [database]
@@ -1139,7 +1143,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "rotsee"
+            network = "jura-dev"
             rpc_url = "http://localhost:8545"
             max_rpc_requests_per_sec = 250
             [database]
@@ -1172,7 +1176,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "rotsee"
+            network = "jura-dev"
             rpc_url = "http://localhost:8545"
             [database]
             type = "postgresql"
@@ -1209,7 +1213,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "rotsee"
+            network = "jura-dev"
             rpc_url = "http://from-env-path:8545"
             [database]
             type = "postgresql"
@@ -1242,7 +1246,7 @@ mod tests {
         writeln!(
             flag_file,
             r#"
-            network = "rotsee"
+            network = "jura-dev"
             rpc_url = "http://from-flag:8545"
             [database]
             type = "postgresql"
@@ -1256,7 +1260,7 @@ mod tests {
         writeln!(
             env_file,
             r#"
-            network = "rotsee"
+            network = "jura-dev"
             rpc_url = "http://from-env-path:8545"
             [database]
             type = "postgresql"
