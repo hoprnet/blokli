@@ -172,13 +172,13 @@ impl<R: ReceiptProvider, S: SafeAddressChecker> TransactionMonitor<R, S> {
             // Check if transaction has timed out
             let elapsed = chrono::Utc::now().signed_duration_since(record.submitted_at);
             if elapsed.to_std().ok() > Some(self.config.timeout) {
-                info!("Transaction {} timed out", record.id);
+                warn!(id = %record.id, tx_hash = %tx_hash, "Transaction timed out");
                 if let Err(e) = self.transaction_store.update_status(
                     record.id,
                     TransactionStatus::Timeout,
                     Some("Transaction timed out waiting for confirmation".to_string()),
                 ) {
-                    error!("Failed to update transaction {} status to Timeout: {}", record.id, e);
+                    error!(id = %record.id, tx_hash = %tx_hash, "Failed to update transaction status to Timeout: {e}");
                 }
                 continue;
             }
@@ -186,7 +186,7 @@ impl<R: ReceiptProvider, S: SafeAddressChecker> TransactionMonitor<R, S> {
             // Check confirmation status
             match self.receipt_provider.get_transaction_status(tx_hash).await {
                 Ok(Some(true)) => {
-                    info!("Transaction {} confirmed", record.id);
+                    info!(id = %record.id, tx_hash = %tx_hash, "Transaction confirmed");
 
                     // Collect Safe enrichment data before confirming, so that
                     // status and safe_execution are set atomically.
@@ -196,25 +196,25 @@ impl<R: ReceiptProvider, S: SafeAddressChecker> TransactionMonitor<R, S> {
                         .transaction_store
                         .confirm_with_safe_execution(record.id, safe_execution)
                     {
-                        error!("Failed to confirm transaction {}: {}", record.id, e);
+                        error!(id = %record.id, tx_hash = %tx_hash, "Failed to confirm transaction: {e}");
                     }
                 }
                 Ok(Some(false)) => {
-                    info!("Transaction {} reverted", record.id);
+                    warn!(id = %record.id, tx_hash = %tx_hash, "Transaction reverted");
                     if let Err(e) = self.transaction_store.update_status(
                         record.id,
                         TransactionStatus::Reverted,
                         Some("Transaction reverted on-chain".to_string()),
                     ) {
-                        error!("Failed to update transaction {} status to Reverted: {}", record.id, e);
+                        error!(id = %record.id, tx_hash = %tx_hash, "Failed to update transaction status to Reverted: {e}");
                     }
                 }
                 Ok(None) => {
                     // Still pending, continue monitoring
-                    debug!("Transaction {} still pending", record.id);
+                    debug!(id = %record.id, tx_hash = %tx_hash, "Transaction still pending");
                 }
                 Err(e) => {
-                    error!("Error checking transaction {}: {}", record.id, e);
+                    error!(id = %record.id, tx_hash = %tx_hash, "Error checking transaction: {e}");
                 }
             }
 
