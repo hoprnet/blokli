@@ -358,9 +358,7 @@ mod tests {
     /// single state row at position `(100, 0, 0)` / `(100, 0, 1)`.
     async fn setup_seeded_service_registry() -> DatabaseConnection {
         let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
-            .await
-            .unwrap();
+        Migrator::up(&db, None).await.unwrap();
 
         db.execute_raw(Statement::from_string(
             DbBackend::Sqlite,
