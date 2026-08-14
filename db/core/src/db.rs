@@ -6,7 +6,10 @@ use blokli_db_entity::{
 };
 use migration::{Migrator, MigratorChainLogs, MigratorIndex, MigratorTrait};
 use sea_orm::{ConnectOptions, Database, EntityTrait, Set, SqlxSqliteConnector, sea_query::OnConflict};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::{
+    ConnectOptions as _,
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+};
 use tracing::log::LevelFilter;
 use validator::Validate;
 
@@ -146,9 +149,13 @@ impl BlokliDb {
             // Helper to create SQLite pool
             let create_sqlite_pool = |url: String| async move {
                 // Parse URL to extract path and mode
-                let connect_opts: SqliteConnectOptions = url
+                let mut connect_opts: SqliteConnectOptions = url
                     .parse()
                     .map_err(|e| DbSqlError::Construction(format!("invalid SQLite URL: {e}")))?;
+                connect_opts = connect_opts.log_statements(LevelFilter::Debug);
+                if !cfg.log_slow_queries.is_zero() {
+                    connect_opts = connect_opts.log_slow_statements(LevelFilter::Warn, cfg.log_slow_queries);
+                }
 
                 let pool = SqlitePoolOptions::new()
                     .max_connections(cfg.max_connections)
