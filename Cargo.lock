@@ -4057,7 +4057,7 @@ dependencies = [
 [[package]]
 name = "hopli"
 version = "0.19.0"
-source = "git+https://github.com/hoprnet/hopli?rev=8724a7b6531b48647d46d7cdba272fb787d39622#8724a7b6531b48647d46d7cdba272fb787d39622"
+source = "git+https://github.com/hoprnet/hopli?rev=5728402bfc0edae8e69e8adc8878ec34ccddd34f#5728402bfc0edae8e69e8adc8878ec34ccddd34f"
 dependencies = [
  "alloy-transport-http",
  "anyhow",
@@ -4081,7 +4081,7 @@ dependencies = [
 [[package]]
 name = "hopr-bindings"
 version = "4.14.0"
-source = "git+https://github.com/hoprnet/contracts?rev=0eea1981c67343e65ff4e5ecb0b81b9ddc201b14#0eea1981c67343e65ff4e5ecb0b81b9ddc201b14"
+source = "git+https://github.com/hoprnet/contracts?rev=ee2ab3ab6524a764de0c58543ba2c68d1f75ad9c#ee2ab3ab6524a764de0c58543ba2c68d1f75ad9c"
 dependencies = [
  "alloy",
  "anyhow",
@@ -4098,7 +4098,7 @@ dependencies = [
 [[package]]
 name = "hopr-types"
 version = "2.4.0"
-source = "git+https://github.com/hoprnet/hopr-types?rev=47f3f1b80d9aa3fbb4d6adc73d7fde3dbd84e3cb#47f3f1b80d9aa3fbb4d6adc73d7fde3dbd84e3cb"
+source = "git+https://github.com/hoprnet/hopr-types?rev=fbbb743010a858bc2fa8c79e6140b8aa0c09a19a#fbbb743010a858bc2fa8c79e6140b8aa0c09a19a"
 dependencies = [
  "aes",
  "anyhow",
