@@ -32,6 +32,30 @@ pub struct BlokliDbConfig {
     pub network_name: String,
 }
 
+/// Build [`ConnectOptions`] for a PostgreSQL connection with consistent pool sizing and
+/// statement logging settings.
+///
+/// Used by [`BlokliDb::new`] for its own connection(s), and by any other caller that opens
+/// a separate connection to the same database (e.g. the API server's own connection pool)
+/// so that all connections share the same logging behavior instead of falling back to
+/// SeaORM's own defaults (which log every statement at `INFO`, not `DEBUG`).
+pub fn build_connect_options(url: &str, cfg: &BlokliDbConfig) -> ConnectOptions {
+    let mut opt = ConnectOptions::new(url.to_string());
+    opt.max_connections(cfg.max_connections)
+        .min_connections(1)
+        .connect_timeout(Duration::from_secs(8))
+        .idle_timeout(Duration::from_secs(300))
+        .max_lifetime(Duration::from_secs(1800))
+        .sqlx_logging(true)
+        .sqlx_logging_level(LevelFilter::Debug);
+    // A zero duration means slow-query warnings are disabled; leave the setting at
+    // its default (Off) rather than warning on every statement.
+    if !cfg.log_slow_queries.is_zero() {
+        opt.sqlx_slow_statements_logging_settings(LevelFilter::Warn, cfg.log_slow_queries);
+    }
+    opt
+}
+
 /// Main database handle for HOPR node operations.
 ///
 /// For PostgreSQL: Uses a single database connection for all tables.
@@ -127,22 +151,7 @@ impl BlokliDb {
         }
 
         // Helper function to create connection options for PostgreSQL
-        let create_connection_opts = |url: &str| -> ConnectOptions {
-            let mut opt = ConnectOptions::new(url.to_string());
-            opt.max_connections(cfg.max_connections)
-                .min_connections(1)
-                .connect_timeout(Duration::from_secs(8))
-                .idle_timeout(Duration::from_secs(300))
-                .max_lifetime(Duration::from_secs(1800))
-                .sqlx_logging(true)
-                .sqlx_logging_level(LevelFilter::Debug);
-            // A zero duration means slow-query warnings are disabled; leave the setting at
-            // its default (Off) rather than warning on every statement.
-            if !cfg.log_slow_queries.is_zero() {
-                opt.sqlx_slow_statements_logging_settings(LevelFilter::Warn, cfg.log_slow_queries);
-            }
-            opt
-        };
+        let create_connection_opts = |url: &str| -> ConnectOptions { build_connect_options(url, &cfg) };
 
         // Create database connections
         let (db, logs_db) = if is_sqlite {
