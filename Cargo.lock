@@ -2179,7 +2179,7 @@ dependencies = [
 
 [[package]]
 name = "bloklid"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "anyhow",
  "async-signal",
@@ -4057,7 +4057,7 @@ dependencies = [
 [[package]]
 name = "hopli"
 version = "0.19.0"
-source = "git+https://github.com/hoprnet/hopli?rev=32116320754e2897a3fb72ca8aff1ec8dae6a85e#32116320754e2897a3fb72ca8aff1ec8dae6a85e"
+source = "git+https://github.com/hoprnet/hopli?rev=8724a7b6531b48647d46d7cdba272fb787d39622#8724a7b6531b48647d46d7cdba272fb787d39622"
 dependencies = [
  "alloy-transport-http",
  "anyhow",
@@ -4097,8 +4097,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-types"
-version = "2.3.0"
-source = "git+https://github.com/hoprnet/hopr-types?rev=68d626ba041da06fde90c9c3c51a4d53c5ab0c4c#68d626ba041da06fde90c9c3c51a4d53c5ab0c4c"
+version = "2.4.0"
+source = "git+https://github.com/hoprnet/hopr-types?rev=47f3f1b80d9aa3fbb4d6adc73d7fde3dbd84e3cb#47f3f1b80d9aa3fbb4d6adc73d7fde3dbd84e3cb"
 dependencies = [
  "aes",
  "anyhow",
