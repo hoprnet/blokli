@@ -135,6 +135,18 @@ pub struct RpcOperationsConfig {
     /// low-congestion pricing.
     ///
     /// Defaults to 0.001 gwei (1,000,000 wei).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use blokli_chain_rpc::rpc::RpcOperationsConfig;
+    ///
+    /// let config = RpcOperationsConfig {
+    ///     gas_estimate_sanity_threshold: 500_000,
+    ///     ..Default::default()
+    /// };
+    /// assert_eq!(config.gas_estimate_sanity_threshold, 500_000);
+    /// ```
     #[default = 1_000_000]
     pub gas_estimate_sanity_threshold: u128,
     /// Maximum number of consecutive failures tolerated during log streaming before giving up.
@@ -348,6 +360,17 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         cfg: RpcOperationsConfig,
         use_dummy_nr: Option<bool>,
     ) -> Result<Self> {
+        if cfg.gas_oracle_fallback_max_fee < cfg.gas_estimate_sanity_threshold
+            || cfg.gas_oracle_fallback_priority_fee < cfg.gas_estimate_sanity_threshold
+        {
+            return Err(RpcError::Other(
+                "gas_oracle_fallback_max_fee and gas_oracle_fallback_priority_fee must each be >= \
+                 gas_estimate_sanity_threshold, otherwise a degenerate estimate would be replaced with another \
+                 degenerate value"
+                    .to_string(),
+            ));
+        }
+
         let provider = ProviderBuilder::new()
             .disable_recommended_fillers()
             .filler(ChainIdFiller::default())
