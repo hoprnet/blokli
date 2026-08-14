@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use hopr_types::crypto::types::Hash;
 use thiserror::Error;
+use tracing::{error, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -180,6 +181,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
     pub async fn send_raw_transaction(&self, raw_tx: Vec<u8>) -> Result<Hash, TransactionExecutorError> {
         // Validate transaction
         if let Err(e) = self.validator.validate_raw_transaction(&raw_tx) {
+            warn!(error = %e, "Transaction validation failed");
             record_transaction_status(STATUS_VALIDATION_FAILED);
             return Err(e.into());
         }
@@ -207,6 +209,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
     pub async fn send_raw_transaction_async(&self, raw_tx: Vec<u8>) -> Result<Uuid, TransactionExecutorError> {
         // Validate transaction
         if let Err(e) = self.validator.validate_raw_transaction(&raw_tx) {
+            warn!(error = %e, "Transaction validation failed");
             record_transaction_status(STATUS_VALIDATION_FAILED);
             return Err(e.into());
         }
@@ -233,7 +236,10 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             safe_execution: None,
         };
 
-        self.transaction_store.insert(record)?;
+        if let Err(e) = self.transaction_store.insert(record) {
+            error!(id = %id, tx_hash = %tx_hash, error = %e, "Failed to store submitted transaction");
+            return Err(e.into());
+        }
         Ok(id)
     }
 
@@ -251,6 +257,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
     ) -> Result<TransactionRecord, TransactionExecutorError> {
         // Validate transaction
         if let Err(e) = self.validator.validate_raw_transaction(&raw_tx) {
+            warn!(error = %e, "Transaction validation failed");
             record_transaction_status(STATUS_VALIDATION_FAILED);
             return Err(e.into());
         }
@@ -298,7 +305,10 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
                 enrich_safe_execution(&record, receipt_provider.as_ref(), safe_checker.as_ref()).await;
         }
 
-        self.transaction_store.insert(record.clone())?;
+        if let Err(e) = self.transaction_store.insert(record.clone()) {
+            error!(id = %record.id, tx_hash = %tx_hash, error = %e, "Failed to store confirmed transaction");
+            return Err(e.into());
+        }
         record_transaction_status(STATUS_CONFIRMED);
         Ok(record)
     }
