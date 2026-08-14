@@ -126,29 +126,6 @@ pub struct RpcOperationsConfig {
     /// Defaults to 0.1 gwei (100,000,000 wei) which is suitable for Gnosis chain.
     #[default = 100_000_000]
     pub gas_oracle_fallback_priority_fee: u128,
-    /// Sanity threshold (in wei) below which a gas estimate is treated as degenerate
-    /// (e.g. a misbehaving RPC endpoint returning a near-zero fee history) and replaced
-    /// with the fallback values above.
-    ///
-    /// This is deliberately far below normal gas prices, even on a cheap chain like
-    /// Gnosis, so it only catches genuinely broken estimates rather than legitimate
-    /// low-congestion pricing.
-    ///
-    /// Defaults to 0.001 gwei (1,000,000 wei).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use blokli_chain_rpc::rpc::RpcOperationsConfig;
-    ///
-    /// let config = RpcOperationsConfig {
-    ///     gas_estimate_sanity_threshold: 500_000,
-    ///     ..Default::default()
-    /// };
-    /// assert_eq!(config.gas_estimate_sanity_threshold, 500_000);
-    /// ```
-    #[default = 1_000_000]
-    pub gas_estimate_sanity_threshold: u128,
     /// Maximum number of consecutive failures tolerated during log streaming before giving up.
     ///
     /// When the indexer encounters errors while fetching logs, it will retry up to this many times
@@ -360,17 +337,6 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         cfg: RpcOperationsConfig,
         use_dummy_nr: Option<bool>,
     ) -> Result<Self> {
-        if cfg.gas_oracle_fallback_max_fee < cfg.gas_estimate_sanity_threshold
-            || cfg.gas_oracle_fallback_priority_fee < cfg.gas_estimate_sanity_threshold
-        {
-            return Err(RpcError::Other(
-                "gas_oracle_fallback_max_fee and gas_oracle_fallback_priority_fee must each be >= \
-                 gas_estimate_sanity_threshold, otherwise a degenerate estimate would be replaced with another \
-                 degenerate value"
-                    .to_string(),
-            ));
-        }
-
         let provider = ProviderBuilder::new()
             .disable_recommended_fillers()
             .filler(ChainIdFiller::default())
@@ -402,11 +368,6 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
             cfg,
             provider: Arc::new(provider),
         })
-    }
-
-    /// Get the configuration this instance was created with
-    pub fn config(&self) -> &RpcOperationsConfig {
-        &self.cfg
     }
 
     /// Get the current block number from the RPC endpoint, adjusted for finality
