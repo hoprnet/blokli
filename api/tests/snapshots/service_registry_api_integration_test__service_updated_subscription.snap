@@ -1,0 +1,15 @@
+---
+source: api/tests/service_registry_api_integration_test.rs
+expression: sorted(update.data.into_json()?)
+---
+serviceUpdated:
+  entry:
+    metadata: "0x7b2276223a317d"
+    node: "[node]"
+    registeredAt: "[timestamp]"
+    safe: "[safe]"
+    serviceType: "gvpn:exit"
+    updatedAt: "[timestamp]"
+  kind: REGISTERED
+  node: "[node]"
+  serviceType: "gvpn:exit"

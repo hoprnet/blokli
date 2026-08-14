@@ -98,6 +98,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             winning_probability_oracle: h2a(contracts.winning_probability_oracle),
             node_stake_factory: h2a(contracts.node_stake_factory),
             xhopr_token: h2a(contracts.xhopr_token),
+            service_registry: h2a(contracts.service_registry),
         },
     };
     let toml_output = toml::to_string(&output)?;
@@ -136,6 +137,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             tokenAddress: *instances.token.address(),
             defaultTokenAllowance: network.defaultTokenAllowance,
             defaultAnnouncementTarget: network.defaultAnnouncementTarget,
+            serviceRegistryAddress: *instances.service_registry.address(),
         })
         .send()
         .await?
