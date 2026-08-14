@@ -621,7 +621,7 @@ where
                 },
                 Err(_err) => {
                     // Error details may contain sensitive URL information - avoid logging
-                    error!("RPC request failed");
+                    error!(?method_names, "RPC request failed");
                     method_names.iter().for_each(|_m| {
                         #[cfg(all(feature = "telemetry", not(test)))]
                         METRIC_COUNT_RPC_CALLS.increment(&[_m, "failure"]);

@@ -4,9 +4,12 @@ use blokli_db_entity::{
     chain_info,
     prelude::{Account, Announcement, ChainInfo},
 };
-use migration::{Migrator, MigratorChainLogs, MigratorIndex, MigratorTrait, SafeDataOrigin};
+use migration::{Migrator, MigratorChainLogs, MigratorIndex, MigratorTrait};
 use sea_orm::{ConnectOptions, Database, EntityTrait, Set, SqlxSqliteConnector, sea_query::OnConflict};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::{
+    ConnectOptions as _,
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+};
 use tracing::log::LevelFilter;
 use validator::Validate;
 
@@ -25,8 +28,32 @@ pub struct BlokliDbConfig {
     pub max_connections: u32,
     #[default(Duration::from_secs(5))]
     pub log_slow_queries: Duration,
-    #[default("jura")]
+    #[default("jura-prod")]
     pub network_name: String,
+}
+
+/// Build [`ConnectOptions`] for a PostgreSQL connection with consistent pool sizing and
+/// statement logging settings.
+///
+/// Used by [`BlokliDb::new`] for its own connection(s), and by any other caller that opens
+/// a separate connection to the same database (e.g. the API server's own connection pool)
+/// so that all connections share the same logging behavior instead of falling back to
+/// SeaORM's own defaults (which log every statement at `INFO`, not `DEBUG`).
+pub fn build_connect_options(url: &str, cfg: &BlokliDbConfig) -> ConnectOptions {
+    let mut opt = ConnectOptions::new(url.to_string());
+    opt.max_connections(cfg.max_connections)
+        .min_connections(1)
+        .connect_timeout(Duration::from_secs(8))
+        .idle_timeout(Duration::from_secs(300))
+        .max_lifetime(Duration::from_secs(1800))
+        .sqlx_logging(true)
+        .sqlx_logging_level(LevelFilter::Debug);
+    // A zero duration means slow-query warnings are disabled; leave the setting at
+    // its default (Off) rather than warning on every statement.
+    if !cfg.log_slow_queries.is_zero() {
+        opt.sqlx_slow_statements_logging_settings(LevelFilter::Warn, cfg.log_slow_queries);
+    }
+    opt
 }
 
 /// Main database handle for HOPR node operations.
@@ -124,26 +151,20 @@ impl BlokliDb {
         }
 
         // Helper function to create connection options for PostgreSQL
-        let create_connection_opts = |url: &str| -> ConnectOptions {
-            let mut opt = ConnectOptions::new(url.to_string());
-            opt.max_connections(cfg.max_connections)
-                .min_connections(1)
-                .connect_timeout(Duration::from_secs(8))
-                .idle_timeout(Duration::from_secs(300))
-                .max_lifetime(Duration::from_secs(1800))
-                .sqlx_logging(cfg.log_slow_queries.as_secs() > 0)
-                .sqlx_logging_level(LevelFilter::Warn);
-            opt
-        };
+        let create_connection_opts = |url: &str| -> ConnectOptions { build_connect_options(url, &cfg) };
 
         // Create database connections
         let (db, logs_db) = if is_sqlite {
             // Helper to create SQLite pool
             let create_sqlite_pool = |url: String| async move {
                 // Parse URL to extract path and mode
-                let connect_opts: SqliteConnectOptions = url
+                let mut connect_opts: SqliteConnectOptions = url
                     .parse()
                     .map_err(|e| DbSqlError::Construction(format!("invalid SQLite URL: {e}")))?;
+                connect_opts = connect_opts.log_statements(LevelFilter::Debug);
+                if !cfg.log_slow_queries.is_zero() {
+                    connect_opts = connect_opts.log_slow_statements(LevelFilter::Warn, cfg.log_slow_queries);
+                }
 
                 let pool = SqlitePoolOptions::new()
                     .max_connections(cfg.max_connections)
@@ -196,7 +217,7 @@ impl BlokliDb {
         if is_sqlite {
             if let Some(logs_db) = &logs_db {
                 // For SQLite with dual databases: run separate migrations on each database
-                MigratorIndex::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
+                MigratorIndex::up(&db, None)
                     .await
                     .map_err(|e| DbSqlError::Construction(format!("cannot apply index migrations: {e}")))?;
 
@@ -204,12 +225,12 @@ impl BlokliDb {
                     .await
                     .map_err(|e| DbSqlError::Construction(format!("cannot apply logs migrations: {e}")))?;
             } else {
-                Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
+                Migrator::up(&db, None)
                     .await
                     .map_err(|e| DbSqlError::Construction(format!("cannot apply migrations: {e}")))?;
             }
         } else {
-            Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
+            Migrator::up(&db, None)
                 .await
                 .map_err(|e| DbSqlError::Construction(format!("cannot apply migrations: {e}")))?;
         }
@@ -343,7 +364,7 @@ impl BlokliDbAllOperations for BlokliDb {}
 #[cfg(test)]
 mod tests {
     use blokli_db_entity::prelude::ChainInfo;
-    use migration::{Migrator, MigratorTrait, SafeDataOrigin};
+    use migration::{Migrator, MigratorTrait};
     use sea_orm::{EntityTrait, PaginatorTrait};
 
     use crate::{BlokliDbGeneralModelOperations, SINGULAR_TABLE_FIXED_ID, TargetDb, db::BlokliDb};
@@ -353,7 +374,7 @@ mod tests {
         let db = BlokliDb::new_in_memory().await?;
 
         // For SQLite, check the unified Migrator status
-        Migrator::<{ SafeDataOrigin::Jura as u8 }>::status(db.conn(TargetDb::Index)).await?;
+        Migrator::status(db.conn(TargetDb::Index)).await?;
 
         Ok(())
     }

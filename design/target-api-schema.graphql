@@ -85,7 +85,7 @@ type ChainInfo {
   maxPriorityFeePerGas: String
   "Current minimum ticket winning probability (decimal value between 0.0 and 1.0)"
   minTicketWinningProbability: Float!
-  "Network name (e.g., 'rotsee', 'jura')"
+  "Network name (e.g., 'jura-dev', 'jura-prod')"
   network: String!
   "Safe Registry smart contract domain separator (hex string)"
   safeRegistryDst: String

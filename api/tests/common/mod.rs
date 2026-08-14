@@ -45,7 +45,7 @@ use hopr_bindings::exports::alloy::{
     transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
 };
 use hopr_types::crypto::keypairs::{ChainKeypair, Keypair};
-use migration::{Migrator, MigratorTrait, SafeDataOrigin};
+use migration::{Migrator, MigratorTrait};
 use sea_orm::DatabaseConnection;
 use tokio::task::AbortHandle;
 
@@ -246,7 +246,7 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
 
     // Run migrations if configured
     if config.run_migrations {
-        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
+        Migrator::up(&db, None)
             .await
             .expect("Failed to run database migrations");
     }
