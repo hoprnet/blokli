@@ -204,6 +204,35 @@ fn scale_wei_by_multiplier(value: u128, multiplier: f64) -> u128 {
         / denominator
 }
 
+/// Resolves a legacy gas price estimate, substituting `fallback` when `estimated` is below
+/// `sanity_threshold` (e.g. a misbehaving RPC endpoint returning a near-zero fee).
+fn resolve_gas_price(estimated: u128, sanity_threshold: u128, fallback: u128) -> u128 {
+    if estimated < sanity_threshold {
+        fallback
+    } else {
+        estimated
+    }
+}
+
+/// Resolves EIP-1559 fee estimates, substituting both fallback values together when either
+/// component is below `sanity_threshold`, and enforcing `max_fee >= priority_fee` per EIP-1559.
+fn resolve_eip1559_fees(
+    max_fee: u128,
+    priority_fee: u128,
+    sanity_threshold: u128,
+    max_fee_fallback: u128,
+    priority_fee_fallback: u128,
+) -> (u128, u128) {
+    let below_threshold = max_fee < sanity_threshold || priority_fee < sanity_threshold;
+    let resolved_priority_fee = if below_threshold {
+        priority_fee_fallback
+    } else {
+        priority_fee
+    };
+    let resolved_max_fee = if below_threshold { max_fee_fallback } else { max_fee }.max(resolved_priority_fee);
+    (resolved_max_fee, resolved_priority_fee)
+}
+
 fn safe_from_current_row(
     current: CurrentSafe,
     registered_nodes: Vec<String>,
@@ -1396,22 +1425,27 @@ impl QueryRoot {
 
             // The RPC endpoint's fee estimate (eth_gasPrice / eth_feeHistory) can occasionally return
             // a degenerate near-zero value (e.g. a misbehaving provider), which would produce a
-            // transaction that can never be mined. Floor against the configured gas oracle fallback,
-            // which is a known-reasonable value for this chain.
-            let max_fee_floor = rpc.config().gas_oracle_fallback_max_fee;
-            let priority_fee_floor = rpc.config().gas_oracle_fallback_priority_fee;
+            // transaction that can never be mined. Detection uses a sanity threshold far below any
+            // legitimate fee (even on a cheap chain like Gnosis); the replacement values are the
+            // separate, higher gas oracle fallback config. These must stay decoupled: using the
+            // fallback itself as the detection threshold would misfire on legitimate low-congestion
+            // prices, since Gnosis gas can normally be far below the fallback's "reasonable" value.
+            let sanity_threshold = rpc.config().gas_estimate_sanity_threshold;
+            let max_fee_fallback = rpc.config().gas_oracle_fallback_max_fee;
+            let priority_fee_fallback = rpc.config().gas_oracle_fallback_priority_fee;
 
             match gas_price_result {
                 Ok(estimated_gas_price) => {
-                    let floored = estimated_gas_price.max(max_fee_floor);
-                    if floored != estimated_gas_price {
+                    let resolved_gas_price = resolve_gas_price(estimated_gas_price, sanity_threshold, max_fee_fallback);
+                    if resolved_gas_price != estimated_gas_price {
                         warn!(
                             estimated_gas_price,
-                            floor = max_fee_floor,
-                            "estimated gas price below sanity floor, using floor instead"
+                            sanity_threshold,
+                            fallback = max_fee_fallback,
+                            "estimated gas price below sanity threshold, using fallback instead"
                         );
                     }
-                    gas_price = Some(floored.to_string());
+                    gas_price = Some(resolved_gas_price.to_string());
                 }
                 Err(e) => {
                     warn!(error = %e, "failed to fetch gas price estimate for chain_info");
@@ -1420,22 +1454,28 @@ impl QueryRoot {
 
             match eip1559_result {
                 Ok(fees) => {
-                    let floored_priority_fee = fees.max_priority_fee_per_gas.max(priority_fee_floor);
-                    // max_fee_per_gas must be >= max_priority_fee_per_gas per EIP-1559
-                    let floored_max_fee = fees.max_fee_per_gas.max(max_fee_floor).max(floored_priority_fee);
-                    if floored_max_fee != fees.max_fee_per_gas || floored_priority_fee != fees.max_priority_fee_per_gas
+                    let (resolved_max_fee, resolved_priority_fee) = resolve_eip1559_fees(
+                        fees.max_fee_per_gas,
+                        fees.max_priority_fee_per_gas,
+                        sanity_threshold,
+                        max_fee_fallback,
+                        priority_fee_fallback,
+                    );
+                    if resolved_max_fee != fees.max_fee_per_gas
+                        || resolved_priority_fee != fees.max_priority_fee_per_gas
                     {
                         warn!(
                             estimated_max_fee = fees.max_fee_per_gas,
                             estimated_priority_fee = fees.max_priority_fee_per_gas,
-                            max_fee_floor,
-                            priority_fee_floor,
-                            "eip1559 fee estimate below sanity floor, using floor instead"
+                            sanity_threshold,
+                            max_fee_fallback,
+                            priority_fee_fallback,
+                            "eip1559 fee estimate below sanity threshold, using fallback instead"
                         );
                     }
-                    max_fee_per_gas = Some(scale_wei_by_multiplier(floored_max_fee, gas_multiplier).to_string());
+                    max_fee_per_gas = Some(scale_wei_by_multiplier(resolved_max_fee, gas_multiplier).to_string());
                     max_priority_fee_per_gas =
-                        Some(scale_wei_by_multiplier(floored_priority_fee, gas_multiplier).to_string());
+                        Some(scale_wei_by_multiplier(resolved_priority_fee, gas_multiplier).to_string());
                 }
                 Err(e) => {
                     warn!(error = %e, "failed to fetch eip1559 fee estimate for chain_info");
@@ -1747,8 +1787,8 @@ mod tests {
     };
 
     use super::{
-        QueryRoot, SAFES_BALANCE_MAX_SAFES, check_safes_balance_cap, owners_for_safe, safe_from_current_row,
-        scale_wei_by_multiplier,
+        QueryRoot, SAFES_BALANCE_MAX_SAFES, check_safes_balance_cap, owners_for_safe, resolve_eip1559_fees,
+        resolve_gas_price, safe_from_current_row, scale_wei_by_multiplier,
     };
     use crate::{
         errors,
@@ -1787,6 +1827,46 @@ mod tests {
     #[test]
     fn test_scale_wei_by_multiplier_rounds_up() {
         assert_eq!(scale_wei_by_multiplier(3, 1.5), 5);
+    }
+
+    #[test]
+    fn test_resolve_gas_price_below_threshold_uses_fallback() {
+        assert_eq!(resolve_gas_price(99, 100, 500), 500);
+    }
+
+    #[test]
+    fn test_resolve_gas_price_at_threshold_uses_estimate() {
+        assert_eq!(resolve_gas_price(100, 100, 500), 100);
+    }
+
+    #[test]
+    fn test_resolve_gas_price_above_threshold_uses_estimate() {
+        assert_eq!(resolve_gas_price(101, 100, 500), 101);
+    }
+
+    #[test]
+    fn test_resolve_eip1559_fees_max_fee_below_threshold_uses_both_fallbacks() {
+        assert_eq!(resolve_eip1559_fees(99, 200, 100, 500, 50), (500, 50));
+    }
+
+    #[test]
+    fn test_resolve_eip1559_fees_priority_fee_below_threshold_uses_both_fallbacks() {
+        assert_eq!(resolve_eip1559_fees(200, 99, 100, 500, 50), (500, 50));
+    }
+
+    #[test]
+    fn test_resolve_eip1559_fees_both_at_or_above_threshold_uses_estimates() {
+        assert_eq!(resolve_eip1559_fees(200, 150, 100, 500, 50), (200, 150));
+    }
+
+    #[test]
+    fn test_resolve_eip1559_fees_enforces_max_fee_invariant_when_priority_fallback_dominates() {
+        // Both estimates are below threshold, so both fallbacks apply. If priority_fee_fallback
+        // exceeds max_fee_fallback, the resolved max fee must still be raised to match it, since
+        // max_fee_per_gas >= max_priority_fee_per_gas per EIP-1559.
+        let (max_fee, priority_fee) = resolve_eip1559_fees(50, 50, 100, 50, 500);
+        assert_eq!((max_fee, priority_fee), (500, 500));
+        assert!(max_fee >= priority_fee);
     }
 
     #[test]

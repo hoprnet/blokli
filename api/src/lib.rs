@@ -32,7 +32,10 @@ use blokli_chain_rpc::{
     rpc::{RpcOperations, RpcOperationsConfig},
     transport::ReqwestClient,
 };
-use blokli_db::utils::redact_database_url;
+use blokli_db::{
+    db::{BlokliDbConfig, build_connect_options},
+    utils::redact_database_url,
+};
 use config::ApiConfig;
 use errors::{ApiError, ApiResult};
 use hopr_bindings::exports::alloy::{
@@ -82,7 +85,7 @@ pub async fn start_server(network: String, finality: u16, config: ApiConfig) -> 
     info!("Connecting to database: {}", redact_database_url(&config.database_url));
 
     // Connect to database
-    let db = Database::connect(&config.database_url).await?;
+    let db = Database::connect(build_connect_options(&config.database_url, &BlokliDbConfig::default())).await?;
     info!("Database connection established");
 
     // Create a default IndexerState for standalone API server
