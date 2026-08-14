@@ -1396,21 +1396,28 @@ impl QueryRoot {
 
             // The RPC endpoint's fee estimate (eth_gasPrice / eth_feeHistory) can occasionally return
             // a degenerate near-zero value (e.g. a misbehaving provider), which would produce a
-            // transaction that can never be mined. Floor against the configured gas oracle fallback,
-            // which is a known-reasonable value for this chain.
+            // transaction that can never be mined. Detection uses a sanity threshold far below any
+            // legitimate fee (even on a cheap chain like Gnosis); the replacement values are the
+            // separate, higher gas oracle fallback config. These must stay decoupled: using the
+            // fallback itself as the detection threshold would misfire on legitimate low-congestion
+            // prices, since Gnosis gas can normally be far below the fallback's "reasonable" value.
+            let sanity_threshold = rpc.config().gas_estimate_sanity_threshold;
             let max_fee_floor = rpc.config().gas_oracle_fallback_max_fee;
             let priority_fee_floor = rpc.config().gas_oracle_fallback_priority_fee;
 
             match gas_price_result {
                 Ok(estimated_gas_price) => {
-                    let floored = estimated_gas_price.max(max_fee_floor);
-                    if floored != estimated_gas_price {
+                    let floored = if estimated_gas_price < sanity_threshold {
                         warn!(
                             estimated_gas_price,
+                            sanity_threshold,
                             floor = max_fee_floor,
-                            "estimated gas price below sanity floor, using floor instead"
+                            "estimated gas price below sanity threshold, using fallback instead"
                         );
-                    }
+                        max_fee_floor
+                    } else {
+                        estimated_gas_price
+                    };
                     gas_price = Some(floored.to_string());
                 }
                 Err(e) => {
@@ -1420,19 +1427,30 @@ impl QueryRoot {
 
             match eip1559_result {
                 Ok(fees) => {
-                    let floored_priority_fee = fees.max_priority_fee_per_gas.max(priority_fee_floor);
-                    // max_fee_per_gas must be >= max_priority_fee_per_gas per EIP-1559
-                    let floored_max_fee = fees.max_fee_per_gas.max(max_fee_floor).max(floored_priority_fee);
-                    if floored_max_fee != fees.max_fee_per_gas || floored_priority_fee != fees.max_priority_fee_per_gas
-                    {
+                    let below_threshold =
+                        fees.max_fee_per_gas < sanity_threshold || fees.max_priority_fee_per_gas < sanity_threshold;
+                    if below_threshold {
                         warn!(
                             estimated_max_fee = fees.max_fee_per_gas,
                             estimated_priority_fee = fees.max_priority_fee_per_gas,
+                            sanity_threshold,
                             max_fee_floor,
                             priority_fee_floor,
-                            "eip1559 fee estimate below sanity floor, using floor instead"
+                            "eip1559 fee estimate below sanity threshold, using fallback instead"
                         );
                     }
+                    let floored_priority_fee = if below_threshold {
+                        priority_fee_floor
+                    } else {
+                        fees.max_priority_fee_per_gas
+                    };
+                    // max_fee_per_gas must be >= max_priority_fee_per_gas per EIP-1559
+                    let floored_max_fee = if below_threshold {
+                        max_fee_floor
+                    } else {
+                        fees.max_fee_per_gas
+                    }
+                    .max(floored_priority_fee);
                     max_fee_per_gas = Some(scale_wei_by_multiplier(floored_max_fee, gas_multiplier).to_string());
                     max_priority_fee_per_gas =
                         Some(scale_wei_by_multiplier(floored_priority_fee, gas_multiplier).to_string());
