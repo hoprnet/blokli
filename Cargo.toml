@@ -17,10 +17,10 @@ members = [
 ]
 
 [workspace.dependencies]
-alloy-sol-types = "1.5.7"
-anyhow = "1.0.103"
+alloy-sol-types = "1.6.1"
+anyhow = "1.0.104"
 async-broadcast = "0.7.2"
-async-compression = "0.4.42"
+async-compression = "0.4.43"
 async-graphql = { version = "7.2.1", features = [
   "chrono",
   "dataloader",
@@ -32,7 +32,7 @@ async-stream = "0.3.6"
 async-tar = { version = "0.6.1", default-features = false, features = [
   "runtime-tokio",
 ] }
-async-trait = "0.1.89"
+async-trait = "0.1.92"
 axum = { version = "0.8.9", features = ["http2", "ws"] }
 backon = { version = "1.6.0", default-features = false }
 base64ct = "1.8.3"
@@ -46,46 +46,46 @@ blokli-db = { path = "db/core" }
 blokli-db-entity = { path = "db/entity" }
 blokli-db-migration = { path = "db/migration" }
 chrono = "0.4.45"
-clap = { version = "4.6.1", features = ["derive", "env", "string"] }
-config = "0.15.23"
+clap = { version = "4.6.6", features = ["derive", "env", "string"] }
+config = "0.15.25"
 dashmap = "6.2.1"
-env_logger = "0.11.10"
+env_logger = "0.11.11"
 flagset = "0.4.7"
-futures = "0.3.32"
+futures = "0.3.34"
 futures-timer = "3.0.4"
-futures-util = "0.3.32"
+futures-util = "0.3.34"
 hex = "0.4.3"
 hex-literal = "1.1.0"
 hopli = { git = "https://github.com/hoprnet/hopli", branch = "main" }
 hopr-bindings = "4.13.0"
 hopr-types = "2.3.0"
 
-http = "1.4.2"
+http = "1.5.0"
 humantime-serde = "1.1.1"
-insta = { version = "1.47.2", features = ["yaml"] }
+insta = { version = "1.48.0", features = ["yaml"] }
 lazy_static = "1.5.0"
-libp2p-identity = { version = "0.2.14", features = [
+libp2p-identity = { version = "0.3.0", features = [
   "ed25519",
   "peerid",
   "rand",
 ] }
-mockall = "0.14.0"
+mockall = "0.15.0"
 mockito = "1.7.2"
-moka = { version = "0.12.15", features = ["future"] }
-multiaddr = "0.18.2"
+moka = { version = "0.12.16", features = ["future"] }
+multiaddr = "0.19.0"
 opentelemetry = "0.32.0"
 opentelemetry-otlp = { version = "0.32.0", default-features = false }
 opentelemetry-prometheus-text-exporter = "0.3.0"
-opentelemetry_sdk = "0.32.0"
+opentelemetry_sdk = "0.32.1"
 pem-rfc7468 = "1.0"
 primitive-types = { version = "0.14.0", features = ["serde"] }
-rand = "0.10.1"
-regex = "1.12.3"
+rand = "0.10.2"
+regex = "1.13.1"
 reqwest = { version = "0.13.4", features = ["json"] }
 rstest = "0.26.1"
 rust-stream-ext-concurrent = "2.0.0"
-rustls = { version = "0.23.40", default-features = false, features = ["std"] }
-sea-orm = { version = "2.0.1", default-features = false, features = [
+rustls = { version = "0.23.43", default-features = false, features = ["std"] }
+sea-orm = { version = "2.0.2", default-features = false, features = [
   "debug-print",
   "macros",
   "runtime-tokio-rustls",
@@ -93,21 +93,21 @@ sea-orm = { version = "2.0.1", default-features = false, features = [
   "with-chrono",
   "with-json",
 ] }
-sea-orm-cli = { version = "2.0.1", default-features = false, features = [
+sea-orm-cli = { version = "2.0.2", default-features = false, features = [
   "codegen",
   "runtime-tokio-rustls",
 ] }
-sea-orm-migration = { version = "2.0.1", default-features = false, features = [
+sea-orm-migration = { version = "2.0.2", default-features = false, features = [
   "cli",
   "sqlx-postgres",
   "with-chrono",
 ] }
-sea-query = { version = "1.0.1", default-features = false }
+sea-query = { version = "1.0.2", default-features = false }
 # Keep sea-query aligned with SeaORM RC line to avoid resolver drift.
 semver = "1.0.28"
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.150"
-serde_with = { version = "3.21.0" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+serde_with = { version = "3.22.0" }
 serde_yaml = "0.9.34"
 smart-default = "0.7.1"
 sqlx = { version = "0.9.0", default-features = false, features = [
@@ -115,12 +115,12 @@ sqlx = { version = "0.9.0", default-features = false, features = [
   "sqlite",
 ] }
 strum = { version = "0.28.0", features = ["derive"] }
-sysinfo = "0.39.3"
+sysinfo = "0.39.6"
 temp-env = "0.3.6"
 tempfile = "3.27.0"
 test-log = { version = "0.2.21", features = ["trace"] }
-thiserror = "2.0.18"
-tokio = { version = "1.52.3", features = [
+thiserror = "2.0.20"
+tokio = { version = "1.53.1", features = [
   "fs",
   "macros",
   "rt-multi-thread",
@@ -131,9 +131,9 @@ tokio = { version = "1.52.3", features = [
 tokio-rustls = { version = "0.26.4", default-features = false, features = [
   "ring",
 ] }
-toml = "1.1.2"
+toml = "1.1.4"
 tower = { version = "0.5.3", default-features = false, features = ["util"] }
-tower-http = { version = "0.6.11", features = [
+tower-http = { version = "0.7.0", features = [
   "compression-zstd",
   "cors",
   "trace",
@@ -147,8 +147,8 @@ tracing-subscriber = { version = "0.3.23", features = [
   "std",
 ] }
 url = { version = "2.5.8", features = ["serde"] }
-uuid = { version = "1.23.3", features = ["serde", "v4"] }
-validator = { version = "0.20.0", features = ["derive"] }
+uuid = { version = "1.24.1", features = ["serde", "v4"] }
+validator = { version = "0.21.0", features = ["derive"] }
 
 [profile.dev]
 panic = "abort"
