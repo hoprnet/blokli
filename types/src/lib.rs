@@ -110,6 +110,303 @@ impl ScalarType for UInt64 {
     }
 }
 
+/// Unsigned 256-bit integer represented as a decimal string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UInt256(pub String);
+
+#[Scalar(name = "UInt256")]
+impl ScalarType for UInt256 {
+    fn parse(value: Value) -> async_graphql::InputValueResult<Self> {
+        let value = match value {
+            Value::String(value) => value,
+            Value::Number(value) => value.to_string(),
+            _ => return Err("UInt256 must be a decimal string or non-negative integer".into()),
+        };
+        if value.is_empty() {
+            return Err("UInt256 must not be empty".into());
+        }
+        let normalized = value.trim_start_matches('0');
+        let normalized = if normalized.is_empty() { "0" } else { normalized };
+        const MAX_U256: &str = "115792089237316195423570985008687907853269984665640564039457584007913129639935";
+        if !normalized.bytes().all(|byte| byte.is_ascii_digit())
+            || normalized.len() > MAX_U256.len()
+            || (normalized.len() == MAX_U256.len() && normalized > MAX_U256)
+        {
+            return Err("UInt256 must be a decimal integer between 0 and 2^256 - 1".into());
+        }
+        Ok(Self(normalized.to_string()))
+    }
+
+    fn to_value(&self) -> Value {
+        Value::String(self.0.clone())
+    }
+}
+
+/// Exclusive pagination cursor for indexed Curvy events.
+///
+/// The numeric position alone is not reorg-safe: a reorganization can place a different
+/// canonical event at the same block/transaction/log/item position, and an exclusive
+/// `>` comparison would skip it. Supplying `blockHash` anchors the cursor to the branch
+/// it was issued on, so a cursor that has been orphaned is rejected instead of silently
+/// skipping the replacement. It is optional for backwards compatibility; clients that
+/// omit it keep the previous, unchecked behaviour.
+#[derive(InputObject, Clone, Debug, PartialEq, Eq)]
+pub struct CurvyEventCursor {
+    pub block: UInt64,
+    #[graphql(name = "transactionIndex")]
+    pub transaction_index: UInt64,
+    #[graphql(name = "logIndex")]
+    pub log_index: UInt64,
+    #[graphql(name = "eventItemIndex")]
+    pub event_item_index: UInt64,
+    /// Block hash the cursor position was observed on, as returned in the event's
+    /// `position.blockHash`.
+    #[graphql(name = "blockHash")]
+    pub block_hash: Option<Hex32>,
+}
+
+/// Position and transaction identity shared by indexed Curvy events.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyEventPosition {
+    #[graphql(name = "transactionHash")]
+    pub transaction_hash: Hex32,
+    #[graphql(name = "blockHash")]
+    pub block_hash: Hex32,
+    pub block: UInt64,
+    #[graphql(name = "transactionIndex")]
+    pub transaction_index: UInt64,
+    #[graphql(name = "logIndex")]
+    pub log_index: UInt64,
+    #[graphql(name = "eventItemIndex")]
+    pub event_item_index: UInt64,
+}
+
+/// One note emitted by `PendingNotes`.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyPendingNote {
+    #[graphql(name = "noteId")]
+    pub note_id: Hex32,
+    #[graphql(name = "ephemeralKey")]
+    pub ephemeral_key: Vec<UInt256>,
+    #[graphql(name = "viewTag")]
+    pub view_tag: i32,
+    #[graphql(name = "tokenId")]
+    pub token_id: UInt256,
+    pub amount: UInt256,
+    #[graphql(name = "isPlaintext")]
+    pub is_plaintext: bool,
+    pub position: CurvyEventPosition,
+}
+
+/// One note emitted by `CommittedNotes`.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyCommittedNote {
+    #[graphql(name = "batchIndex")]
+    pub batch_index: Hex32,
+    #[graphql(name = "noteId")]
+    pub note_id: Hex32,
+    #[graphql(name = "leafIndex")]
+    pub leaf_index: UInt64,
+    pub position: CurvyEventPosition,
+}
+
+/// One nullifier emitted by `CommittedNullifiers`.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyCommittedNullifier {
+    #[graphql(name = "batchIndex")]
+    pub batch_index: Hex32,
+    pub nullifier: Hex32,
+    #[graphql(name = "nullifierIndex")]
+    pub nullifier_index: UInt64,
+    pub position: CurvyEventPosition,
+}
+
+/// Finalized, immutable Curvy synchronization checkpoint.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvySyncCheckpoint {
+    #[graphql(name = "blockNumber")]
+    pub block_number: UInt64,
+    #[graphql(name = "blockHash")]
+    pub block_hash: Hex32,
+    #[graphql(name = "aggregatorAddress")]
+    pub aggregator_address: String,
+    #[graphql(name = "treeVersion")]
+    pub tree_version: i32,
+    #[graphql(name = "treeDepth")]
+    pub tree_depth: i32,
+    #[graphql(name = "shardHeight")]
+    pub shard_height: i32,
+    #[graphql(name = "shardSize")]
+    pub shard_size: UInt64,
+    #[graphql(name = "noteCount")]
+    pub note_count: UInt64,
+    #[graphql(name = "nullifierCount")]
+    pub nullifier_count: UInt64,
+    #[graphql(name = "shardCount")]
+    pub shard_count: UInt64,
+    #[graphql(name = "notesRoot")]
+    pub notes_root: Hex32,
+}
+
+/// Committed note plus its optional announcement metadata for SDK synchronization.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvySyncNote {
+    #[graphql(name = "leafIndex")]
+    pub leaf_index: UInt64,
+    #[graphql(name = "noteId")]
+    pub note_id: Hex32,
+    #[graphql(name = "batchIndex")]
+    pub batch_index: Hex32,
+    pub announcement: Option<CurvyPendingNote>,
+    #[graphql(name = "commitPosition")]
+    pub commit_position: CurvyEventPosition,
+}
+
+/// One completed Curvy notes-tree shard.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyShardRoot {
+    #[graphql(name = "shardIndex")]
+    pub shard_index: UInt64,
+    pub root: Hex32,
+    #[graphql(name = "completionPosition")]
+    pub completion_position: CurvyEventPosition,
+}
+
+/// Checkpoint-pinned page of dense Curvy committed notes.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvySyncNotePage {
+    pub checkpoint: Hex32,
+    pub notes: Vec<CurvySyncNote>,
+    #[graphql(name = "nextIndex")]
+    pub next_index: UInt64,
+    pub total: UInt64,
+}
+
+/// Checkpoint-pinned page of dense Curvy nullifiers.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvySyncNullifierPage {
+    pub checkpoint: Hex32,
+    pub nullifiers: Vec<CurvyCommittedNullifier>,
+    #[graphql(name = "nextIndex")]
+    pub next_index: UInt64,
+    pub total: UInt64,
+}
+
+/// Checkpoint-pinned page of completed Curvy shard roots.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyShardRootPage {
+    pub checkpoint: Hex32,
+    #[graphql(name = "shardRoots")]
+    pub shard_roots: Vec<CurvyShardRoot>,
+    #[graphql(name = "nextIndex")]
+    pub next_index: UInt64,
+    pub total: UInt64,
+}
+
+/// Current per-token gas fees read from the Curvy Vault.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyGasFees {
+    #[graphql(name = "tokenId")]
+    pub token_id: UInt256,
+    #[graphql(name = "portalDeployment")]
+    pub portal_deployment: UInt256,
+    #[graphql(name = "pendingNoteCommitment")]
+    pub pending_note_commitment: UInt256,
+    pub withdrawal: UInt256,
+}
+
+/// Current Curvy Aggregator indices and notes-tree root.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyAggregatorState {
+    #[graphql(name = "notesTreeRoot")]
+    pub notes_tree_root: Hex32,
+    #[graphql(name = "notesBatchIndex")]
+    pub notes_batch_index: UInt256,
+    #[graphql(name = "nullifiersBatchIndex")]
+    pub nullifiers_batch_index: UInt256,
+    #[graphql(name = "noteIndex")]
+    pub note_index: UInt256,
+}
+
+/// Current Curvy Vault protocol-level fees.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyVaultFees {
+    #[graphql(name = "depositFee")]
+    pub deposit_fee: UInt256,
+    #[graphql(name = "withdrawalFee")]
+    pub withdrawal_fee: UInt256,
+}
+
+/// Curvy Aggregator fee configuration needed to build a valid aggregation proof.
+///
+/// `commitmentFeeRoot` is rendered as `Hex32` to match the other Curvy tree roots
+/// (`notesTreeRoot`, shard roots); the fee rate and the BabyJubJub fee-note key are
+/// `UInt256` like the Vault fees and `ephemeralKey`.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyAggregatorFees {
+    #[graphql(name = "protocolFeePerThousand")]
+    pub protocol_fee_per_thousand: UInt256,
+    #[graphql(name = "commitmentFeeRoot")]
+    pub commitment_fee_root: Hex32,
+    /// `[x, y]` of the key the circuit constrains the fee note's owner to.
+    #[graphql(name = "feeNotePublicKey")]
+    pub fee_note_public_key: Vec<UInt256>,
+}
+
+/// The number of tokens registered in the Curvy Vault.
+///
+/// Lets a client enumerate `curvyVaultToken(tokenId)` over the real token set instead
+/// of probing every id the gas-fee tree could hold.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyVaultTokenCount {
+    pub count: UInt256,
+}
+
+/// A Curvy Vault token and its configured gas fees.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyVaultToken {
+    #[graphql(name = "tokenAddress")]
+    pub token_address: String,
+    #[graphql(name = "gasFees")]
+    pub gas_fees: CurvyGasFees,
+}
+
+/// Successful Curvy pending-note history response.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyPendingNotes {
+    pub notes: Vec<CurvyPendingNote>,
+}
+
+/// Successful Curvy committed-note history response.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyCommittedNotes {
+    pub notes: Vec<CurvyCommittedNote>,
+}
+
+/// Successful Curvy committed-nullifier history response.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyCommittedNullifiers {
+    pub nullifiers: Vec<CurvyCommittedNullifier>,
+}
+
+/// Boolean value returned by a Curvy contract read.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyBooleanValue {
+    pub value: bool,
+}
+
+/// Raw Curvy note status returned by the Aggregator.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyNoteStatus {
+    pub status: i32,
+}
+
+/// Address derived or returned by a Curvy contract read.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyAddress {
+    pub address: String,
+}
+
 /// Map of contract identifiers to contract addresses
 ///
 /// This scalar type represents a mapping from contract identifier strings
@@ -835,6 +1132,9 @@ impl From<&blokli_chain_types::ContractAddresses> for ContractAddressMap {
             ("winning_probability_oracle", &addresses.winning_probability_oracle),
             ("node_stake_factory", &addresses.node_stake_factory),
             ("xhopr_token", &addresses.xhopr_token),
+            ("curvy_aggregator", &addresses.curvy_aggregator),
+            ("curvy_vault", &addresses.curvy_vault),
+            ("curvy_portal_factory", &addresses.curvy_portal_factory),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))

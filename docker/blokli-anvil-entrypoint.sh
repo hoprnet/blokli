@@ -51,12 +51,20 @@ if [ "${anvil_ready}" != "true" ]; then
 fi
 
 CONTRACTS_PATH="${DATA_DIR}/contracts-deploy.toml"
-DEPLOYER_ARGS=()
+CONTRACTS_DIR="$(dirname "${CONTRACTS_PATH}")"
+
+mkdir -p "${CONTRACTS_DIR}"
+
+# This image always deploys the Curvy suite alongside the HOPR one. It is built from
+# the `-curvy` binary, whose deployer is the only one that accepts `--with-curvy`, so
+# there is nothing here to make conditional.
+CURVY_JSON_PATH="${CURVY_JSON_PATH:-${CONTRACTS_DIR}/curvy_deployed_addresses.json}"
+
+DEPLOYER_ARGS=(--with-curvy --curvy-json-out "${CURVY_JSON_PATH}")
 if [ -n "${ANVIL_DEPLOYER_PRIVATE_KEY:-}" ]; then
   DEPLOYER_ARGS+=(--private-key "${ANVIL_DEPLOYER_PRIVATE_KEY}")
 fi
 
-# Deploy contracts with error handling
 if ! blokli-contract-deployer \
   --rpc-url "${ANVIL_RPC_URL}" \
   --output "${CONTRACTS_PATH}" \
@@ -80,6 +88,11 @@ max_connections = 10
 [indexer]
 fast_sync = false
 enable_logs_snapshot = false
+# Not optional here, and it defaults to false. Deploying the Curvy suite and then not
+# indexing its events produces an aggregator whose notes never reach the API, which
+# surfaces at a consumer as a notes-root mismatch rather than as anything pointing
+# back at this file.
+enable_curvy_indexing = true
 
 [indexer.subscription]
 event_bus_capacity = 100

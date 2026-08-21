@@ -14,7 +14,8 @@ use std::sync::{
 
 use async_broadcast::{Receiver, Sender, broadcast};
 use blokli_api_types::{
-    Account, ChannelUpdate, RedeemTicketDetails, RedemptionResult, TicketParameters, TokenValueString, UInt64,
+    Account, ChannelUpdate, CurvyCommittedNote, CurvyCommittedNullifier, CurvyPendingNote, RedeemTicketDetails,
+    RedemptionResult, TicketParameters, TokenValueString, UInt64,
 };
 use hopr_types::primitive::prelude::Address;
 use tokio::sync::RwLock;
@@ -76,6 +77,12 @@ impl From<RedeemTicketDetailsInfo> for RedeemTicketDetails {
 /// and to ensure temporal consistency.
 #[derive(Clone, Debug)]
 pub enum IndexerEvent {
+    /// A note emitted by the Curvy Aggregator's `PendingNotes` event.
+    CurvyPendingNote(CurvyPendingNote),
+    /// A note emitted by the Curvy Aggregator's `CommittedNotes` event.
+    CurvyCommittedNote(CurvyCommittedNote),
+    /// A nullifier emitted by the Curvy Aggregator's `CommittedNullifiers` event.
+    CurvyCommittedNullifier(CurvyCommittedNullifier),
     /// An account was updated (balance change, announcement, safe registration, etc.)
     ///
     /// Contains complete account data including all balances and multiaddresses.

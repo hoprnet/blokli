@@ -37,6 +37,7 @@ url                        = { workspace = true }
 validator                  = { workspace = true }
 
 blokli-chain-types = { workspace = true }
+curvy-bindings = { workspace = true }
 hopr-bindings = { workspace = true }
 hopr-types = { workspace = true, features = [
   "crypto",

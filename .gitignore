@@ -29,8 +29,10 @@ target
 
 # make sure anything which is vendored is copied
 !/vendor/**/*
-vendor/.DS_Store
-vendor/cargo/.DS_Store
+
+# Local operating-system and agent metadata
+.DS_Store
+/.codex/
 
 # nix generated files
 result
@@ -45,4 +47,3 @@ local/
 /.npm/
 
 *.log
-

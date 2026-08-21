@@ -48,6 +48,9 @@ blokli-db-migration = { path = "db/migration" }
 chrono = "0.4.45"
 clap = { version = "4.6.1", features = ["derive", "env", "string"] }
 config = "0.15.23"
+# Exact pins until Curvy publishes its stable crates
+curvy-bindings = { version = "=0.1.0-rc.5" }
+curvy-core = "=0.1.0-rc.3"
 dashmap = "6.2.1"
 env_logger = "0.11.10"
 flagset = "0.4.7"

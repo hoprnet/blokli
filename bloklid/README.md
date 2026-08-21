@@ -47,6 +47,7 @@ For the complete OTLP setup guide, including environment overrides and endpoint 
 - `indexer`: Indexer-specific configuration
   - `start_block_number`: Block to start indexing from
   - `enable_safe_indexing`: Enable Safe contract event indexing for discovered Safes
+  - `enable_curvy_indexing`: Enable note/nullifier indexing from the configured Curvy Aggregator
   - `fast_sync`: Enable fast synchronization
   - `enable_logs_snapshot`: Enable snapshot download for faster initial sync
   - `logs_snapshot_url`: URL of a tar.xz archive containing `hopr_logs.sql`

@@ -245,16 +245,19 @@
               ];
             };
 
-          # Helper: build the bloklid-anvil Docker image for a target platform.
+          # Build the local Anvil image. It always deploys the Curvy suite: the
+          # entrypoint passes `--with-curvy` unconditionally, and only the `-curvy`
+          # binary's deployer accepts that flag, so a stock variant would exit at
+          # startup on `validate_args`. There is one anvil image here, not two.
           mkBloklidAnvilDocker =
             targetPlatform:
             let
               platformPkgs = platformPkgsMap.${targetPlatform};
-              binary = bloklidPackages."binary-bloklid-${targetPlatform}";
+              binary = bloklidPackages."binary-bloklid-${targetPlatform}-curvy";
               anvilEntrypoint = mkBlokliAnvilEntrypoint targetPlatform;
             in
             nixLib.mkDockerImage {
-              name = "bloklid-anvil";
+              name = "bloklid-anvil-curvy";
               Entrypoint = [ "/bin/blokli-anvil-entrypoint" ];
               pkgsLinux = platformPkgs;
               env = [ "SSL_CERT_FILE=${platformPkgs.cacert}/etc/ssl/certs/ca-bundle.crt" ];
@@ -274,10 +277,10 @@
           bloklidDocker = {
             docker-bloklid-x86_64-linux = mkBloklidDocker "x86_64-linux" null;
             docker-bloklid-x86_64-linux-dev = mkBloklidDocker "x86_64-linux" "dev";
-            docker-bloklid-anvil-x86_64-linux = mkBloklidAnvilDocker "x86_64-linux";
+            docker-bloklid-anvil-curvy-x86_64-linux = mkBloklidAnvilDocker "x86_64-linux";
             docker-bloklid-aarch64-linux = mkBloklidDocker "aarch64-linux" null;
             docker-bloklid-aarch64-linux-dev = mkBloklidDocker "aarch64-linux" "dev";
-            docker-bloklid-anvil-aarch64-linux = mkBloklidAnvilDocker "aarch64-linux";
+            docker-bloklid-anvil-curvy-aarch64-linux = mkBloklidAnvilDocker "aarch64-linux";
           };
 
           # Combine all packages
