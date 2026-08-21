@@ -94,6 +94,12 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         indexer_cfg: IndexerConfig,
         rpc_url: String,
     ) -> Result<Self> {
+        if indexer_cfg.enable_curvy_indexing && contract_addresses.curvy_aggregator == Address::default() {
+            return Err(BlokliChainError::Configuration(
+                "Curvy indexing is enabled but the Curvy Aggregator address is not configured".to_string(),
+            ));
+        }
+
         // TODO(#7140): replace this DefaultRetryPolicy with a custom one that computes backoff with the number of
         // retries
         let rpc_http_retry_policy = DefaultRetryPolicy::default();
@@ -257,6 +263,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
                     self.rpc_operations.clone(),
                     self.indexer_state.clone(),
                     self.indexer_cfg.enable_safe_indexing,
+                    self.indexer_cfg.enable_curvy_indexing,
                 ),
                 self.db.clone(),
                 self.indexer_cfg.clone(),

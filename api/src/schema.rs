@@ -8,7 +8,7 @@ use blokli_chain_api::{
     transaction_store::TransactionStore,
 };
 use blokli_chain_indexer::IndexerState;
-use blokli_chain_rpc::{rpc::RpcOperations, transport::HttpRequestor};
+use blokli_chain_rpc::{HoprRpcOperations, rpc::RpcOperations, transport::HttpRequestor};
 use blokli_chain_types::ContractAddresses;
 use futures::Stream;
 use sea_orm::DatabaseConnection;
@@ -34,6 +34,10 @@ pub struct ChainId(pub u64);
 /// Wrapper type for network name to avoid type confusion in context
 #[derive(Debug, Clone)]
 pub struct NetworkName(pub String);
+
+/// Type-erased read-only RPC operations used by GraphQL query resolvers.
+#[derive(Clone)]
+pub struct RpcOperationsContext(pub Arc<dyn HoprRpcOperations + Send + Sync>);
 
 /// Build the registry of all supported versioned schemas.
 ///
@@ -180,6 +184,7 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
     readiness_checker: ReadinessChecker,
     limits: Option<(usize, usize)>,
 ) -> Schema<QueryRoot, MutationRoot, SubscriptionRoot> {
+    let query_rpc: Arc<dyn HoprRpcOperations + Send + Sync> = rpc_operations.clone();
     let mut builder = Schema::build(QueryRoot, MutationRoot, SubscriptionRoot)
         .data(db)
         .data(ChainId(chain_id))
@@ -191,6 +196,7 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
         .data(indexer_state)
         .data(transaction_executor)
         .data(transaction_store)
+        .data(RpcOperationsContext(query_rpc))
         .data(rpc_operations)
         .data(readiness_checker);
 

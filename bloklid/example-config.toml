@@ -38,6 +38,12 @@ max_block_range = 10000
 # winning_probability_oracle = "0x0000000000000000000000000000000000000000"
 # node_stake_factory = "0x0000000000000000000000000000000000000000"
 # xhopr_token = "0x0000000000000000000000000000000000000000"
+# Curvy addresses are not supplied by the HOPR network registry. A non-zero Aggregator
+# address is required when indexer.enable_curvy_indexing is true; Vault and PortalFactory
+# addresses enable the corresponding typed GraphQL contract reads.
+# curvy_aggregator = "0x0000000000000000000000000000000000000000"
+# curvy_vault = "0x0000000000000000000000000000000000000000"
+# curvy_portal_factory = "0x0000000000000000000000000000000000000000"
 
 # Database configuration - supports PostgreSQL or SQLite
 # IMPORTANT: This section is OPTIONAL if using environment variables.
@@ -112,6 +118,10 @@ logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz"
 # Enable indexing of Safe contract events after a Safe has been discovered
 # Safe discovery via registry/stake-factory events remains enabled regardless
 enable_safe_indexing = false
+
+# Enable note/nullifier indexing from the configured Curvy Aggregator
+# Requires contracts.curvy_aggregator to be set to a non-zero address
+enable_curvy_indexing = false
 
 # GraphQL subscription behavior configuration
 [indexer.subscription]

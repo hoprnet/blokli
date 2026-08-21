@@ -6,6 +6,7 @@ mod m002_initial_log_schema;
 mod m003_safe_history_schema;
 mod m004_safe_redeemed_stats_rejections;
 mod m005_optimize_current_views;
+mod m006_curvy_events;
 
 /// This is a special block ID that even pre-dates the v3 contract deployment on Gnosis chain,
 /// and therefore could be safely used to mark data added via the migration.
@@ -33,6 +34,7 @@ impl MigratorTrait for Migrator {
             Box::new(m003_safe_history_schema::Migration),
             Box::new(m004_safe_redeemed_stats_rejections::Migration),
             Box::new(m005_optimize_current_views::Migration),
+            Box::new(m006_curvy_events::Migration),
         ]
     }
 }
@@ -52,6 +54,7 @@ impl MigratorTrait for MigratorIndex {
             Box::new(m003_safe_history_schema::Migration),
             Box::new(m004_safe_redeemed_stats_rejections::Migration),
             Box::new(m005_optimize_current_views::Migration),
+            Box::new(m006_curvy_events::Migration),
         ]
     }
 }

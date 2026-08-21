@@ -315,6 +315,10 @@ impl Config {
             "  indexer.enable_safe_indexing: {}\n",
             self.indexer.enable_safe_indexing
         ));
+        output.push_str(&format!(
+            "  indexer.enable_curvy_indexing: {}\n",
+            self.indexer.enable_curvy_indexing
+        ));
 
         if let Some(snapshot_url) = &self.indexer.logs_snapshot_url {
             output.push_str(&format!("  indexer.logs_snapshot_url: {}\n", redact_url(snapshot_url)));
@@ -389,6 +393,10 @@ pub struct IndexerConfig {
     #[default(false)]
     #[serde(default = "default_false")]
     pub enable_safe_indexing: bool,
+
+    #[default(false)]
+    #[serde(default = "default_false")]
+    pub enable_curvy_indexing: bool,
 
     #[serde(default)]
     pub logs_snapshot_url: Option<String>,
@@ -808,6 +816,7 @@ mod tests {
         // Check indexer config
         assert!(config.indexer.fast_sync);
         assert!(!config.indexer.enable_safe_indexing);
+        assert!(!config.indexer.enable_curvy_indexing);
         assert_eq!(config.indexer.subscription.event_bus_capacity, 1000);
 
         // Check API config
@@ -840,6 +849,7 @@ mod tests {
         assert!(!cfg.indexer.fast_sync);
         assert!(!cfg.indexer.enable_logs_snapshot); // Default
         assert!(!cfg.indexer.enable_safe_indexing); // Default
+        assert!(!cfg.indexer.enable_curvy_indexing); // Default
         assert_eq!(cfg.indexer.subscription.event_bus_capacity, 1000); // Default
         assert_eq!(cfg.indexer.subscription.batch_size, 100); // Default
     }

@@ -41,7 +41,7 @@ let
         })
         // {
           prependPackageName = false;
-          cargoExtraArgs = "-p bloklid --bins";
+          cargoExtraArgs = "-p bloklid --bins --locked";
         };
       name = "binary-bloklid-${platform}";
     in
@@ -51,6 +51,12 @@ let
     // lib.optionalAttrs (lib.hasSuffix "-linux" platform) {
       "${name}-dev" = builders.${platform}.callPackage nixLib.mkRustPackage (
         args // { CARGO_PROFILE = "dev"; }
+      );
+      "${name}-curvy" = builders.${platform}.callPackage nixLib.mkRustPackage (
+        args
+        // {
+          cargoExtraArgs = "-p bloklid --bins --locked --features curvy-test-deployment";
+        }
       );
     };
 
@@ -134,7 +140,7 @@ in
     })
     // {
       runTests = true;
-      cargoExtraArgs = "-Z panic-abort-tests"; # Nightly feature for test optimization
+      cargoExtraArgs = "--locked -Z panic-abort-tests"; # Nightly feature for test optimization
     }
   );
 
