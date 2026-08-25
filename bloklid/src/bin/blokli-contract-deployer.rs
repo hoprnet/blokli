@@ -5,10 +5,11 @@ use std::{
 
 use blokli_chain_types::ContractAddresses as BlokliContractAddresses;
 use clap::Parser;
-use hopli_lib::utils::{a2h, h2a};
+use hopli_lib::utils::h2a;
 use hopr_bindings::{
     config::ContractInstances,
     exports::alloy::{
+        network::EthereumWallet,
         primitives::{U256, aliases::U56},
         providers::ProviderBuilder,
         rpc::client::ClientBuilder,
@@ -18,7 +19,6 @@ use hopr_bindings::{
 };
 use hopr_types::{
     chain::ContractAddresses,
-    crypto::keypairs::{ChainKeypair, Keypair},
     internal::prelude::WinningProbability,
     primitive::{prelude::HoprBalance, traits::IntoEndian},
 };
@@ -26,7 +26,10 @@ use serde::Serialize;
 use tracing_subscriber::{Layer as _, prelude::*};
 use url::Url;
 
-const DEFAULT_ANVIL_PRIVATE_KEY: &str = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+const DEFAULT_ANVIL_HOPR_DEPLOYER_PRIVATE_KEY: &str =
+    "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+const DEFAULT_ANVIL_COMMON_DEPLOYER_PRIVATE_KEY: &str =
+    "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
 static PANIC_HOOK_INSTALLED: Once = Once::new();
 
 #[derive(Debug, Parser)]
@@ -39,9 +42,21 @@ struct Args {
     #[arg(long, env = "BLOKLI_DEPLOYER_RPC_URL", default_value = "http://127.0.0.1:8545")]
     rpc_url: String,
 
-    /// Private key used to deploy contracts
-    #[arg(long, env = "ANVIL_DEPLOYER_PRIVATE_KEY", default_value = DEFAULT_ANVIL_PRIVATE_KEY)]
+    /// Private key used to deploy HOPR contracts
+    #[arg(
+        long,
+        env = "ANVIL_DEPLOYER_PRIVATE_KEY",
+        default_value = DEFAULT_ANVIL_HOPR_DEPLOYER_PRIVATE_KEY
+    )]
     private_key: String,
+
+    /// Private key used to deploy common contracts such as ERC1820 and the Safe suite
+    #[arg(
+        long,
+        env = "ANVIL_COMMON_DEPLOYER_PRIVATE_KEY",
+        default_value = DEFAULT_ANVIL_COMMON_DEPLOYER_PRIVATE_KEY
+    )]
+    common_private_key: String,
 
     /// Minimum ticket price to set on the deployed HoprTicketPriceOracle.
     /// Defaults to the live jura-dev value so the local cluster behaves like jura-dev.
@@ -74,17 +89,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let args = Args::parse();
 
-    let signer = PrivateKeySigner::from_str(&args.private_key)?;
-    let signer_chain_key = ChainKeypair::from_secret(signer.to_bytes().as_ref())?;
-    let signer_address = signer.address();
+    let common_deployer_signer = PrivateKeySigner::from_str(&args.common_private_key)?;
+    let hopr_deployer_signer = PrivateKeySigner::from_str(&args.private_key)?;
+    let common_deployer_address = common_deployer_signer.address();
+    let hopr_deployer_address = hopr_deployer_signer.address();
+    let mut wallet = EthereumWallet::from(common_deployer_signer);
+    wallet.register_default_signer(hopr_deployer_signer);
 
     let rpc_url = Url::parse(&args.rpc_url)?;
     let rpc_client = ClientBuilder::default().http(rpc_url);
-    let provider = ProviderBuilder::new().wallet(signer).connect_client(rpc_client);
+    let provider = ProviderBuilder::new().wallet(wallet).connect_client(rpc_client);
 
-    // The local deployment uses a single signer for both the HOPR and common contract deployers.
-    let deployer_address = a2h(signer_chain_key.public().to_address());
-    let instances = ContractInstances::deploy_for_testing(provider, deployer_address, deployer_address).await?;
+    let instances =
+        ContractInstances::deploy_for_testing(provider, hopr_deployer_address, common_deployer_address).await?;
     let contracts = ContractAddresses::from(&instances);
     let output = ContractsOutput {
         contracts: BlokliContractAddresses {
@@ -107,18 +124,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let minter_role = instances.token.MINTER_ROLE().call().await?;
     instances
         .token
-        .grantRole(minter_role, signer_address)
+        .grantRole(minter_role, hopr_deployer_address)
         .send()
         .await?
         .watch()
         .await?;
-    tracing::info!(%signer_address, "granted minter role to Anvil account");
+    tracing::info!(%hopr_deployer_address, "granted minter role to Anvil account");
 
     // Mint 10M tokens to Anvil account 0
     instances
         .token
         .mint(
-            signer_address,
+            hopr_deployer_address,
             "10000000000000000000000000".parse()?,
             Default::default(),
             Default::default(),
@@ -127,7 +144,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await?
         .watch()
         .await?;
-    tracing::info!(%signer_address, "minted tokens to Anvil account");
+    tracing::info!(%hopr_deployer_address, "minted tokens to Anvil account");
 
     // Update the stake factory to use correct addresses
     let network = instances.stake_factory.defaultHoprNetwork().call().await?;
