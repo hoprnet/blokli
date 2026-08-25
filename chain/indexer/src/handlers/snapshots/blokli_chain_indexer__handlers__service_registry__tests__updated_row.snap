@@ -1,0 +1,10 @@
+---
+source: chain/indexer/src/handlers/service_registry.rs
+expression: to_api_entry(&stored)?
+---
+service_type: "gvpn:exit"
+node: "0x1111111111111111111111111111111111111111"
+safe: "0x2222222222222222222222222222222222222222"
+metadata: "0x7b2276223a327d"
+registered_at: 1700000000
+updated_at: 1700003600

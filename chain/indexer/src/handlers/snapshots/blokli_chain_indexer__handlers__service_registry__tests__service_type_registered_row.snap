@@ -1,0 +1,9 @@
+---
+source: chain/indexer/src/handlers/service_registry.rs
+expression: to_api_type_info(&stored)
+---
+service_type: "gvpn:exit"
+owner: "0x3333333333333333333333333333333333333333"
+requirement: ~
+registration_burn: 0 wxHOPR
+update_burn: 0 wxHOPR

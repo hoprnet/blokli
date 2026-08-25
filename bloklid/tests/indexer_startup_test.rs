@@ -150,6 +150,7 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
         winning_probability_oracle: Address::from([6; 20]),
         node_stake_factory: Address::from([7; 20]),
         xhopr_token: Address::from([10; 20]),
+        service_registry: Address::from([11; 20]),
     };
 
     // Create indexer state for subscriptions (must be created before handlers)
@@ -233,6 +234,7 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
         winning_probability_oracle: Address::from([6; 20]),
         node_stake_factory: Address::from([7; 20]),
         xhopr_token: Address::from([10; 20]),
+        service_registry: Address::from([11; 20]),
     };
 
     // Create indexer state for subscriptions (must be created before handlers)
@@ -420,6 +422,7 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         winning_probability_oracle: Address::from([6; 20]),
         node_stake_factory: Address::from([7; 20]),
         xhopr_token: Address::from([10; 20]),
+        service_registry: Address::from([11; 20]),
     };
 
     // Create indexer state for subscriptions (must be created before handlers)
@@ -526,6 +529,7 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
         winning_probability_oracle: Address::from([6; 20]),
         node_stake_factory: Address::from([7; 20]),
         xhopr_token: Address::from([10; 20]),
+        service_registry: Address::from([11; 20]),
     };
 
     // Create indexer state for subscriptions
@@ -577,6 +581,74 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
         Some(expected_grace_period.as_secs()),
         "Grace period should be initialized from contract during pre_start"
     );
+
+    Ok(())
+}
+
+/// The service registry must reach the RPC filter set: its address is monitored and it maps to the
+/// ten registry topics the indexer stores.
+#[tokio::test]
+async fn test_service_registry_is_in_the_handler_filter_set() -> anyhow::Result<()> {
+    let db = BlokliDb::new_in_memory().await?;
+    let service_registry = Address::from([11; 20]);
+
+    let handlers = ContractEventHandlers::new(
+        ContractAddresses {
+            token: Address::from([1; 20]),
+            channels: Address::from([2; 20]),
+            announcements: Address::from([3; 20]),
+            module_implementation: Address::from([8; 20]),
+            node_safe_migration: Address::from([9; 20]),
+            node_safe_registry: Address::from([4; 20]),
+            ticket_price_oracle: Address::from([5; 20]),
+            winning_probability_oracle: Address::from([6; 20]),
+            node_stake_factory: Address::from([7; 20]),
+            xhopr_token: Address::from([10; 20]),
+            service_registry,
+        },
+        db,
+        MockRpcOperations::new(),
+        blokli_chain_indexer::IndexerState::new(1000, 10),
+        false,
+    );
+
+    let addresses = handlers.contract_addresses();
+    assert_eq!(addresses.len(), 8);
+    assert!(addresses.contains(&service_registry));
+    assert_eq!(handlers.contract_address_topics(service_registry).len(), 10);
+
+    Ok(())
+}
+
+/// A network without the registry carries the zero address for it. Filtering `eth_getLogs` on the
+/// null address is meaningless and expensive, so the address is left out of the set entirely.
+#[tokio::test]
+async fn test_zero_service_registry_is_not_monitored() -> anyhow::Result<()> {
+    let db = BlokliDb::new_in_memory().await?;
+
+    let handlers = ContractEventHandlers::new(
+        ContractAddresses {
+            token: Address::from([1; 20]),
+            channels: Address::from([2; 20]),
+            announcements: Address::from([3; 20]),
+            module_implementation: Address::from([8; 20]),
+            node_safe_migration: Address::from([9; 20]),
+            node_safe_registry: Address::from([4; 20]),
+            ticket_price_oracle: Address::from([5; 20]),
+            winning_probability_oracle: Address::from([6; 20]),
+            node_stake_factory: Address::from([7; 20]),
+            xhopr_token: Address::from([10; 20]),
+            service_registry: Address::default(),
+        },
+        db,
+        MockRpcOperations::new(),
+        blokli_chain_indexer::IndexerState::new(1000, 10),
+        false,
+    );
+
+    let addresses = handlers.contract_addresses();
+    assert_eq!(addresses.len(), 7);
+    assert!(!addresses.contains(&Address::default()));
 
     Ok(())
 }
