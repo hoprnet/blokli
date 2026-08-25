@@ -261,7 +261,7 @@
               extraContents = [
                 binary
                 platformPkgs.curl
-                platformPkgs.foundry
+                platformPkgs.foundry-bin
                 (mkStaticEntrypoint {
                   pkgs = platformPkgs;
                   binary = anvilEntrypoint;
