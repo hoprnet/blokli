@@ -31,4 +31,14 @@ ignore = [
   # Status: Insufficient archive validation can cause out-of-bounds reads in archives containing Rc/Arc
   # Review by: 2026-06-30
   "RUSTSEC-2026-0235",
+
+  # RUSTSEC-2026-0253
+  # Crate: lru 0.16.4
+  # Status: unsound  
+  "RUSTSEC-2026-0253",
+
+  # RUSTSEC-2026-0249
+  # Crate: smartstrings 1.0.1
+  # Status: unmaintained
+  "RUSTSEC-2026-0249",
 ]
