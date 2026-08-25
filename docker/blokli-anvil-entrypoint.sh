@@ -55,6 +55,9 @@ DEPLOYER_ARGS=()
 if [ -n "${ANVIL_DEPLOYER_PRIVATE_KEY:-}" ]; then
   DEPLOYER_ARGS+=(--private-key "${ANVIL_DEPLOYER_PRIVATE_KEY}")
 fi
+if [ -n "${ANVIL_COMMON_DEPLOYER_PRIVATE_KEY:-}" ]; then
+  DEPLOYER_ARGS+=(--common-private-key "${ANVIL_COMMON_DEPLOYER_PRIVATE_KEY}")
+fi
 
 # Deploy contracts with error handling
 if ! blokli-contract-deployer \
