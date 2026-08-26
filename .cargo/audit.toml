@@ -32,4 +32,17 @@ ignore = [
   # Review by: 2026-06-30
   "RUSTSEC-2026-0235",
 
+  # RUSTSEC-2026-0253
+  # Crate: lru 0.16.4
+  # Transitive: async-graphql -> lru
+  # Status: Potential use-after-free due to lack of panic safety in `LruCache::pop()`
+  # Review by: 2026-06-30
+  "RUSTSEC-2026-0253",
+
+  # RUSTSEC-2026-0249
+  # Crate: smartstring 1.0.1
+  # Transitive hopr-types -> open-telemetry -> smartstring
+  # Status: smartstring is unmaintained
+  # Review by: 2026-06-30
+  "RUSTSEC-2026-0249",
 ]
