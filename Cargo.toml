@@ -49,7 +49,7 @@ chrono = "0.4.45"
 clap = { version = "4.6.1", features = ["derive", "env", "string"] }
 config = "0.15.23"
 # Exact pins until Curvy publishes its stable crates.
-curvy-bindings = { version = "=0.1.0-rc.5" }
+curvy-bindings = { version = "=1.0.0-rc-1" }
 curvy-core = "=0.1.0-rc.3"
 dashmap = "6.2.1"
 env_logger = "0.11.10"
@@ -59,9 +59,9 @@ futures-timer = "3.0.4"
 futures-util = "0.3.32"
 hex = "0.4.3"
 hex-literal = "1.1.0"
-hopli = { git = "https://github.com/hoprnet/hopli", branch = "main" }
-hopr-bindings = "5.0.0"
-hopr-types = "3.1.0"
+hopli = { git = "https://github.com/hoprnet/hopli", rev = "5728402bfc0edae8e69e8adc8878ec34ccddd34f" }
+hopr-bindings = { git = "https://github.com/hoprnet/contracts", rev = "ee2ab3ab6524a764de0c58543ba2c68d1f75ad9c" }
+hopr-types = { git = "https://github.com/hoprnet/hopr-types", rev = "fbbb743010a858bc2fa8c79e6140b8aa0c09a19a" }
 http = "1.4.2"
 humantime-serde = "1.1.1"
 insta = { version = "1.47.2", features = ["yaml"] }

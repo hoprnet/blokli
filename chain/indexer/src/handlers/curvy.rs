@@ -251,7 +251,6 @@ where
                 self.on_curvy_committed_nullifiers(tx, log, event).await
             }
             CurvyAggregatorAlphaV2Events::CommitmentGasFeeRootUpdated(_)
-            | CurvyAggregatorAlphaV2Events::DirectShieldEnabledUpdated(_)
             | CurvyAggregatorAlphaV2Events::Initialized(_)
             | CurvyAggregatorAlphaV2Events::OwnershipTransferred(_)
             | CurvyAggregatorAlphaV2Events::RoleAdminChanged(_)

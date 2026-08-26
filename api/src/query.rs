@@ -1970,14 +1970,21 @@ impl QueryRoot {
 
     /// Retrieve HOPR token balance for a specific address
     ///
-    /// This query makes a direct RPC call to the blockchain to get a current HOPR token balance.
+    /// This query makes a direct RPC call to the blockchain to get a current token balance.
     /// No database storage is used - balance is fetched directly from the chain.
+    ///
+    /// Only the HOPR token variants `HOPR` and `XHOPR` are supported. `NATIVE` is rejected —
+    /// use the `nativeBalance` query for the native (xDAI) balance.
     #[graphql(name = "hoprBalance", complexity = 50)]
     async fn hopr_balance(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "On-chain address to query (hexadecimal format)")] address: String,
-        #[graphql(desc = "Token type to query (defaults to wxHOPR)")] token: Option<Token>,
+        #[graphql(
+            desc = "HOPR token to query: HOPR (default) or XHOPR. NATIVE is not accepted here — use nativeBalance \
+                    instead."
+        )]
+        token: Option<Token>,
     ) -> Result<HoprBalanceResult> {
         // Validate address format
         if let Err(e) = validate_eth_address(&address) {
@@ -1993,21 +2000,22 @@ impl QueryRoot {
         // Get RPC operations from context - using ReqwestClient as the concrete type
         let rpc = ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>()?;
 
-        // Keep the argument optional for legacy callers, which implicitly query wxHOPR.
-        let result = match token.unwrap_or(Token::WxHOPR) {
+        // Make RPC call to get balance from blockchain
+        let token = token.unwrap_or(Token::WxHOPR);
+        let result = match token {
             Token::WxHOPR => rpc
                 .get_hopr_balance(parsed_address)
                 .await
-                .map(|balance| balance.to_string())
-                .map_err(|error| ("query wxHOPR balance", error)),
+                .map(|b| b.to_string())
+                .map_err(|e| ("query wxHOPR balance", e)),
             Token::XHOPR => rpc
                 .get_xhopr_balance(parsed_address)
                 .await
-                .map(|balance| balance.to_string())
-                .map_err(|error| ("query xHOPR balance", error)),
-            _ => {
+                .map(|b| b.to_string())
+                .map_err(|e| ("query xHOPR balance", e)),
+            Token::Native => {
                 return Ok(HoprBalanceResult::QueryFailed(errors::not_implemented(
-                    "Unsupported token",
+                    "Native balance is not available via hoprBalance; use the nativeBalance query instead",
                 )));
             }
         };
@@ -2017,7 +2025,7 @@ impl QueryRoot {
                 address,
                 balance: TokenValueString(balance),
             }),
-            Err((operation, error)) => HoprBalanceResult::QueryFailed(errors::rpc_query_failed(operation, error)),
+            Err((op, e)) => HoprBalanceResult::QueryFailed(errors::rpc_query_failed(op, e)),
         })
     }
 

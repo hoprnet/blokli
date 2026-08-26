@@ -144,7 +144,10 @@ pub struct ContractAddresses {
     #[serde_as(as = "DisplayFromStr")]
     #[serde(default)]
     pub curvy_portal_factory: Address,
-    /// Service registry contract. The zero address means it is not deployed.
+    /// Service registry contract.
+    ///
+    /// The zero address means the registry is not deployed on this network and consumers must skip the contract
+    /// rather than filter logs on the null address.
     #[serde_as(as = "DisplayFromStr")]
     #[serde(default)]
     pub service_registry: Address,
@@ -281,7 +284,6 @@ where
             provider.clone(),
             AlloyAddress::ZERO, // _moduleSingletonAddress - use zero for testing
             AlloyAddress::from(announcements.address().as_ref()),
-            AlloyAddress::ZERO, // service registry is deployed later and wired by the deployer
             self_address,
         )
         .await?;

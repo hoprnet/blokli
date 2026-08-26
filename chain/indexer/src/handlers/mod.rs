@@ -304,7 +304,7 @@ where
     /// node_safe_registry, node_stake_factory, token, and - only where it is deployed -
     /// service_registry, followed by the configured Curvy Aggregator address when indexing is enabled.
     ///
-    /// The service registry is the one optional entry. `jura-prod`, `debug-staging` and `jura-dev`
+    /// The service registry is the one optional entry. Networks without a deployed registry
     /// carry the zero address for it, and filtering `eth_getLogs` on the null address is both
     /// meaningless and expensive, so it is skipped there.
     ///

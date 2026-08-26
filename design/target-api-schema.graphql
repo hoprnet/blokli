@@ -923,7 +923,7 @@ type ModuleAddress {
 type MutationRoot {
 	"""
 	Submit a transaction with fire-and-forget mode
-	
+
 	Validates the pre-signed raw transaction data and submits it to the chain.
 	Returns the transaction hash immediately after submission.
 	Does not wait for confirmation and does not track transaction status.
@@ -1419,8 +1419,11 @@ type QueryRoot {
 	"""
 	Retrieve HOPR token balance for a specific address
 	
-	This query makes a direct RPC call to the blockchain to get a current HOPR token balance.
+	This query makes a direct RPC call to the blockchain to get a current token balance.
 	No database storage is used - balance is fetched directly from the chain.
+
+	Only the HOPR token variants `HOPR` and `XHOPR` are supported. `NATIVE` is rejected —
+	use the `nativeBalance` query for the native (xDAI) balance.
 	"""
 	hoprBalance(
 		"""
@@ -1428,7 +1431,7 @@ type QueryRoot {
 		"""
 		address: String!,
 		"""
-		Token type to query (defaults to wxHOPR)
+		HOPR token to query: HOPR (default) or XHOPR. NATIVE is not accepted here — use nativeBalance instead.
 		"""
 		token: Token
 	): HoprBalanceResult!
@@ -2352,9 +2355,9 @@ type SubscriptionRoot {
 	Subscribe to the opened payment channels graph with real-time updates
 	
 	**Streaming Behavior:**
-	- Emits one OpenedChannelsGraphEntry per open channel
+	- Emits one OpenedChannelsGraphEntry per non-closed channel
 	- Each entry contains a single channel with its source and destination accounts
-	- On subscription start, emits all existing open channels as separate entries
+	- On subscription start, emits all existing open and pending-to-close channels as separate entries
 	- Subsequently, emits updates when any channel changes, including non-open states
 	
 	**Phase 1 Ordering:**

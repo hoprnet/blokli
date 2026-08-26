@@ -16,7 +16,7 @@ Both Curvy crates come from crates.io and are pinned exactly, so a routine
 `cargo update` cannot move them:
 
 ```toml
-curvy-bindings = "=0.1.0-rc.5"
+curvy-bindings = "=1.0.0-rc-1"
 curvy-core = "=0.1.0-rc.3"
 ```
 
