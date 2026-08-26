@@ -630,6 +630,7 @@ async fn test_service_registry_is_in_the_handler_filter_set() -> anyhow::Result<
         MockRpcOperations::new(),
         blokli_chain_indexer::IndexerState::new(1000, 10),
         false,
+        false,
     );
 
     let addresses = handlers.contract_addresses();
@@ -663,6 +664,7 @@ async fn test_zero_service_registry_is_not_monitored() -> anyhow::Result<()> {
         db,
         MockRpcOperations::new(),
         blokli_chain_indexer::IndexerState::new(1000, 10),
+        false,
         false,
     );
 
