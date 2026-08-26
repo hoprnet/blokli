@@ -1,19 +1,8 @@
 ---
 name: Merge
 #
-# TODO(curvy-integration): revert the Curvy integration-branch scaffolding once
+# TODO(curvy-integration): remove this integration-branch scaffolding once
 # `curvy-integration` has been merged into `main`. See hoprnet/blokli#432.
-#
-#   1. Drop `curvy-integration` from `on.pull_request.branches` below.
-#   2. Drop the `base.ref == 'main'` guard from `build-docker` and
-#      `build-docker-with-anvil` — it only exists because the reusable workflow
-#      republishes the floating `latest` tags on any base branch, which would let a
-#      `curvy-integration` merge overwrite `bloklid:latest`. With only `main` left,
-#      the guard is dead weight.
-#
-# Keep the `deploy-dev` guard and the `notify` result matching: both are correct
-# independently of the integration branch.
-#
 on:
   pull_request:
     types:
@@ -21,7 +10,6 @@ on:
       # - synchronize
     branches:
       - main
-      # TODO(curvy-integration): remove once merged into main — see header.
       - curvy-integration
 concurrency:
   group: merge-${{ github.event.pull_request.base.ref }}
@@ -44,9 +32,6 @@ jobs:
           - architecture: aarch64-linux
             runner: depot-ubuntu-24.04-arm-4
             build_command: nix build -L .#binary-bloklid-aarch64-linux
-          - architecture: aarch64-darwin
-            runner: depot-macos-15
-            build_command: nix build -L .#binary-bloklid-aarch64-darwin
     uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@45221eb1aadfc5c46751306c5c7d6d291c8a24b3 # build-binaries-v3.1.2
     permissions:
       contents: read
@@ -63,12 +48,9 @@ jobs:
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       gpg_private_key: ${{ secrets.GPG_HOPRNET_PRIVATE_KEY }}
-  # The reusable workflow republishes the floating `latest` / `latest-<platform>` tags
-  # on every `pr` build regardless of base branch, so the Curvy-less images are built
-  # from main only — otherwise a curvy-integration merge would overwrite `bloklid:latest`.
-  # TODO(curvy-integration): drop the base.ref guard once merged into main — see header.
   build-docker:
     name: Docker
+    # Avoid publishing main's floating Curvy-free tags from the integration branch.
     if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
     uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@25898d13dab1b3fbf4c33c394e7c581578a2b0d7 # build-docker-v3.2.0
     needs: build-binaries
@@ -99,10 +81,9 @@ jobs:
       concurrency_group_suffix: main
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-  # Curvy-less anvil image: main only, same floating-tag reason as build-docker.
-  # TODO(curvy-integration): drop the base.ref guard once merged into main — see header.
   build-docker-with-anvil:
     name: Docker anvil
+    # Avoid publishing main's floating Curvy-free tags from the integration branch.
     if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
     uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@25898d13dab1b3fbf4c33c394e7c581578a2b0d7 # build-docker-v3.2.0
     needs: build-binaries
@@ -128,9 +109,6 @@ jobs:
       concurrency_group_suffix: anvil
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-  # Same local Anvil image as above, but with the Curvy v2 contract suite deployed
-  # alongside the HOPR contracts. Published under a separate image name so the stock
-  # bloklid-anvil tags stay Curvy-free.
   build-docker-with-anvil-curvy:
     name: Docker anvil curvy
     if: github.event.pull_request.merged == true
@@ -160,8 +138,6 @@ jobs:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
   deploy-dev:
     name: Deploy Gnosis Dev
-    # Only main reaches the shared Gnosis Dev environment; integration branches
-    # publish images but must not trigger a deployment.
     if: github.event.pull_request.base.ref == 'main'
     runs-on: depot-ubuntu-24.04-2
     needs: build-docker
@@ -196,8 +172,6 @@ jobs:
       - build-docker-with-anvil
       - build-docker-with-anvil-curvy
       - deploy-dev
-    # Match on explicit failure/cancellation rather than !success(): jobs gated to main
-    # are *skipped* on other base branches, and a skipped need also makes success() false.
     if: >-
       ${{ always() && github.event.pull_request.merged == true && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
     runs-on: depot-ubuntu-24.04-2

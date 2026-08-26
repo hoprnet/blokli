@@ -1,0 +1,7 @@
+---
+source: api/tests/service_registry_api_integration_test.rs
+expression: response.data.into_json()?
+---
+services:
+  __typename: MissingFilterError
+  code: MISSING_FILTER

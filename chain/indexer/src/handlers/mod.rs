@@ -17,6 +17,7 @@ use hopr_bindings::{
     hopr_node_management_module::HoprNodeManagementModule::HoprNodeManagementModuleEvents,
     hopr_node_safe_registry::HoprNodeSafeRegistry::HoprNodeSafeRegistryEvents,
     hopr_node_stake_factory::HoprNodeStakeFactory::HoprNodeStakeFactoryEvents,
+    hopr_service_registry::HoprServiceRegistry::HoprServiceRegistryEvents,
     hopr_ticket_price_oracle::HoprTicketPriceOracle::HoprTicketPriceOracleEvents,
     hopr_token::HoprToken::HoprTokenEvents,
     hopr_winning_probability_oracle::HoprWinningProbabilityOracle::HoprWinningProbabilityOracleEvents,
@@ -42,6 +43,7 @@ mod helpers;
 mod node_safe_registry;
 mod oracles;
 mod safe_contracts;
+mod service_registry;
 mod stake_factory;
 #[cfg(test)]
 mod test_utils;
@@ -235,6 +237,12 @@ where
         } else if log.address.eq(&self.addresses.node_safe_registry) {
             let event = HoprNodeSafeRegistryEvents::decode_log(&primitive_log)?;
             self.on_node_safe_registry_event(tx, &log, event.data, is_synced).await
+        } else if !self.addresses.service_registry.is_zero() && log.address.eq(&self.addresses.service_registry) {
+            // Placed ahead of the Safe lookup below so that a registry log costs no database
+            // query. The zero-address guard keeps a network without the registry from routing an
+            // unrelated zero-address log here.
+            let event = HoprServiceRegistryEvents::decode_log(&primitive_log)?;
+            self.on_service_registry_event(tx, &log, event.data, is_synced).await
         } else if self
             .db
             .get_safe_contract_by_address(Some(tx), log.address)
@@ -286,18 +294,23 @@ where
     ///
     /// `Vec<Address>` containing the monitored contract addresses in the following order:
     /// announcements, channels, ticket_price_oracle, winning_probability_oracle,
-    /// node_safe_registry, node_stake_factory, token.
+    /// node_safe_registry, node_stake_factory, token, and - only where it is deployed -
+    /// service_registry.
+    ///
+    /// The service registry is the one optional entry. `jura`, `debug-staging` and `rotsee`
+    /// carry the zero address for it, and filtering `eth_getLogs` on the null address is both
+    /// meaningless and expensive, so it is skipped there.
     ///
     /// # Examples
     ///
     /// ```ignore
     /// let addrs = handlers.contract_addresses();
-    /// assert_eq!(addrs.len(), 7);
+    /// assert_eq!(addrs.len(), 8); // 7 where the service registry is not deployed
     /// // order: announcements, channels, ticket_price_oracle, winning_probability_oracle,
-    /// // node_safe_registry, node_stake_factory, token
+    /// // node_safe_registry, node_stake_factory, token, service_registry
     /// ```
     fn contract_addresses(&self) -> Vec<Address> {
-        vec![
+        let mut addresses = vec![
             self.addresses.announcements,
             self.addresses.channels,
             self.addresses.ticket_price_oracle,
@@ -305,7 +318,13 @@ where
             self.addresses.node_safe_registry,
             self.addresses.node_stake_factory,
             self.addresses.token,
-        ]
+        ];
+
+        if !self.addresses.service_registry.is_zero() {
+            addresses.push(self.addresses.service_registry);
+        }
+
+        addresses
     }
 
     fn contract_addresses_map(&self) -> Arc<ContractAddresses> {
@@ -343,6 +362,10 @@ where
             crate::constants::topics::stake_factory()
         } else if contract.eq(&self.addresses.token) {
             crate::constants::topics::token()
+        } else if !self.addresses.service_registry.is_zero() && contract.eq(&self.addresses.service_registry) {
+            // The zero-address guard keeps a network without the registry from matching here on
+            // an unrelated call with a zero address, which would silently return registry topics.
+            crate::constants::topics::service_registry()
         } else {
             panic!("use of unsupported contract address: {contract}");
         }

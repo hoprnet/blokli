@@ -293,6 +293,9 @@ pub trait HoprRpcOperations {
     /// Retrieves the safe address of the given node address from the registry.
     async fn get_safe_from_node_safe_registry(&self, node: Address) -> Result<Address>;
 
+    /// Resolves a node against an explicitly selected NodeSafeRegistry contract.
+    async fn get_safe_from_node_safe_registry_at(&self, registry: Address, node: Address) -> Result<Address>;
+
     /// Retrieves the current network gas price estimate (wei) for legacy transactions.
     async fn get_gas_price(&self) -> Result<u128>;
 
