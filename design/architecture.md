@@ -193,6 +193,7 @@ RPC Endpoint
 - **HoprNodeStakeFactory**: Safe contract deployment events with module and owner tracking
 - **HoprTicketPriceOracle**: Network-wide ticket price updates
 - **HoprWinningProbabilityOracle**: Network-wide winning probability updates
+- **Curvy Aggregator**: Pending notes, committed notes, and committed nullifiers, normalized from batched events
 
 ### 4. Database Layer
 
@@ -214,6 +215,11 @@ The database implements an event sourcing pattern with temporal versioning:
 - **hopr_balance**: Current wxHOPR token balances indexed by address
 - **native_balance**: Current native token balances indexed by address
 - **chain_info**: Singleton table tracking indexer metadata (watermark, network parameters)
+- **curvy_pending_note**: Position-keyed pending-note announcements used for local ownership scanning
+- **curvy_committed_note**: Non-padding committed notes with dense notes-tree leaf indices
+- **curvy_committed_nullifier**: Non-padding nullifiers with independent dense indices
+- **curvy_sync_checkpoint**: Versioned notes-tree frontier and synchronization watermark
+- **curvy_shard_root**: Completed notes-tree shard roots for compact wallet bootstrap
 
 **Logs Tables** (for fast sync and reorg handling):
 
@@ -324,7 +330,7 @@ The schema is organized into three root types following GraphQL best practices:
 - Safe deployments: Real-time notifications when new Safe contracts are deployed
 - Network topology: Opened channel graph updates for routing decisions
 - Transaction updates: Status changes for submitted transactions
-- Curvy note events: Filtered, resumable raw `PendingNotes` and `CommittedNotes` items
+- Curvy events: Historical-to-live streams for pending notes, committed notes, and committed nullifiers
 
 **Error Handling**: Uses GraphQL union types to return domain-specific error types (InvalidAddressError, ContractNotAllowedError, etc.)
 alongside success types, providing structured error responses with codes and context.
@@ -435,9 +441,9 @@ guaranteeing no events are emitted between reading watermark and subscribing.
 **Guarantee**: No events can be missed between reading the watermark and subscribing to the event bus, ensuring complete event delivery to
 all subscriptions.
 
-**Event Types**: The event bus carries four event types: AccountUpdated (with account keyid), ChannelUpdated (with channel id),
-BalanceUpdated (with address bytes), and SafeDeployed (with Safe contract address). Subscribers filter events based on their query
-parameters.
+**Event Types**: The event bus carries structured variants for account, channel, balance, Safe, ticket, transaction, and Curvy changes.
+Curvy variants contain one normalized non-padding note or nullifier and its complete chain position. Subscribers select the variants
+relevant to their query parameters.
 
 ### 9. Transaction Store Architecture
 
@@ -953,7 +959,9 @@ Indexer handlers publish structured events containing complete data to avoid N+1
 | `KeyBindingFeeUpdated`    | Protocol fee parameter changes        | Fee amount (TokenValueString) | `keyBindingFeeUpdated`      |
 | `SafeDeployed`            | New safe contract deployed            | Safe address                  | `safeDeployed`              |
 | `TicketParametersUpdated` | Ticket price/probability changes      | Full TicketParameters object  | `ticketParametersUpdated`   |
-| `CurvyNote`               | Curvy note pending or committed       | One raw note item and cursor  | `curvyNoteEvents`           |
+| `CurvyPendingNote`        | Curvy pending-note announcement       | One normalized note item      | `curvyPendingNote`          |
+| `CurvyCommittedNote`      | Curvy note commitment                 | Note and dense leaf index     | `curvyCommittedNote`        |
+| `CurvyCommittedNullifier` | Curvy nullifier commitment            | Nullifier and dense index     | `curvyCommittedNullifier`   |
 
 **Two-Phase Subscription Pattern**:
 
@@ -987,17 +995,20 @@ The IndexerState uses an RwLock to ensure no events are missed between the snaps
 3. Subscribe to event channels
 4. Release read lock
 
-The Curvy note subscription retains the raw block, transaction, log, and array-item position as an exclusive resume cursor. Zero-padded
-contract array slots are not emitted, but their raw item positions are preserved, so cursor ordering stays identical to chain ordering.
-Committed non-zero notes also carry a separate dense leaf index; clients must never derive that index from the raw item position.
+Curvy event positions retain the raw block, transaction, log, and array-item coordinates. Zero-padded contract array slots are not emitted,
+but their raw item positions are preserved, so ordering stays identical to chain ordering. Historical queries accept the full position as an
+exclusive cursor. Subscriptions accept a lower block bound; clients that resume within a block compare full positions locally to discard
+already-processed items. Committed non-zero notes also carry a separate dense leaf index, which clients must never derive from the raw item
+position.
 
 While processing each committed-note log, the indexer transactionally appends its non-zero notes to the depth-30 Poseidon frontier and
 stores the leaves, the compact frontier checkpoint and root, and any completed level-14 (16,384-leaf) shard root. This state is global and
 key-independent: ownership detection and witness construction remain local to the node. Reorg handling deletes Curvy leaves, checkpoints,
 and shard roots from the first affected block before subscriptions are terminated and resumed against canonical state.
 
-Historical and live items share one raw-field filter. Event-bus overflow or a reorganization terminates the stream so the client can resume
-from its last processed cursor instead of accepting silent loss. Events published during watermark capture are buffered in the channel.
+Historical and live items use the same normalized event representation. Event-bus overflow or a reorganization terminates the stream so a
+client can reconnect from its last processed position instead of accepting silent loss. Events published during watermark capture are
+buffered in the channel.
 
 **Overflow Handling**:
 
@@ -1492,12 +1503,46 @@ by the readiness checks.
 ## Local Contract Deployment Variants
 
 The standard local Anvil image deploys and indexes only the HOPR contract suite. An explicitly named Curvy development variant compiles an
-optional deployment dependency and deploys Curvy on the same chain with the same signer after HOPR deployment. The variant writes the
-aggregator proxy into Blokli configuration so the indexer includes its two note topics.
+optional deployment dependency and deploys Curvy on the same chain with the same signer after HOPR deployment. Within that variant, Curvy
+deployment and indexing are inseparable: deploying the suite without indexing its events would surface much later as a consumer-side
+notes-root mismatch. The production binary remains HOPR-only.
 
-Curvy addresses are also emitted as a separate client-facing artifact. Blokli indexes and forwards raw `PendingNotes` and `CommittedNotes`
-items but does not store ownership, correlate note lifecycles, or enrich the events. Those responsibilities stay in the node and client. A
-failure in either requested deployment prevents final address/configuration artifacts from being published.
+The deployment artifact and generated Blokli configuration include the Curvy Aggregator, Vault, and PortalFactory addresses. The local HOPR
+token is registered in the Curvy Vault after the development assets. The configured Aggregator extends the indexer's address/topic filter
+only when Curvy indexing is explicitly enabled. Pending-note, committed-note, and committed-nullifier events are stored as append-only,
+position-keyed records; zero padding is omitted and array-valued events are normalized into one row per array item. PortalFactory has no
+indexed event in the supported surface.
+
+Committed notes and nullifiers receive independent dense, zero-based indices. The note index is the canonical leaf position in Curvy's
+depth-30 Poseidon tree. The indexer advances a constant-space frontier transactionally with each committed-note event and persists completed
+depth-14 shard roots when a 16,384-leaf boundary is crossed. This keeps steady-state indexer memory bounded; Blokli neither retains the full
+tree nor generates user witnesses.
+
+The tree's cryptographic behavior is defined by Curvy's canonical Rust core rather than reimplemented in Blokli. Poseidon hashing, field
+encoding, tree geometry, and the versioned frontier snapshot format all come from that dependency. The tree version recorded on every
+checkpoint detects an incompatible geometry or snapshot change across an upgrade.
+
+Each state-changing Curvy log atomically persists its event rows, completed shard roots, and a checkpoint identified by the containing block
+hash. Multiple state-changing logs in one block replace that block's checkpoint inside their respective transactions, so the latest
+checkpoint describes all durable Curvy rows through the latest committed log. Pending-only blocks do not write redundant frontier snapshots.
+A checkpoint records the tree geometry, dense note/nullifier counts, completed-shard count, tree root, and canonical frontier snapshot; it
+is the sole persisted live frontier state.
+
+GraphQL synchronization pages are pinned to one checkpoint and bounded by its counts, so concurrent indexing cannot change a client's
+dataset. Note pages batch-associate the latest preceding pending-note announcement when available. Shard-root and tail-leaf pages let a
+client bootstrap the compact tree representation without rebuilding every completed shard. Ownership detection and witness construction
+remain local to the client and do not reveal which note it owns to Blokli.
+
+On a reorganization, the Curvy handler removes event rows, shard roots, and checkpoints at or after the first affected block through the
+indexer's derived-state rollback seam. The frontier is restored from the latest earlier checkpoint before canonical replacement logs are
+replayed. Checkpoint counts are cross-checked against retained dense note and nullifier indices; missing or inconsistent state is fatal
+because continuing would silently diverge dense indices and roots. Ordinary restarts restore the latest checkpoint, while the logs snapshot
+remains the source for rebuilding all derived index state on a fresh installation.
+
+GraphQL exposes position-paginated event history, checkpoint-pinned dense synchronization pages, and historical-to-live subscriptions. Curvy
+view functions and non-note protocol state are read directly from the configured contracts through the RPC layer. State-changing calls use
+Blokli's existing pre-signed raw-transaction boundary, keeping signing and proof construction outside the service. A failure in either
+requested deployment prevents final address and configuration artifacts from being published.
 
 ## Design Principles and Patterns
 

@@ -868,6 +868,7 @@ mod tests {
         // Check indexer config
         assert!(config.indexer.fast_sync);
         assert!(!config.indexer.enable_safe_indexing);
+        assert!(!config.indexer.enable_curvy_indexing);
         assert_eq!(config.indexer.subscription.event_bus_capacity, 1000);
 
         // Check API config
@@ -900,6 +901,7 @@ mod tests {
         assert!(!cfg.indexer.fast_sync);
         assert!(!cfg.indexer.enable_logs_snapshot); // Default
         assert!(!cfg.indexer.enable_safe_indexing); // Default
+        assert!(!cfg.indexer.enable_curvy_indexing); // Default
         assert_eq!(cfg.indexer.subscription.event_bus_capacity, 1000); // Default
         assert_eq!(cfg.indexer.subscription.batch_size, 100); // Default
     }

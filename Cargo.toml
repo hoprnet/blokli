@@ -48,19 +48,20 @@ blokli-db-migration = { path = "db/migration" }
 chrono = "0.4.45"
 clap = { version = "4.6.1", features = ["derive", "env", "string"] }
 config = "0.15.23"
-curvy-bindings = { version = "1.0.0-rc-1" }
-curvy-core = { version = "0.1.0-rc.3" }
-dashmap = "6.2.1"
-env_logger = "0.11.10"
-flagset = "0.4.7"
-futures = "0.3.32"
-futures-timer = "3.0.4"
-futures-util = "0.3.32"
-hex = "0.4.3"
-hex-literal = "1.1.0"
-hopli = { git = "https://github.com/hoprnet/hopli", branch = "main" }
-hopr-bindings = "4.12.1"
-hopr-types = "2.0.2"
+# Exact pins until Curvy publishes its stable crates.
+curvy-bindings = { version = "=0.1.0-rc.5" }
+curvy-core     = "=0.1.0-rc.3"
+dashmap        = "6.2.1"
+env_logger     = "0.11.10"
+flagset        = "0.4.7"
+futures        = "0.3.32"
+futures-timer  = "3.0.4"
+futures-util   = "0.3.32"
+hex            = "0.4.3"
+hex-literal    = "1.1.0"
+hopli          = { git = "https://github.com/hoprnet/hopli", branch = "main" }
+hopr-bindings  = "4.13.0"
+hopr-types     = "2.3.0"
 
 http = "1.4.2"
 humantime-serde = "1.1.1"

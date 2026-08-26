@@ -41,7 +41,7 @@ let
         })
         // {
           prependPackageName = false;
-          cargoExtraArgs = "-p bloklid --bins";
+          cargoExtraArgs = "-p bloklid --bins --locked";
         };
       name = "binary-bloklid-${platform}";
     in
@@ -140,7 +140,7 @@ in
     })
     // {
       runTests = true;
-      cargoExtraArgs = "-Z panic-abort-tests"; # Nightly feature for test optimization
+      cargoExtraArgs = "--locked -Z panic-abort-tests"; # Nightly feature for test optimization
     }
   );
 

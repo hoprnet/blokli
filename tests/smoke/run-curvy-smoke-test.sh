@@ -12,6 +12,7 @@
 #   4. every unique address has bytecode on chain (eth_getCode != 0x)
 #   5. the generated Blokli config contains the HOPR contracts section too
 #      (the Curvy path must not break it)
+#   6. the local wxHOPR token is registered in the Curvy Vault as token id 3
 #
 # Usage:
 #   SOURCE_IMAGE=myimage:tag ./run-curvy-smoke-test.sh # pull image from a registry
@@ -274,6 +275,32 @@ verify_bytecode() {
   log_pass "all ${checked} addresses have bytecode on chain"
 }
 
+verify_hopr_token_registration() {
+  local expected_token response typename registered_token message
+  expected_token=$(awk -F' = ' '/^token = / {gsub(/"/, "", $2); print $2; exit}' "${WORK_DIR}/config.toml")
+  if [ -z "${expected_token}" ]; then
+    log_error "could not read the HOPR token address from generated config"
+    return 1
+  fi
+
+  response=$(curl -sf "http://127.0.0.1:${HOST_PORT_API}/graphql" \
+    -H 'content-type: application/json' \
+    --data '{"query":"{ curvyVaultToken(tokenId: \"3\") { __typename ... on CurvyVaultToken { tokenAddress } ... on QueryFailedError { message } } }"}')
+  typename=$(echo "${response}" | jq -r '.data.curvyVaultToken.__typename // empty')
+  if [ "${typename}" != "CurvyVaultToken" ]; then
+    message=$(echo "${response}" | jq -r '.data.curvyVaultToken.message // .errors[0].message // "unknown GraphQL error"')
+    log_error "Curvy Vault token id 3 lookup failed: ${message}"
+    return 1
+  fi
+
+  registered_token=$(echo "${response}" | jq -r '.data.curvyVaultToken.tokenAddress // empty')
+  if [ "$(echo "${registered_token}" | tr '[:upper:]' '[:lower:]')" != "$(echo "${expected_token}" | tr '[:upper:]' '[:lower:]')" ]; then
+    log_error "Curvy Vault token id 3 is ${registered_token}, expected local wxHOPR ${expected_token}"
+    return 1
+  fi
+  log_pass "local wxHOPR registered in Curvy Vault as token id 3"
+}
+
 main() {
   require_tool docker
   require_tool jq
@@ -288,6 +315,7 @@ main() {
   copy_artifacts
   validate_json
   verify_bytecode
+  verify_hopr_token_registration
 
   echo
   echo "curvy-smoke: ALL CHECKS PASSED"

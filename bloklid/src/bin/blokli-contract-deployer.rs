@@ -1,10 +1,11 @@
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     any::Any,
     backtrace::Backtrace,
     borrow::Cow,
     error::Error,
-    fs,
-    io::{self, stdout},
+    io::{self, Write, stdout},
     panic,
     path::{Component, Path, PathBuf},
     str::FromStr,
@@ -34,6 +35,7 @@ use hopr_types::{
     primitive::{prelude::HoprBalance, primitives::Address, traits::IntoEndian},
 };
 use serde::Serialize;
+use tempfile::NamedTempFile;
 use tracing_subscriber::{Layer as _, prelude::*};
 use url::Url;
 
@@ -219,6 +221,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
         {
             tracing::info!("deploying Curvy v2 local-development contracts");
             let curvy_instances = CurvyContractInstances::deploy_for_testing(provider, signer_address).await?;
+            let hopr_token_id = curvy_instances.vault.getNumberOfTokens().call().await? + U256::ONE;
+            curvy_instances
+                .vault
+                .registerToken(*instances.token.address())
+                .send()
+                .await?
+                .watch()
+                .await?;
+            tracing::info!(
+                token = %instances.token.address(),
+                token_id = %hopr_token_id,
+                "registered the HOPR token in the Curvy vault"
+            );
             let curvy_contracts = CurvyContractAddresses::from(&curvy_instances);
             let output = ContractsOutput {
                 contracts: BlokliContractAddresses::new(
@@ -249,13 +264,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
 
     // Publish outputs only after every requested deployment and serialization succeeds.
-    if let Some(path) = args.output {
-        fs::write(path, toml_output)?;
+    if let Some(path) = args.output.as_deref() {
+        atomic_write(path, toml_output.as_bytes())?;
+        tracing::info!(path = %path.display(), "wrote HOPR contract configuration");
     } else {
         print!("{toml_output}");
     }
     if let (Some(path), Some(json)) = (args.curvy_json_out.as_deref(), curvy_json.as_deref()) {
-        fs::write(path, json)?;
+        atomic_write(path, json.as_bytes())?;
         tracing::info!(path = %path.display(), "wrote Curvy contract addresses");
     }
 
@@ -311,6 +327,20 @@ fn normalize_path(path: &Path) -> io::Result<PathBuf> {
         }
     }
     Ok(normalized)
+}
+
+fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut temporary = NamedTempFile::new_in(parent)?;
+    temporary.write_all(contents)?;
+    #[cfg(unix)]
+    temporary.as_file().set_permissions(PermissionsExt::from_mode(0o644))?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path).map_err(|error| error.error)?;
+    Ok(())
 }
 
 fn install_tracing() -> Result<(), Box<dyn Error>> {
@@ -377,13 +407,16 @@ fn panic_payload_to_str(payload: &(dyn Any + Send)) -> Cow<'static, str> {
 
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::{any::Any, fs};
 
     use anyhow::Result;
     use clap::Parser;
     use hopr_types::{internal::prelude::WinningProbability, primitive::traits::IntoEndian};
+    use tempfile::tempdir;
 
-    use super::{Args, panic_payload_to_str, validate_args};
+    use super::{Args, atomic_write, panic_payload_to_str, validate_args};
 
     #[test]
     fn test_panic_payload_to_str_from_str() {
@@ -462,6 +495,20 @@ mod tests {
     fn feature_on_binary_accepts_curvy() -> Result<()> {
         let args = Args::try_parse_from(["blokli-contract-deployer", "--with-curvy"])?;
         validate_args(&args)?;
+        Ok(())
+    }
+
+    #[test]
+    fn atomic_write_replaces_complete_file() -> Result<()> {
+        let directory = tempdir()?;
+        let path = directory.path().join("contracts.toml");
+        fs::write(&path, "old")?;
+
+        atomic_write(&path, b"new\n")?;
+
+        assert_eq!(fs::read_to_string(&path)?, "new\n");
+        #[cfg(unix)]
+        assert_eq!(fs::metadata(path)?.permissions().mode() & 0o777, 0o644);
         Ok(())
     }
 }

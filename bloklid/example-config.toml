@@ -42,9 +42,12 @@ max_block_range = 10000
 # winning_probability_oracle = "0x0000000000000000000000000000000000000000"
 # node_stake_factory = "0x0000000000000000000000000000000000000000"
 # xhopr_token = "0x0000000000000000000000000000000000000000"
-# Curvy aggregator proxy used by local full deployment overrides. Prefer the
-# top-level curvy_aggregator setting when only this address must be supplied.
+# Curvy addresses are not supplied by the HOPR network registry. Prefer the
+# top-level curvy_aggregator setting when only event indexing is needed. Vault
+# and PortalFactory enable the corresponding typed GraphQL contract reads.
 # curvy_aggregator = "0x0000000000000000000000000000000000000000"
+# curvy_vault = "0x0000000000000000000000000000000000000000"
+# curvy_portal_factory = "0x0000000000000000000000000000000000000000"
 
 # Database configuration - supports PostgreSQL or SQLite
 # IMPORTANT: This section is OPTIONAL if using environment variables.
@@ -121,7 +124,7 @@ logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz"
 enable_safe_indexing = false
 
 # Enable note/nullifier indexing from the configured Curvy Aggregator.
-# Requires contracts.curvy_aggregator to be non-zero.
+# Requires either curvy_aggregator or contracts.curvy_aggregator to be non-zero.
 enable_curvy_indexing = false
 
 # GraphQL subscription behavior configuration

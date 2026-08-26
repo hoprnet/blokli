@@ -73,8 +73,7 @@ fn increment_indexer_contract_log_count(contract: &str) {
 /// and passed on to this object that handles event-specific actions for each on-chain operation.
 #[derive(Clone)]
 pub struct ContractEventHandlers<T, Db> {
-    /// channels, announcements, token: contract addresses
-    /// whose event we process
+    /// Contract addresses whose events are processed, including the optional Curvy Aggregator.
     pub(super) addresses: Arc<ContractAddresses>,
     /// callbacks to inform other modules
     pub(super) db: Db,
@@ -294,7 +293,8 @@ where
     ///
     /// `Vec<Address>` containing the monitored contract addresses in the following order:
     /// announcements, channels, ticket_price_oracle, winning_probability_oracle,
-    /// node_safe_registry, node_stake_factory, token.
+    /// node_safe_registry, node_stake_factory, token, followed by the configured
+    /// Curvy Aggregator address when indexing is enabled.
     ///
     /// # Examples
     ///
@@ -302,7 +302,7 @@ where
     /// let addrs = handlers.contract_addresses();
     /// assert_eq!(addrs.len(), 7);
     /// // order: announcements, channels, ticket_price_oracle, winning_probability_oracle,
-    /// // node_safe_registry, node_stake_factory, token
+    /// // node_safe_registry, node_stake_factory, token, optional Curvy Aggregator
     /// ```
     fn contract_addresses(&self) -> Vec<Address> {
         let mut addresses = vec![

@@ -33,6 +33,8 @@ pub struct IndexerConfig {
     pub enable_safe_indexing: bool,
 
     /// Whether to index note and nullifier events from the configured Curvy Aggregator.
+    ///
+    /// Default is `false`.
     #[default(false)]
     pub enable_curvy_indexing: bool,
 
@@ -74,6 +76,7 @@ impl IndexerConfig {
     /// * `fast_sync` - Whether to enable fast synchronization during startup
     /// * `enable_logs_snapshot` - Whether to enable logs snapshot download
     /// * `enable_safe_indexing` - Whether to index Safe contract events for discovered Safes
+    /// * `enable_curvy_indexing` - Whether to index Curvy Aggregator note and nullifier events
     /// * `logs_snapshot_url` - URL to download logs snapshot from
     /// * `data_directory` - Path to the data directory where databases are stored
     /// * `event_bus_capacity` - Capacity of the event bus buffer
@@ -130,7 +133,7 @@ impl IndexerConfig {
     ///     true,
     ///     true,
     ///     false,
-    ///     true,
+    ///     false,
     ///     Some("https://example.com/snapshot.tar.xz".to_string()),
     ///     "/tmp/hopr_data".to_string(),
     ///     100,
