@@ -952,6 +952,68 @@ mod tests {
         assert_ne!(updated_log_1, updated_log_3);
     }
 
+    /// After the `1.3.0` -> `1.4.0` schema bump clears the logs database, `ensure_logs_origin`
+    /// must accept the widened contract set and prime the `log_topic_info` table with it, rather
+    /// than reporting the service registry topics as inconsistent.
+    ///
+    /// The topic list is built explicitly here: the authoritative one lives in
+    /// `chain/indexer/src/constants.rs::topics::service_registry()` (section 1.2), and `blokli-db`
+    /// cannot depend on the indexer crate.
+    #[tokio::test]
+    async fn test_ensure_logs_origin_primes_service_registry_topics_on_cleared_db() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let channels = Address::new(b"channels contract 12");
+        let registry = Address::new(b"service registry 123");
+
+        let pre_upgrade_origin = vec![(channels, Hash::create(&[b"ChannelOpened"]))];
+
+        // The ten service registry events the indexer subscribes to.
+        let registry_topics: Vec<Hash> = [
+            b"Registered".as_slice(),
+            b"Updated".as_slice(),
+            b"Deregistered".as_slice(),
+            b"ServiceTypeRegistered".as_slice(),
+            b"TypeOwnershipTransferred".as_slice(),
+            b"RequirementUpdated".as_slice(),
+            b"SelfRegistrationBurnUpdated".as_slice(),
+            b"SelfUpdateBurnUpdated".as_slice(),
+            b"TypeRegistrationFeeUpdated".as_slice(),
+            b"NodeSafeRegistryUpdated".as_slice(),
+        ]
+        .into_iter()
+        .map(|name| Hash::create(&[name]))
+        .collect();
+
+        let post_upgrade_origin: Vec<(Address, Hash)> = pre_upgrade_origin
+            .iter()
+            .copied()
+            .chain(registry_topics.iter().map(|topic| (registry, *topic)))
+            .collect();
+
+        // A database primed before the upgrade rejects the widened set.
+        db.ensure_logs_origin(pre_upgrade_origin.clone()).await?;
+        assert!(matches!(
+            db.ensure_logs_origin(post_upgrade_origin.clone()).await,
+            Err(DbError::InconsistentLogs)
+        ));
+
+        // The minor schema bump clears the logs tables, which is what unblocks the new set.
+        LogTopicInfo::delete_many().exec(db.conn(TargetDb::Logs)).await?;
+        LogStatus::delete_many().exec(db.conn(TargetDb::Logs)).await?;
+        Log::delete_many().exec(db.conn(TargetDb::Logs)).await?;
+
+        db.ensure_logs_origin(post_upgrade_origin.clone()).await?;
+
+        let primed = LogTopicInfo::find().count(db.conn(TargetDb::Logs)).await?;
+        assert_eq!(primed, post_upgrade_origin.len() as u64);
+
+        // A second call over the same set is a no-op rather than an error.
+        db.ensure_logs_origin(post_upgrade_origin).await?;
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_should_not_allow_inconsistent_logs_in_the_db() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;

@@ -94,7 +94,8 @@ just docker-run-anvil trace
 | `ANVIL_ACCOUNTS`                      | `10`                      | Number of accounts to create                             |
 | `ANVIL_BALANCE`                       | `10000`                   | Initial balance per account in ETH                       |
 | `ANVIL_RPC_URL`                       | derived from `ANVIL_PORT` | URL used for readiness checks, deployment, and `bloklid` |
-| `ANVIL_DEPLOYER_PRIVATE_KEY`          | Anvil's first account     | Private key for contract deployment                      |
+| `ANVIL_DEPLOYER_PRIVATE_KEY`          | Anvil's first account     | Private key for HOPR contract deployment                 |
+| `ANVIL_COMMON_DEPLOYER_PRIVATE_KEY`   | Anvil's second account    | Private key for common contract deployment               |
 | `BLOKLI_DEPLOYER_TICKET_PRICE`        | `100 wei wxHOPR`          | Initial ticket price oracle value                        |
 | `BLOKLI_DEPLOYER_WINNING_PROBABILITY` | `0.000125`                | Initial winning probability oracle value                 |
 | `BLOKLI_DATA_DIRECTORY`               | `/data`                   | Data directory for SQLite databases                      |
@@ -257,7 +258,7 @@ priority over their canonical database aliases when both are set. Boolean enviro
 | Config Key                 | Default                 | Environment Variable              | Description                                                               |
 | :------------------------- | :---------------------- | :-------------------------------- | :------------------------------------------------------------------------ |
 | `data_directory`           | `data`                  | `BLOKLI_DATA_DIRECTORY`           | Directory for daemon data                                                 |
-| `network`                  | `rotsee`                | `BLOKLI_NETWORK`                  | `rotsee`, `jura`, or `anvil-localhost` (`localhost` is an alias)          |
+| `network`                  | `jura-dev`              | `BLOKLI_NETWORK`                  | `jura-dev`, `jura-prod`, or `anvil-localhost` (`localhost` is an alias)   |
 | `rpc_url`                  | `http://localhost:8545` | `BLOKLI_RPC_URL`                  | Chain JSON-RPC endpoint                                                   |
 | `max_rpc_requests_per_sec` | `100`                   | `BLOKLI_MAX_RPC_REQUESTS_PER_SEC` | Maximum request rate; `0` means unlimited                                 |
 | `max_block_range`          | `10000`                 | `BLOKLI_MAX_BLOCK_RANGE`          | Ceiling for adaptive `eth_getLogs` ranges; `0` auto-discovers up to 10000 |
@@ -350,9 +351,10 @@ xhopr_token = "0x0000000000000000000000000000000000000000"
 
 These variables configure `blokli-contract-deployer` when it is run directly. Command-line options take precedence.
 
-| Environment Variable                  | Default                   | Description                       |
-| ------------------------------------- | ------------------------- | --------------------------------- |
-| `BLOKLI_DEPLOYER_RPC_URL`             | `http://127.0.0.1:8545`   | Deployment RPC endpoint           |
-| `ANVIL_DEPLOYER_PRIVATE_KEY`          | Anvil's first account key | Contract deployer private key     |
-| `BLOKLI_DEPLOYER_TICKET_PRICE`        | `100 wei wxHOPR`          | Initial ticket price oracle value |
-| `BLOKLI_DEPLOYER_WINNING_PROBABILITY` | `0.000125`                | Initial winning probability       |
+| Environment Variable                  | Default                    | Description                       |
+| ------------------------------------- | -------------------------- | --------------------------------- |
+| `BLOKLI_DEPLOYER_RPC_URL`             | `http://127.0.0.1:8545`    | Deployment RPC endpoint           |
+| `ANVIL_DEPLOYER_PRIVATE_KEY`          | Anvil's first account key  | HOPR contract deployer key        |
+| `ANVIL_COMMON_DEPLOYER_PRIVATE_KEY`   | Anvil's second account key | Common contract deployer key      |
+| `BLOKLI_DEPLOYER_TICKET_PRICE`        | `100 wei wxHOPR`           | Initial ticket price oracle value |
+| `BLOKLI_DEPLOYER_WINNING_PROBABILITY` | `0.000125`                 | Initial winning probability       |

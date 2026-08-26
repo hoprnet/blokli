@@ -1,6 +1,7 @@
 //! This crate contains various on-chain related modules and types.
 use constants::{ERC_1820_DEPLOYER, ERC_1820_REGISTRY_DEPLOY_CODE, ETH_VALUE_FOR_ERC1820_DEPLOYER};
 use hopr_bindings::{
+    constants::{INIT_ADMIN_DELAY, INIT_TYPE_REGISTRATION_FEE},
     erc677_mock::ERC677Mock::{self, ERC677MockInstance},
     exports::alloy::{
         contract::Result as ContractResult,
@@ -15,6 +16,7 @@ use hopr_bindings::{
     hopr_node_safe_migration::HoprNodeSafeMigration::HoprNodeSafeMigrationInstance,
     hopr_node_safe_registry::HoprNodeSafeRegistry::{self, HoprNodeSafeRegistryInstance},
     hopr_node_stake_factory::HoprNodeStakeFactory::{self, HoprNodeStakeFactoryInstance},
+    hopr_service_registry::HoprServiceRegistry::{self, HoprServiceRegistryInstance},
     hopr_ticket_price_oracle::HoprTicketPriceOracle::{self, HoprTicketPriceOracleInstance},
     hopr_token::HoprToken::{self, HoprTokenInstance},
     hopr_winning_probability_oracle::HoprWinningProbabilityOracle::{self, HoprWinningProbabilityOracleInstance},
@@ -142,6 +144,10 @@ pub struct ContractAddresses {
     #[serde_as(as = "DisplayFromStr")]
     #[serde(default)]
     pub curvy_portal_factory: Address,
+    /// Service registry contract. The zero address means it is not deployed.
+    #[serde_as(as = "DisplayFromStr")]
+    #[serde(default)]
+    pub service_registry: Address,
 }
 
 impl ContractAddresses {
@@ -166,6 +172,7 @@ impl ContractAddresses {
             curvy_aggregator,
             curvy_vault,
             curvy_portal_factory,
+            service_registry: hopr.service_registry.to_hopr_address(),
         }
     }
 }
@@ -184,6 +191,7 @@ pub struct ContractInstances<P> {
     pub ticket_price_oracle: HoprTicketPriceOracleInstance<P>,
     pub winning_probability_oracle: HoprWinningProbabilityOracleInstance<P>,
     pub node_stake_factory: HoprNodeStakeFactoryInstance<P>,
+    pub service_registry: HoprServiceRegistryInstance<P>,
 }
 
 /// Amount of xHOPR (18 decimals) minted to the deployer in the testing deployment.
@@ -237,6 +245,10 @@ where
                 AlloyAddress::from_hopr_address(contract_addresses.node_stake_factory),
                 provider.clone(),
             ),
+            service_registry: HoprServiceRegistryInstance::new(
+                AlloyAddress::from_hopr_address(contract_addresses.service_registry),
+                provider.clone(),
+            ),
         }
     }
 
@@ -269,6 +281,7 @@ where
             provider.clone(),
             AlloyAddress::ZERO, // _moduleSingletonAddress - use zero for testing
             AlloyAddress::from(announcements.address().as_ref()),
+            AlloyAddress::ZERO, // service registry is deployed later and wired by the deployer
             self_address,
         )
         .await?;
@@ -308,6 +321,21 @@ where
         // In production, these addresses are loaded from hopr-bindings network configuration.
         let node_safe_migration = HoprNodeSafeMigrationInstance::new(AlloyAddress::ZERO, provider.clone());
 
+        // CAUTION: the service registry must stay LAST. Deploy addresses are nonce-derived
+        // CREATE, so a deployment in any other position churns every `anvil-localhost` address
+        // that follows it. `DeployAll.s.sol` and `hopr-bindings`' own testing deploy both put the
+        // registry after everything that came before it.
+        let service_registry = HoprServiceRegistry::deploy(
+            provider.clone(),
+            *token.address(),
+            *safe_registry.address(),
+            INIT_ADMIN_DELAY,
+            self_address,
+            self_address,
+            INIT_TYPE_REGISTRATION_FEE,
+        )
+        .await?;
+
         Ok(Self {
             token,
             xhopr_token,
@@ -319,6 +347,7 @@ where
             ticket_price_oracle: price_oracle,
             winning_probability_oracle: win_prob_oracle,
             node_stake_factory: stake_factory,
+            service_registry,
         })
     }
 
@@ -356,6 +385,7 @@ where
             curvy_aggregator: Address::default(),
             curvy_vault: Address::default(),
             curvy_portal_factory: Address::default(),
+            service_registry: instances.service_registry.address().to_hopr_address(),
         }
     }
 }

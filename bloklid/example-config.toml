@@ -5,9 +5,9 @@
 data_directory = "data"
 
 # Network identifier - specifies which HOPR network to connect to
-# Supported networks: rotsee (default, testnet), jura (staging), anvil-localhost (local development)
+# Supported networks: jura-dev (default, development), jura-prod (production), piz-palu-dev (development), piz-palu-staging (staging), anvil-localhost (local development)
 # Case-insensitive: anvil_localhost, anvil-localhost, and localhost are also accepted
-network = "rotsee"
+network = "jura-dev"
 
 # RPC endpoint URL for connecting to the blockchain
 # Overrides the default RPC endpoint for the selected network
@@ -48,6 +48,9 @@ max_block_range = 10000
 # curvy_aggregator = "0x0000000000000000000000000000000000000000"
 # curvy_vault = "0x0000000000000000000000000000000000000000"
 # curvy_portal_factory = "0x0000000000000000000000000000000000000000"
+# The service registry is optional: leave it out, or set it to the zero address, on a network
+# where the contract is not deployed. bloklid then skips it instead of indexing the null address.
+# service_registry = "0x0000000000000000000000000000000000000000"
 
 # Database configuration - supports PostgreSQL or SQLite
 # IMPORTANT: This section is OPTIONAL if using environment variables.
@@ -184,7 +187,7 @@ text = "keep-alive"
 # This limit is compared against finality-adjusted blocks from the RPC:
 #   lag = (rpc_block - finality) - indexed_block
 #
-# For Rotsee (Gnosis), finality=3 blocks. So with max_indexer_lag=10:
+# For jura-dev (Gnosis), finality=3 blocks. So with max_indexer_lag=10:
 # - The indexer can be up to 13 blocks behind the RPC chain head
 # - But must be within 10 blocks of confirmed blocks (with 3 confirmations)
 #

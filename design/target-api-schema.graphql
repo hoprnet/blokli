@@ -61,7 +61,7 @@ type ChainInfo {
 	"""
 	chainId: Int!
 	"""
-	Network name (e.g., 'rotsee', 'jura')
+	Network name (e.g., 'jura-dev', 'jura-prod')
 	"""
 	network: String!
 	"""
@@ -1264,6 +1264,70 @@ type QueryRoot {
 		chainKey: String
 	): CountResult!
 	"""
+	Retrieve a stable, paginated view of service registry entries.
+	"""
+	services(
+		"""
+		Filter by service type - ASCII name such as gvpn:exit, or 0x-prefixed hex
+		"""
+		serviceType: String,
+		"""
+		Filter by node chain address (hexadecimal format)
+		"""
+		node: String,
+		"""
+		Maximum entries in this page (1-1000)
+		"""
+		first: Int! = 100,
+		"""
+		Cursor returned by the previous page
+		"""
+		after: UInt64,
+		"""
+		Watermark returned by the first page; required for a stable continuation
+		"""
+		watermark: UInt64,
+		"""
+		Only entries whose node is bound in the registry's current NodeSafeRegistry
+		"""
+		liveOnly: Boolean! = false
+	): ServicesResult!
+	"""
+	Count service registry entries matching optional filters
+	
+	If no filters are provided, returns the total entry count.
+	"""
+	serviceCount(
+		"""
+		Filter by service type - ASCII name such as gvpn:exit, or 0x-prefixed hex
+		"""
+		serviceType: String,
+		"""
+		Filter by node chain address (hexadecimal format)
+		"""
+		node: String
+	): CountResult!
+	"""
+	Retrieve service type configuration
+	
+	Omitting the filter returns every registered type. The set of types is owner-gated by the
+	type registration fee, so enumerating it is bounded, unlike the entry set.
+	"""
+	serviceTypes(
+		"""
+		Filter by service type - ASCII name such as gvpn:exit, or 0x-prefixed hex
+		"""
+		serviceType: String
+	): ServiceTypesResult!
+	"""
+	Retrieve the registry-wide service configuration
+	
+	These two values belong to no single service type, and they are otherwise only observable
+	through `serviceTypeUpdated`: a client that starts after the last change would never learn
+	them from the event stream alone.
+	"""
+	serviceRegistryConfig: ServiceRegistryConfigResult!
+	"""
 	Count channels matching optional filters
 	
 	If no filters are provided, returns total channels count.
@@ -1982,6 +2046,225 @@ Result type for synchronous transaction submission
 """
 union SendTransactionSyncResult = Transaction | ContractNotAllowedError | FunctionNotAllowedError | RpcError | TimeoutError
 
+"""
+A single entry in the on-chain service registry: one node offering one service type
+
+The registry treats the metadata as opaque bytes: its schema belongs to the service type, not
+to the registry, so it is exposed as hex rather than parsed.
+"""
+type ServiceEntry {
+	"""
+	Service type identifier - ASCII name, or 0x-prefixed hex when the id is not printable ASCII
+	"""
+	serviceType: String!
+	"""
+	Chain address of the node offering the service in hexadecimal format
+	"""
+	node: String!
+	"""
+	Safe that performed the last write to this entry, in hexadecimal format
+	"""
+	safe: String!
+	"""
+	Opaque metadata as 0x-prefixed hex
+	"""
+	metadata: String!
+	"""
+	Unix timestamp in seconds at which the entry was registered
+	
+	A `UInt64` rather than an `Int`: the on-chain source is a `uint48`, which a signed 32-bit
+	GraphQL `Int` cannot carry past 2038.
+	"""
+	registeredAt: UInt64!
+	"""
+	Unix timestamp in seconds at which the entry was last updated
+	"""
+	updatedAt: UInt64!
+}
+
+"""
+Registry-wide configuration, shared by every service type
+"""
+type ServiceRegistryConfig {
+	"""
+	wxHOPR burned to register a new service type
+	"""
+	typeRegistrationFee: TokenValueString!
+	"""
+	Node-safe registry the service registry resolves node bindings against, in hexadecimal format
+	"""
+	nodeSafeRegistry: String!
+}
+
+"""
+Result type for the registry-wide configuration query
+"""
+union ServiceRegistryConfigResult = ServiceRegistryConfig | QueryFailedError
+
+"""
+Configuration of a single service type
+"""
+type ServiceTypeInfo {
+	"""
+	Service type identifier - ASCII name, or 0x-prefixed hex
+	"""
+	serviceType: String!
+	"""
+	Owner of the type; null once the type has been abandoned, which is one-way
+	"""
+	owner: String
+	"""
+	Requirement contract gating registration; null for an open type
+	"""
+	requirement: String
+	"""
+	wxHOPR burned on self-registration
+	"""
+	registrationBurn: TokenValueString!
+	"""
+	wxHOPR burned on self-update
+	"""
+	updateBurn: TokenValueString!
+}
+
+"""
+A change to service-type or registry-wide configuration
+"""
+type ServiceTypeUpdate {
+	"""
+	What changed
+	"""
+	kind: ServiceTypeUpdateKind!
+	"""
+	Service type affected; null for the two registry-wide kinds
+	"""
+	serviceType: String
+	"""
+	Type configuration after the change; null for the two registry-wide kinds
+	"""
+	config: ServiceTypeInfo
+	"""
+	Registry-wide configuration after the change; null for the five per-type kinds
+	"""
+	registryConfig: ServiceRegistryConfig
+}
+
+"""
+Kind of change to service-type or registry-wide configuration
+"""
+enum ServiceTypeUpdateKind {
+	"""
+	A new service type was registered
+	"""
+	REGISTERED
+	"""
+	Type ownership moved, or the type was abandoned
+	"""
+	OWNER_CHANGED
+	"""
+	The requirement contract gating the type changed
+	"""
+	REQUIREMENT_CHANGED
+	"""
+	The self-registration burn of the type changed
+	"""
+	REGISTRATION_BURN_CHANGED
+	"""
+	The self-update burn of the type changed
+	"""
+	UPDATE_BURN_CHANGED
+	"""
+	The registry-wide type registration fee changed
+	"""
+	REGISTRATION_FEE_CHANGED
+	"""
+	The node-safe registry the service registry points at changed
+	"""
+	REGISTRY_POINTER_CHANGED
+}
+
+"""
+Success response for the serviceTypes query
+"""
+type ServiceTypesList {
+	"""
+	Matching service types
+	"""
+	serviceTypes: [ServiceTypeInfo!]!
+}
+
+"""
+Result type for the service types query
+"""
+union ServiceTypesResult = ServiceTypesList | QueryFailedError
+
+"""
+A change to one registry entry
+
+The kind is explicit rather than inferred from the timestamps: registration sets `updatedAt`
+to `registeredAt`, and so does an update landing in the registration block, so the two are
+not distinguishable from the entry alone. Deregistration carries no entry at all.
+"""
+type ServiceUpdate {
+	"""
+	What happened to the entry
+	"""
+	kind: ServiceUpdateKind!
+	"""
+	Service type the entry belongs to
+	"""
+	serviceType: String!
+	"""
+	Node the entry belongs to, in hexadecimal format
+	"""
+	node: String!
+	"""
+	Entry state after the change; null for `DEREGISTERED`, where the entry no longer exists
+	"""
+	entry: ServiceEntry
+}
+
+"""
+Kind of change to a single registry entry
+"""
+enum ServiceUpdateKind {
+	"""
+	The entry was created
+	"""
+	REGISTERED
+	"""
+	An existing entry changed
+	"""
+	UPDATED
+	"""
+	The entry was removed
+	"""
+	DEREGISTERED
+}
+
+"""
+Success response for the services query
+"""
+type ServicesList {
+	"""
+	Matching registry entries
+	"""
+	services: [ServiceEntry!]!
+	"""
+	Fully indexed block at which this page is evaluated. Pass it unchanged for later pages.
+	"""
+	watermark: UInt64!
+	"""
+	Immutable service-entry id after which the next page starts, or null at the end.
+	"""
+	nextCursor: UInt64
+}
+
+"""
+Result type for the services list query
+"""
+union ServicesResult = ServicesList | MissingFilterError | QueryFailedError
+
 type SubscriptionRoot {
 	"""
 	Stream indexed Curvy `PendingNotes` entries with an optional historical phase.
@@ -2132,6 +2415,55 @@ type SubscriptionRoot {
 		"""
 		chainKey: String
 	): Account!
+	"""
+	Subscribe to real-time changes of service registry entries
+	
+	Emits on registration, update and deregistration. Optional filters restrict the stream to
+	a single service type, a single node, or both.
+	
+	Uses the IndexerState event bus for real-time notifications:
+	- Streams changes when `IndexerEvent::ServiceEntryUpdated` events are received
+	- Automatically shuts down on blockchain reorganization
+	
+	Before live changes, every subscription emits each matching entry present at its captured
+	watermark as `REGISTERED`. The snapshot is page-walked, so an unfiltered subscription does
+	not require one unbounded database response.
+	"""
+	serviceUpdated(
+		"""
+		Filter by service type - ASCII name such as gvpn:exit, or 0x-prefixed hex
+		"""
+		serviceType: String,
+		"""
+		Filter by node chain address (hexadecimal format)
+		"""
+		node: String
+	): ServiceUpdate!
+	"""
+	Subscribe to real-time changes of service type and registry-wide configuration
+	
+	Uses the IndexerState event bus for real-time notifications:
+	- Streams changes when `IndexerEvent::ServiceTypeUpdated` events are received
+	- Automatically shuts down on blockchain reorganization
+	
+	Emits current complete type configurations before switching to live changes. Use
+	`serviceRegistryConfigUpdated` for the separate registry-wide configuration.
+	
+	The two registry-wide kinds carry no service type, so a `serviceType` filter excludes them.
+	"""
+	serviceTypeUpdated(
+		"""
+		Filter by service type - ASCII name such as gvpn:exit, or 0x-prefixed hex
+		"""
+		serviceType: String
+	): ServiceTypeUpdate!
+	"""
+	Subscribe to the complete registry-wide configuration.
+	
+	The first item is an atomic snapshot of the current type registration fee and node-safe
+	registry pointer. Later items contain the complete configuration after either value changes.
+	"""
+	serviceRegistryConfigUpdated: ServiceRegistryConfig!
 	"""
 	Subscribe to real-time updates of ticket price and winning probability
 	

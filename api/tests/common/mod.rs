@@ -45,7 +45,7 @@ use hopr_bindings::exports::alloy::{
     transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
 };
 use hopr_types::crypto::keypairs::{ChainKeypair, Keypair};
-use migration::{Migrator, MigratorTrait, SafeDataOrigin};
+use migration::{Migrator, MigratorTrait};
 use sea_orm::DatabaseConnection;
 use tokio::task::AbortHandle;
 
@@ -247,7 +247,7 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
 
     // Run migrations if configured
     if config.run_migrations {
-        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
+        Migrator::up(&db, None)
             .await
             .expect("Failed to run database migrations");
     }
@@ -311,6 +311,36 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
         transaction_store,
         transaction_executor,
     })
+}
+
+/// Build RPC operations pointing at a running Anvil instance
+///
+/// Tests that drive the indexer need an `RpcOperations` configured with the deployed contract
+/// addresses, which `setup_test_environment` builds internally but does not expose for a
+/// separately deployed chain.
+#[allow(unused)]
+pub fn rpc_operations_for(
+    anvil: &AnvilInstance,
+    contract_addrs: ContractAddresses,
+    expected_block_time: Duration,
+) -> anyhow::Result<RpcOperations<ReqwestClient>> {
+    let transport = ReqwestTransport::new(anvil.endpoint_url());
+    let rpc_client = ClientBuilder::default().transport(transport.clone(), transport.guess_local());
+
+    Ok(RpcOperations::new(
+        rpc_client,
+        ReqwestClient::new(),
+        RpcOperationsConfig {
+            chain_id: 31337,
+            contract_addrs,
+            expected_block_time,
+            // No finality offset: a test reads the logs it just wrote, and the default offset of
+            // three blocks would hide them behind the chain head.
+            finality: 0,
+            ..Default::default()
+        },
+        None,
+    )?)
 }
 
 /// Helper function to create a simple test context with default configuration

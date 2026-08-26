@@ -18,13 +18,19 @@ pub enum Network {
     /// Local Anvil development network
     #[serde(alias = "anvil_localhost", alias = "anvil-localhost", alias = "localhost")]
     AnvilLocalhost,
-    /// Rotsee testnet (development/testing network)
+    /// Jura development (development/testing network)
     #[default]
-    #[serde(alias = "rotsee")]
-    Rotsee,
-    /// Jura testnet (staging network)
-    #[serde(alias = "jura")]
-    Jura,
+    #[serde(alias = "jura-dev")]
+    JuraDev,
+    /// Jura production (staging network)
+    #[serde(alias = "jura-prod")]
+    JuraProd,
+    /// PizPalu development network (development/testing network)
+    #[serde(alias = "piz-palu-dev")]
+    PizPaluDev,
+    /// PizPalu staging network (staging network)
+    #[serde(alias = "piz-palu-staging")]
+    PizPaluStaging,
 }
 
 impl Network {
@@ -33,7 +39,13 @@ impl Network {
     /// This is useful for generating error messages that show users
     /// what networks are supported.
     pub fn all() -> Vec<Network> {
-        vec![Network::AnvilLocalhost, Network::Rotsee, Network::Jura]
+        vec![
+            Network::AnvilLocalhost,
+            Network::JuraDev,
+            Network::JuraProd,
+            Network::PizPaluDev,
+            Network::PizPaluStaging,
+        ]
     }
 
     /// Returns all available network names as strings.
@@ -50,8 +62,10 @@ impl Network {
     pub fn as_str(&self) -> &'static str {
         match self {
             Network::AnvilLocalhost => "anvil-localhost",
-            Network::Rotsee => "rotsee",
-            Network::Jura => "jura",
+            Network::JuraDev => "jura-dev",
+            Network::JuraProd => "jura-prod",
+            Network::PizPaluDev => "piz-palu-dev",
+            Network::PizPaluStaging => "piz-palu-staging",
         }
     }
 
@@ -66,7 +80,7 @@ impl Network {
     /// ```rust,ignore
     /// use bloklid::network::Network;
     ///
-    /// let network = Network::Rotsee;
+    /// let network = Network::JuraDev;
     /// if let Some(config) = network.resolve() {
     ///     println!("Start block: {}", config.indexer_start_block_number);
     /// }
@@ -80,8 +94,10 @@ impl Network {
     pub fn tx_polling_interval(&self) -> u64 {
         match self {
             Network::AnvilLocalhost => 100,
-            Network::Rotsee => 1000,
-            Network::Jura => 1000,
+            Network::JuraDev => 1000,
+            Network::JuraProd => 1000,
+            Network::PizPaluDev => 1000,
+            Network::PizPaluStaging => 1000,
         }
     }
 
@@ -89,8 +105,10 @@ impl Network {
     pub fn confirmations(&self) -> u16 {
         match self {
             Network::AnvilLocalhost => 1,
-            Network::Rotsee => 3,
-            Network::Jura => 3,
+            Network::JuraDev => 3,
+            Network::JuraProd => 3,
+            Network::PizPaluDev => 3,
+            Network::PizPaluStaging => 3,
         }
     }
 
@@ -98,8 +116,10 @@ impl Network {
     pub fn expected_block_time(&self) -> u64 {
         match self {
             Network::AnvilLocalhost => 1,
-            Network::Rotsee => 5,
-            Network::Jura => 5,
+            Network::JuraDev => 5,
+            Network::JuraProd => 5,
+            Network::PizPaluDev => 5,
+            Network::PizPaluStaging => 5,
         }
     }
 }
@@ -116,8 +136,10 @@ impl FromStr for Network {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "anvil-localhost" | "anvil_localhost" | "localhost" => Ok(Network::AnvilLocalhost),
-            "rotsee" => Ok(Network::Rotsee),
-            "jura" => Ok(Network::Jura),
+            "jura-dev" => Ok(Network::JuraDev),
+            "jura-prod" => Ok(Network::JuraProd),
+            "piz-palu-dev" => Ok(Network::PizPaluDev),
+            "piz-palu-staging" => Ok(Network::PizPaluStaging),
             _ => Err(NetworkParseError::UnknownNetwork {
                 name: s.to_string(),
                 available: Self::all_names(),
@@ -145,9 +167,11 @@ mod tests {
 
     #[test]
     fn test_network_from_str() {
-        assert_eq!("rotsee".parse::<Network>().unwrap(), Network::Rotsee);
-        assert_eq!("ROTSEE".parse::<Network>().unwrap(), Network::Rotsee);
-        assert_eq!("jura".parse::<Network>().unwrap(), Network::Jura);
+        assert_eq!("jura-dev".parse::<Network>().unwrap(), Network::JuraDev);
+        assert_eq!("JURA-DEV".parse::<Network>().unwrap(), Network::JuraDev);
+        assert_eq!("jura-prod".parse::<Network>().unwrap(), Network::JuraProd);
+        assert_eq!("piz-palu-dev".parse::<Network>().unwrap(), Network::PizPaluDev);
+        assert_eq!("piz-palu-staging".parse::<Network>().unwrap(), Network::PizPaluStaging);
         assert_eq!("anvil-localhost".parse::<Network>().unwrap(), Network::AnvilLocalhost);
         assert_eq!("localhost".parse::<Network>().unwrap(), Network::AnvilLocalhost);
     }
@@ -158,43 +182,66 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("invalid-network"));
-        assert!(err.to_string().contains("rotsee"));
-        assert!(err.to_string().contains("jura"));
+        assert!(err.to_string().contains("jura-dev"));
+        assert!(err.to_string().contains("jura-prod"));
+        assert!(err.to_string().contains("piz-palu-dev"));
+        assert!(err.to_string().contains("piz-palu-staging"));
     }
 
     #[test]
     fn test_network_display() {
-        assert_eq!(Network::Rotsee.to_string(), "rotsee");
         assert_eq!(Network::AnvilLocalhost.to_string(), "anvil-localhost");
-        assert_eq!(Network::Jura.to_string(), "jura");
+        assert_eq!(Network::JuraDev.to_string(), "jura-dev");
+        assert_eq!(Network::JuraProd.to_string(), "jura-prod");
+        assert_eq!(Network::PizPaluDev.to_string(), "piz-palu-dev");
+        assert_eq!(Network::PizPaluStaging.to_string(), "piz-palu-staging");
     }
 
     #[test]
     fn test_network_all() {
         let networks = Network::all();
-        assert_eq!(networks.len(), 3);
+        assert_eq!(networks.len(), 5);
         assert!(networks.contains(&Network::AnvilLocalhost));
-        assert!(networks.contains(&Network::Rotsee));
-        assert!(networks.contains(&Network::Jura));
+        assert!(networks.contains(&Network::JuraDev));
+        assert!(networks.contains(&Network::JuraProd));
+        assert!(networks.contains(&Network::PizPaluDev));
+        assert!(networks.contains(&Network::PizPaluStaging));
     }
 
     #[test]
     fn test_network_default() {
-        assert_eq!(Network::default(), Network::Rotsee);
+        assert_eq!(Network::default(), Network::JuraDev);
     }
 
     #[test]
     fn test_network_resolve() {
         // Test that networks can be resolved
         // Note: This test depends on hopr-bindings having these networks defined
-        let rotsee = Network::Rotsee.resolve();
-        assert!(rotsee.is_some(), "Rotsee network should be defined in hopr-bindings");
         let anvil = Network::AnvilLocalhost.resolve();
         assert!(
             anvil.is_some(),
             "AnvilLocalhost network should be defined in hopr-bindings"
         );
-        let jura = Network::Jura.resolve();
-        assert!(jura.is_some(), "Jura network should be defined in hopr-bindings");
+
+        let jura_dev = Network::JuraDev.resolve();
+        assert!(jura_dev.is_some(), "JuraDev network should be defined in hopr-bindings");
+
+        let jura_prod = Network::JuraProd.resolve();
+        assert!(
+            jura_prod.is_some(),
+            "JuraProd network should be defined in hopr-bindings"
+        );
+
+        let piz_palu_dev = Network::PizPaluDev.resolve();
+        assert!(
+            piz_palu_dev.is_some(),
+            "PizPaluDev network should be defined in hopr-bindings"
+        );
+
+        let piz_palu_staging = Network::PizPaluStaging.resolve();
+        assert!(
+            piz_palu_staging.is_some(),
+            "PizPaluStaging network should be defined in hopr-bindings"
+        );
     }
 }

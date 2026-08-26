@@ -19,6 +19,7 @@ telemetry = [
   "blokli-chain-indexer/telemetry",
   "blokli-chain-rpc/telemetry",
   "blokli-db/telemetry",
+  "hopr-types/telemetry",
 ]
 
 [dependencies]
@@ -29,6 +30,7 @@ chrono          = { workspace = true }
 dashmap         = { workspace = true }
 futures         = { workspace = true }
 hex             = { workspace = true }
+lazy_static     = { workspace = true }
 serde           = { workspace = true }
 serde_json      = { workspace = true }
 thiserror       = { workspace = true }

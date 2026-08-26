@@ -17,10 +17,11 @@ use blokli_chain_types::ContractAddresses as BlokliContractAddresses;
 use clap::Parser;
 #[cfg(feature = "curvy-test-deployment")]
 use curvy_bindings::{CurvyContractAddresses, config::CurvyContractInstances};
-use hopli_lib::utils::{a2h, h2a};
+use hopli_lib::utils::h2a;
 use hopr_bindings::{
     config::ContractInstances,
     exports::alloy::{
+        network::EthereumWallet,
         primitives::{U256, aliases::U56},
         providers::{Provider, ProviderBuilder},
         rpc::client::ClientBuilder,
@@ -30,7 +31,6 @@ use hopr_bindings::{
 };
 use hopr_types::{
     chain::ContractAddresses,
-    crypto::keypairs::{ChainKeypair, Keypair},
     internal::prelude::WinningProbability,
     primitive::{prelude::HoprBalance, primitives::Address, traits::IntoEndian},
 };
@@ -39,7 +39,10 @@ use tempfile::NamedTempFile;
 use tracing_subscriber::{Layer as _, prelude::*};
 use url::Url;
 
-const DEFAULT_ANVIL_PRIVATE_KEY: &str = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+const DEFAULT_ANVIL_HOPR_DEPLOYER_PRIVATE_KEY: &str =
+    "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+const DEFAULT_ANVIL_COMMON_DEPLOYER_PRIVATE_KEY: &str =
+    "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
 const ANVIL_CHAIN_ID: u64 = 31_337;
 static PANIC_HOOK_INSTALLED: Once = Once::new();
 
@@ -53,19 +56,31 @@ struct Args {
     #[arg(long, env = "BLOKLI_DEPLOYER_RPC_URL", default_value = "http://127.0.0.1:8545")]
     rpc_url: String,
 
-    /// Private key used to deploy contracts
-    #[arg(long, env = "ANVIL_DEPLOYER_PRIVATE_KEY", default_value = DEFAULT_ANVIL_PRIVATE_KEY)]
+    /// Private key used to deploy HOPR contracts
+    #[arg(
+        long,
+        env = "ANVIL_DEPLOYER_PRIVATE_KEY",
+        default_value = DEFAULT_ANVIL_HOPR_DEPLOYER_PRIVATE_KEY
+    )]
     private_key: String,
 
+    /// Private key used to deploy common contracts such as ERC1820 and the Safe suite
+    #[arg(
+        long,
+        env = "ANVIL_COMMON_DEPLOYER_PRIVATE_KEY",
+        default_value = DEFAULT_ANVIL_COMMON_DEPLOYER_PRIVATE_KEY
+    )]
+    common_private_key: String,
+
     /// Minimum ticket price to set on the deployed HoprTicketPriceOracle.
-    /// Defaults to the live rotsee value so the local cluster behaves like rotsee.
+    /// Defaults to the live jura-dev value so the local cluster behaves like jura-dev.
     /// Read once via: cast call 0xca2c60433eC6a10dDEabBbE3Ce7f9737b1a0628C
     ///   "currentTicketPrice()(uint256)" --rpc-url https://rpc.gnosischain.com
     #[arg(long, env = "BLOKLI_DEPLOYER_TICKET_PRICE", default_value = "100 wei wxHOPR")]
     ticket_price: HoprBalance,
 
     /// Minimum winning probability to set on the deployed HoprWinningProbabilityOracle.
-    /// Defaults to the live rotsee value so the local cluster behaves like rotsee.
+    /// Defaults to the live jura-dev value so the local cluster behaves like jura-dev.
     /// Read once via: cast call 0x5136Bac09C78af89bDA56F5086A3F3E2Ee4EAfCa
     ///   "currentWinProb()(uint56)" --rpc-url https://rpc.gnosischain.com
     /// Use 1.0 to restore the legacy "always wins" behaviour.
@@ -106,6 +121,7 @@ struct DeployedHoprContractAddresses {
     winning_probability_oracle: Address,
     node_stake_factory: Address,
     xhopr_token: Address,
+    service_registry: Address,
 }
 
 #[tokio::main]
@@ -115,13 +131,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
     validate_args(&args)?;
 
-    let signer = PrivateKeySigner::from_str(&args.private_key)?;
-    let signer_chain_key = ChainKeypair::from_secret(signer.to_bytes().as_ref())?;
-    let signer_address = signer.address();
+    let common_deployer_signer = PrivateKeySigner::from_str(&args.common_private_key)?;
+    let hopr_deployer_signer = PrivateKeySigner::from_str(&args.private_key)?;
+    let common_deployer_address = common_deployer_signer.address();
+    let hopr_deployer_address = hopr_deployer_signer.address();
+    let mut wallet = EthereumWallet::from(common_deployer_signer);
+    wallet.register_default_signer(hopr_deployer_signer);
 
     let rpc_url = Url::parse(&args.rpc_url)?;
     let rpc_client = ClientBuilder::default().http(rpc_url);
-    let provider = ProviderBuilder::new().wallet(signer).connect_client(rpc_client);
+    let provider = ProviderBuilder::new().wallet(wallet).connect_client(rpc_client);
     let chain_id = provider.get_chain_id().await?;
     if args.with_curvy && chain_id != ANVIL_CHAIN_ID && !args.allow_unsafe_chain {
         return Err(io::Error::new(
@@ -134,9 +153,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .into());
     }
 
-    // The local deployment uses a single signer for both the HOPR and common contract deployers.
-    let deployer_address = a2h(signer_chain_key.public().to_address());
-    let instances = ContractInstances::deploy_for_testing(provider.clone(), deployer_address, deployer_address).await?;
+    let instances =
+        ContractInstances::deploy_for_testing(provider.clone(), hopr_deployer_address, common_deployer_address).await?;
     let contracts = ContractAddresses::from(&instances);
     let hopr_output = ContractsOutput {
         contracts: DeployedHoprContractAddresses {
@@ -150,6 +168,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             winning_probability_oracle: h2a(contracts.winning_probability_oracle),
             node_stake_factory: h2a(contracts.node_stake_factory),
             xhopr_token: h2a(contracts.xhopr_token),
+            service_registry: h2a(contracts.service_registry),
         },
     };
 
@@ -157,18 +176,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let minter_role = instances.token.MINTER_ROLE().call().await?;
     instances
         .token
-        .grantRole(minter_role, signer_address)
+        .grantRole(minter_role, hopr_deployer_address)
         .send()
         .await?
         .watch()
         .await?;
-    tracing::info!(%signer_address, "granted minter role to Anvil account");
+    tracing::info!(%hopr_deployer_address, "granted minter role to Anvil account");
 
     // Mint 10M tokens to Anvil account 0
     instances
         .token
         .mint(
-            signer_address,
+            hopr_deployer_address,
             "10000000000000000000000000".parse()?,
             Default::default(),
             Default::default(),
@@ -177,7 +196,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await?
         .watch()
         .await?;
-    tracing::info!(%signer_address, "minted tokens to Anvil account");
+    tracing::info!(%hopr_deployer_address, "minted tokens to Anvil account");
 
     // Update the stake factory to use correct addresses
     let network = instances.stake_factory.defaultHoprNetwork().call().await?;
@@ -187,6 +206,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             tokenAddress: *instances.token.address(),
             defaultTokenAllowance: network.defaultTokenAllowance,
             defaultAnnouncementTarget: network.defaultAnnouncementTarget,
+            serviceRegistryAddress: *instances.service_registry.address(),
         })
         .send()
         .await?
@@ -220,7 +240,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         #[cfg(feature = "curvy-test-deployment")]
         {
             tracing::info!("deploying Curvy v2 local-development contracts");
-            let curvy_instances = CurvyContractInstances::deploy_for_testing(provider, signer_address).await?;
+            let curvy_instances = CurvyContractInstances::deploy_for_testing(provider, hopr_deployer_address).await?;
             let hopr_token_id = curvy_instances.vault.getNumberOfTokens().call().await? + U256::ONE;
             curvy_instances
                 .vault
@@ -285,8 +305,6 @@ fn validate_args(args: &Args) -> io::Result<()> {
             "--curvy-json-out requires --with-curvy",
         ));
     }
-    // The HOPR TOML falls back to stdout, but the Curvy JSON has no such fallback: stdout is
-    // already carrying the TOML, so a second document there would garble both.
     if args.with_curvy && args.curvy_json_out.is_none() {
         tracing::warn!(
             "--with-curvy without --curvy-json-out: the Ignition address JSON is discarded; only the aggregator, \

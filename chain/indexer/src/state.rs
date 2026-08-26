@@ -15,7 +15,7 @@ use std::sync::{
 use async_broadcast::{Receiver, Sender, broadcast};
 use blokli_api_types::{
     Account, ChannelUpdate, CurvyCommittedNote, CurvyCommittedNullifier, CurvyPendingNote, RedeemTicketDetails,
-    RedemptionResult, TicketParameters, TokenValueString, UInt64,
+    RedemptionResult, ServiceTypeUpdate, ServiceUpdate, TicketParameters, TokenValueString, UInt64,
 };
 use hopr_types::primitive::prelude::Address;
 use tokio::sync::RwLock;
@@ -113,6 +113,15 @@ pub enum IndexerEvent {
 
     /// A nullifier emitted by the Curvy Aggregator's `CommittedNullifiers` event.
     CurvyCommittedNullifier(CurvyCommittedNullifier),
+
+    /// A service registry entry was registered, updated or deregistered.
+    ///
+    /// Carries the kind of change explicitly, because a deregistration leaves no entry behind
+    /// and a registration is not distinguishable from an update by its timestamps alone.
+    ServiceEntryUpdated(ServiceUpdate),
+
+    /// Service-type or registry-wide configuration changed.
+    ServiceTypeUpdated(ServiceTypeUpdate),
 }
 
 /// Shared state for coordinating indexer operations with subscriptions

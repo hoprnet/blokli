@@ -64,6 +64,9 @@ pub mod codes {
     /// Invalid address format errors
     pub const INVALID_ADDRESS: &str = "INVALID_ADDRESS";
 
+    /// Invalid service type identifier
+    pub const INVALID_SERVICE_TYPE: &str = "INVALID_SERVICE_TYPE";
+
     /// Type conversion errors (e.g., i64 to i32)
     pub const CONVERSION_ERROR: &str = "CONVERSION_ERROR";
 
@@ -171,6 +174,14 @@ pub mod messages {
 
     pub fn invalid_address_characters() -> String {
         "Invalid address: contains non-hexadecimal characters".to_string()
+    }
+
+    /// Service type validation error message
+    pub fn invalid_service_type(service_type: &str, error: impl std::fmt::Display) -> String {
+        format!(
+            "Invalid service type '{}': {}. Give an ASCII name such as gvpn:exit, or the 0x-prefixed 32-byte id",
+            service_type, error
+        )
     }
 
     /// Type conversion error message
@@ -349,6 +360,17 @@ pub fn invalid_address_from_message(address: impl Into<String>, message: String)
 pub fn invalid_address_query_failed(message: String) -> QueryFailedError {
     QueryFailedError {
         code: codes::INVALID_ADDRESS.to_string(),
+        message,
+    }
+}
+
+/// Creates a QueryFailedError for a service type identifier that cannot be parsed
+///
+/// Use this when the result type expects QueryFailedError, which is the case for every service
+/// registry query: the registry has no dedicated invalid-input member in its result unions.
+pub fn invalid_service_type_query_failed(message: String) -> QueryFailedError {
+    QueryFailedError {
+        code: codes::INVALID_SERVICE_TYPE.to_string(),
         message,
     }
 }

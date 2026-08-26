@@ -107,6 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             curvy_aggregator: Address::default(),
                             curvy_vault: Address::default(),
                             curvy_portal_factory: Address::default(),
+                            service_registry: Address::default(),
                         },
                         ..Default::default()
                     },

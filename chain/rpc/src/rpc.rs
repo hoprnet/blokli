@@ -12,18 +12,23 @@ use blokli_chain_types::{AlloyAddressExt, ContractAddresses, ContractInstances};
 use curvy_bindings::{
     curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2, curvy_vault_v2::CurvyVaultV2, portal_factory::PortalFactory,
 };
-use hopr_bindings::exports::alloy::{
-    contract::Error as AlloyContractError,
-    primitives::{Address as AlloyAddress, FixedBytes, U256},
-    providers::{
-        Identity, PendingTransaction, Provider, ProviderBuilder, RootProvider,
-        fillers::{BlobGasFiller, CachedNonceManager, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller},
+use hopr_bindings::{
+    exports::alloy::{
+        contract::Error as AlloyContractError,
+        primitives::{Address as AlloyAddress, FixedBytes, U256},
+        providers::{
+            Identity, PendingTransaction, Provider, ProviderBuilder, RootProvider,
+            fillers::{
+                BlobGasFiller, CachedNonceManager, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller,
+            },
+        },
+        rpc::{
+            client::RpcClient,
+            types::{Block, TransactionRequest},
+        },
+        sol,
     },
-    rpc::{
-        client::RpcClient,
-        types::{Block, TransactionRequest},
-    },
-    sol,
+    hopr_node_safe_registry::HoprNodeSafeRegistry,
 };
 use hopr_types::{
     crypto::prelude::Hash,
@@ -685,6 +690,16 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
             Ok(returned_result) => Ok(returned_result.to_hopr_address()),
             Err(e) => Err(e.into()),
         }
+    }
+
+    async fn get_safe_from_node_safe_registry_at(&self, registry: Address, node_address: Address) -> Result<Address> {
+        Ok(
+            HoprNodeSafeRegistry::new(AlloyAddress::from_hopr_address(registry), self.provider.clone())
+                .nodeToSafe(AlloyAddress::from_hopr_address(node_address))
+                .call()
+                .await?
+                .to_hopr_address(),
+        )
     }
 
     async fn get_gas_price(&self) -> Result<u128> {

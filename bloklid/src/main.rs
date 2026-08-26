@@ -257,7 +257,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
         let db = if is_in_memory {
             BlokliDb::new_in_memory().await?
         } else {
-            BlokliDb::new(&database_path, logs_database_path.as_deref(), db_config).await?
+            BlokliDb::new(&database_path, logs_database_path.as_deref(), db_config.clone()).await?
         };
 
         // Initialize singleton entries for chain_info and node_info

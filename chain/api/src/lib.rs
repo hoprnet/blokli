@@ -1,6 +1,7 @@
 //! Crate containing the API object for chain operations used by the HOPRd node.
 
 pub mod errors;
+pub mod metrics;
 pub(crate) mod revert_decoder;
 pub mod rpc_adapter;
 pub mod safe_execution;
@@ -14,7 +15,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use blokli_chain_indexer::{IndexerConfig, IndexerState, block::Indexer, handlers::ContractEventHandlers};
 use blokli_chain_rpc::{
     HoprIndexerRpcOperations, HoprRpcOperations,
-    client::DefaultRetryPolicy,
+    client::{DefaultRetryPolicy, MetricsLayer},
     rpc::{RpcOperations, RpcOperationsConfig},
     transport::ReqwestClient,
 };
@@ -131,6 +132,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
                 max_requests_per_sec,
                 rpc_http_retry_policy,
             ))
+            .layer(MetricsLayer)
             .transport(transport_client.clone(), transport_client.guess_local());
 
         let requestor = DefaultHttpRequestor::new();

@@ -18,6 +18,7 @@ use hopr_bindings::{
     hopr_node_management_module::HoprNodeManagementModule::HoprNodeManagementModuleEvents,
     hopr_node_safe_registry::HoprNodeSafeRegistry::HoprNodeSafeRegistryEvents,
     hopr_node_stake_factory::HoprNodeStakeFactory::HoprNodeStakeFactoryEvents,
+    hopr_service_registry::HoprServiceRegistry::HoprServiceRegistryEvents,
     hopr_ticket_price_oracle::HoprTicketPriceOracle::HoprTicketPriceOracleEvents,
     hopr_token::HoprToken::HoprTokenEvents,
     hopr_winning_probability_oracle::HoprWinningProbabilityOracle::HoprWinningProbabilityOracleEvents,
@@ -44,6 +45,7 @@ mod helpers;
 mod node_safe_registry;
 mod oracles;
 mod safe_contracts;
+mod service_registry;
 mod stake_factory;
 #[cfg(test)]
 mod test_utils;
@@ -239,6 +241,12 @@ where
         } else if log.address.eq(&self.addresses.node_safe_registry) {
             let event = HoprNodeSafeRegistryEvents::decode_log(&primitive_log)?;
             self.on_node_safe_registry_event(tx, &log, event.data, is_synced).await
+        } else if !self.addresses.service_registry.is_zero() && log.address.eq(&self.addresses.service_registry) {
+            // Placed ahead of the Safe lookup below so that a registry log costs no database
+            // query. The zero-address guard keeps a network without the registry from routing an
+            // unrelated zero-address log here.
+            let event = HoprServiceRegistryEvents::decode_log(&primitive_log)?;
+            self.on_service_registry_event(tx, &log, event.data, is_synced).await
         } else if self
             .db
             .get_safe_contract_by_address(Some(tx), log.address)
@@ -293,16 +301,20 @@ where
     ///
     /// `Vec<Address>` containing the monitored contract addresses in the following order:
     /// announcements, channels, ticket_price_oracle, winning_probability_oracle,
-    /// node_safe_registry, node_stake_factory, token, followed by the configured
-    /// Curvy Aggregator address when indexing is enabled.
+    /// node_safe_registry, node_stake_factory, token, and - only where it is deployed -
+    /// service_registry, followed by the configured Curvy Aggregator address when indexing is enabled.
+    ///
+    /// The service registry is the one optional entry. `jura-prod`, `debug-staging` and `jura-dev`
+    /// carry the zero address for it, and filtering `eth_getLogs` on the null address is both
+    /// meaningless and expensive, so it is skipped there.
     ///
     /// # Examples
     ///
     /// ```ignore
     /// let addrs = handlers.contract_addresses();
-    /// assert_eq!(addrs.len(), 7);
+    /// assert_eq!(addrs.len(), 8); // 7 where the service registry is not deployed
     /// // order: announcements, channels, ticket_price_oracle, winning_probability_oracle,
-    /// // node_safe_registry, node_stake_factory, token, optional Curvy Aggregator
+    /// // node_safe_registry, node_stake_factory, token, optional service_registry, optional Curvy Aggregator
     /// ```
     fn contract_addresses(&self) -> Vec<Address> {
         let mut addresses = vec![
@@ -314,6 +326,10 @@ where
             self.addresses.node_stake_factory,
             self.addresses.token,
         ];
+        if !self.addresses.service_registry.is_zero() {
+            addresses.push(self.addresses.service_registry);
+        }
+
         if self.enable_curvy_indexing {
             addresses.push(self.addresses.curvy_aggregator);
         }
@@ -359,7 +375,11 @@ where
             crate::constants::topics::stake_factory()
         } else if contract.eq(&self.addresses.token) {
             crate::constants::topics::token()
-        } else if contract.eq(&self.addresses.curvy_aggregator) {
+        } else if !self.addresses.service_registry.is_zero() && contract.eq(&self.addresses.service_registry) {
+            // The zero-address guard keeps a network without the registry from matching here on
+            // an unrelated call with a zero address, which would silently return registry topics.
+            crate::constants::topics::service_registry()
+        } else if self.enable_curvy_indexing && contract.eq(&self.addresses.curvy_aggregator) {
             crate::constants::topics::curvy_aggregator()
         } else {
             panic!("use of unsupported contract address: {contract}");

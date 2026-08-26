@@ -234,6 +234,57 @@ erDiagram
         bigint completed_log_index "Log that completed the shard"
     }
 
+    service_type {
+        int id PK "Primary key, autoincrement"
+        binary(32) service_type UK "Service type identifier as it appears on-chain (bytes32, UNIQUE, NOT NULL)"
+    }
+
+    service_type_state {
+        int id PK "Primary key, autoincrement"
+        bigint service_type_id FK "Foreign key to service_type.id (NOT NULL)"
+        binary(20) owner_address "Owner of the type, NULL once the type was abandoned"
+        binary(20) requirement_address "Requirement contract gating registration, NULL for an open type"
+        binary(32) registration_burn "wxHOPR burned on self-registration (original u256 stored in bytes, NOT NULL)"
+        binary(32) update_burn "wxHOPR burned on self-update (original u256 stored in bytes, NOT NULL)"
+        bigint published_block "Published block (NOT NULL)"
+        bigint published_tx_index "Published tx index (NOT NULL)"
+        bigint published_log_index "Published log index (NOT NULL)"
+    }
+    %% Composite unique constraint: UNIQUE(service_type_id, published_block, published_tx_index, published_log_index)
+    %% Index: idx_service_type_state_position (service_type_id, published_block DESC, published_tx_index DESC, published_log_index DESC)
+
+    service_entry {
+        int id PK "Primary key, autoincrement"
+        bigint service_type_id FK "Foreign key to service_type.id (NOT NULL)"
+        binary(20) node_address "Node offering the service (NOT NULL). Deliberately not a foreign key: the registry does not require the node to have announced itself, so an entry may exist without an account row"
+    }
+    %% Composite unique constraint: UNIQUE(service_type_id, node_address)
+    %% Index: idx_service_entry_node_address (node_address)
+
+    service_entry_state {
+        int id PK "Primary key, autoincrement"
+        bigint service_entry_id FK "Foreign key to service_entry.id (NOT NULL)"
+        binary(20) safe_address "Safe that performed this write, NULL on a deregistration tombstone"
+        binary(2048) metadata "Opaque metadata capped at the contract's 2048 bytes, NULL on a deregistration tombstone"
+        datetime registered_at "Registration timestamp, NULL on a deregistration tombstone"
+        datetime updated_at "Last update timestamp, NULL on a deregistration tombstone"
+        bool deregistered "Tombstone flag: the entry was removed on-chain (NOT NULL, default is false)"
+        bigint published_block "Published block (NOT NULL)"
+        bigint published_tx_index "Published tx index (NOT NULL)"
+        bigint published_log_index "Published log index (NOT NULL)"
+    }
+    %% Composite unique constraint: UNIQUE(service_entry_id, published_block, published_tx_index, published_log_index)
+    %% Index: idx_service_entry_state_position (service_entry_id, published_block DESC, published_tx_index DESC, published_log_index DESC)
+
+    service_registry_config {
+        int id PK "Primary key, singleton row"
+        binary(32) type_registration_fee "wxHOPR burned to register a new service type (original u256 stored in bytes, NOT NULL, default is zero)"
+        binary(20) node_safe_registry "Node-safe registry the service registry resolves bindings against, NULL until the registry reports it"
+        bigint last_changed_block "Position of the newest config log applied (NOT NULL, default is 0)"
+        bigint last_changed_tx_index "Position of the newest config log applied (NOT NULL, default is 0)"
+        bigint last_changed_log_index "Position of the newest config log applied (NOT NULL, default is 0)"
+    }
+
     %% ========================================
     %% RELATIONSHIPS
     %% ========================================
@@ -255,6 +306,9 @@ erDiagram
     hopr_safe_event ||--o| hopr_safe_execution_event : "has 0 or 1 execution payload"
     hopr_safe_contract ||--o{ hopr_safe_redeemed_stats : "has 0 or more (one per safe/node pair)"
     channel ||--o{ channel_state : "has version history"
+    service_type ||--o{ service_type_state : "has version history"
+    service_type ||--o{ service_entry : "has many entries"
+    service_entry ||--o{ service_entry_state : "has version history"
     log ||--o| log_status : "has 0 or 1"
 
     %% ========================================
@@ -264,3 +318,6 @@ erDiagram
     %% channel_current: Latest channel state (channel + most recent channel_state)
     %% safe_owner_current: Latest owner membership state per (safe, owner) where the owner is currently active
     %% safe_threshold_current: Latest threshold state per safe
+    %% service_type_current: Latest service type state (service_type + most recent service_type_state)
+    %% service_entry_current: Latest registry entry state (service_entry + most recent service_entry_state);
+    %%                        a row with deregistered set is a tombstone and must be filtered out by readers

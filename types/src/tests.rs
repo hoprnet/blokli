@@ -170,3 +170,52 @@ mod uint256_tests {
         assert!(UInt256::parse(Value::String("0x2a".to_string())).is_err());
     }
 }
+
+/// The map is hand-listed, while its source struct is derived. Consumers - notably
+/// `hopr-chain-connector` - deserialize the map straight into `hopr_types::chain::ContractAddresses`,
+/// whose fields carry no `#[serde(default)]`, so a key missing here is a runtime failure on every
+/// chain-info read rather than a compile error anywhere.
+#[cfg(test)]
+mod contract_address_map_conversion_tests {
+    use std::collections::BTreeSet;
+
+    use blokli_chain_types::ContractAddresses;
+    use hopr_types::primitive::primitives::Address;
+
+    use crate::ContractAddressMap;
+
+    /// Serde field names of [`ContractAddresses`], read off the struct itself rather than
+    /// duplicated, so the test tracks the struct instead of a second hand-written list.
+    fn contract_address_field_names() -> BTreeSet<String> {
+        let json = serde_json::to_value(ContractAddresses::default()).expect("the struct should serialize");
+
+        json.as_object()
+            .expect("the struct should serialize to a JSON object")
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn conversion_covers_every_contract_address_field() {
+        let map = ContractAddressMap::from(&ContractAddresses::default());
+        let keys: BTreeSet<String> = map.0.keys().cloned().collect();
+
+        assert_eq!(contract_address_field_names(), keys);
+    }
+
+    #[test]
+    fn conversion_carries_the_service_registry_address() {
+        let addresses = ContractAddresses {
+            service_registry: Address::from([0xbb; 20]),
+            ..Default::default()
+        };
+
+        let map = ContractAddressMap::from(&addresses);
+
+        assert_eq!(
+            Some(&addresses.service_registry.to_string()),
+            map.0.get("service_registry")
+        );
+    }
+}

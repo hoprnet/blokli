@@ -160,6 +160,7 @@ RPC Endpoint
      ├── Channels (open/close/balance updates)
      ├── Token (HOPR token transfers/approvals)
      ├── SafeRegistry (Safe address linking)
+     ├── ServiceRegistry (service entries and service type configuration)
      └── Oracles (ticket price, win probability)
      │
      ▼
@@ -194,6 +195,9 @@ RPC Endpoint
 - **HoprTicketPriceOracle**: Network-wide ticket price updates
 - **HoprWinningProbabilityOracle**: Network-wide winning probability updates
 - **Curvy Aggregator**: Pending notes, committed notes, and committed nullifiers, normalized from batched events
+- **HoprServiceRegistry**: Permissionless registry of the services nodes offer, together with the configuration of each service type. The
+  contract is optional: a network that has not deployed it carries the zero address, and the indexer then leaves that address out of the
+  filter set entirely rather than filtering logs on the null address.
 
 ### 4. Database Layer
 
@@ -314,6 +318,8 @@ The schema is organized into three root types following GraphQL best practices:
 - Safe contract queries by address or chain key (owner)
 - Balance queries by address (works for any Ethereum address)
 - Chain information and network parameters
+- Service registry queries: entries with mandatory filtering, an entry count, the service type configuration, and the registry-wide
+  configuration
 - Transaction status queries by UUID
 - Health check and version endpoints
 
@@ -329,8 +335,15 @@ The schema is organized into three root types following GraphQL best practices:
 - Channel updates: Real-time changes to payment channel states
 - Safe deployments: Real-time notifications when new Safe contracts are deployed
 - Network topology: Opened channel graph updates for routing decisions
+- Service registry updates: snapshot-first streams of entries, service types and registry-wide configuration followed by live changes
 - Transaction updates: Status changes for submitted transactions
 - Curvy events: Historical-to-live streams for pending notes, committed notes, and committed nullifiers
+
+Registry entry queries use bounded cursor pages pinned to the first page's indexer watermark, including unfiltered enumeration. Entry
+subscriptions capture that same kind of watermark while registering their event receivers, page through the matching historical snapshot,
+and then stream later changes. Service-type and registry-wide configuration subscriptions likewise emit complete current state before live
+changes. Broadcast overflow ends the server stream; the client reconnects and receives a fresh snapshot, turning possible silent loss into a
+deterministic resynchronization.
 
 **Error Handling**: Uses GraphQL union types to return domain-specific error types (InvalidAddressError, ContractNotAllowedError, etc.)
 alongside success types, providing structured error responses with codes and context.

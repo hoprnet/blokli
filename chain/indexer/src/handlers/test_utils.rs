@@ -37,6 +37,7 @@ pub(super) mod test_helpers {
         pub static ref ANNOUNCEMENTS_ADDR: Address = "11db4791bf45ef31a10ea4a1b5cb90f46cc72c7e".parse().expect("lazy static address should be constructible"); // just a dummy
         pub static ref TICKET_PRICE_ORACLE_ADDR: Address = "11db4391bf45ef31a10ea4a1b5cb90f46cc72c7e".parse().expect("lazy static address should be constructible"); // just a dummy
         pub static ref WIN_PROB_ORACLE_ADDR: Address = "00db4391bf45ef31a10ea4a1b5cb90f46cc64c7e".parse().expect("lazy static address should be constructible"); // just a dummy
+        pub static ref SERVICE_REGISTRY_ADDR: Address = "9a676e781a523b5d0c0e43731313a708cb607508".parse().expect("lazy static address should be constructible"); // just a dummy
     }
 
     mockall::mock! {
@@ -187,6 +188,7 @@ pub(super) mod test_helpers {
                 curvy_aggregator: Default::default(),
                 curvy_vault: Default::default(),
                 curvy_portal_factory: Default::default(),
+                service_registry: *SERVICE_REGISTRY_ADDR,
             },
             db,
             rpc_operations,

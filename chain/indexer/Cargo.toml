@@ -60,6 +60,7 @@ hopr-types = { workspace = true, features = [
 [dev-dependencies]
 anyhow          = { workspace = true }
 hex-literal     = { workspace = true }
+insta           = { workspace = true, features = ["yaml"] }
 mockall         = { workspace = true }
 primitive-types = { workspace = true }
 test-log        = { workspace = true }
