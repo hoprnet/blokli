@@ -14,15 +14,15 @@ use std::{
 
 use args::{Args, Command, generate_config_template, peek_verbosity_from_env_args};
 use async_signal::{Signal, Signals};
+use blokli_api::server::ApiDatabases;
 use blokli_chain_api::BlokliChain;
 use blokli_chain_indexer::{snapshot::SnapshotManager, startup, utils::redact_url};
 use blokli_db::{
-    db::{BlokliDb, BlokliDbConfig, build_connect_options},
+    db::{BlokliDb, BlokliDbConfig},
     utils::redact_database_url,
 };
 use clap::Parser;
 use futures::TryStreamExt;
-use sea_orm::Database;
 use tokio::net::TcpListener;
 
 use crate::{
@@ -191,6 +191,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 fast_sync: cfg.indexer.fast_sync,
                 enable_logs_snapshot: cfg.indexer.enable_logs_snapshot,
                 enable_safe_indexing: cfg.indexer.enable_safe_indexing,
+                enable_curvy_indexing: cfg.indexer.enable_curvy_indexing,
                 logs_snapshot_url: cfg.indexer.logs_snapshot_url.clone(),
                 data_directory: cfg.data_directory.clone(),
                 event_bus_capacity: cfg.indexer.subscription.event_bus_capacity,
@@ -277,7 +278,8 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
 
         // Create BlokliChain instance
         let enable_safe_indexing = indexer_config.enable_safe_indexing;
-        let blokli_chain = BlokliChain::new(db, chain_network, contracts, indexer_config, rpc_url)?;
+        let blokli_chain = BlokliChain::new(db, chain_network, contracts, indexer_config, rpc_url).await?;
+        let contracts = blokli_chain.contract_addresses();
 
         // Verify RPC supports required capabilities (debug tracing)
         blokli_chain.verify_rpc_capabilities().await?;
@@ -293,11 +295,6 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
         // This ensures the API is available immediately even if indexer initialization takes time
         let api_handle = if api_config.enabled {
             tracing::info!("Starting blokli-api server on {}", api_config.bind_address);
-
-            // Connect to database for API server
-            let api_db = Database::connect(build_connect_options(&database_path, &db_config))
-                .await
-                .map_err(|e| BloklidError::NonSpecific(format!("Failed to connect API database: {}", e)))?;
 
             // Construct blokli-api ApiConfig from bloklid config
             // We need to get rpc_url and contracts from the original config
@@ -343,7 +340,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
 
             // Build API app with indexer state for subscriptions and transaction components
             let api_app = blokli_api::server::build_app(
-                api_db,
+                ApiDatabases::from_blokli(blokli_chain.db()),
                 network.clone(),
                 blokli_api_config,
                 expected_block_time,

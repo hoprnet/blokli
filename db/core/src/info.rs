@@ -2,8 +2,9 @@ use async_trait::async_trait;
 use blokli_db_entity::{
     chain_info,
     prelude::{
-        Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, HoprBalance as HoprBalanceEntity,
-        HoprSafeContract, NativeBalance,
+        Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, CurvyCommittedNote,
+        CurvyCommittedNullifier, CurvyPendingNote, CurvyShardRoot, CurvySyncCheckpoint,
+        HoprBalance as HoprBalanceEntity, HoprSafeContract, NativeBalance,
     },
 };
 use futures::TryFutureExt;
@@ -142,6 +143,15 @@ impl BlokliDbInfoOperations for BlokliDb {
             return Ok(false);
         }
 
+        if CurvyPendingNote::find().one(c).await?.is_some()
+            || CurvyCommittedNote::find().one(c).await?.is_some()
+            || CurvyCommittedNullifier::find().one(c).await?.is_some()
+            || CurvyShardRoot::find().one(c).await?.is_some()
+            || CurvySyncCheckpoint::find().one(c).await?.is_some()
+        {
+            return Ok(false);
+        }
+
         Ok(true)
     }
 
@@ -153,6 +163,11 @@ impl BlokliDbInfoOperations for BlokliDb {
                     Account::delete_many().exec(tx.as_ref()).await?;
                     Announcement::delete_many().exec(tx.as_ref()).await?;
                     Channel::delete_many().exec(tx.as_ref()).await?;
+                    CurvySyncCheckpoint::delete_many().exec(tx.as_ref()).await?;
+                    CurvyShardRoot::delete_many().exec(tx.as_ref()).await?;
+                    CurvyPendingNote::delete_many().exec(tx.as_ref()).await?;
+                    CurvyCommittedNote::delete_many().exec(tx.as_ref()).await?;
+                    CurvyCommittedNullifier::delete_many().exec(tx.as_ref()).await?;
                     ChainInfo::delete_many().exec(tx.as_ref()).await?;
 
                     // Initial row is needed in the ChainInfo table

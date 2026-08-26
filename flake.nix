@@ -464,6 +464,7 @@
 
               # Generated GraphQL schema (formatted separately)
               "schema.graphql"
+              "design/target-api-schema.graphql"
 
               # locally installed npm packages
               ".npm/"

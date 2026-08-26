@@ -91,6 +91,7 @@ max_connections = 10
 [indexer]
 fast_sync = false
 enable_logs_snapshot = false
+enable_curvy_indexing = ${BLOKLI_DEPLOY_CURVY}
 
 [indexer.subscription]
 event_bus_capacity = 100

@@ -21,7 +21,7 @@ use blokli_api::{
     query::QueryRoot,
     readiness::ReadinessChecker,
     schema::build_schema,
-    server::build_app,
+    server::{ApiDatabases, build_app},
     subscription::SubscriptionRoot,
 };
 use blokli_chain_api::{
@@ -140,6 +140,7 @@ fn build_subscription_test_schema(
 
     build_schema(
         db.conn(TargetDb::Index).clone(),
+        db.conn(TargetDb::Logs).clone(),
         1,
         "test-network".to_string(),
         ContractAddresses::default(),
@@ -283,6 +284,7 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
     // Build GraphQL schema with all dependencies
     let schema = build_schema(
         db.clone(),
+        db.clone(),
         chain_id,
         "test-network".to_string(),
         contract_addrs,
@@ -417,7 +419,7 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
 
     // Build HTTP router
     let app = build_app(
-        db.clone(),
+        ApiDatabases::single(db.clone()),
         "test-network".to_string(),
         api_config,
         expected_block_time,

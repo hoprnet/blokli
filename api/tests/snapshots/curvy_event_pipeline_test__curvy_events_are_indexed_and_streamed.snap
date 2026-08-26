@@ -1,0 +1,64 @@
+---
+source: api/tests/curvy_event_pipeline_test.rs
+expression: history_data
+---
+curvyCommittedNotes:
+  notes:
+    - batchIndex: "0x0000000000000000000000000000000000000000000000000000000000000006"
+      noteId: "0x0000000000000000000000000000000000000000000000000000000000000064"
+      position:
+        block: "31"
+        eventItemIndex: "0"
+        logIndex: "0"
+        transactionHash: "0x3030303030303030303030303030303030303030303030303030303030303030"
+        transactionIndex: "0"
+    - batchIndex: "0x0000000000000000000000000000000000000000000000000000000000000007"
+      noteId: "0x0000000000000000000000000000000000000000000000000000000000000065"
+      position:
+        block: "32"
+        eventItemIndex: "1"
+        logIndex: "0"
+        transactionHash: "0x3131313131313131313131313131313131313131313131313131313131313131"
+        transactionIndex: "0"
+    - batchIndex: "0x0000000000000000000000000000000000000000000000000000000000000007"
+      noteId: "0x0000000000000000000000000000000000000000000000000000000000000066"
+      position:
+        block: "32"
+        eventItemIndex: "3"
+        logIndex: "0"
+        transactionHash: "0x3131313131313131313131313131313131313131313131313131313131313131"
+        transactionIndex: "0"
+curvyCommittedNullifiers:
+  nullifiers:
+    - batchIndex: "0x0000000000000000000000000000000000000000000000000000000000000008"
+      nullifier: "0x00000000000000000000000000000000000000000000000000000000000000c9"
+      position:
+        block: "33"
+        eventItemIndex: "0"
+        logIndex: "0"
+        transactionHash: "0x3232323232323232323232323232323232323232323232323232323232323232"
+        transactionIndex: "0"
+    - batchIndex: "0x0000000000000000000000000000000000000000000000000000000000000008"
+      nullifier: "0x00000000000000000000000000000000000000000000000000000000000000ca"
+      position:
+        block: "33"
+        eventItemIndex: "2"
+        logIndex: "0"
+        transactionHash: "0x3232323232323232323232323232323232323232323232323232323232323232"
+        transactionIndex: "0"
+curvyPendingNotes:
+  notes:
+    - amount: "849000000000000000"
+      ephemeralKey:
+        - "22"
+        - "33"
+      isPlaintext: true
+      noteId: "0x13ea1b3b95601d96264437e145d437289f8667b1e24189e8cf79e80caf4ae361"
+      position:
+        block: "30"
+        eventItemIndex: "0"
+        logIndex: "1"
+        transactionHash: "0xf227caa3df7428e210dee41b9632dfee086587ad84f469dc822c01848e2afa95"
+        transactionIndex: "0"
+      tokenId: "1"
+      viewTag: 44

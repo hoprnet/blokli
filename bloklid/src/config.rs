@@ -3,6 +3,7 @@ use std::{fmt, time::Duration};
 use blokli_chain_indexer::utils::redact_url;
 use blokli_chain_types::{ChainConfig, ContractAddresses};
 use blokli_db::utils::redact_database_url;
+use hopr_types::primitive::primitives::Address;
 
 use crate::network::Network;
 
@@ -277,6 +278,13 @@ pub struct Config {
     #[serde(default, rename = "contracts")]
     pub contracts_override: Option<ContractAddresses>,
 
+    /// Optional Curvy Aggregator proxy address. The Vault and PortalFactory
+    /// addresses are resolved from this contract during startup.
+    /// This overrides the value in `[contracts]` when both are configured.
+    #[serde_as(as = "Option<serde_with::DisplayFromStr>")]
+    #[serde(default)]
+    pub curvy_aggregator: Option<Address>,
+
     #[serde(skip)]
     #[default(None)]
     pub chain_network: Option<ChainConfig>,
@@ -314,6 +322,10 @@ impl Config {
         output.push_str(&format!(
             "  indexer.enable_safe_indexing: {}\n",
             self.indexer.enable_safe_indexing
+        ));
+        output.push_str(&format!(
+            "  indexer.enable_curvy_indexing: {}\n",
+            self.indexer.enable_curvy_indexing
         ));
 
         if let Some(snapshot_url) = &self.indexer.logs_snapshot_url {
@@ -389,6 +401,10 @@ pub struct IndexerConfig {
     #[default(false)]
     #[serde(default = "default_false")]
     pub enable_safe_indexing: bool,
+
+    #[default(false)]
+    #[serde(default = "default_false")]
+    pub enable_curvy_indexing: bool,
 
     #[serde(default)]
     pub logs_snapshot_url: Option<String>,
@@ -582,7 +598,7 @@ mod tests {
             winning_probability_oracle = "0x0808080808080808080808080808080808080808"
             node_stake_factory = "0x0909090909090909090909090909090909090909"
             xhopr_token = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-            service_registry = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            service_registry = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
         "#;
 
         let config: Config = toml::from_str(config).expect("contracts should accept hex strings");
@@ -600,7 +616,10 @@ mod tests {
                 winning_probability_oracle: Address::from([8; 20]),
                 node_stake_factory: Address::from([9; 20]),
                 xhopr_token: Address::from([0xaa; 20]),
-                service_registry: Address::from([0xbb; 20]),
+                curvy_aggregator: Address::default(),
+                curvy_vault: Address::default(),
+                curvy_portal_factory: Address::default(),
+                service_registry: Address::from([0xee; 20]),
             })
         );
     }
@@ -633,6 +652,45 @@ mod tests {
         // The zero address is the "not deployed" sentinel every consumer must skip.
         assert_eq!(contracts.service_registry, Address::default());
         assert_eq!(contracts.xhopr_token, Address::default());
+    }
+
+    #[test]
+    fn test_contract_overrides_default_to_disabled_curvy_indexing() {
+        let config = r#"
+            [contracts]
+            token = "0x0101010101010101010101010101010101010101"
+            channels = "0x0202020202020202020202020202020202020202"
+            announcements = "0x0303030303030303030303030303030303030303"
+            module_implementation = "0x0404040404040404040404040404040404040404"
+            node_safe_migration = "0x0505050505050505050505050505050505050505"
+            node_safe_registry = "0x0606060606060606060606060606060606060606"
+            ticket_price_oracle = "0x0707070707070707070707070707070707070707"
+            winning_probability_oracle = "0x0808080808080808080808080808080808080808"
+            node_stake_factory = "0x0909090909090909090909090909090909090909"
+            xhopr_token = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "#;
+
+        let config: Config = toml::from_str(config).expect("legacy contract overrides should remain valid");
+
+        assert_eq!(
+            config
+                .contracts_override
+                .expect("contract overrides should be present")
+                .curvy_aggregator,
+            Address::default()
+        );
+    }
+
+    #[test]
+    fn test_curvy_aggregator_can_be_configured_independently() {
+        let config = r#"
+            curvy_aggregator = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        "#;
+
+        let config: Config = toml::from_str(config).expect("Curvy aggregator should accept a hex string");
+
+        assert_eq!(config.curvy_aggregator, Some(Address::from([0xbb; 20])));
+        assert!(config.contracts_override.is_none());
     }
 
     #[test]
@@ -840,6 +898,7 @@ mod tests {
         // Check indexer config
         assert!(config.indexer.fast_sync);
         assert!(!config.indexer.enable_safe_indexing);
+        assert!(!config.indexer.enable_curvy_indexing);
         assert_eq!(config.indexer.subscription.event_bus_capacity, 1000);
 
         // Check API config
@@ -872,6 +931,7 @@ mod tests {
         assert!(!cfg.indexer.fast_sync);
         assert!(!cfg.indexer.enable_logs_snapshot); // Default
         assert!(!cfg.indexer.enable_safe_indexing); // Default
+        assert!(!cfg.indexer.enable_curvy_indexing); // Default
         assert_eq!(cfg.indexer.subscription.event_bus_capacity, 1000); // Default
         assert_eq!(cfg.indexer.subscription.batch_size, 100); // Default
     }

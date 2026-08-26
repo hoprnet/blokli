@@ -1,17 +1,17 @@
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     any::Any,
     backtrace::Backtrace,
     borrow::Cow,
     error::Error,
-    fs,
-    io::{self, stdout},
+    io::{self, Write, stdout},
     panic,
     path::{Component, Path, PathBuf},
     str::FromStr,
     sync::Once,
 };
 
-use blokli_chain_types::ContractAddresses as BlokliContractAddresses;
 use clap::Parser;
 #[cfg(feature = "curvy-test-deployment")]
 use curvy_bindings::{CurvyContractAddresses, config::CurvyContractInstances};
@@ -30,9 +30,10 @@ use hopr_bindings::{
 use hopr_types::{
     chain::ContractAddresses,
     internal::prelude::WinningProbability,
-    primitive::{prelude::HoprBalance, traits::IntoEndian},
+    primitive::{prelude::HoprBalance, primitives::Address, traits::IntoEndian},
 };
 use serde::Serialize;
+use tempfile::NamedTempFile;
 use tracing_subscriber::{Layer as _, prelude::*};
 use url::Url;
 
@@ -102,8 +103,30 @@ struct Args {
 }
 
 #[derive(Debug, Serialize)]
-struct ContractsOutput {
-    contracts: BlokliContractAddresses,
+struct ContractsOutput<T> {
+    contracts: T,
+}
+
+#[cfg(feature = "curvy-test-deployment")]
+#[derive(Debug, Serialize)]
+struct CurvyContractsOutput<T> {
+    curvy_aggregator: Address,
+    contracts: T,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+struct DeployedHoprContractAddresses {
+    token: Address,
+    channels: Address,
+    announcements: Address,
+    module_implementation: Address,
+    node_safe_migration: Address,
+    node_safe_registry: Address,
+    ticket_price_oracle: Address,
+    winning_probability_oracle: Address,
+    node_stake_factory: Address,
+    xhopr_token: Address,
+    service_registry: Address,
 }
 
 #[tokio::main]
@@ -138,22 +161,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let instances =
         ContractInstances::deploy_for_testing(provider.clone(), hopr_deployer_address, common_deployer_address).await?;
     let contracts = ContractAddresses::from(&instances);
-    let output = ContractsOutput {
-        contracts: BlokliContractAddresses {
-            token: h2a(contracts.token),
-            channels: h2a(contracts.channels),
-            announcements: h2a(contracts.announcements),
-            module_implementation: h2a(contracts.module_implementation),
-            node_safe_migration: h2a(contracts.node_safe_migration),
-            node_safe_registry: h2a(contracts.node_safe_registry),
-            ticket_price_oracle: h2a(contracts.ticket_price_oracle),
-            winning_probability_oracle: h2a(contracts.winning_probability_oracle),
-            node_stake_factory: h2a(contracts.node_stake_factory),
-            xhopr_token: h2a(contracts.xhopr_token),
-            service_registry: h2a(contracts.service_registry),
-        },
+    let deployed_hopr_contracts = DeployedHoprContractAddresses {
+        token: h2a(contracts.token),
+        channels: h2a(contracts.channels),
+        announcements: h2a(contracts.announcements),
+        module_implementation: h2a(contracts.module_implementation),
+        node_safe_migration: h2a(contracts.node_safe_migration),
+        node_safe_registry: h2a(contracts.node_safe_registry),
+        ticket_price_oracle: h2a(contracts.ticket_price_oracle),
+        winning_probability_oracle: h2a(contracts.winning_probability_oracle),
+        node_stake_factory: h2a(contracts.node_stake_factory),
+        xhopr_token: h2a(contracts.xhopr_token),
+        service_registry: h2a(contracts.service_registry),
     };
-    let toml_output = toml::to_string(&output)?;
+    let hopr_output = ContractsOutput {
+        contracts: deployed_hopr_contracts,
+    };
 
     // Assign minter role to Anvil account 0
     let minter_role = instances.token.MINTER_ROLE().call().await?;
@@ -219,37 +242,58 @@ async fn main() -> Result<(), Box<dyn Error>> {
         args.winning_probability.as_f64()
     );
 
-    let curvy_json: Option<String> = if args.with_curvy {
+    let (curvy_json, toml_output): (Option<String>, String) = if args.with_curvy {
         #[cfg(feature = "curvy-test-deployment")]
         {
             tracing::info!("deploying Curvy v2 local-development contracts");
             let curvy_instances = CurvyContractInstances::deploy_for_testing(provider, hopr_deployer_address).await?;
+            let hopr_token_id = curvy_instances.vault.getNumberOfTokens().call().await? + U256::ONE;
+            curvy_instances
+                .vault
+                .registerToken(*instances.token.address())
+                .send()
+                .await?
+                .watch()
+                .await?;
+            tracing::info!(
+                token = %instances.token.address(),
+                token_id = %hopr_token_id,
+                "registered the HOPR token in the Curvy vault"
+            );
             let curvy_contracts = CurvyContractAddresses::from(&curvy_instances);
+            let output = CurvyContractsOutput {
+                curvy_aggregator: h2a(curvy_contracts.aggregator_proxy),
+                contracts: deployed_hopr_contracts,
+            };
             tracing::info!(
                 aggregator = %curvy_contracts.aggregator_proxy,
                 vault = %curvy_contracts.vault_proxy,
                 portal_factory = %curvy_contracts.portal_factory,
                 "Curvy contracts ready"
             );
-            Some(format!(
-                "{}\n",
-                serde_json::to_string_pretty(&curvy_contracts.to_ignition_json())?
-            ))
+            (
+                Some(format!(
+                    "{}\n",
+                    serde_json::to_string_pretty(&curvy_contracts.to_ignition_json())?
+                )),
+                toml::to_string(&output)?,
+            )
         }
         #[cfg(not(feature = "curvy-test-deployment"))]
         unreachable!("validate_args rejects Curvy without compiled support")
     } else {
-        None
+        (None, toml::to_string(&hopr_output)?)
     };
 
     // Publish outputs only after every requested deployment and serialization succeeds.
-    if let Some(path) = args.output {
-        fs::write(path, toml_output)?;
+    if let Some(path) = args.output.as_deref() {
+        atomic_write(path, toml_output.as_bytes())?;
+        tracing::info!(path = %path.display(), "wrote HOPR contract configuration");
     } else {
         print!("{toml_output}");
     }
     if let (Some(path), Some(json)) = (args.curvy_json_out.as_deref(), curvy_json.as_deref()) {
-        fs::write(path, json)?;
+        atomic_write(path, json.as_bytes())?;
         tracing::info!(path = %path.display(), "wrote Curvy contract addresses");
     }
 
@@ -303,6 +347,20 @@ fn normalize_path(path: &Path) -> io::Result<PathBuf> {
         }
     }
     Ok(normalized)
+}
+
+fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut temporary = NamedTempFile::new_in(parent)?;
+    temporary.write_all(contents)?;
+    #[cfg(unix)]
+    temporary.as_file().set_permissions(PermissionsExt::from_mode(0o644))?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path).map_err(|error| error.error)?;
+    Ok(())
 }
 
 fn install_tracing() -> Result<(), Box<dyn Error>> {
@@ -369,13 +427,16 @@ fn panic_payload_to_str(payload: &(dyn Any + Send)) -> Cow<'static, str> {
 
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::{any::Any, fs};
 
     use anyhow::Result;
     use clap::Parser;
     use hopr_types::{internal::prelude::WinningProbability, primitive::traits::IntoEndian};
+    use tempfile::tempdir;
 
-    use super::{Args, panic_payload_to_str, validate_args};
+    use super::{Args, atomic_write, panic_payload_to_str, validate_args};
 
     #[test]
     fn test_panic_payload_to_str_from_str() {
@@ -454,6 +515,20 @@ mod tests {
     fn feature_on_binary_accepts_curvy() -> Result<()> {
         let args = Args::try_parse_from(["blokli-contract-deployer", "--with-curvy"])?;
         validate_args(&args)?;
+        Ok(())
+    }
+
+    #[test]
+    fn atomic_write_replaces_complete_file() -> Result<()> {
+        let directory = tempdir()?;
+        let path = directory.path().join("contracts.toml");
+        fs::write(&path, "old")?;
+
+        atomic_write(&path, b"new\n")?;
+
+        assert_eq!(fs::read_to_string(&path)?, "new\n");
+        #[cfg(unix)]
+        assert_eq!(fs::metadata(path)?.permissions().mode() & 0o777, 0o644);
         Ok(())
     }
 }

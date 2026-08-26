@@ -150,6 +150,9 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
         winning_probability_oracle: Address::from([6; 20]),
         node_stake_factory: Address::from([7; 20]),
         xhopr_token: Address::from([10; 20]),
+        curvy_aggregator: Address::default(),
+        curvy_vault: Address::default(),
+        curvy_portal_factory: Address::default(),
         service_registry: Address::from([11; 20]),
     };
 
@@ -162,6 +165,7 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
         db.clone(),
         mock_rpc.clone(),
         indexer_state.clone(),
+        false,
         false,
     );
 
@@ -183,6 +187,7 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
         fast_sync: false, // Disable fast sync for testing
         enable_logs_snapshot: false,
         enable_safe_indexing: false,
+        enable_curvy_indexing: false,
         logs_snapshot_url: None,
         data_directory: db_path.to_string_lossy().to_string(),
         event_bus_capacity: 1000,
@@ -234,6 +239,9 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
         winning_probability_oracle: Address::from([6; 20]),
         node_stake_factory: Address::from([7; 20]),
         xhopr_token: Address::from([10; 20]),
+        curvy_aggregator: Address::default(),
+        curvy_vault: Address::default(),
+        curvy_portal_factory: Address::default(),
         service_registry: Address::from([11; 20]),
     };
 
@@ -246,6 +254,7 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
         db.clone(),
         mock_rpc.clone(),
         indexer_state.clone(),
+        false,
         false,
     );
 
@@ -267,6 +276,7 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
         fast_sync: true,
         enable_logs_snapshot: false, // Don't try to download snapshots
         enable_safe_indexing: false,
+        enable_curvy_indexing: false,
         logs_snapshot_url: None,
         data_directory: db_path.to_string_lossy().to_string(),
         event_bus_capacity: 1000,
@@ -422,6 +432,9 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         winning_probability_oracle: Address::from([6; 20]),
         node_stake_factory: Address::from([7; 20]),
         xhopr_token: Address::from([10; 20]),
+        curvy_aggregator: Address::default(),
+        curvy_vault: Address::default(),
+        curvy_portal_factory: Address::default(),
         service_registry: Address::from([11; 20]),
     };
 
@@ -434,6 +447,7 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         db.clone(),
         tracking_rpc.clone(),
         indexer_state.clone(),
+        false,
         false,
     );
 
@@ -456,6 +470,7 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         fast_sync: false,
         enable_logs_snapshot: false,
         enable_safe_indexing: false,
+        enable_curvy_indexing: false,
         logs_snapshot_url: None,
         data_directory: db_path.to_string_lossy().to_string(),
         event_bus_capacity: 1000,
@@ -529,6 +544,9 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
         winning_probability_oracle: Address::from([6; 20]),
         node_stake_factory: Address::from([7; 20]),
         xhopr_token: Address::from([10; 20]),
+        curvy_aggregator: Address::default(),
+        curvy_vault: Address::default(),
+        curvy_portal_factory: Address::default(),
         service_registry: Address::from([11; 20]),
     };
 
@@ -541,6 +559,7 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
         db.clone(),
         mock_rpc.clone(),
         indexer_state.clone(),
+        false,
         false,
     );
 
@@ -562,6 +581,7 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
         fast_sync: false,
         enable_logs_snapshot: false,
         enable_safe_indexing: false,
+        enable_curvy_indexing: false,
         logs_snapshot_url: None,
         data_directory: db_path.to_string_lossy().to_string(),
         event_bus_capacity: 1000,
