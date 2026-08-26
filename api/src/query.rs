@@ -7,7 +7,8 @@ use blokli_api_types::{
     Account, AccountsList, AccountsResult, ChainInfo, ChainInfoResult, Channel, ChannelStats, ChannelStatsResult,
     ChannelsList, ChannelsResult, ContractAddressMap, CountResult, HoprBalance, InvalidAddressError,
     MissingFilterError, ModuleAddress, NativeBalance, QueryFailedError, RedeemedStats, RedeemedStatsFilter, Safe,
-    SafeHoprAllowance, SafeSelectorInput, SafesBalance, SafesBalanceResult, Token, TokenValueString, TransactionCount,
+    SafeHoprAllowance, SafeSelectorInput, SafesBalance, SafesBalanceResult, ServiceRegistryConfigResult,
+    ServiceTypesList, ServiceTypesResult, ServicesList, ServicesResult, Token, TokenValueString, TransactionCount,
     UInt64,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
@@ -15,6 +16,7 @@ use blokli_chain_rpc::{HoprIndexerRpcOperations, HoprRpcOperations, rpc::RpcOper
 use blokli_chain_types::ContractAddresses;
 use blokli_db_entity::{
     account, chain_info,
+    chain_info::Entity as ChainInfoEntity,
     conversions::{
         account_aggregation::fetch_accounts_with_filters,
         channel_aggregation::{fetch_channel_stats as fetch_channel_stats_db, fetch_channels_with_state},
@@ -25,13 +27,16 @@ use blokli_db_entity::{
             fetch_safe_by_address as fetch_safe_by_address_db, fetch_safe_owners, fetch_safe_owners_for_safes,
             fetch_safes_by_chain_key as fetch_safes_by_chain_key_db, fetch_safes_by_owner as fetch_safes_by_owner_db,
         },
+        service_aggregation::{fetch_service_entries_page_at, fetch_service_types, fetch_service_types_by_id},
     },
     hopr_node_safe_registration,
-    views::{account_current, channel_current},
+    prelude::ServiceRegistryConfig as ServiceRegistryConfigEntity,
+    views::{account_current, channel_current, service_entry_current},
 };
 use futures::future::try_join_all;
 use hopr_types::{
     crypto::prelude::Hash,
+    internal::prelude::ServiceType,
     primitive::{
         prelude::HoprBalance as PrimitiveHoprBalance,
         primitives::Address,
@@ -42,7 +47,13 @@ use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, Quer
 use tracing::warn;
 
 use crate::{
-    conversions::transaction_from_record, errors, mutation::TransactionResult, validation::validate_eth_address,
+    conversions::{
+        service_entry_from_aggregate, service_registry_config_from_model, service_type_from_aggregate,
+        transaction_from_record,
+    },
+    errors,
+    mutation::TransactionResult,
+    validation::{parse_service_type, validate_eth_address},
 };
 
 /// Result type for HOPR balance queries
@@ -330,10 +341,30 @@ fn check_safes_balance_cap(count: usize) -> std::result::Result<(), QueryFailedE
     }
 }
 
+/// Parses the optional service type filter shared by every service registry query.
+///
+/// `None` in, `None` out: an absent filter is not an error, only an unparseable one is.
+fn parse_service_type_filter(service_type: Option<&str>) -> std::result::Result<Option<ServiceType>, QueryFailedError> {
+    service_type
+        .map(|value| parse_service_type(value).map_err(|e| errors::invalid_service_type_query_failed(e.message)))
+        .transpose()
+}
+
+/// Parses the optional node chain address filter shared by the service registry queries.
+fn parse_node_filter(node: Option<&str>) -> std::result::Result<Option<Address>, QueryFailedError> {
+    node.map(|value| {
+        validate_eth_address(value).map_err(|e| errors::invalid_address_query_failed(e.message))?;
+        Address::from_hex(value)
+            .map_err(|e| errors::invalid_address_query_failed(errors::messages::invalid_address(value, e)))
+    })
+    .transpose()
+}
+
 /// Root query type providing read-only access to indexed blockchain data
 #[derive(Default)]
 pub struct QueryRoot;
 
+#[allow(clippy::too_many_arguments)]
 #[Object]
 impl QueryRoot {
     /// Retrieve accounts from the database with required filtering
@@ -461,6 +492,311 @@ impl QueryRoot {
         };
 
         CountResult::Count(blokli_api_types::Count { count })
+    }
+
+    /// Retrieve a stable, paginated view of service registry entries.
+    async fn services(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Filter by service type - ASCII name such as gvpn:exit, or 0x-prefixed hex")]
+        service_type: Option<String>,
+        #[graphql(desc = "Filter by node chain address (hexadecimal format)")] node: Option<String>,
+        #[graphql(desc = "Maximum entries in this page (1-1000)", default = 100)] first: i32,
+        #[graphql(desc = "Cursor returned by the previous page")] after: Option<UInt64>,
+        #[graphql(desc = "Watermark returned by the first page; required for a stable continuation")] watermark: Option<
+            UInt64,
+        >,
+        #[graphql(
+            desc = "Only entries whose node is bound in the registry's current NodeSafeRegistry",
+            default = false
+        )]
+        live_only: bool,
+    ) -> ServicesResult {
+        let filter_type = match parse_service_type_filter(service_type.as_deref()) {
+            Ok(filter) => filter,
+            Err(e) => return ServicesResult::QueryFailed(e),
+        };
+
+        let filter_node = match parse_node_filter(node.as_deref()) {
+            Ok(filter) => filter,
+            Err(e) => return ServicesResult::QueryFailed(e),
+        };
+
+        let db = match ctx.data::<DatabaseConnection>() {
+            Ok(db) => db,
+            Err(e) => {
+                return ServicesResult::QueryFailed(errors::db_connection_error(format!("{:?}", e)));
+            }
+        };
+
+        if !(1..=1000).contains(&first) {
+            return ServicesResult::QueryFailed(errors::query_failed(
+                "fetch services",
+                "first must be between 1 and 1000",
+            ));
+        }
+        let first = match u64::try_from(first) {
+            Ok(first) => first,
+            Err(_) => unreachable!("the range check above guarantees a positive page size"),
+        };
+
+        let current_watermark = match ChainInfoEntity::find().one(db).await {
+            Ok(Some(info)) => info.last_indexed_block,
+            Ok(None) => {
+                return ServicesResult::QueryFailed(errors::not_found("chain_info", "not initialized"));
+            }
+            Err(e) => return ServicesResult::QueryFailed(errors::query_failed("fetch chain watermark", e)),
+        };
+        let watermark = match watermark {
+            Some(value) => match i64::try_from(value.0) {
+                Ok(value) if value <= current_watermark => value,
+                _ => {
+                    return ServicesResult::QueryFailed(errors::query_failed(
+                        "fetch services",
+                        "watermark is ahead of the indexer or does not fit in i64",
+                    ));
+                }
+            },
+            None => current_watermark,
+        };
+        let output_watermark = match u64::try_from(watermark) {
+            Ok(watermark) => watermark,
+            Err(_) => {
+                return ServicesResult::QueryFailed(errors::query_failed(
+                    "fetch services",
+                    "chain watermark is negative",
+                ));
+            }
+        };
+        let after = match after.map(|value| i64::try_from(value.0)).transpose() {
+            Ok(after) => after,
+            Err(_) => {
+                return ServicesResult::QueryFailed(errors::query_failed(
+                    "fetch services",
+                    "cursor does not fit in i64",
+                ));
+            }
+        };
+
+        let page = match fetch_service_entries_page_at(
+            db,
+            filter_type.as_ref().map(AsRef::as_ref),
+            filter_node.as_ref().map(AsRef::as_ref),
+            watermark,
+            after,
+            first,
+        )
+        .await
+        {
+            Ok(page) => page,
+            Err(e) => return ServicesResult::QueryFailed(errors::query_failed("fetch services", e)),
+        };
+
+        let next_cursor = match page.next_cursor.map(u64::try_from).transpose() {
+            Ok(cursor) => cursor.map(UInt64),
+            Err(_) => {
+                return ServicesResult::QueryFailed(errors::query_failed(
+                    "fetch services",
+                    "database returned a negative service cursor",
+                ));
+            }
+        };
+
+        let mut services = match page
+            .entries
+            .into_iter()
+            .map(service_entry_from_aggregate)
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(services) => services,
+            Err(e) => return ServicesResult::QueryFailed(e),
+        };
+
+        if live_only {
+            let config = match ServiceRegistryConfigEntity::find().one(db).await {
+                Ok(Some(config)) => config,
+                Ok(None) => {
+                    return ServicesResult::QueryFailed(errors::not_found(
+                        "service_registry_config",
+                        "not initialized",
+                    ));
+                }
+                Err(e) => return ServicesResult::QueryFailed(errors::query_failed("fetch registry pointer", e)),
+            };
+            let registry = match config.node_safe_registry.as_deref().map(Address::try_from).transpose() {
+                Ok(Some(registry)) => registry,
+                Ok(None) => {
+                    return ServicesResult::QueryFailed(errors::not_found(
+                        "service_registry_config.node_safe_registry",
+                        "not initialized",
+                    ));
+                }
+                Err(e) => return ServicesResult::QueryFailed(errors::query_failed("parse registry pointer", e)),
+            };
+            let rpc = match ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>() {
+                Ok(rpc) => rpc,
+                Err(e) => return ServicesResult::QueryFailed(errors::context_error("RpcOperations", e.message)),
+            };
+            let checked = try_join_all(services.into_iter().map(|entry| async {
+                let node = Address::from_hex(&entry.node).map_err(|e| errors::query_failed("parse service node", e))?;
+                HoprRpcOperations::get_safe_from_node_safe_registry_at(&**rpc, registry, node)
+                    .await
+                    .map(|safe| (!safe.is_zero()).then_some(entry))
+                    .map_err(|e| errors::query_failed("resolve service liveness", e))
+            }))
+            .await;
+            services = match checked {
+                Ok(entries) => entries.into_iter().flatten().collect(),
+                Err(e) => return ServicesResult::QueryFailed(e),
+            };
+        }
+
+        ServicesResult::Services(ServicesList {
+            services,
+            watermark: UInt64(output_watermark),
+            next_cursor,
+        })
+    }
+
+    /// Count service registry entries matching optional filters
+    ///
+    /// If no filters are provided, returns the total entry count.
+    #[graphql(name = "serviceCount")]
+    async fn service_count(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Filter by service type - ASCII name such as gvpn:exit, or 0x-prefixed hex")]
+        service_type: Option<String>,
+        #[graphql(desc = "Filter by node chain address (hexadecimal format)")] node: Option<String>,
+    ) -> CountResult {
+        let filter_type = match parse_service_type_filter(service_type.as_deref()) {
+            Ok(filter) => filter,
+            Err(e) => return CountResult::QueryFailed(e),
+        };
+
+        let filter_node = match parse_node_filter(node.as_deref()) {
+            Ok(filter) => filter,
+            Err(e) => return CountResult::QueryFailed(e),
+        };
+
+        let db = match ctx.data::<DatabaseConnection>() {
+            Ok(db) => db,
+            Err(e) => {
+                return CountResult::QueryFailed(errors::db_connection_error(format!("{:?}", e)));
+            }
+        };
+
+        // Deregistration appends a tombstone rather than deleting, so the live entries are the
+        // rows of the current view that are not tombstones.
+        let mut query =
+            service_entry_current::Entity::find().filter(service_entry_current::Column::Deregistered.eq(false));
+
+        if let Some(service_type) = filter_type {
+            query = query.filter(service_entry_current::Column::ServiceType.eq(service_type.as_ref().to_vec()));
+        }
+
+        if let Some(node) = filter_node {
+            query = query.filter(service_entry_current::Column::NodeAddress.eq(node.as_ref().to_vec()));
+        }
+
+        let count_u64 = match query.count(db).await {
+            Ok(count) => count,
+            Err(e) => {
+                return CountResult::QueryFailed(errors::query_failed("count services", e));
+            }
+        };
+
+        let count = match i32::try_from(count_u64) {
+            Ok(c) => c,
+            Err(_) => {
+                return CountResult::QueryFailed(errors::overflow_error("service count", count_u64.to_string()));
+            }
+        };
+
+        CountResult::Count(blokli_api_types::Count { count })
+    }
+
+    /// Retrieve service type configuration
+    ///
+    /// Omitting the filter returns every registered type. The set of types is owner-gated by the
+    /// type registration fee, so enumerating it is bounded, unlike the entry set.
+    #[graphql(name = "serviceTypes")]
+    async fn service_types(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Filter by service type - ASCII name such as gvpn:exit, or 0x-prefixed hex")]
+        service_type: Option<String>,
+    ) -> ServiceTypesResult {
+        let filter_type = match parse_service_type_filter(service_type.as_deref()) {
+            Ok(filter) => filter,
+            Err(e) => return ServiceTypesResult::QueryFailed(e),
+        };
+
+        let db = match ctx.data::<DatabaseConnection>() {
+            Ok(db) => db,
+            Err(e) => {
+                return ServiceTypesResult::QueryFailed(errors::db_connection_error(format!("{:?}", e)));
+            }
+        };
+
+        let aggregated = match filter_type {
+            Some(service_type) => fetch_service_types_by_id(db, &[service_type.as_ref().to_vec()]).await,
+            None => fetch_service_types(db).await,
+        };
+
+        let aggregated = match aggregated {
+            Ok(types) => types,
+            Err(e) => return ServiceTypesResult::QueryFailed(errors::query_failed("fetch service types", e)),
+        };
+
+        let service_types = match aggregated
+            .into_iter()
+            .map(service_type_from_aggregate)
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(service_types) => service_types,
+            Err(e) => return ServiceTypesResult::QueryFailed(e),
+        };
+
+        ServiceTypesResult::ServiceTypes(ServiceTypesList { service_types })
+    }
+
+    /// Retrieve the registry-wide service configuration
+    ///
+    /// These two values belong to no single service type, and they are otherwise only observable
+    /// through `serviceTypeUpdated`: a client that starts after the last change would never learn
+    /// them from the event stream alone.
+    #[graphql(name = "serviceRegistryConfig")]
+    async fn service_registry_config(&self, ctx: &Context<'_>) -> ServiceRegistryConfigResult {
+        let db = match ctx.data::<DatabaseConnection>() {
+            Ok(db) => db,
+            Err(e) => {
+                return ServiceRegistryConfigResult::QueryFailed(errors::db_connection_error(format!("{:?}", e)));
+            }
+        };
+
+        // The table holds a single row, created by the migration, so an absent row is a broken
+        // database rather than an empty result.
+        let model = match ServiceRegistryConfigEntity::find().one(db).await {
+            Ok(Some(model)) => model,
+            Ok(None) => {
+                return ServiceRegistryConfigResult::QueryFailed(errors::not_found(
+                    "service registry configuration",
+                    "the singleton row is missing",
+                ));
+            }
+            Err(e) => {
+                return ServiceRegistryConfigResult::QueryFailed(errors::query_failed(
+                    "fetch service registry configuration",
+                    e,
+                ));
+            }
+        };
+
+        match service_registry_config_from_model(model) {
+            Ok(config) => ServiceRegistryConfigResult::Config(config),
+            Err(e) => ServiceRegistryConfigResult::QueryFailed(e),
+        }
     }
 
     /// Count channels matching optional filters

@@ -56,6 +56,9 @@ DEPLOYER_ARGS=()
 if [ -n "${ANVIL_DEPLOYER_PRIVATE_KEY:-}" ]; then
   DEPLOYER_ARGS+=(--private-key "${ANVIL_DEPLOYER_PRIVATE_KEY}")
 fi
+if [ -n "${ANVIL_COMMON_DEPLOYER_PRIVATE_KEY:-}" ]; then
+  DEPLOYER_ARGS+=(--common-private-key "${ANVIL_COMMON_DEPLOYER_PRIVATE_KEY}")
+fi
 if [ "${BLOKLI_DEPLOY_CURVY}" = "true" ]; then
   CURVY_JSON_PATH="${CURVY_JSON_PATH:-${DATA_DIR}/curvy_deployed_addresses.json}"
   # The default lives under DATA_DIR (already created above), but an overridden

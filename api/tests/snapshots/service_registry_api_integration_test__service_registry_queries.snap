@@ -1,0 +1,26 @@
+---
+source: api/tests/service_registry_api_integration_test.rs
+expression: sorted(query.data.into_json()?)
+---
+serviceCount:
+  __typename: Count
+  count: 1
+serviceRegistryConfig:
+  __typename: ServiceRegistryConfig
+  nodeSafeRegistry: "[node_safe_registry]"
+  typeRegistrationFee: 0 wxHOPR
+serviceTypes:
+  __typename: ServiceTypesList
+  serviceTypes:
+    - owner: "[owner]"
+      registrationBurn: 0 wxHOPR
+      requirement: ~
+      serviceType: "gvpn:exit"
+      updateBurn: 0 wxHOPR
+services:
+  __typename: ServicesList
+  services:
+    - metadata: "0x7b2276223a317d"
+      node: "[node]"
+      safe: "[safe]"
+      serviceType: "gvpn:exit"

@@ -17,7 +17,7 @@ use async_signal::{Signal, Signals};
 use blokli_chain_api::BlokliChain;
 use blokli_chain_indexer::{snapshot::SnapshotManager, startup, utils::redact_url};
 use blokli_db::{
-    db::{BlokliDb, BlokliDbConfig},
+    db::{BlokliDb, BlokliDbConfig, build_connect_options},
     utils::redact_database_url,
 };
 use clap::Parser;
@@ -256,7 +256,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
         let db = if is_in_memory {
             BlokliDb::new_in_memory().await?
         } else {
-            BlokliDb::new(&database_path, logs_database_path.as_deref(), db_config).await?
+            BlokliDb::new(&database_path, logs_database_path.as_deref(), db_config.clone()).await?
         };
 
         // Initialize singleton entries for chain_info and node_info
@@ -295,7 +295,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
             tracing::info!("Starting blokli-api server on {}", api_config.bind_address);
 
             // Connect to database for API server
-            let api_db = Database::connect(&database_path)
+            let api_db = Database::connect(build_connect_options(&database_path, &db_config))
                 .await
                 .map_err(|e| BloklidError::NonSpecific(format!("Failed to connect API database: {}", e)))?;
 

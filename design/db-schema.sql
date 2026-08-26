@@ -225,52 +225,114 @@ CREATE TABLE "schema_version" (
     "updated_at" timestamp_text NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE "service_entry" (
+    "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "service_type_id" integer NOT NULL,
+    "node_address" blob (20) NOT NULL,
+    FOREIGN KEY ("service_type_id") REFERENCES "service_type" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+CREATE TABLE "service_entry_state" (
+    "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "service_entry_id" integer NOT NULL,
+    "safe_address" blob (20) NULL,
+    "metadata" blob (2048) NULL,
+    "registered_at" timestamp_with_timezone_text NULL,
+    "updated_at" timestamp_with_timezone_text NULL,
+    "deregistered" boolean NOT NULL DEFAULT FALSE,
+    "published_block" integer NOT NULL,
+    "published_tx_index" integer NOT NULL,
+    "published_log_index" integer NOT NULL,
+    FOREIGN KEY ("service_entry_id") REFERENCES "service_entry" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+CREATE TABLE "service_registry_config" (
+    "id" integer NOT NULL PRIMARY KEY,
+    "type_registration_fee" blob (32) NOT NULL DEFAULT x'0000000000000000000000000000000000000000000000000000000000000000',
+    "node_safe_registry" blob (20) NULL,
+    "last_changed_block" integer NOT NULL DEFAULT 0,
+    "last_changed_tx_index" integer NOT NULL DEFAULT 0,
+    "last_changed_log_index" integer NOT NULL DEFAULT 0
+);
+
+CREATE TABLE "service_type" (
+    "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "service_type" blob (32) NOT NULL UNIQUE
+);
+
+CREATE TABLE "service_type_state" (
+    "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "service_type_id" integer NOT NULL,
+    "owner_address" blob (20) NULL,
+    "requirement_address" blob (20) NULL,
+    "registration_burn" blob (32) NOT NULL,
+    "update_burn" blob (32) NOT NULL,
+    "published_block" integer NOT NULL,
+    "published_tx_index" integer NOT NULL,
+    "published_log_index" integer NOT NULL,
+    FOREIGN KEY ("service_type_id") REFERENCES "service_type" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
 CREATE VIEW account_current AS
 SELECT
-    s.id,
+    acs.id,
     a.id AS account_id,
     a.chain_key,
     a.packet_key,
-    s.safe_address,
-    s.published_block,
-    s.published_tx_index,
-    s.published_log_index
+    acs.safe_address,
+    acs.published_block,
+    acs.published_tx_index,
+    acs.published_log_index
 FROM
     account a
-    JOIN (
+    JOIN account_state acs ON acs.account_id = a.id
+WHERE
+    acs.id = (
         SELECT
-            acs.*,
-            ROW_NUMBER() OVER (PARTITION BY acs.account_id ORDER BY acs.published_block DESC, acs.published_tx_index DESC, acs.published_log_index DESC) AS rn
+            s2.id
         FROM
-            account_state acs) s ON s.account_id = a.id
-        AND s.rn = 1;
+            account_state s2
+        WHERE
+            s2.account_id = a.id
+        ORDER BY
+            s2.published_block DESC,
+            s2.published_tx_index DESC,
+            s2.published_log_index DESC
+        LIMIT 1);
 
 CREATE VIEW channel_current AS
 SELECT
-    s.id,
+    cs.id,
     c.id AS channel_id,
     c.concrete_channel_id,
     c.source,
     c.destination,
-    s.balance,
-    s.status,
-    s.epoch,
-    s.ticket_index,
-    s.closure_time,
-    s.corrupted_state,
-    s.published_block,
-    s.published_tx_index,
-    s.published_log_index,
-    s.reorg_correction
+    cs.balance,
+    cs.status,
+    cs.epoch,
+    cs.ticket_index,
+    cs.closure_time,
+    cs.corrupted_state,
+    cs.published_block,
+    cs.published_tx_index,
+    cs.published_log_index,
+    cs.reorg_correction
 FROM
     channel c
-    JOIN (
+    JOIN channel_state cs ON cs.channel_id = c.id
+WHERE
+    cs.id = (
         SELECT
-            cs.*,
-            ROW_NUMBER() OVER (PARTITION BY cs.channel_id ORDER BY cs.published_block DESC, cs.published_tx_index DESC, cs.published_log_index DESC) AS rn
+            s2.id
         FROM
-            channel_state cs) s ON s.channel_id = c.id
-        AND s.rn = 1;
+            channel_state s2
+        WHERE
+            s2.channel_id = c.id
+        ORDER BY
+            s2.published_block DESC,
+            s2.published_tx_index DESC,
+            s2.published_log_index DESC
+        LIMIT 1);
 
 CREATE VIEW safe_contract_current AS
 SELECT
@@ -344,6 +406,68 @@ WHERE
             hopr_safe_threshold_state s2
         WHERE
             s2.hopr_safe_contract_id = sc.id
+        ORDER BY
+            s2.published_block DESC,
+            s2.published_tx_index DESC,
+            s2.published_log_index DESC
+        LIMIT 1);
+
+CREATE VIEW service_entry_current AS
+SELECT
+    ses.id,
+    se.id AS service_entry_id,
+    se.service_type_id,
+    st.service_type,
+    se.node_address,
+    ses.safe_address,
+    ses.metadata,
+    ses.registered_at,
+    ses.updated_at,
+    ses.deregistered,
+    ses.published_block,
+    ses.published_tx_index,
+    ses.published_log_index
+FROM
+    service_entry se
+    JOIN service_type st ON st.id = se.service_type_id
+    JOIN service_entry_state ses ON ses.service_entry_id = se.id
+WHERE
+    ses.id = (
+        SELECT
+            s2.id
+        FROM
+            service_entry_state s2
+        WHERE
+            s2.service_entry_id = se.id
+        ORDER BY
+            s2.published_block DESC,
+            s2.published_tx_index DESC,
+            s2.published_log_index DESC
+        LIMIT 1);
+
+CREATE VIEW service_type_current AS
+SELECT
+    sts.id,
+    st.id AS service_type_id,
+    st.service_type,
+    sts.owner_address,
+    sts.requirement_address,
+    sts.registration_burn,
+    sts.update_burn,
+    sts.published_block,
+    sts.published_tx_index,
+    sts.published_log_index
+FROM
+    service_type st
+    JOIN service_type_state sts ON sts.service_type_id = st.id
+WHERE
+    sts.id = (
+        SELECT
+            s2.id
+        FROM
+            service_type_state s2
+        WHERE
+            s2.service_type_id = st.id
         ORDER BY
             s2.published_block DESC,
             s2.published_tx_index DESC,
@@ -427,6 +551,18 @@ CREATE UNIQUE INDEX "idx_safe_setup_owner_unique_position" ON "hopr_safe_setup_o
 CREATE INDEX "idx_safe_threshold_state_current_lookup" ON "hopr_safe_threshold_state" ("hopr_safe_contract_id", "published_block" DESC, "published_tx_index" DESC, "published_log_index" DESC);
 
 CREATE UNIQUE INDEX "idx_safe_threshold_state_unique_position" ON "hopr_safe_threshold_state" ("hopr_safe_contract_id", "published_block", "published_tx_index", "published_log_index");
+
+CREATE INDEX "idx_service_entry_node_address" ON "service_entry" ("node_address");
+
+CREATE INDEX "idx_service_entry_state_position" ON "service_entry_state" ("service_entry_id", "published_block" DESC, "published_tx_index" DESC, "published_log_index" DESC);
+
+CREATE UNIQUE INDEX "idx_service_entry_state_unique_position" ON "service_entry_state" ("service_entry_id", "published_block", "published_tx_index", "published_log_index");
+
+CREATE UNIQUE INDEX "idx_service_entry_unique_type_node" ON "service_entry" ("service_type_id", "node_address");
+
+CREATE INDEX "idx_service_type_state_position" ON "service_type_state" ("service_type_id", "published_block" DESC, "published_tx_index" DESC, "published_log_index" DESC);
+
+CREATE UNIQUE INDEX "idx_service_type_state_unique_position" ON "service_type_state" ("service_type_id", "published_block", "published_tx_index", "published_log_index");
 
 CREATE INDEX "idx_unprocessed_log_status" ON "log_status" ("processed", "block_number", "tx_index", "log_index");
 
