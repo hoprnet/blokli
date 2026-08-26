@@ -390,6 +390,43 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         })
     }
 
+    /// Resolves the Curvy Vault and PortalFactory from the configured Aggregator proxy.
+    ///
+    /// The Aggregator is the sole Curvy bootstrap address. Resolution happens once
+    /// during daemon startup so the indexer and GraphQL API share one validated
+    /// runtime address set.
+    pub async fn resolve_curvy_contract_addresses(&mut self) -> Result<ContractAddresses> {
+        let aggregator_address = configured_contract(self.cfg.contract_addrs.curvy_aggregator, "Curvy Aggregator")?;
+        let aggregator = CurvyAggregatorAlphaV2::new(aggregator_address, self.provider.clone());
+        let (vault_address, portal_factory_address) =
+            futures::try_join!(async { aggregator.curvyVault().call().await }, async {
+                aggregator.portalFactory().call().await
+            },)?;
+
+        if vault_address == AlloyAddress::ZERO {
+            return Err(RpcError::Other(
+                "Curvy Aggregator returned the zero address for Curvy Vault".to_string(),
+            ));
+        }
+        if portal_factory_address == AlloyAddress::ZERO {
+            return Err(RpcError::Other(
+                "Curvy Aggregator returned the zero address for Curvy PortalFactory".to_string(),
+            ));
+        }
+
+        self.cfg.contract_addrs.curvy_vault = vault_address.to_hopr_address();
+        self.cfg.contract_addrs.curvy_portal_factory = portal_factory_address.to_hopr_address();
+
+        debug!(
+            aggregator = %aggregator_address,
+            vault = %vault_address,
+            portal_factory = %portal_factory_address,
+            "resolved Curvy contract addresses from Aggregator"
+        );
+
+        Ok(self.cfg.contract_addrs)
+    }
+
     /// Get the current block number from the RPC endpoint, adjusted for finality
     ///
     /// This method returns the block number minus the configured finality window

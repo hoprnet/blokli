@@ -24,8 +24,9 @@ max_rpc_requests_per_sec = 0
 # default 10000-block ceiling.
 max_block_range = 10000
 
-# Optional Curvy aggregator proxy. When omitted, Curvy event indexing is disabled.
-# This can be set independently without overriding all HOPR contract addresses.
+# Optional Curvy Aggregator proxy. When Curvy indexing is enabled, Blokli
+# resolves the Vault and PortalFactory from this contract during startup.
+# This setting does not override any HOPR contract address.
 # curvy_aggregator = "0x0000000000000000000000000000000000000000"
 
 # Optional contract address overrides
@@ -42,12 +43,6 @@ max_block_range = 10000
 # winning_probability_oracle = "0x0000000000000000000000000000000000000000"
 # node_stake_factory = "0x0000000000000000000000000000000000000000"
 # xhopr_token = "0x0000000000000000000000000000000000000000"
-# Curvy addresses are not supplied by the HOPR network registry. Prefer the
-# top-level curvy_aggregator setting when only event indexing is needed. Vault
-# and PortalFactory enable the corresponding typed GraphQL contract reads.
-# curvy_aggregator = "0x0000000000000000000000000000000000000000"
-# curvy_vault = "0x0000000000000000000000000000000000000000"
-# curvy_portal_factory = "0x0000000000000000000000000000000000000000"
 # The service registry is optional: leave it out, or set it to the zero address, on a network
 # where the contract is not deployed. bloklid then skips it instead of indexing the null address.
 # service_registry = "0x0000000000000000000000000000000000000000"
@@ -127,7 +122,8 @@ logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz"
 enable_safe_indexing = false
 
 # Enable note/nullifier indexing from the configured Curvy Aggregator.
-# Requires either curvy_aggregator or contracts.curvy_aggregator to be non-zero.
+# Requires curvy_aggregator to be non-zero. The Vault and PortalFactory are
+# resolved from the configured Aggregator before indexing starts.
 enable_curvy_indexing = false
 
 # GraphQL subscription behavior configuration

@@ -347,6 +347,18 @@ node_stake_factory = "0x0000000000000000000000000000000000000000"
 xhopr_token = "0x0000000000000000000000000000000000000000"
 ```
 
+Curvy configuration is independent of the HOPR `[contracts]` override. Set only the Aggregator proxy and enable Curvy indexing; Blokli
+resolves the Vault and PortalFactory from the Aggregator during startup:
+
+```toml
+curvy_aggregator = "0x0000000000000000000000000000000000000000"
+
+[indexer]
+enable_curvy_indexing = true
+```
+
+The equivalent environment variables are `BLOKLI_CURVY_AGGREGATOR` and `BLOKLI_INDEXER_ENABLE_CURVY_INDEXING`.
+
 #### Contract Deployer Environment Variables
 
 These variables configure `blokli-contract-deployer` when it is run directly. Command-line options take precedence.

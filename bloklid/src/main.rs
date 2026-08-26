@@ -278,7 +278,8 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
 
         // Create BlokliChain instance
         let enable_safe_indexing = indexer_config.enable_safe_indexing;
-        let blokli_chain = BlokliChain::new(db, chain_network, contracts, indexer_config, rpc_url)?;
+        let blokli_chain = BlokliChain::new(db, chain_network, contracts, indexer_config, rpc_url).await?;
+        let contracts = blokli_chain.contract_addresses();
 
         // Verify RPC supports required capabilities (debug tracing)
         blokli_chain.verify_rpc_capabilities().await?;

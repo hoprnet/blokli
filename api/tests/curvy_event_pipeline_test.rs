@@ -213,24 +213,35 @@ async fn test_curvy_events_are_indexed_and_streamed() -> anyhow::Result<()> {
         .map(Log::try_from)
         .collect::<Result<Vec<_>, _>>()?;
 
-    let contract_addresses = ContractAddresses {
+    let configured_contract_addresses = ContractAddresses {
         curvy_aggregator: curvy_addresses.aggregator_proxy.to_hopr_address(),
-        curvy_vault: curvy_addresses.vault_proxy.to_hopr_address(),
-        curvy_portal_factory: curvy_addresses.portal_factory.to_hopr_address(),
         ..Default::default()
     };
     let transport = ReqwestTransport::new(anvil.endpoint_url());
     let rpc_client = ClientBuilder::default().transport(transport.clone(), transport.guess_local());
-    let rpc_operations = RpcOperations::new(
+    let mut rpc_operations = RpcOperations::new(
         rpc_client,
         ReqwestClient::new(),
         RpcOperationsConfig {
             chain_id: 31_337,
-            contract_addrs: contract_addresses,
+            contract_addrs: configured_contract_addresses,
             ..Default::default()
         },
         None,
     )?;
+    let contract_addresses = rpc_operations.resolve_curvy_contract_addresses().await?;
+    assert_eq!(
+        contract_addresses.curvy_aggregator,
+        configured_contract_addresses.curvy_aggregator
+    );
+    assert_eq!(
+        contract_addresses.curvy_vault,
+        curvy_addresses.vault_proxy.to_hopr_address()
+    );
+    assert_eq!(
+        contract_addresses.curvy_portal_factory,
+        curvy_addresses.portal_factory.to_hopr_address()
+    );
 
     let db = BlokliDb::new_in_memory().await?;
     chain_info::ActiveModel {

@@ -1,9 +1,10 @@
 # Curvy local contract deployment
 
 Curvy indexing is opt-in through `indexer.enable_curvy_indexing` and requires a
-non-zero Aggregator address. The address can be supplied independently through
-`curvy_aggregator` or together with the Vault and PortalFactory addresses in the
-`[contracts]` override.
+non-zero Aggregator proxy supplied through `curvy_aggregator`. During startup,
+Blokli reads `curvyVault()` and `portalFactory()` from that Aggregator and uses
+the resolved addresses for typed contract reads. Curvy configuration therefore
+does not replace the HOPR addresses resolved for the selected network.
 
 The stock Blokli binary and Anvil image remain HOPR-only. The explicitly named
 Curvy Anvil image compiles the development deployer, deploys both suites, and

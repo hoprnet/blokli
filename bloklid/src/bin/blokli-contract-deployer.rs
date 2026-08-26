@@ -12,8 +12,6 @@ use std::{
     sync::Once,
 };
 
-#[cfg(feature = "curvy-test-deployment")]
-use blokli_chain_types::ContractAddresses as BlokliContractAddresses;
 use clap::Parser;
 #[cfg(feature = "curvy-test-deployment")]
 use curvy_bindings::{CurvyContractAddresses, config::CurvyContractInstances};
@@ -109,7 +107,14 @@ struct ContractsOutput<T> {
     contracts: T,
 }
 
+#[cfg(feature = "curvy-test-deployment")]
 #[derive(Debug, Serialize)]
+struct CurvyContractsOutput<T> {
+    curvy_aggregator: Address,
+    contracts: T,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
 struct DeployedHoprContractAddresses {
     token: Address,
     channels: Address,
@@ -156,20 +161,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let instances =
         ContractInstances::deploy_for_testing(provider.clone(), hopr_deployer_address, common_deployer_address).await?;
     let contracts = ContractAddresses::from(&instances);
+    let deployed_hopr_contracts = DeployedHoprContractAddresses {
+        token: h2a(contracts.token),
+        channels: h2a(contracts.channels),
+        announcements: h2a(contracts.announcements),
+        module_implementation: h2a(contracts.module_implementation),
+        node_safe_migration: h2a(contracts.node_safe_migration),
+        node_safe_registry: h2a(contracts.node_safe_registry),
+        ticket_price_oracle: h2a(contracts.ticket_price_oracle),
+        winning_probability_oracle: h2a(contracts.winning_probability_oracle),
+        node_stake_factory: h2a(contracts.node_stake_factory),
+        xhopr_token: h2a(contracts.xhopr_token),
+        service_registry: h2a(contracts.service_registry),
+    };
     let hopr_output = ContractsOutput {
-        contracts: DeployedHoprContractAddresses {
-            token: h2a(contracts.token),
-            channels: h2a(contracts.channels),
-            announcements: h2a(contracts.announcements),
-            module_implementation: h2a(contracts.module_implementation),
-            node_safe_migration: h2a(contracts.node_safe_migration),
-            node_safe_registry: h2a(contracts.node_safe_registry),
-            ticket_price_oracle: h2a(contracts.ticket_price_oracle),
-            winning_probability_oracle: h2a(contracts.winning_probability_oracle),
-            node_stake_factory: h2a(contracts.node_stake_factory),
-            xhopr_token: h2a(contracts.xhopr_token),
-            service_registry: h2a(contracts.service_registry),
-        },
+        contracts: deployed_hopr_contracts,
     };
 
     // Assign minter role to Anvil account 0
@@ -255,13 +261,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 "registered the HOPR token in the Curvy vault"
             );
             let curvy_contracts = CurvyContractAddresses::from(&curvy_instances);
-            let output = ContractsOutput {
-                contracts: BlokliContractAddresses::new(
-                    &contracts,
-                    h2a(curvy_contracts.aggregator_proxy),
-                    h2a(curvy_contracts.vault_proxy),
-                    h2a(curvy_contracts.portal_factory),
-                ),
+            let output = CurvyContractsOutput {
+                curvy_aggregator: h2a(curvy_contracts.aggregator_proxy),
+                contracts: deployed_hopr_contracts,
             };
             tracing::info!(
                 aggregator = %curvy_contracts.aggregator_proxy,

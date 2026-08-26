@@ -278,7 +278,8 @@ pub struct Config {
     #[serde(default, rename = "contracts")]
     pub contracts_override: Option<ContractAddresses>,
 
-    /// Optional Curvy aggregator proxy address. When omitted, Curvy event indexing is disabled.
+    /// Optional Curvy Aggregator proxy address. The Vault and PortalFactory
+    /// addresses are resolved from this contract during startup.
     /// This overrides the value in `[contracts]` when both are configured.
     #[serde_as(as = "Option<serde_with::DisplayFromStr>")]
     #[serde(default)]
@@ -597,9 +598,6 @@ mod tests {
             winning_probability_oracle = "0x0808080808080808080808080808080808080808"
             node_stake_factory = "0x0909090909090909090909090909090909090909"
             xhopr_token = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-            curvy_aggregator = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-            curvy_vault = "0xcccccccccccccccccccccccccccccccccccccccc"
-            curvy_portal_factory = "0xdddddddddddddddddddddddddddddddddddddddd"
             service_registry = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
         "#;
 
@@ -618,9 +616,9 @@ mod tests {
                 winning_probability_oracle: Address::from([8; 20]),
                 node_stake_factory: Address::from([9; 20]),
                 xhopr_token: Address::from([0xaa; 20]),
-                curvy_aggregator: Address::from([0xbb; 20]),
-                curvy_vault: Address::from([0xcc; 20]),
-                curvy_portal_factory: Address::from([0xdd; 20]),
+                curvy_aggregator: Address::default(),
+                curvy_vault: Address::default(),
+                curvy_portal_factory: Address::default(),
                 service_registry: Address::from([0xee; 20]),
             })
         );
