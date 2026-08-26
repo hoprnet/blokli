@@ -881,12 +881,13 @@ where
         // transaction. This is difficult since currently this would be across databases.
         // Process all logs - events are published internally via IndexerState
         for log in block.logs.clone() {
-            if !logs_handler.should_process_log(&log) {
+            if log.removed || !logs_handler.should_process_log(&log) {
                 debug!(
                     block_id = log.block_number,
                     tx_index = log.tx_index,
                     log_index = %log.log_index,
-                    "skipping log excluded by its contract handler"
+                    removed = log.removed,
+                    "skipping log excluded by the indexer or its contract handler"
                 );
                 if let Err(error) = db.set_log_processed(log).await {
                     error!(block_id, %error, "failed to mark skipped log as processed");
@@ -1501,6 +1502,31 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Default)]
+    struct DispatchTrackingLogHandler {
+        collect_called: Arc<StdAtomicBool>,
+    }
+
+    #[async_trait]
+    impl ChainLogHandler for DispatchTrackingLogHandler {
+        fn contract_addresses(&self) -> Vec<Address> {
+            Vec::new()
+        }
+
+        fn contract_addresses_map(&self) -> Arc<ContractAddresses> {
+            Arc::new(ContractAddresses::default())
+        }
+
+        fn contract_address_topics(&self, _contract: Address) -> Vec<B256> {
+            Vec::new()
+        }
+
+        async fn collect_log_event(&self, _log: SerializableLog, _is_synced: bool) -> crate::errors::Result<()> {
+            self.collect_called.store(true, StdOrdering::SeqCst);
+            Ok(())
+        }
+    }
+
     #[tokio::test]
     async fn test_process_block_marks_rejected_log_processed_without_dispatching() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
@@ -1519,6 +1545,50 @@ mod tests {
         db.store_log(log.clone()).await?;
 
         let result = Indexer::<MockHoprIndexerOps, RejectingLogHandler, BlokliDb>::process_block(
+            &db,
+            &handler,
+            BlockWithLogs {
+                block_id: log.block_number,
+                logs: BTreeSet::from([log.clone()]),
+            },
+            false,
+            false,
+            &IndexerState::default(),
+            false,
+        )
+        .await;
+
+        assert!(result.is_some());
+        assert!(!handler.collect_called.load(StdOrdering::SeqCst));
+        assert_eq!(
+            db.get_log(log.block_number, log.tx_index, log.log_index)
+                .await?
+                .processed,
+            Some(true)
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_block_marks_removed_log_processed_without_dispatching() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let handler = DispatchTrackingLogHandler::default();
+        let log = SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: vec![Hash::create(&[b"my topic"]).into()],
+            data: vec![1, 2, 3],
+            tx_hash: Hash::create(&[b"my tx hash"]).into(),
+            block_hash: Hash::create(&[b"my block hash"]).into(),
+            tx_index: 1,
+            block_number: 100,
+            log_index: 2,
+            removed: true,
+            ..Default::default()
+        };
+        db.store_log(log.clone()).await?;
+
+        let result = Indexer::<MockHoprIndexerOps, DispatchTrackingLogHandler, BlokliDb>::process_block(
             &db,
             &handler,
             BlockWithLogs {

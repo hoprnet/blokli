@@ -48,7 +48,8 @@ pub trait ChainLogHandler {
     /// * `Result<()>` - Success or error
     async fn collect_log_event(&self, log: SerializableLog, is_synced: bool) -> Result<()>;
 
-    /// Returns whether a fetched log should be dispatched to the contract handler.
+    /// Returns whether a fetched, canonical log should be dispatched to the contract handler.
+    /// Removed logs are filtered by the indexer before this hook is called.
     fn should_process_log(&self, _log: &SerializableLog) -> bool {
         true
     }

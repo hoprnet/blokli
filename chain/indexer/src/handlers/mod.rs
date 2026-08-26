@@ -340,10 +340,6 @@ where
         self.addresses.clone()
     }
 
-    fn should_process_log(&self, log: &SerializableLog) -> bool {
-        !(log.removed && log.address == self.addresses.curvy_aggregator)
-    }
-
     /// Map a contract address to its associated event topics.
     ///
     /// Given a contract address managed by this handler, returns the list of event topic hashes
@@ -451,41 +447,11 @@ mod tests {
     use crate::{
         handlers::test_utils::test_helpers::{
             ClonableMockOperations, MockIndexerRpcOperations, SAFE_INSTANCE_ADDR, SELF_CHAIN_ADDRESS, SELF_PRIV_KEY,
-            init_handlers, init_handlers_with_events, test_log,
+            init_handlers_with_events, test_log,
         },
         state::IndexerEvent,
         traits::ChainLogHandler,
     };
-
-    #[tokio::test]
-    async fn test_removed_curvy_logs_are_not_processed() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory().await?;
-        let rpc_operations = ClonableMockOperations {
-            inner: Arc::new(MockIndexerRpcOperations::new()),
-        };
-        let handlers = init_handlers(rpc_operations, db);
-
-        let removed_curvy_log = SerializableLog {
-            address: handlers.addresses.curvy_aggregator,
-            removed: true,
-            ..test_log()
-        };
-        assert!(!handlers.should_process_log(&removed_curvy_log));
-
-        let canonical_curvy_log = SerializableLog {
-            removed: false,
-            ..removed_curvy_log.clone()
-        };
-        assert!(handlers.should_process_log(&canonical_curvy_log));
-
-        let removed_hopr_log = SerializableLog {
-            address: handlers.addresses.channels,
-            ..removed_curvy_log
-        };
-        assert!(handlers.should_process_log(&removed_hopr_log));
-
-        Ok(())
-    }
 
     #[tokio::test]
     async fn test_collect_log_event_publishes_after_transaction_commit() -> anyhow::Result<()> {
