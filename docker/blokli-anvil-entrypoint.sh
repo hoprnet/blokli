@@ -81,6 +81,15 @@ data_directory = "${DATA_DIR}"
 network = "anvil-localhost"
 rpc_url = "${ANVIL_RPC_URL}"
 max_rpc_requests_per_sec = 0
+EOF
+
+# The deployer output contains root-level settings (such as curvy_aggregator)
+# followed by [contracts]. It must be inserted before any other TOML table so
+# those settings remain at the document root.
+cat "${CONTRACTS_PATH}" >>"${CONFIG_PATH}"
+rm -f "${CONTRACTS_PATH}"
+
+cat >>"${CONFIG_PATH}" <<EOF
 
 [database]
 type = "sqlite"
@@ -108,8 +117,5 @@ max_indexer_lag = 10
 timeout = "5s"
 readiness_check_interval = "5s"
 EOF
-
-cat "${CONTRACTS_PATH}" >>"${CONFIG_PATH}"
-rm -f "${CONTRACTS_PATH}"
 
 exec bloklid -c "${CONFIG_PATH}"

@@ -284,6 +284,7 @@ where
             provider.clone(),
             AlloyAddress::ZERO, // _moduleSingletonAddress - use zero for testing
             AlloyAddress::from(announcements.address().as_ref()),
+            AlloyAddress::ZERO, // _serviceRegistryAddress - deployed later to preserve deterministic addresses
             self_address,
         )
         .await?;
