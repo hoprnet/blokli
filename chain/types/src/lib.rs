@@ -240,10 +240,27 @@ where
 
         let safe_registry = HoprNodeSafeRegistry::deploy(provider.clone()).await?;
         let announcements = HoprAnnouncements::deploy(provider.clone()).await?;
+        let token = HoprToken::deploy(provider.clone()).await?;
+
+        // NOTE: `HoprNodeStakeFactory::deploy` now requires the service registry address as a
+        // constructor argument, so the registry must be deployed before the stake factory. This
+        // matches the order used by `DeployAll.s.sol` and `hopr-bindings`' own testing deploy.
+        let service_registry = HoprServiceRegistry::deploy(
+            provider.clone(),
+            *token.address(),
+            *safe_registry.address(),
+            INIT_ADMIN_DELAY,
+            self_address,
+            self_address,
+            INIT_TYPE_REGISTRATION_FEE,
+        )
+        .await?;
+
         let stake_factory = HoprNodeStakeFactory::deploy(
             provider.clone(),
             AlloyAddress::ZERO, // _moduleSingletonAddress - use zero for testing
             AlloyAddress::from(announcements.address().as_ref()),
+            AlloyAddress::from(service_registry.address().as_ref()),
             self_address,
         )
         .await?;
@@ -260,7 +277,6 @@ where
                                               * decimal values */
         )
         .await?;
-        let token = HoprToken::deploy(provider.clone()).await?;
         // Deploy a distinct xHOPR token (ERC677) so its balance is independent of wxHOPR, and
         // seed the deployer with a recognisably different amount for balance assertions in tests.
         let xhopr_token = ERC677Mock::deploy(provider.clone()).await?;
@@ -282,21 +298,6 @@ where
         // For testing purposes, we create a minimal instance with zero address that won't be used in actual tests.
         // In production, these addresses are loaded from hopr-bindings network configuration.
         let node_safe_migration = HoprNodeSafeMigrationInstance::new(AlloyAddress::ZERO, provider.clone());
-
-        // CAUTION: the service registry must stay LAST. Deploy addresses are nonce-derived
-        // CREATE, so a deployment in any other position churns every `anvil-localhost` address
-        // that follows it. `DeployAll.s.sol` and `hopr-bindings`' own testing deploy both put the
-        // registry after everything that came before it.
-        let service_registry = HoprServiceRegistry::deploy(
-            provider.clone(),
-            *token.address(),
-            *safe_registry.address(),
-            INIT_ADMIN_DELAY,
-            self_address,
-            self_address,
-            INIT_TYPE_REGISTRATION_FEE,
-        )
-        .await?;
 
         Ok(Self {
             token,

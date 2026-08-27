@@ -56,9 +56,8 @@ futures-timer = "3.0.4"
 futures-util = "0.3.32"
 hex = "0.4.3"
 hex-literal = "1.1.0"
-hopli = { git = "https://github.com/hoprnet/hopli", rev = "5728402bfc0edae8e69e8adc8878ec34ccddd34f" }
-hopr-bindings = { git = "https://github.com/hoprnet/contracts", rev = "ee2ab3ab6524a764de0c58543ba2c68d1f75ad9c" }
-hopr-types = { git = "https://github.com/hoprnet/hopr-types", rev = "fbbb743010a858bc2fa8c79e6140b8aa0c09a19a" }
+hopr-bindings = { version = "5.0.0" }
+hopr-types = { version = "4.0.0" }
 http = "1.4.2"
 humantime-serde = "1.1.1"
 insta = { version = "1.47.2", features = ["yaml"] }

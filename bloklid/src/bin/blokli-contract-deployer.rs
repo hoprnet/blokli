@@ -3,9 +3,8 @@ use std::{
     sync::Once,
 };
 
-use blokli_chain_types::ContractAddresses as BlokliContractAddresses;
+use blokli_chain_types::{AlloyAddressExt, ContractAddresses as BlokliContractAddresses};
 use clap::Parser;
-use hopli_lib::utils::h2a;
 use hopr_bindings::{
     config::ContractInstances,
     exports::alloy::{
@@ -105,17 +104,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let contracts = ContractAddresses::from(&instances);
     let output = ContractsOutput {
         contracts: BlokliContractAddresses {
-            token: h2a(contracts.token),
-            channels: h2a(contracts.channels),
-            announcements: h2a(contracts.announcements),
-            module_implementation: h2a(contracts.module_implementation),
-            node_safe_migration: h2a(contracts.node_safe_migration),
-            node_safe_registry: h2a(contracts.node_safe_registry),
-            ticket_price_oracle: h2a(contracts.ticket_price_oracle),
-            winning_probability_oracle: h2a(contracts.winning_probability_oracle),
-            node_stake_factory: h2a(contracts.node_stake_factory),
-            xhopr_token: h2a(contracts.xhopr_token),
-            service_registry: h2a(contracts.service_registry),
+            token: contracts.token.to_hopr_address(),
+            channels: contracts.channels.to_hopr_address(),
+            announcements: contracts.announcements.to_hopr_address(),
+            module_implementation: contracts.module_implementation.to_hopr_address(),
+            node_safe_migration: contracts.node_safe_migration.to_hopr_address(),
+            node_safe_registry: contracts.node_safe_registry.to_hopr_address(),
+            ticket_price_oracle: contracts.ticket_price_oracle.to_hopr_address(),
+            winning_probability_oracle: contracts.winning_probability_oracle.to_hopr_address(),
+            node_stake_factory: contracts.node_stake_factory.to_hopr_address(),
+            xhopr_token: contracts.xhopr_token.to_hopr_address(),
+            service_registry: contracts.service_registry.to_hopr_address(),
         },
     };
     let toml_output = toml::to_string(&output)?;
