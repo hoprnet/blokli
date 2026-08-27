@@ -33,6 +33,7 @@ use hopr_types::{
     primitive::{prelude::HoprBalance, primitives::Address, traits::IntoEndian},
 };
 use serde::Serialize;
+use serde_with::{DisplayFromStr, serde_as};
 use tempfile::NamedTempFile;
 use tracing_subscriber::{Layer as _, prelude::*};
 use url::Url;
@@ -108,24 +109,38 @@ struct ContractsOutput<T> {
 }
 
 #[cfg(feature = "curvy-test-deployment")]
+#[serde_as]
 #[derive(Debug, Serialize)]
 struct CurvyContractsOutput<T> {
+    #[serde_as(as = "DisplayFromStr")]
     curvy_aggregator: Address,
     contracts: T,
 }
 
+#[serde_as]
 #[derive(Clone, Copy, Debug, Serialize)]
 struct DeployedHoprContractAddresses {
+    #[serde_as(as = "DisplayFromStr")]
     token: Address,
+    #[serde_as(as = "DisplayFromStr")]
     channels: Address,
+    #[serde_as(as = "DisplayFromStr")]
     announcements: Address,
+    #[serde_as(as = "DisplayFromStr")]
     module_implementation: Address,
+    #[serde_as(as = "DisplayFromStr")]
     node_safe_migration: Address,
+    #[serde_as(as = "DisplayFromStr")]
     node_safe_registry: Address,
+    #[serde_as(as = "DisplayFromStr")]
     ticket_price_oracle: Address,
+    #[serde_as(as = "DisplayFromStr")]
     winning_probability_oracle: Address,
+    #[serde_as(as = "DisplayFromStr")]
     node_stake_factory: Address,
+    #[serde_as(as = "DisplayFromStr")]
     xhopr_token: Address,
+    #[serde_as(as = "DisplayFromStr")]
     service_registry: Address,
 }
 
@@ -431,12 +446,36 @@ mod tests {
     use std::os::unix::fs::PermissionsExt as _;
     use std::{any::Any, fs};
 
-    use anyhow::Result;
+    use anyhow::{Result, anyhow};
     use clap::Parser;
-    use hopr_types::{internal::prelude::WinningProbability, primitive::traits::IntoEndian};
+    use hopr_types::{
+        internal::prelude::WinningProbability,
+        primitive::{primitives::Address, traits::IntoEndian},
+    };
     use tempfile::tempdir;
+    use toml::Value;
 
-    use super::{Args, atomic_write, panic_payload_to_str, validate_args};
+    #[cfg(feature = "curvy-test-deployment")]
+    use super::CurvyContractsOutput;
+    use super::{
+        Args, ContractsOutput, DeployedHoprContractAddresses, atomic_write, panic_payload_to_str, validate_args,
+    };
+
+    fn deployed_contracts(address: Address) -> DeployedHoprContractAddresses {
+        DeployedHoprContractAddresses {
+            token: address,
+            channels: address,
+            announcements: address,
+            module_implementation: address,
+            node_safe_migration: address,
+            node_safe_registry: address,
+            ticket_price_oracle: address,
+            winning_probability_oracle: address,
+            node_stake_factory: address,
+            xhopr_token: address,
+            service_registry: address,
+        }
+    }
 
     #[test]
     fn test_panic_payload_to_str_from_str() {
@@ -515,6 +554,39 @@ mod tests {
     fn feature_on_binary_accepts_curvy() -> Result<()> {
         let args = Args::try_parse_from(["blokli-contract-deployer", "--with-curvy"])?;
         validate_args(&args)?;
+        Ok(())
+    }
+
+    #[test]
+    fn deployment_addresses_are_serialized_as_strings() -> Result<()> {
+        let address = Address::from([0x11; 20]);
+        let output = ContractsOutput {
+            contracts: deployed_contracts(address),
+        };
+
+        let serialized = toml::to_string(&output)?;
+        let value = toml::from_str::<Value>(&serialized)?;
+        let contracts = value
+            .get("contracts")
+            .and_then(Value::as_table)
+            .ok_or_else(|| anyhow!("serialized output is missing the contracts table"))?;
+
+        assert!(contracts.values().all(|value| value.as_str().is_some()));
+        Ok(())
+    }
+
+    #[cfg(feature = "curvy-test-deployment")]
+    #[test]
+    fn curvy_aggregator_is_serialized_as_a_string() -> Result<()> {
+        let output = CurvyContractsOutput {
+            curvy_aggregator: Address::from([0x22; 20]),
+            contracts: deployed_contracts(Address::from([0x11; 20])),
+        };
+
+        let serialized = toml::to_string(&output)?;
+        let value = toml::from_str::<Value>(&serialized)?;
+
+        assert!(value.get("curvy_aggregator").and_then(Value::as_str).is_some());
         Ok(())
     }
 
