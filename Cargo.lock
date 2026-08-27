@@ -738,13 +738,10 @@ dependencies = [
  "alloy-json-rpc",
  "alloy-transport",
  "itertools 0.14.0",
- "opentelemetry 0.31.0",
- "opentelemetry-http 0.31.0",
  "reqwest",
  "serde_json",
  "tower",
  "tracing",
- "tracing-opentelemetry 0.32.1",
  "url",
 ]
 
@@ -1943,8 +1940,8 @@ dependencies = [
  "env_logger",
  "futures",
  "hex",
- "hopr-bindings 5.0.0",
- "hopr-types 4.0.0",
+ "hopr-bindings",
+ "hopr-types",
  "humantime-serde",
  "insta",
  "lazy_static",
@@ -1978,7 +1975,7 @@ dependencies = [
  "async-graphql",
  "blokli-chain-types",
  "chrono",
- "hopr-types 4.0.0",
+ "hopr-types",
  "serde",
  "serde_json",
 ]
@@ -2000,8 +1997,8 @@ dependencies = [
  "env_logger",
  "futures",
  "hex",
- "hopr-bindings 5.0.0",
- "hopr-types 4.0.0",
+ "hopr-bindings",
+ "hopr-types",
  "insta",
  "lazy_static",
  "rand 0.10.2",
@@ -2034,8 +2031,8 @@ dependencies = [
  "futures",
  "futures-util",
  "hex-literal",
- "hopr-bindings 5.0.0",
- "hopr-types 4.0.0",
+ "hopr-bindings",
+ "hopr-types",
  "insta",
  "lazy_static",
  "mockall",
@@ -2065,8 +2062,8 @@ dependencies = [
  "futures",
  "futures-timer",
  "hex-literal",
- "hopr-bindings 5.0.0",
- "hopr-types 4.0.0",
+ "hopr-bindings",
+ "hopr-types",
  "http",
  "lazy_static",
  "mockall",
@@ -2095,8 +2092,8 @@ name = "blokli-chain-types"
 version = "0.4.0"
 dependencies = [
  "hex-literal",
- "hopr-bindings 5.0.0",
- "hopr-types 4.0.0",
+ "hopr-bindings",
+ "hopr-types",
  "lazy_static",
  "libp2p-identity",
  "multiaddr",
@@ -2120,7 +2117,7 @@ dependencies = [
  "futures",
  "hex",
  "hex-literal",
- "hopr-types 4.0.0",
+ "hopr-types",
  "lazy_static",
  "multiaddr",
  "rand 0.10.2",
@@ -2147,7 +2144,7 @@ dependencies = [
  "clap",
  "futures",
  "hex",
- "hopr-types 4.0.0",
+ "hopr-types",
  "sea-orm",
  "sea-orm-cli",
  "sea-orm-migration",
@@ -2159,7 +2156,7 @@ dependencies = [
 name = "blokli-db-migration"
 version = "0.13.0"
 dependencies = [
- "hopr-types 4.0.0",
+ "hopr-types",
  "sea-orm",
  "sea-orm-migration",
  "tokio",
@@ -2173,8 +2170,8 @@ dependencies = [
  "blokli-chain-types",
  "clap",
  "hex",
- "hopr-bindings 5.0.0",
- "hopr-types 4.0.0",
+ "hopr-bindings",
+ "hopr-types",
 ]
 
 [[package]]
@@ -2195,11 +2192,10 @@ dependencies = [
  "config",
  "flagset",
  "futures",
- "hopli",
- "hopr-bindings 5.0.0",
- "hopr-types 4.0.0",
+ "hopr-bindings",
+ "hopr-types",
  "humantime-serde",
- "opentelemetry 0.32.0",
+ "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry-prometheus-text-exporter",
  "opentelemetry_sdk",
@@ -2214,7 +2210,7 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
- "tracing-opentelemetry 0.33.0",
+ "tracing-opentelemetry",
  "tracing-subscriber",
  "url",
  "validator",
@@ -4055,47 +4051,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hopli"
-version = "0.19.0"
-source = "git+https://github.com/hoprnet/hopli?rev=5728402bfc0edae8e69e8adc8878ec34ccddd34f#5728402bfc0edae8e69e8adc8878ec34ccddd34f"
-dependencies = [
- "alloy-transport-http",
- "anyhow",
- "clap",
- "hex",
- "hex-literal",
- "hopr-bindings 4.14.0",
- "hopr-types 2.4.0",
- "lazy_static",
- "rpassword",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "hopr-bindings"
-version = "4.14.0"
-source = "git+https://github.com/hoprnet/contracts?rev=ee2ab3ab6524a764de0c58543ba2c68d1f75ad9c#ee2ab3ab6524a764de0c58543ba2c68d1f75ad9c"
-dependencies = [
- "alloy",
- "anyhow",
- "const_format",
- "hex-literal",
- "serde",
- "serde_json",
- "serde_with",
- "thiserror",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "hopr-bindings"
 version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4111,66 +4066,6 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "hopr-types"
-version = "2.4.0"
-source = "git+https://github.com/hoprnet/hopr-types?rev=fbbb743010a858bc2fa8c79e6140b8aa0c09a19a#fbbb743010a858bc2fa8c79e6140b8aa0c09a19a"
-dependencies = [
- "aes",
- "anyhow",
- "aquamarine",
- "ark-bn254 0.6.0",
- "ark-ec 0.6.0",
- "ark-ff 0.6.0",
- "ark-serialize 0.6.0",
- "arrayvec",
- "async-trait",
- "babyjubjub-ec",
- "bigdecimal",
- "blake3",
- "chacha20",
- "chrono",
- "cipher",
- "const-hex",
- "ctr",
- "curve25519-dalek 5.0.0",
- "digest 0.11.3",
- "ed25519-dalek 3.0.0",
- "elliptic-curve 0.14.1",
- "float-cmp",
- "hash2curve",
- "hex-literal",
- "hopr-bindings 4.14.0",
- "hybrid-array",
- "k256 0.14.0",
- "lazy_static",
- "libp2p-identity",
- "multiaddr",
- "num_enum",
- "poly1305",
- "primitive-types 0.14.0",
- "rand 0.10.2",
- "rayon",
- "regex",
- "rlp 0.6.1",
- "scrypt",
- "secp256k1 0.31.1",
- "serde",
- "serde_bytes",
- "serde_json",
- "serde_with",
- "sha2 0.11.0",
- "sha3 0.12.0",
- "smart-default",
- "strum 0.28.0",
- "subtle",
- "thiserror",
- "tracing",
- "typenum",
- "uuid",
- "zeroize",
 ]
 
 [[package]]
@@ -4203,14 +4098,14 @@ dependencies = [
  "float-cmp",
  "hash2curve",
  "hex-literal",
- "hopr-bindings 5.0.0",
+ "hopr-bindings",
  "hybrid-array",
  "k256 0.14.0",
  "lazy_static",
  "libp2p-identity",
  "multiaddr",
  "num_enum",
- "opentelemetry 0.32.0",
+ "opentelemetry",
  "opentelemetry-prometheus-text-exporter",
  "opentelemetry_sdk",
  "poly1305",
@@ -5456,20 +5351,6 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
 name = "opentelemetry"
-version = "0.31.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b84bcd6ae87133e903af7ef497404dda70c60d0ea14895fc8a5e6722754fc2a0"
-dependencies = [
- "futures-core",
- "futures-sink",
- "js-sys",
- "pin-project-lite",
- "thiserror",
- "tracing",
-]
-
-[[package]]
-name = "opentelemetry"
 version = "0.32.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b0142c63252a9e054e68a4c61a5778f7b14f576274d593f8ce883d191a099682"
@@ -5484,18 +5365,6 @@ dependencies = [
 
 [[package]]
 name = "opentelemetry-http"
-version = "0.31.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7a6d09a73194e6b66df7c8f1b680f156d916a1a942abf2de06823dd02b7855d"
-dependencies = [
- "async-trait",
- "bytes",
- "http",
- "opentelemetry 0.31.0",
-]
-
-[[package]]
-name = "opentelemetry-http"
 version = "0.32.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5683015d09e2df236ef005b17f6f196f0d5f6313c4fa43a7b6a53b52776e4331"
@@ -5503,7 +5372,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "http",
- "opentelemetry 0.32.0",
+ "opentelemetry",
  "reqwest",
 ]
 
@@ -5514,8 +5383,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9966929966d17620d7c316c643ba62631826e10021409357772d5eea84f62c35"
 dependencies = [
  "http",
- "opentelemetry 0.32.0",
- "opentelemetry-http 0.32.0",
+ "opentelemetry",
+ "opentelemetry-http",
  "opentelemetry-proto",
  "opentelemetry_sdk",
  "prost",
@@ -5533,7 +5402,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4fe57ea90b12f643a366aa7c4fa5cfb54bd1cf252f55368337e40534b278a68"
 dependencies = [
- "opentelemetry 0.32.0",
+ "opentelemetry",
  "opentelemetry_sdk",
  "smartstring",
 ]
@@ -5546,7 +5415,7 @@ checksum = "56d658ba1faf63f7b9c492cfbe6e0ec365440a16132d3270c1065f7b33f1b638"
 dependencies = [
  "base64",
  "const-hex",
- "opentelemetry 0.32.0",
+ "opentelemetry",
  "opentelemetry_sdk",
  "prost",
  "serde",
@@ -5563,7 +5432,7 @@ dependencies = [
  "futures-channel",
  "futures-executor",
  "futures-util",
- "opentelemetry 0.32.0",
+ "opentelemetry",
  "percent-encoding",
  "portable-atomic",
  "rand 0.9.5",
@@ -5673,15 +5542,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "password-hash"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aab41826031698d6ffcd9cff78ef56ef998e39dc7e5067cdfebe373842d4723b"
-dependencies = [
- "phc",
-]
-
-[[package]]
 name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5692,16 +5552,6 @@ name = "pathdiff"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
-
-[[package]]
-name = "pbkdf2"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "112d82ceb8c5bf524d9af484d4e4970c9fd5a0cc15ba14ad93dccd28873b0629"
-dependencies = [
- "digest 0.11.3",
- "hmac 0.13.0",
-]
 
 [[package]]
 name = "pem-rfc7468"
@@ -5767,16 +5617,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3673cba5b9a124916096a423b806a9f29620972c6c97b08db5f2053e9428b481"
 dependencies = [
  "serde",
-]
-
-[[package]]
-name = "phc"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44dc769b75f93afdddd8c7fa12d685292ddeff1e66f7f0f3a234cf1818afe892"
-dependencies = [
- "base64ct",
- "ctutils",
 ]
 
 [[package]]
@@ -6588,17 +6428,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rpassword"
-version = "7.5.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2da316a15f47e3d053de9cb2c439650bd8fa4aaeb9365f2e5f27f492ff73c196"
-dependencies = [
- "libc",
- "rtoolbox",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "rstest"
 version = "0.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6625,16 +6454,6 @@ dependencies = [
  "rustc_version 0.4.1",
  "syn 2.0.119",
  "unicode-ident",
-]
-
-[[package]]
-name = "rtoolbox"
-version = "0.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "50a0e551c1e27e1731aba276dbeaeac73f53c7cd34d1bda485d02bd1e0f36844"
-dependencies = [
- "libc",
- "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6842,16 +6661,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
-name = "salsa20"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f874456e72520ff1375a06c588eaf074b0f01f9e9e1aada45bd9b7954a6e42c"
-dependencies = [
- "cfg-if",
- "cipher",
-]
-
-[[package]]
 name = "same-file"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6898,19 +6707,6 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
-
-[[package]]
-name = "scrypt"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d87af57419b594aa23fa95f09f0e06d80d84ba01c26148c43844cad6ff4485f0"
-dependencies = [
- "cfg-if",
- "password-hash",
- "pbkdf2",
- "salsa20",
- "sha2 0.11.0",
-]
 
 [[package]]
 name = "sea-bae"
@@ -8471,28 +8267,12 @@ dependencies = [
 
 [[package]]
 name = "tracing-opentelemetry"
-version = "0.32.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ac28f2d093c6c477eaa76b23525478f38de514fa9aeb1285738d4b97a9552fc"
-dependencies = [
- "js-sys",
- "opentelemetry 0.31.0",
- "smallvec",
- "tracing",
- "tracing-core",
- "tracing-log",
- "tracing-subscriber",
- "web-time",
-]
-
-[[package]]
-name = "tracing-opentelemetry"
 version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "adbc64cba7137545b8044cb1fe9814f7aacf3c6b5f9b45be8bb5db538befdb26"
 dependencies = [
  "js-sys",
- "opentelemetry 0.32.0",
+ "opentelemetry",
  "smallvec",
  "tracing",
  "tracing-core",
@@ -9062,15 +8842,6 @@ name = "windows-sys"
 version = "0.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
-dependencies = [
- "windows-targets",
-]
-
-[[package]]
-name = "windows-sys"
-version = "0.59.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
 dependencies = [
  "windows-targets",
 ]
