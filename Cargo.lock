@@ -2911,9 +2911,9 @@ dependencies = [
 
 [[package]]
 name = "curvy-bindings"
-version = "1.0.0-rc-1"
+version = "0.1.0-rc.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "17072d890f37cafa605470488075155c7942be71988fcc157754313a7436c62e"
+checksum = "372a02d382ff9d8ec31e1063b83e416b18fb58a1952ed858e1fc7602227f094d"
 dependencies = [
  "alloy",
  "anyhow",
@@ -4137,8 +4137,8 @@ dependencies = [
 
 [[package]]
 name = "hopli"
-version = "0.19.0"
-source = "git+https://github.com/hoprnet/hopli?rev=5728402bfc0edae8e69e8adc8878ec34ccddd34f#5728402bfc0edae8e69e8adc8878ec34ccddd34f"
+version = "0.20.1"
+source = "git+https://github.com/hoprnet/hopli?branch=main#6ba76de4166f46a0e00c3fc944d18745966bf281"
 dependencies = [
  "alloy-transport-http",
  "anyhow",
@@ -4161,8 +4161,9 @@ dependencies = [
 
 [[package]]
 name = "hopr-bindings"
-version = "4.14.0"
-source = "git+https://github.com/hoprnet/contracts?rev=ee2ab3ab6524a764de0c58543ba2c68d1f75ad9c#ee2ab3ab6524a764de0c58543ba2c68d1f75ad9c"
+version = "5.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13cb248171e67e6bf5891c2e60e5a02389ba3121da8a1aa77b3f435e75c6099f"
 dependencies = [
  "alloy",
  "anyhow",
@@ -4178,8 +4179,9 @@ dependencies = [
 
 [[package]]
 name = "hopr-types"
-version = "2.4.0"
-source = "git+https://github.com/hoprnet/hopr-types?rev=fbbb743010a858bc2fa8c79e6140b8aa0c09a19a#fbbb743010a858bc2fa8c79e6140b8aa0c09a19a"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6994bdc05812ab588d3fa970c1df9a7bea3d8808907baf30c0596a54b84458f3"
 dependencies = [
  "aes",
  "anyhow",
