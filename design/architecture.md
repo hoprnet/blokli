@@ -1515,10 +1515,7 @@ by the readiness checks.
 
 ## Local Contract Deployment Variants
 
-The standard local Anvil image deploys and indexes only the HOPR contract suite. An explicitly named Curvy development variant compiles an
-optional deployment dependency and deploys Curvy on the same chain with the same signer after HOPR deployment. Within that variant, Curvy
-deployment and indexing are inseparable: deploying the suite without indexing its events would surface much later as a consumer-side
-notes-root mismatch. The production binary remains HOPR-only.
+The local Anvil image can optionally deploy the Curvy contract suite (controlled by `BLOKLI_DEPLOY_CURVY`). When Curvy is enabled, deployment and indexing are inseparable: deploying the suite without indexing its events would surface much later as a consumer-side notes-root mismatch. The production binary remains HOPR-only.
 
 The deployment artifact and generated Blokli configuration include the Curvy Aggregator, Vault, and PortalFactory addresses. The local HOPR
 token is registered in the Curvy Vault after the development assets. The configured Aggregator extends the indexer's address/topic filter
