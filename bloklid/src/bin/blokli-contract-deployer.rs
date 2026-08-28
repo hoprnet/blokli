@@ -1,16 +1,27 @@
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
-    any::Any, backtrace::Backtrace, borrow::Cow, error::Error, fs, io::stdout, panic, path::PathBuf, str::FromStr,
+    any::Any,
+    backtrace::Backtrace,
+    borrow::Cow,
+    error::Error,
+    io::{self, Write, stdout},
+    panic,
+    path::{Component, Path, PathBuf},
+    str::FromStr,
     sync::Once,
 };
 
-use blokli_chain_types::{AlloyAddressExt, ContractAddresses as BlokliContractAddresses};
+use blokli_chain_types::AlloyAddressExt;
 use clap::Parser;
+#[cfg(feature = "curvy-test-deployment")]
+use curvy_bindings::{CurvyContractAddresses, config::CurvyContractInstances};
 use hopr_bindings::{
     config::ContractInstances,
     exports::alloy::{
         network::EthereumWallet,
         primitives::{U256, aliases::U56},
-        providers::ProviderBuilder,
+        providers::{Provider, ProviderBuilder},
         rpc::client::ClientBuilder,
         signers::local::PrivateKeySigner,
     },
@@ -19,9 +30,11 @@ use hopr_bindings::{
 use hopr_types::{
     chain::ContractAddresses,
     internal::prelude::WinningProbability,
-    primitive::{prelude::HoprBalance, traits::IntoEndian},
+    primitive::{prelude::HoprBalance, primitives::Address, traits::IntoEndian},
 };
 use serde::Serialize;
+use serde_with::{DisplayFromStr, serde_as};
+use tempfile::NamedTempFile;
 use tracing_subscriber::{Layer as _, prelude::*};
 use url::Url;
 
@@ -29,6 +42,7 @@ const DEFAULT_ANVIL_HOPR_DEPLOYER_PRIVATE_KEY: &str =
     "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 const DEFAULT_ANVIL_COMMON_DEPLOYER_PRIVATE_KEY: &str =
     "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
+const ANVIL_CHAIN_ID: u64 = 31_337;
 static PANIC_HOOK_INSTALLED: Once = Once::new();
 
 #[derive(Debug, Parser)]
@@ -75,11 +89,59 @@ struct Args {
     /// Optional output path for TOML configuration
     #[arg(long)]
     output: Option<PathBuf>,
+
+    /// Also deploy the Curvy v2 local-development contract suite
+    #[arg(long, default_value_t = false)]
+    with_curvy: bool,
+
+    /// Curvy Ignition-compatible address JSON output path
+    #[arg(long)]
+    curvy_json_out: Option<PathBuf>,
+
+    /// Allow Curvy deployment outside Anvil's default chain ID
+    #[arg(long, env = "BLOKLI_DEPLOYER_ALLOW_UNSAFE_CHAIN", default_value_t = false)]
+    allow_unsafe_chain: bool,
 }
 
 #[derive(Debug, Serialize)]
-struct ContractsOutput {
-    contracts: BlokliContractAddresses,
+struct ContractsOutput<T> {
+    contracts: T,
+}
+
+#[cfg(feature = "curvy-test-deployment")]
+#[serde_as]
+#[derive(Debug, Serialize)]
+struct CurvyContractsOutput<T> {
+    #[serde_as(as = "DisplayFromStr")]
+    curvy_aggregator: Address,
+    contracts: T,
+}
+
+#[serde_as]
+#[derive(Clone, Copy, Debug, Serialize)]
+struct DeployedHoprContractAddresses {
+    #[serde_as(as = "DisplayFromStr")]
+    token: Address,
+    #[serde_as(as = "DisplayFromStr")]
+    channels: Address,
+    #[serde_as(as = "DisplayFromStr")]
+    announcements: Address,
+    #[serde_as(as = "DisplayFromStr")]
+    module_implementation: Address,
+    #[serde_as(as = "DisplayFromStr")]
+    node_safe_migration: Address,
+    #[serde_as(as = "DisplayFromStr")]
+    node_safe_registry: Address,
+    #[serde_as(as = "DisplayFromStr")]
+    ticket_price_oracle: Address,
+    #[serde_as(as = "DisplayFromStr")]
+    winning_probability_oracle: Address,
+    #[serde_as(as = "DisplayFromStr")]
+    node_stake_factory: Address,
+    #[serde_as(as = "DisplayFromStr")]
+    xhopr_token: Address,
+    #[serde_as(as = "DisplayFromStr")]
+    service_registry: Address,
 }
 
 #[tokio::main]
@@ -87,6 +149,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     install_tracing()?;
 
     let args = Args::parse();
+    validate_args(&args)?;
 
     let common_deployer_signer = PrivateKeySigner::from_str(&args.common_private_key)?;
     let hopr_deployer_signer = PrivateKeySigner::from_str(&args.private_key)?;
@@ -98,26 +161,37 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let rpc_url = Url::parse(&args.rpc_url)?;
     let rpc_client = ClientBuilder::default().http(rpc_url);
     let provider = ProviderBuilder::new().wallet(wallet).connect_client(rpc_client);
+    let chain_id = provider.get_chain_id().await?;
+    if args.with_curvy && chain_id != ANVIL_CHAIN_ID && !args.allow_unsafe_chain {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "refusing local-development deployment on chain {chain_id}; expected {ANVIL_CHAIN_ID} (use \
+                 --allow-unsafe-chain to override)"
+            ),
+        )
+        .into());
+    }
 
     let instances =
-        ContractInstances::deploy_for_testing(provider, hopr_deployer_address, common_deployer_address).await?;
+        ContractInstances::deploy_for_testing(provider.clone(), hopr_deployer_address, common_deployer_address).await?;
     let contracts = ContractAddresses::from(&instances);
-    let output = ContractsOutput {
-        contracts: BlokliContractAddresses {
-            token: contracts.token.to_hopr_address(),
-            channels: contracts.channels.to_hopr_address(),
-            announcements: contracts.announcements.to_hopr_address(),
-            module_implementation: contracts.module_implementation.to_hopr_address(),
-            node_safe_migration: contracts.node_safe_migration.to_hopr_address(),
-            node_safe_registry: contracts.node_safe_registry.to_hopr_address(),
-            ticket_price_oracle: contracts.ticket_price_oracle.to_hopr_address(),
-            winning_probability_oracle: contracts.winning_probability_oracle.to_hopr_address(),
-            node_stake_factory: contracts.node_stake_factory.to_hopr_address(),
-            xhopr_token: contracts.xhopr_token.to_hopr_address(),
-            service_registry: contracts.service_registry.to_hopr_address(),
-        },
+    let deployed_hopr_contracts = DeployedHoprContractAddresses {
+        token: contracts.token.to_hopr_address(),
+        channels: contracts.channels.to_hopr_address(),
+        announcements: contracts.announcements.to_hopr_address(),
+        module_implementation: contracts.module_implementation.to_hopr_address(),
+        node_safe_migration: contracts.node_safe_migration.to_hopr_address(),
+        node_safe_registry: contracts.node_safe_registry.to_hopr_address(),
+        ticket_price_oracle: contracts.ticket_price_oracle.to_hopr_address(),
+        winning_probability_oracle: contracts.winning_probability_oracle.to_hopr_address(),
+        node_stake_factory: contracts.node_stake_factory.to_hopr_address(),
+        xhopr_token: contracts.xhopr_token.to_hopr_address(),
+        service_registry: contracts.service_registry.to_hopr_address(),
     };
-    let toml_output = toml::to_string(&output)?;
+    let hopr_output = ContractsOutput {
+        contracts: deployed_hopr_contracts,
+    };
 
     // Assign minter role to Anvil account 0
     let minter_role = instances.token.MINTER_ROLE().call().await?;
@@ -183,12 +257,124 @@ async fn main() -> Result<(), Box<dyn Error>> {
         args.winning_probability.as_f64()
     );
 
-    if let Some(path) = args.output {
-        fs::write(path, toml_output)?;
+    let (curvy_json, toml_output): (Option<String>, String) = if args.with_curvy {
+        #[cfg(feature = "curvy-test-deployment")]
+        {
+            tracing::info!("deploying Curvy v2 local-development contracts");
+            let curvy_instances = CurvyContractInstances::deploy_for_testing(provider, hopr_deployer_address).await?;
+            let hopr_token_id = curvy_instances.vault.getNumberOfTokens().call().await? + U256::ONE;
+            curvy_instances
+                .vault
+                .registerToken(*instances.token.address())
+                .send()
+                .await?
+                .watch()
+                .await?;
+            tracing::info!(
+                token = %instances.token.address(),
+                token_id = %hopr_token_id,
+                "registered the HOPR token in the Curvy vault"
+            );
+            let curvy_contracts = CurvyContractAddresses::from(&curvy_instances);
+            let output = CurvyContractsOutput {
+                curvy_aggregator: curvy_contracts.aggregator_proxy.to_hopr_address(),
+                contracts: deployed_hopr_contracts,
+            };
+            tracing::info!(
+                aggregator = %curvy_contracts.aggregator_proxy,
+                vault = %curvy_contracts.vault_proxy,
+                portal_factory = %curvy_contracts.portal_factory,
+                "Curvy contracts ready"
+            );
+            (
+                Some(format!(
+                    "{}\n",
+                    serde_json::to_string_pretty(&curvy_contracts.to_ignition_json())?
+                )),
+                toml::to_string(&output)?,
+            )
+        }
+        #[cfg(not(feature = "curvy-test-deployment"))]
+        unreachable!("validate_args rejects Curvy without compiled support")
+    } else {
+        (None, toml::to_string(&hopr_output)?)
+    };
+
+    // Publish outputs only after every requested deployment and serialization succeeds.
+    if let Some(path) = args.output.as_deref() {
+        atomic_write(path, toml_output.as_bytes())?;
+        tracing::info!(path = %path.display(), "wrote HOPR contract configuration");
     } else {
         print!("{toml_output}");
     }
+    if let (Some(path), Some(json)) = (args.curvy_json_out.as_deref(), curvy_json.as_deref()) {
+        atomic_write(path, json.as_bytes())?;
+        tracing::info!(path = %path.display(), "wrote Curvy contract addresses");
+    }
 
+    Ok(())
+}
+
+fn validate_args(args: &Args) -> io::Result<()> {
+    if args.curvy_json_out.is_some() && !args.with_curvy {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--curvy-json-out requires --with-curvy",
+        ));
+    }
+    if args.with_curvy && args.curvy_json_out.is_none() {
+        tracing::warn!(
+            "--with-curvy without --curvy-json-out: the Ignition address JSON is discarded; only the aggregator, \
+             vault and portal factory addresses are logged"
+        );
+    }
+    if let (Some(hopr), Some(curvy)) = (args.output.as_deref(), args.curvy_json_out.as_deref())
+        && normalize_path(hopr)? == normalize_path(curvy)?
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "HOPR and Curvy output paths must be different",
+        ));
+    }
+    if args.with_curvy && !cfg!(feature = "curvy-test-deployment") {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Curvy deployment requires a binary built with the curvy-test-deployment feature",
+        ));
+    }
+    Ok(())
+}
+
+fn normalize_path(path: &Path) -> io::Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    Ok(normalized)
+}
+
+fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut temporary = NamedTempFile::new_in(parent)?;
+    temporary.write_all(contents)?;
+    #[cfg(unix)]
+    temporary.as_file().set_permissions(PermissionsExt::from_mode(0o644))?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path).map_err(|error| error.error)?;
     Ok(())
 }
 
@@ -256,13 +442,40 @@ fn panic_payload_to_str(payload: &(dyn Any + Send)) -> Cow<'static, str> {
 
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::{any::Any, fs};
 
-    use anyhow::Result;
+    use anyhow::{Result, anyhow};
     use clap::Parser;
-    use hopr_types::{internal::prelude::WinningProbability, primitive::traits::IntoEndian};
+    use hopr_types::{
+        internal::prelude::WinningProbability,
+        primitive::{primitives::Address, traits::IntoEndian},
+    };
+    use tempfile::tempdir;
+    use toml::Value;
 
-    use super::{Args, panic_payload_to_str};
+    #[cfg(feature = "curvy-test-deployment")]
+    use super::CurvyContractsOutput;
+    use super::{
+        Args, ContractsOutput, DeployedHoprContractAddresses, atomic_write, panic_payload_to_str, validate_args,
+    };
+
+    fn deployed_contracts(address: Address) -> DeployedHoprContractAddresses {
+        DeployedHoprContractAddresses {
+            token: address,
+            channels: address,
+            announcements: address,
+            module_implementation: address,
+            node_safe_migration: address,
+            node_safe_registry: address,
+            ticket_price_oracle: address,
+            winning_probability_oracle: address,
+            node_stake_factory: address,
+            xhopr_token: address,
+            service_registry: address,
+        }
+    }
 
     #[test]
     fn test_panic_payload_to_str_from_str() {
@@ -293,6 +506,101 @@ mod tests {
         let args = Args::try_parse_from(["blokli-contract-deployer"])?;
         let roundtrip = args.winning_probability.as_f64();
         assert!((roundtrip - 0.000125_f64).abs() < WinningProbability::EPSILON);
+        Ok(())
+    }
+
+    #[test]
+    fn curvy_defaults_off() -> Result<()> {
+        let args = Args::try_parse_from(["blokli-contract-deployer"])?;
+        assert!(!args.with_curvy);
+        assert!(args.curvy_json_out.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn curvy_output_requires_explicit_activation() -> Result<()> {
+        let args = Args::try_parse_from(["blokli-contract-deployer", "--curvy-json-out", "curvy.json"])?;
+        let error = validate_args(&args).expect_err("output alone must not enable Curvy deployment");
+        assert_eq!(error.to_string(), "--curvy-json-out requires --with-curvy");
+        Ok(())
+    }
+
+    #[test]
+    fn output_paths_must_not_collide() -> Result<()> {
+        let args = Args::try_parse_from([
+            "blokli-contract-deployer",
+            "--with-curvy",
+            "--output",
+            "deployments.toml",
+            "--curvy-json-out",
+            "./deployments.toml",
+        ])?;
+        let error = validate_args(&args).expect_err("colliding paths must fail before deployment");
+        assert_eq!(error.to_string(), "HOPR and Curvy output paths must be different");
+        Ok(())
+    }
+
+    #[cfg(not(feature = "curvy-test-deployment"))]
+    #[test]
+    fn feature_off_binary_rejects_curvy() -> Result<()> {
+        let args = Args::try_parse_from(["blokli-contract-deployer", "--with-curvy"])?;
+        let error = validate_args(&args).expect_err("feature-off binary must reject Curvy deployment");
+        assert!(error.to_string().contains("curvy-test-deployment"));
+        Ok(())
+    }
+
+    #[cfg(feature = "curvy-test-deployment")]
+    #[test]
+    fn feature_on_binary_accepts_curvy() -> Result<()> {
+        let args = Args::try_parse_from(["blokli-contract-deployer", "--with-curvy"])?;
+        validate_args(&args)?;
+        Ok(())
+    }
+
+    #[test]
+    fn deployment_addresses_are_serialized_as_strings() -> Result<()> {
+        let address = Address::from([0x11; 20]);
+        let output = ContractsOutput {
+            contracts: deployed_contracts(address),
+        };
+
+        let serialized = toml::to_string(&output)?;
+        let value = toml::from_str::<Value>(&serialized)?;
+        let contracts = value
+            .get("contracts")
+            .and_then(Value::as_table)
+            .ok_or_else(|| anyhow!("serialized output is missing the contracts table"))?;
+
+        assert!(contracts.values().all(|value| value.as_str().is_some()));
+        Ok(())
+    }
+
+    #[cfg(feature = "curvy-test-deployment")]
+    #[test]
+    fn curvy_aggregator_is_serialized_as_a_string() -> Result<()> {
+        let output = CurvyContractsOutput {
+            curvy_aggregator: Address::from([0x22; 20]),
+            contracts: deployed_contracts(Address::from([0x11; 20])),
+        };
+
+        let serialized = toml::to_string(&output)?;
+        let value = toml::from_str::<Value>(&serialized)?;
+
+        assert!(value.get("curvy_aggregator").and_then(Value::as_str).is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn atomic_write_replaces_complete_file() -> Result<()> {
+        let directory = tempdir()?;
+        let path = directory.path().join("contracts.toml");
+        fs::write(&path, "old")?;
+
+        atomic_write(&path, b"new\n")?;
+
+        assert_eq!(fs::read_to_string(&path)?, "new\n");
+        #[cfg(unix)]
+        assert_eq!(fs::metadata(path)?.permissions().mode() & 0o777, 0o644);
         Ok(())
     }
 }

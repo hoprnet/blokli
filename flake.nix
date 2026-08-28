@@ -245,7 +245,7 @@
               ];
             };
 
-          # Helper: build the bloklid-anvil Docker image for a target platform.
+          # Build the local Anvil image with HOPR and Curvy contracts deployed.
           mkBloklidAnvilDocker =
             targetPlatform:
             let
@@ -257,10 +257,15 @@
               name = "bloklid-anvil";
               Entrypoint = [ "/bin/blokli-anvil-entrypoint" ];
               pkgsLinux = platformPkgs;
-              env = [ "SSL_CERT_FILE=${platformPkgs.cacert}/etc/ssl/certs/ca-bundle.crt" ];
+              env = [
+                "SSL_CERT_FILE=${platformPkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+                "BLOKLI_DEPLOY_CURVY=true"
+              ];
               extraContents = [
                 binary
                 platformPkgs.curl
+                # The Nixpkgs Foundry 1.7.1 package embeds vulnerable quinn-proto
+                # 0.11.14. The pinned foundry.nix nightly uses 0.11.16.
                 platformPkgs.foundry-bin
                 (mkStaticEntrypoint {
                   pkgs = platformPkgs;
@@ -456,6 +461,7 @@
 
               # Generated GraphQL schema (formatted separately)
               "schema.graphql"
+              "design/target-api-schema.graphql"
 
               # locally installed npm packages
               ".npm/"

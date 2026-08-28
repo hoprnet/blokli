@@ -87,13 +87,18 @@ pub struct BlokliChain<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt
 }
 
 impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static> BlokliChain<T> {
-    pub fn new(
+    pub async fn new(
         db: T,
         chain_config: ChainConfig,
-        contract_addresses: ContractAddresses,
+        mut contract_addresses: ContractAddresses,
         indexer_cfg: IndexerConfig,
         rpc_url: String,
     ) -> Result<Self> {
+        if indexer_cfg.enable_curvy_indexing && contract_addresses.curvy_aggregator == Address::default() {
+            return Err(BlokliChainError::Configuration(
+                "Curvy indexing is enabled but the Curvy Aggregator address is not configured".to_string(),
+            ));
+        }
         // TODO(#7140): replace this DefaultRetryPolicy with a custom one that computes backoff with the number of
         // retries
         let rpc_http_retry_policy = DefaultRetryPolicy::default();
@@ -133,7 +138,10 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         let requestor = DefaultHttpRequestor::new();
 
         // Build RPC operations
-        let rpc_operations = RpcOperations::new(rpc_client, requestor, rpc_cfg, None)?;
+        let mut rpc_operations = RpcOperations::new(rpc_client, requestor, rpc_cfg, None)?;
+        if indexer_cfg.enable_curvy_indexing {
+            contract_addresses = rpc_operations.resolve_curvy_contract_addresses().await?;
+        }
 
         // Create IndexerState for coordinating block processing with subscriptions
         let indexer_state = IndexerState::new(indexer_cfg.event_bus_capacity, indexer_cfg.shutdown_signal_capacity);
@@ -257,6 +265,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
                     self.rpc_operations.clone(),
                     self.indexer_state.clone(),
                     self.indexer_cfg.enable_safe_indexing,
+                    self.indexer_cfg.enable_curvy_indexing,
                 ),
                 self.db.clone(),
                 self.indexer_cfg.clone(),
@@ -270,6 +279,10 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
 
     pub fn indexer_state(&self) -> IndexerState {
         self.indexer_state.clone()
+    }
+
+    pub const fn contract_addresses(&self) -> ContractAddresses {
+        self.contract_addresses
     }
 
     pub fn db(&self) -> &T {

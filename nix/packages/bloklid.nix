@@ -41,7 +41,7 @@ let
         })
         // {
           prependPackageName = false;
-          cargoExtraArgs = "-p bloklid --bins";
+          cargoExtraArgs = "-p bloklid --bins --locked";
         };
       name = "binary-bloklid-${platform}";
     in
@@ -134,7 +134,7 @@ in
     })
     // {
       runTests = true;
-      cargoExtraArgs = "-Z panic-abort-tests"; # Nightly feature for test optimization
+      cargoExtraArgs = "--locked -Z panic-abort-tests"; # Nightly feature for test optimization
     }
   );
 
@@ -146,7 +146,9 @@ in
     // {
       runClippy = true; # Run Clippy linter
       prependPackageName = false;
-      cargoExtraArgs = "--workspace";
+      # --all-features ensures optional, cfg-gated code such as the Curvy test
+      # deployment is linted by CI too.
+      cargoExtraArgs = "--workspace --all-features";
     }
   );
 
@@ -160,7 +162,8 @@ in
       runCoverage = true;
       cargoLlvmCovCommand = "nextest";
       testCargoProfile = "ci-test";
-      cargoExtraArgs = "";
+      # Nix renders nextest's in-place progress bar as repeated, truncated log lines.
+      cargoExtraArgs = "--show-progress=none";
       extraNativeBuildInputs = [
         pkgs.cargo-nextest
         pkgs.foundry-bin

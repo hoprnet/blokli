@@ -104,6 +104,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             winning_probability_oracle: Address::default(),
                             node_stake_factory: Address::default(),
                             xhopr_token: Address::default(),
+                            curvy_aggregator: Address::default(),
+                            curvy_vault: Address::default(),
+                            curvy_portal_factory: Address::default(),
                             service_registry: Address::default(),
                         },
                         ..Default::default()

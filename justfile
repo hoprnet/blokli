@@ -2,6 +2,15 @@
 # Default Command
 # ============================================================================
 
+# Nix's Darwin shell can provide an empty target-specific DEVELOPER_DIR and an
+# lld flag that conflict with its Apple SDK wrapper. Preserve the normal Cargo
+# environment on every other host.
+cargo_native := if os() == "macos" {
+    "env -u CARGO_BUILD_RUSTFLAGS -u DEVELOPER_DIR_arm64_apple_darwin -u DEVELOPER_DIR_x86_64_apple_darwin cargo"
+} else {
+    "cargo"
+}
+
 # Show available commands
 default:
     @just --list
@@ -11,10 +20,10 @@ default:
 # ============================================================================
 
 # Quick check - format, clippy, and check
-quick: fmt clippy check export-db-schema
+quick: fmt clippy check export-generated-schemas
 
 # Development build and test cycle - format, check, and test
-dev: fmt check test export-db-schema
+dev: fmt check test export-generated-schemas
 
 # Watch for changes and run checks continuously
 watch:
@@ -82,11 +91,11 @@ fmt:
 
 # Run clippy lints with warnings as errors
 clippy:
-    cargo clippy --workspace -- -D warnings
+    cargo clippy --workspace --all-features -- -D warnings
 
 # Run clippy on all targets (lib, bin, tests, benches, examples)
 clippy-all:
-    cargo clippy --workspace --all-targets -- -D warnings
+    cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 # Automatically fix clippy warnings
 clippy-fix:
@@ -139,7 +148,7 @@ run-api-release:
 
 # Export GraphQL schema to file (requires database URL)
 export-schema database_url output="schema.graphql":
-    cargo run --bin blokli-api -- export-schema -d {{ database_url }} -o {{ output }}
+    {{ cargo_native }} run --bin blokli-api -- export-schema -d {{ database_url }} -o {{ output }}
 
 # Export GraphQL schema using SQLite database
 export-schema-sqlite output="schema.graphql":
@@ -149,23 +158,38 @@ export-schema-sqlite output="schema.graphql":
     mkdir -p data
     # Run migrations to create/update the database schema
     # Note: ?mode=rwc allows SQLite to create the database file if it doesn't exist
-    cargo run --bin migration -- up -u "sqlite://data/bloklid-index.db?mode=rwc"
+    {{ cargo_native }} run --bin migration -- up -u "sqlite://data/bloklid-index.db?mode=rwc"
     # Export the GraphQL schema
-    cargo run --bin blokli-api -- export-schema -d "sqlite://data/bloklid-index.db" -o {{ output }}
+    {{ cargo_native }} run --bin blokli-api -- export-schema -d "sqlite://data/bloklid-index.db" -o {{ output }}
     echo "GraphQL schema exported to {{ output }}"
+
+# Export the checked-in GraphQL API contract using an isolated SQLite database
+export-target-api-schema output="design/target-api-schema.graphql":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/blokli_api_schema_export.XXXXXX")
+    tmp_db="$tmp_dir/blokli.db"
+    trap 'rm -f "$tmp_db"; rmdir "$tmp_dir"' EXIT
+    {{ cargo_native }} run --bin migration -- up -u "sqlite://${tmp_db}?mode=rwc"
+    {{ cargo_native }} run --bin blokli-api -- export-schema -d "sqlite://${tmp_db}" -o {{ output }}
+    echo "Target GraphQL schema exported to {{ output }}"
 
 
 # Export database schema (DDL) using SQLite for tracking schema changes
 export-db-schema output="design/db-schema.sql":
     #!/usr/bin/env bash
     set -euo pipefail
-    tmp_db=$(mktemp /tmp/blokli_schema_export.XXXXXX.db)
-    trap 'rm -f "$tmp_db"' EXIT
+    tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/blokli_schema_export.XXXXXX")
+    tmp_db="$tmp_dir/blokli.db"
+    trap 'rm -f "$tmp_db"; rmdir "$tmp_dir"' EXIT
     # Run migrations on a temporary SQLite database
-    cargo run --bin migration -- up -u "sqlite://${tmp_db}?mode=rwc"
+    {{ cargo_native }} run --bin migration -- up -u "sqlite://${tmp_db}?mode=rwc"
     # Query sqlite_schema directly. Sort order: tables (0) → views (1) → indexes (2), then by name.
     sqlite3 "$tmp_db" "SELECT sql || ';' || CHAR(10) FROM sqlite_schema WHERE type IN ('table', 'view', 'index') AND name NOT GLOB 'seaql*' AND name NOT GLOB 'sqlite_*' AND sql IS NOT NULL ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'view' THEN 1 WHEN 'index' THEN 2 ELSE 3 END, name;" | pg_format > {{ output }}
     echo "Database schema exported to {{ output }}"
+
+# Regenerate all checked-in schema documents
+export-generated-schemas: export-db-schema export-target-api-schema
     
 # ============================================================================
 # Documentation
@@ -311,6 +335,10 @@ helm-push:
 # Run smoke tests with Docker Compose (PostgreSQL + Anvil) - includes checkpoint resume validation
 smoke-test:
     ./tests/smoke/run-smoke-test.sh
+
+# Verify that the standard Anvil image deploys Curvy v2 and exposes it through the API
+smoke-test-curvy:
+    ./tests/smoke/run-curvy-smoke-test.sh
 
 # Run smoke tests against Gnosis Chain RPC (allows high lag) - includes checkpoint resume validation
 smoke-test-gnosis:

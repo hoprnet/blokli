@@ -1,7 +1,8 @@
 use blokli_db_entity::prelude::{
-    Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, HoprBalance, HoprNodeSafeRegistration,
-    HoprSafeContract, HoprSafeContractState, HoprSafeRedeemedStats, Log, LogStatus, LogTopicInfo, NativeBalance,
-    ServiceEntry, ServiceEntryState, ServiceRegistryConfig, ServiceType as ServiceTypeEntity, ServiceTypeState,
+    Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, CurvyCommittedNote, CurvyCommittedNullifier,
+    CurvyPendingNote, CurvyShardRoot, CurvySyncCheckpoint, HoprBalance, HoprNodeSafeRegistration, HoprSafeContract,
+    HoprSafeContractState, HoprSafeRedeemedStats, Log, LogStatus, LogTopicInfo, NativeBalance, ServiceEntry,
+    ServiceEntryState, ServiceRegistryConfig, ServiceType as ServiceTypeEntity, ServiceTypeState,
 };
 use migration::{Migrator, MigratorChainLogs, MigratorIndex, MigratorTrait};
 use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait, Statement};
@@ -31,7 +32,8 @@ use crate::errors::{DbSqlError, Result};
 /// - `"1.2.0"`:
 /// - `"1.3.0"`: SC set updated through a binding update.
 /// - `"1.4.0"`: Service registry contract added to the indexed set.
-pub const SCHEMA_VERSION: &str = "1.4.0";
+/// - `"1.5.0"`: Curvy event history, dense indices, notes-tree shards, and checkpoints.
+pub const SCHEMA_VERSION: &str = "1.5.0";
 
 /// The singleton ID used for the schema_version table.
 const SCHEMA_VERSION_TABLE_ID: i64 = 1;
@@ -242,6 +244,12 @@ async fn clear_all_data(db: &DatabaseConnection, logs_db: Option<&DatabaseConnec
 ///
 /// Returns an error if any database operations fail.
 async fn clear_index_data(db: &DatabaseConnection) -> Result<()> {
+    CurvySyncCheckpoint::delete_many().exec(db).await?;
+    CurvyShardRoot::delete_many().exec(db).await?;
+    CurvyPendingNote::delete_many().exec(db).await?;
+    CurvyCommittedNote::delete_many().exec(db).await?;
+    CurvyCommittedNullifier::delete_many().exec(db).await?;
+
     ChannelState::delete_many().exec(db).await?;
     Channel::delete_many().exec(db).await?;
 

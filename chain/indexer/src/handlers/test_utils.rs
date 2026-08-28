@@ -185,12 +185,16 @@ pub(super) mod test_helpers {
                 winning_probability_oracle: *WIN_PROB_ORACLE_ADDR,
                 node_stake_factory: Default::default(),
                 xhopr_token: *XHOPR_TOKEN_ADDR,
+                curvy_aggregator: Default::default(),
+                curvy_vault: Default::default(),
+                curvy_portal_factory: Default::default(),
                 service_registry: *SERVICE_REGISTRY_ADDR,
             },
             db,
             rpc_operations,
             indexer_state.clone(),
             true,
+            false,
         );
 
         (handlers, indexer_state, event_receiver)

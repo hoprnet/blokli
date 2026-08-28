@@ -7,6 +7,7 @@ ANVIL_BLOCK_TIME="${ANVIL_BLOCK_TIME:-1}"
 ANVIL_ACCOUNTS="${ANVIL_ACCOUNTS:-10}"
 ANVIL_BALANCE="${ANVIL_BALANCE:-10000}"
 ANVIL_RPC_URL="${ANVIL_RPC_URL:-http://127.0.0.1:${ANVIL_PORT}}"
+BLOKLI_DEPLOY_CURVY="${BLOKLI_DEPLOY_CURVY:-true}"
 
 DATA_DIR="${BLOKLI_DATA_DIRECTORY:-/data}"
 CONFIG_PATH="${BLOKLI_CONFIG_PATH:-/config.toml}"
@@ -58,6 +59,13 @@ fi
 if [ -n "${ANVIL_COMMON_DEPLOYER_PRIVATE_KEY:-}" ]; then
   DEPLOYER_ARGS+=(--common-private-key "${ANVIL_COMMON_DEPLOYER_PRIVATE_KEY}")
 fi
+if [ "${BLOKLI_DEPLOY_CURVY}" = "true" ]; then
+  CURVY_JSON_PATH="${CURVY_JSON_PATH:-${DATA_DIR}/curvy_deployed_addresses.json}"
+  # The default lives under DATA_DIR (already created above), but an overridden
+  # CURVY_JSON_PATH may point somewhere that does not exist yet.
+  mkdir -p "$(dirname "${CURVY_JSON_PATH}")"
+  DEPLOYER_ARGS+=(--with-curvy --curvy-json-out "${CURVY_JSON_PATH}")
+fi
 
 # Deploy contracts with error handling
 if ! blokli-contract-deployer \
@@ -73,6 +81,15 @@ data_directory = "${DATA_DIR}"
 network = "anvil-localhost"
 rpc_url = "${ANVIL_RPC_URL}"
 max_rpc_requests_per_sec = 0
+EOF
+
+# The deployer output contains root-level settings (such as curvy_aggregator)
+# followed by [contracts]. It must be inserted before any other TOML table so
+# those settings remain at the document root.
+cat "${CONTRACTS_PATH}" >>"${CONFIG_PATH}"
+rm -f "${CONTRACTS_PATH}"
+
+cat >>"${CONFIG_PATH}" <<EOF
 
 [database]
 type = "sqlite"
@@ -83,6 +100,7 @@ max_connections = 10
 [indexer]
 fast_sync = false
 enable_logs_snapshot = false
+enable_curvy_indexing = ${BLOKLI_DEPLOY_CURVY}
 
 [indexer.subscription]
 event_bus_capacity = 100
@@ -99,8 +117,5 @@ max_indexer_lag = 10
 timeout = "5s"
 readiness_check_interval = "5s"
 EOF
-
-cat "${CONTRACTS_PATH}" >>"${CONFIG_PATH}"
-rm -f "${CONTRACTS_PATH}"
 
 exec bloklid -c "${CONFIG_PATH}"

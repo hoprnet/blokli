@@ -194,6 +194,7 @@ RPC Endpoint
 - **HoprNodeStakeFactory**: Safe contract deployment events with module and owner tracking
 - **HoprTicketPriceOracle**: Network-wide ticket price updates
 - **HoprWinningProbabilityOracle**: Network-wide winning probability updates
+- **Curvy Aggregator**: Pending notes, committed notes, and committed nullifiers, normalized from batched events
 - **HoprServiceRegistry**: Permissionless registry of the services nodes offer, together with the configuration of each service type. The
   contract is optional: a network that has not deployed it carries the zero address, and the indexer then leaves that address out of the
   filter set entirely rather than filtering logs on the null address.
@@ -218,6 +219,11 @@ The database implements an event sourcing pattern with temporal versioning:
 - **hopr_balance**: Current wxHOPR token balances indexed by address
 - **native_balance**: Current native token balances indexed by address
 - **chain_info**: Singleton table tracking indexer metadata (watermark, network parameters)
+- **curvy_pending_note**: Position-keyed pending-note announcements used for local ownership scanning
+- **curvy_committed_note**: Non-padding committed notes with dense notes-tree leaf indices
+- **curvy_committed_nullifier**: Non-padding nullifiers with independent dense indices
+- **curvy_sync_checkpoint**: Versioned notes-tree frontier and synchronization watermark
+- **curvy_shard_root**: Completed notes-tree shard roots for compact wallet bootstrap
 
 **Logs Tables** (for fast sync and reorg handling):
 
@@ -300,7 +306,8 @@ management, and connection pooling. The trait-based design allows transaction-ag
 
 **GraphQL Schema Structure**:
 
-The target schema reference lives in `design/target-api-schema.graphql` and should remain consistent with the implemented API surface.
+The generated schema reference lives in `design/target-api-schema.graphql`. The `export-target-api-schema` recipe regenerates it directly
+from the implemented API surface.
 
 The schema is organized into three root types following GraphQL best practices:
 
@@ -330,6 +337,7 @@ The schema is organized into three root types following GraphQL best practices:
 - Network topology: Opened channel graph updates for routing decisions
 - Service registry updates: snapshot-first streams of entries, service types and registry-wide configuration followed by live changes
 - Transaction updates: Status changes for submitted transactions
+- Curvy events: Historical-to-live streams for pending notes, committed notes, and committed nullifiers
 
 Registry entry queries use bounded cursor pages pinned to the first page's indexer watermark, including unfiltered enumeration. Entry
 subscriptions capture that same kind of watermark while registering their event receivers, page through the matching historical snapshot,
@@ -446,9 +454,9 @@ guaranteeing no events are emitted between reading watermark and subscribing.
 **Guarantee**: No events can be missed between reading the watermark and subscribing to the event bus, ensuring complete event delivery to
 all subscriptions.
 
-**Event Types**: The event bus carries four event types: AccountUpdated (with account keyid), ChannelUpdated (with channel id),
-BalanceUpdated (with address bytes), and SafeDeployed (with Safe contract address). Subscribers filter events based on their query
-parameters.
+**Event Types**: The event bus carries structured variants for account, channel, balance, Safe, ticket, transaction, and Curvy changes.
+Curvy variants contain one normalized non-padding note or nullifier and its complete chain position. Subscribers select the variants
+relevant to their query parameters.
 
 ### 9. Transaction Store Architecture
 
@@ -964,6 +972,9 @@ Indexer handlers publish structured events containing complete data to avoid N+1
 | `KeyBindingFeeUpdated`    | Protocol fee parameter changes        | Fee amount (TokenValueString) | `keyBindingFeeUpdated`      |
 | `SafeDeployed`            | New safe contract deployed            | Safe address                  | `safeDeployed`              |
 | `TicketParametersUpdated` | Ticket price/probability changes      | Full TicketParameters object  | `ticketParametersUpdated`   |
+| `CurvyPendingNote`        | Curvy pending-note announcement       | One normalized note item      | `curvyPendingNote`          |
+| `CurvyCommittedNote`      | Curvy note commitment                 | Note and dense leaf index     | `curvyCommittedNote`        |
+| `CurvyCommittedNullifier` | Curvy nullifier commitment            | Nullifier and dense index     | `curvyCommittedNullifier`   |
 
 **Two-Phase Subscription Pattern**:
 
@@ -996,7 +1007,21 @@ The IndexerState uses an RwLock to ensure no events are missed between the snaps
 2. Capture watermark (last indexed block/tx/log)
 3. Subscribe to event channels
 4. Release read lock
-5. Events published during this time are buffered in the channel
+
+Curvy event positions retain the raw block, transaction, log, and array-item coordinates. Zero-padded contract array slots are not emitted,
+but their raw item positions are preserved, so ordering stays identical to chain ordering. Historical queries accept the full position as an
+exclusive cursor. Subscriptions accept a lower block bound; clients that resume within a block compare full positions locally to discard
+already-processed items. Committed non-zero notes also carry a separate dense leaf index, which clients must never derive from the raw item
+position.
+
+While processing each committed-note log, the indexer transactionally appends its non-zero notes to the depth-30 Poseidon frontier and
+stores the leaves, the compact frontier checkpoint and root, and any completed level-14 (16,384-leaf) shard root. This state is global and
+key-independent: ownership detection and witness construction remain local to the node. Reorg handling deletes Curvy leaves, checkpoints,
+and shard roots from the first affected block before subscriptions are terminated and resumed against canonical state.
+
+Historical and live items use the same normalized event representation. Event-bus overflow or a reorganization terminates the stream so a
+client can reconnect from its last processed position instead of accepting silent loss. Events published during watermark capture are
+buffered in the channel.
 
 **Overflow Handling**:
 
@@ -1487,6 +1512,49 @@ threshold.
 
 **Configuration Flow**: Finality is defined by the selected network, propagated through runtime configuration into the RPC layer, and reused
 by the readiness checks.
+
+## Local Contract Deployment Variants
+
+The local Anvil image can optionally deploy the Curvy contract suite (controlled by `BLOKLI_DEPLOY_CURVY`). When Curvy is enabled,
+deployment and indexing are inseparable: deploying the suite without indexing its events would surface much later as a consumer-side
+notes-root mismatch. The production binary remains HOPR-only.
+
+The deployment artifact and generated Blokli configuration include the Curvy Aggregator, Vault, and PortalFactory addresses. The local HOPR
+token is registered in the Curvy Vault after the development assets. The configured Aggregator extends the indexer's address/topic filter
+only when Curvy indexing is explicitly enabled. Pending-note, committed-note, and committed-nullifier events are stored as append-only,
+position-keyed records; zero padding is omitted and array-valued events are normalized into one row per array item. PortalFactory has no
+indexed event in the supported surface.
+
+Committed notes and nullifiers receive independent dense, zero-based indices. The note index is the canonical leaf position in Curvy's
+depth-30 Poseidon tree. The indexer advances a constant-space frontier transactionally with each committed-note event and persists completed
+depth-14 shard roots when a 16,384-leaf boundary is crossed. This keeps steady-state indexer memory bounded; Blokli neither retains the full
+tree nor generates user witnesses.
+
+The tree's cryptographic behavior is defined by Curvy's canonical Rust core rather than reimplemented in Blokli. Poseidon hashing, field
+encoding, tree geometry, and the versioned frontier snapshot format all come from that dependency. The tree version recorded on every
+checkpoint detects an incompatible geometry or snapshot change across an upgrade.
+
+Each state-changing Curvy log atomically persists its event rows, completed shard roots, and a checkpoint identified by the containing block
+hash. Multiple state-changing logs in one block replace that block's checkpoint inside their respective transactions, so the latest
+checkpoint describes all durable Curvy rows through the latest committed log. Pending-only blocks do not write redundant frontier snapshots.
+A checkpoint records the tree geometry, dense note/nullifier counts, completed-shard count, tree root, and canonical frontier snapshot; it
+is the sole persisted live frontier state.
+
+GraphQL synchronization pages are pinned to one checkpoint and bounded by its counts, so concurrent indexing cannot change a client's
+dataset. Note pages batch-associate the latest preceding pending-note announcement when available. Shard-root and tail-leaf pages let a
+client bootstrap the compact tree representation without rebuilding every completed shard. Ownership detection and witness construction
+remain local to the client and do not reveal which note it owns to Blokli.
+
+On a reorganization, the Curvy handler removes event rows, shard roots, and checkpoints at or after the first affected block through the
+indexer's derived-state rollback seam. The frontier is restored from the latest earlier checkpoint before canonical replacement logs are
+replayed. Checkpoint counts are cross-checked against retained dense note and nullifier indices; missing or inconsistent state is fatal
+because continuing would silently diverge dense indices and roots. Ordinary restarts restore the latest checkpoint, while the logs snapshot
+remains the source for rebuilding all derived index state on a fresh installation.
+
+GraphQL exposes position-paginated event history, checkpoint-pinned dense synchronization pages, and historical-to-live subscriptions. Curvy
+view functions and non-note protocol state are read directly from the configured contracts through the RPC layer. State-changing calls use
+Blokli's existing pre-signed raw-transaction boundary, keeping signing and proof construction outside the service. A failure in either
+requested deployment prevents final address and configuration artifacts from being published.
 
 ## Design Principles and Patterns
 
