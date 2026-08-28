@@ -1,8 +1,5 @@
 ---
 name: Merge
-#
-# TODO(curvy-integration): remove this integration-branch scaffolding once
-# `curvy-integration` has been merged into `main`. See hoprnet/blokli#432.
 on:
   pull_request:
     types:
@@ -10,7 +7,6 @@ on:
       # - synchronize
     branches:
       - main
-      - curvy-integration
 concurrency:
   group: merge-${{ github.event.pull_request.base.ref }}
   cancel-in-progress: false
@@ -50,8 +46,6 @@ jobs:
       gpg_private_key: ${{ secrets.GPG_HOPRNET_PRIVATE_KEY }}
   build-docker:
     name: Docker
-    # Avoid publishing main's floating Curvy-free tags from the integration branch.
-    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
     uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@25898d13dab1b3fbf4c33c394e7c581578a2b0d7 # build-docker-v3.2.0
     needs: build-binaries
     permissions:
@@ -83,8 +77,6 @@ jobs:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
   build-docker-with-anvil:
     name: Docker anvil
-    # Avoid publishing main's floating Curvy-free tags from the integration branch.
-    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
     uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@25898d13dab1b3fbf4c33c394e7c581578a2b0d7 # build-docker-v3.2.0
     needs: build-binaries
     permissions:
