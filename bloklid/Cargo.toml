@@ -83,10 +83,6 @@ hopr-types = { workspace = true, features = [
   "telemetry",
 ] }
 
-# Needed for test deployment, because deploy_for_testing from blokli_chain_types is outdated
-# TODO: remove blokli-chain-types completely and only use hopr-chain-types
-hopli = { workspace = true }
-
 [dev-dependencies]
 anyhow      = { workspace = true }
 async-trait = { workspace = true }
@@ -96,4 +92,4 @@ tokio       = { workspace = true, features = ["full"] }
 validator   = { workspace = true }
 
 [package.metadata.cargo-machete]
-ignored = ["hopli", "humantime-serde"]
+ignored = ["humantime-serde"]
