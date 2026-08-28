@@ -469,3 +469,302 @@ pub fn shard_root(model: curvy_shard_root::Model) -> CurvyResult<CurvyShardRoot>
         )?,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use blokli_api_types::{CurvyEventCursor, Hex32, QueryFailedError, UInt64, UInt256};
+    use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb};
+    use blokli_db_entity::{curvy_committed_note, curvy_pending_note, curvy_shard_root, curvy_sync_checkpoint};
+    use hopr_types::primitive::{primitives::Address, traits::ToHex};
+    use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait};
+
+    use super::{
+        DatabaseEventCursor, address, committed_note, dense_start, ensure_checkpoint_still_pinned,
+        ensure_cursor_anchor, event_cursor, from_block, hex32_array, load_checkpoint, page_limit, page_next_index,
+        page_total, pending_note, pending_precedes_commit, require_contract, shard_root, sync_checkpoint, sync_note,
+        uint256_bytes, validate_dense_page, validate_page_start,
+    };
+    use crate::errors::codes;
+
+    fn bytes(value: u8, len: usize) -> Vec<u8> {
+        vec![value; len]
+    }
+
+    fn api_result<T>(result: Result<T, QueryFailedError>) -> anyhow::Result<T> {
+        result.map_err(|error| anyhow::anyhow!(error.message))
+    }
+
+    fn pending_model() -> curvy_pending_note::Model {
+        curvy_pending_note::Model {
+            id: 1,
+            note_id: bytes(1, 32),
+            ephemeral_key_x: bytes(0, 32),
+            ephemeral_key_y: bytes(0, 31).into_iter().chain([2]).collect(),
+            view_tag: 3,
+            token_id: bytes(0, 32),
+            amount: bytes(0, 31).into_iter().chain([4]).collect(),
+            is_plaintext: true,
+            event_item_index: 5,
+            chain_tx_hash: bytes(6, 32),
+            block_hash: bytes(7, 32),
+            published_block: 8,
+            published_tx_index: 9,
+            published_log_index: 10,
+        }
+    }
+
+    fn committed_model() -> curvy_committed_note::Model {
+        curvy_committed_note::Model {
+            id: 1,
+            batch_index: bytes(11, 32),
+            note_id: bytes(1, 32),
+            event_item_index: 12,
+            chain_tx_hash: bytes(13, 32),
+            block_hash: bytes(14, 32),
+            published_block: 15,
+            published_tx_index: 16,
+            published_log_index: 17,
+            leaf_index: 18,
+        }
+    }
+
+    fn checkpoint_model(block_number: i64, block_hash: Vec<u8>) -> curvy_sync_checkpoint::Model {
+        curvy_sync_checkpoint::Model {
+            id: block_number,
+            block_number,
+            block_hash,
+            aggregator_address: bytes(20, 20),
+            tree_version: 1,
+            tree_depth: 32,
+            shard_height: 4,
+            leaf_count: 21,
+            nullifier_count: 22,
+            shard_count: 2,
+            root: bytes(23, 32),
+            frontier_snapshot: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_pagination_boundaries() -> anyhow::Result<()> {
+        assert_eq!(api_result(page_limit(None))?, 100);
+        assert_eq!(api_result(page_limit(Some(1)))?, 1);
+        assert_eq!(api_result(page_limit(Some(1000)))?, 1000);
+        for invalid in [0, -1, 1001] {
+            assert_eq!(
+                page_limit(Some(invalid)).expect_err("limit must be rejected").code,
+                codes::INVALID_PAGINATION
+            );
+        }
+
+        assert_eq!(api_result(from_block(None))?, None);
+        assert_eq!(api_result(from_block(Some(UInt64(i64::MAX as u64))))?, Some(i64::MAX));
+        assert_eq!(
+            from_block(Some(UInt64(i64::MAX as u64 + 1)))
+                .expect_err("oversized block must be rejected")
+                .code,
+            codes::INVALID_PAGINATION
+        );
+        assert_eq!(api_result(dense_start(None))?, 0);
+        assert!(dense_start(Some(UInt64(u64::MAX))).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_dense_page_validation_and_next_index() -> anyhow::Result<()> {
+        assert_eq!(api_result(page_next_index(3, 10, Some(5)))?, UInt64(6));
+        assert_eq!(api_result(page_next_index(12, 10, None))?, UInt64(10));
+        assert_eq!(api_result(page_total(10))?, UInt64(10));
+        api_result(validate_page_start(10, 10))?;
+        api_result(validate_dense_page([3, 4, 5], 3, 10, "leaf_index"))?;
+
+        assert!(page_next_index(0, -1, None).is_err());
+        assert!(page_next_index(0, i64::MAX, Some(i64::MAX)).is_err());
+        assert!(page_total(-1).is_err());
+        assert!(validate_page_start(11, 10).is_err());
+        assert!(validate_page_start(0, -1).is_err());
+        assert!(validate_dense_page([3, 5], 3, 10, "leaf_index").is_err());
+        assert!(validate_dense_page([], 3, 10, "leaf_index").is_err());
+        assert!(validate_dense_page([], 10, 10, "leaf_index").is_ok());
+        assert!(validate_dense_page([i64::MAX], i64::MAX, i64::MAX, "leaf_index").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_cursor_conversion_and_anchor_validation() -> anyhow::Result<()> {
+        let hash = Hex32(format!("0x{}", "ab".repeat(32)));
+        let cursor = api_result(event_cursor(Some(CurvyEventCursor {
+            block: UInt64(1),
+            transaction_index: UInt64(2),
+            log_index: UInt64(3),
+            event_item_index: UInt64(4),
+            block_hash: Some(hash),
+        })))?
+        .ok_or_else(|| anyhow::anyhow!("cursor unexpectedly missing"))?;
+        assert_eq!(
+            (
+                cursor.block,
+                cursor.transaction_index,
+                cursor.log_index,
+                cursor.event_item_index
+            ),
+            (1, 2, 3, 4)
+        );
+        assert_eq!(cursor.block_hash, Some([0xab; 32]));
+        api_result(ensure_cursor_anchor(&cursor, Some(&[0xab; 32])))?;
+        assert!(ensure_cursor_anchor(&cursor, Some(&[0xcd; 32])).is_err());
+        assert!(ensure_cursor_anchor(&cursor, None).is_err());
+
+        let unanchored = DatabaseEventCursor {
+            block_hash: None,
+            ..cursor
+        };
+        api_result(ensure_cursor_anchor(&unanchored, None))?;
+        assert!(
+            event_cursor(Some(CurvyEventCursor {
+                block: UInt64(u64::MAX),
+                transaction_index: UInt64(0),
+                log_index: UInt64(0),
+                event_item_index: UInt64(0),
+                block_hash: None,
+            }))
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_external_scalar_and_contract_validation() -> anyhow::Result<()> {
+        let value = Hex32(format!("0x{}", "01".repeat(32)));
+        assert_eq!(api_result(hex32_array(&value))?, [1; 32]);
+        assert!(hex32_array(&Hex32("not-hex".to_string())).is_err());
+        assert!(hex32_array(&Hex32("01".repeat(31))).is_err());
+        assert_eq!(
+            api_result(uint256_bytes(&UInt256("255".to_string()), "amount"))?[31],
+            255
+        );
+        assert!(uint256_bytes(&UInt256("invalid".to_string()), "amount").is_err());
+
+        let configured =
+            address("0x1111111111111111111111111111111111111111").map_err(|error| anyhow::anyhow!(error.message))?;
+        assert_eq!(configured.to_hex(), "0x1111111111111111111111111111111111111111");
+        assert!(address("invalid").is_err());
+        api_result(require_contract(configured, "Aggregator"))?;
+        assert!(require_contract(Address::default(), "Aggregator").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_event_model_conversions() -> anyhow::Result<()> {
+        let pending_model = pending_model();
+        let pending = api_result(pending_note(pending_model.clone()))?;
+        assert_eq!(pending.view_tag, 3);
+        assert_eq!(pending.amount, UInt256("4".to_string()));
+        assert_eq!(pending.position.event_item_index, UInt64(5));
+
+        let committed_model = committed_model();
+        let committed = api_result(committed_note(committed_model.clone()))?;
+        assert_eq!(committed.leaf_index, UInt64(18));
+        assert!(pending_precedes_commit(&pending_model, &committed_model));
+
+        let sync = api_result(sync_note(committed_model, Some(pending_model)))?;
+        assert_eq!(sync.leaf_index, UInt64(18));
+        assert!(sync.announcement.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn test_event_model_conversions_reject_invalid_database_values() {
+        let mut pending = pending_model();
+        pending.chain_tx_hash.pop();
+        assert_eq!(
+            pending_note(pending).expect_err("short hash must be rejected").code,
+            codes::INVALID_DB_DATA
+        );
+
+        let mut committed = committed_model();
+        committed.leaf_index = -1;
+        assert_eq!(
+            committed_note(committed)
+                .expect_err("negative index must be rejected")
+                .code,
+            codes::INVALID_DB_DATA
+        );
+    }
+
+    #[test]
+    fn test_checkpoint_and_shard_conversions() -> anyhow::Result<()> {
+        let checkpoint = api_result(sync_checkpoint(checkpoint_model(24, bytes(25, 32))))?;
+        assert_eq!(checkpoint.block_number, UInt64(24));
+        assert_eq!(checkpoint.shard_size, UInt64(16));
+        assert_eq!(checkpoint.note_count, UInt64(21));
+
+        let shard = api_result(shard_root(curvy_shard_root::Model {
+            id: 1,
+            tree_version: 1,
+            shard_height: 4,
+            shard_index: 2,
+            root: bytes(26, 32),
+            block_hash: bytes(27, 32),
+            chain_tx_hash: bytes(28, 32),
+            completion_block: 29,
+            completion_tx_index: 30,
+            completion_log_index: 31,
+            completion_event_item_index: 32,
+        }))?;
+        assert_eq!(shard.shard_index, UInt64(2));
+        assert_eq!(shard.completion_position.block, UInt64(29));
+
+        let mut invalid_checkpoint = checkpoint_model(1, bytes(1, 32));
+        invalid_checkpoint.shard_height = 64;
+        assert!(sync_checkpoint(invalid_checkpoint).is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_checkpoint_loading_and_reorg_pin() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let first = checkpoint_model(1, bytes(1, 32));
+        let second = checkpoint_model(2, bytes(2, 32));
+        for checkpoint in [first.clone(), second.clone()] {
+            curvy_sync_checkpoint::ActiveModel {
+                id: Set(checkpoint.id),
+                block_number: Set(checkpoint.block_number),
+                block_hash: Set(checkpoint.block_hash),
+                aggregator_address: Set(checkpoint.aggregator_address),
+                tree_version: Set(checkpoint.tree_version),
+                tree_depth: Set(checkpoint.tree_depth),
+                shard_height: Set(checkpoint.shard_height),
+                leaf_count: Set(checkpoint.leaf_count),
+                nullifier_count: Set(checkpoint.nullifier_count),
+                shard_count: Set(checkpoint.shard_count),
+                root: Set(checkpoint.root),
+                frontier_snapshot: Set(checkpoint.frontier_snapshot),
+            }
+            .insert(db.conn(Default::default()))
+            .await?;
+        }
+
+        let latest = api_result(load_checkpoint(db.conn(Default::default()), None).await)?;
+        assert_eq!(latest.block_number, 2);
+        let first_hash = Hex32(format!("0x{}", "01".repeat(32)));
+        let loaded_first = api_result(load_checkpoint(db.conn(Default::default()), Some(&first_hash)).await)?;
+        assert_eq!(loaded_first.block_number, 1);
+        api_result(ensure_checkpoint_still_pinned(db.conn(Default::default()), &loaded_first).await)?;
+
+        curvy_sync_checkpoint::Entity::delete_by_id(loaded_first.id)
+            .exec(db.conn(Default::default()))
+            .await?;
+        assert!(
+            ensure_checkpoint_still_pinned(db.conn(Default::default()), &loaded_first)
+                .await
+                .is_err()
+        );
+        assert!(
+            load_checkpoint(db.conn(Default::default()), Some(&first_hash))
+                .await
+                .is_err()
+        );
+        Ok(())
+    }
+}

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Curvy smoke test for the bloklid-anvil-curvy image
+# Curvy smoke test for the standard bloklid-anvil image
 #
-# The stock smoke test (run-smoke-test.sh) covers bloklid against a compose stack.
-# This one covers the single-container Curvy variant: it asserts that the image
+# The general smoke test (run-smoke-test.sh) covers bloklid against a compose stack.
+# This one covers Curvy in the standard single-container image: it asserts that the image
 # actually deploys the Curvy v2 suite on Anvil, not merely that it compiles.
 #
 # Checks:
@@ -43,8 +43,8 @@ x86_64 | amd64) HOST_NIX_ARCH="x86_64-linux" ;;
 arm64 | aarch64) HOST_NIX_ARCH="aarch64-linux" ;;
 *) HOST_NIX_ARCH="x86_64-linux" ;;
 esac
-NIX_FLAKE_TARGET="${NIX_FLAKE_TARGET:-.#docker-bloklid-anvil-curvy-${HOST_NIX_ARCH}}"
-LOCAL_IMAGE="bloklid-anvil-curvy:latest"
+NIX_FLAKE_TARGET="${NIX_FLAKE_TARGET:-.#docker-bloklid-anvil-${HOST_NIX_ARCH}}"
+LOCAL_IMAGE="bloklid-anvil:latest"
 CONTAINER_NAME="blokli-curvy-smoke"
 CURVY_JSON_IN_CONTAINER="/data/curvy_deployed_addresses.json"
 CONFIG_TOML_IN_CONTAINER="/config.toml"
@@ -135,7 +135,7 @@ resolve_image() {
   if [ "$(uname -s)" = "Darwin" ]; then
     log_error "building a Linux docker image on macOS needs a Linux builder."
     log_error "Set SOURCE_IMAGE to a published image instead, e.g.:"
-    log_error '  SOURCE_IMAGE=europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid-anvil-curvy:latest \'
+    log_error '  SOURCE_IMAGE=europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid-anvil:latest \'
     log_error "    ./tests/smoke/run-curvy-smoke-test.sh"
     exit 1
   fi
@@ -308,7 +308,7 @@ main() {
 
   WORK_DIR="$(mktemp -d)"
 
-  echo "== Curvy image smoke test =="
+  echo "== Curvy deployment smoke test =="
   resolve_image
   start_container
   wait_for_ready

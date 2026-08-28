@@ -245,23 +245,22 @@
               ];
             };
 
-          # Build the stock or Curvy-enabled local Anvil image.
+          # Build the local Anvil image with HOPR and Curvy contracts deployed.
           mkBloklidAnvilDocker =
-            targetPlatform: withCurvy:
+            targetPlatform:
             let
               platformPkgs = platformPkgsMap.${targetPlatform};
-              binarySuffix = if withCurvy then "-curvy" else "";
-              binary = bloklidPackages."binary-bloklid-${targetPlatform}${binarySuffix}";
+              binary = bloklidPackages."binary-bloklid-${targetPlatform}";
               anvilEntrypoint = mkBlokliAnvilEntrypoint targetPlatform;
             in
             nixLib.mkDockerImage {
-              name = "bloklid-anvil${if withCurvy then "-curvy" else ""}";
+              name = "bloklid-anvil";
               Entrypoint = [ "/bin/blokli-anvil-entrypoint" ];
               pkgsLinux = platformPkgs;
               env = [
                 "SSL_CERT_FILE=${platformPkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
-              ]
-              ++ lib.optionals withCurvy [ "BLOKLI_DEPLOY_CURVY=true" ];
+                "BLOKLI_DEPLOY_CURVY=true"
+              ];
               extraContents = [
                 binary
                 platformPkgs.curl
@@ -280,12 +279,10 @@
           bloklidDocker = {
             docker-bloklid-x86_64-linux = mkBloklidDocker "x86_64-linux" null;
             docker-bloklid-x86_64-linux-dev = mkBloklidDocker "x86_64-linux" "dev";
-            docker-bloklid-anvil-x86_64-linux = mkBloklidAnvilDocker "x86_64-linux" false;
-            docker-bloklid-anvil-curvy-x86_64-linux = mkBloklidAnvilDocker "x86_64-linux" true;
+            docker-bloklid-anvil-x86_64-linux = mkBloklidAnvilDocker "x86_64-linux";
             docker-bloklid-aarch64-linux = mkBloklidDocker "aarch64-linux" null;
             docker-bloklid-aarch64-linux-dev = mkBloklidDocker "aarch64-linux" "dev";
-            docker-bloklid-anvil-aarch64-linux = mkBloklidAnvilDocker "aarch64-linux" false;
-            docker-bloklid-anvil-curvy-aarch64-linux = mkBloklidAnvilDocker "aarch64-linux" true;
+            docker-bloklid-anvil-aarch64-linux = mkBloklidAnvilDocker "aarch64-linux";
           };
 
           # Combine all packages

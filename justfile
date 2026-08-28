@@ -336,7 +336,7 @@ helm-push:
 smoke-test:
     ./tests/smoke/run-smoke-test.sh
 
-# Run the Curvy image smoke test (deploys Curvy v2 on Anvil, verifies on-chain bytecode)
+# Verify that the standard Anvil image deploys Curvy v2 and exposes it through the API
 smoke-test-curvy:
     ./tests/smoke/run-curvy-smoke-test.sh
 

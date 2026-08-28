@@ -12,8 +12,8 @@ use std::{
     sync::Once,
 };
 
+use blokli_chain_types::AlloyAddressExt;
 use clap::Parser;
-use blokli_chain_types::{AlloyAddressExt, ContractAddresses as BlokliContractAddresses};
 #[cfg(feature = "curvy-test-deployment")]
 use curvy_bindings::{CurvyContractAddresses, config::CurvyContractInstances};
 use hopr_bindings::{
@@ -277,7 +277,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             );
             let curvy_contracts = CurvyContractAddresses::from(&curvy_instances);
             let output = CurvyContractsOutput {
-                curvy_aggregator: h2a(curvy_contracts.aggregator_proxy),
+                curvy_aggregator: curvy_contracts.aggregator_proxy.to_hopr_address(),
                 contracts: deployed_hopr_contracts,
             };
             tracing::info!(

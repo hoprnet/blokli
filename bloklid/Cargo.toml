@@ -10,7 +10,7 @@ version     = "0.14.1"
 
 [features]
 curvy-test-deployment = ["dep:curvy-bindings"]
-default = ["runtime-tokio"]
+default = ["curvy-test-deployment", "runtime-tokio"]
 runtime-tokio = [
   "blokli-chain-api/runtime-tokio",
   "blokli-chain-indexer/runtime-tokio",
