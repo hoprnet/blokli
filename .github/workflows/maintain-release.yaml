@@ -27,7 +27,7 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: |
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
-            echo "::error::'$TAG' is not a valid release tag (expected vMAJOR.MINOR.PATCH). Commit SHAs are not accepted, only tags."
+            echo "::error::'$TAG' is not a valid release tag (expected vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-PRERELEASE). Commit SHAs are not accepted, only tags."
             exit 1
           fi
 
