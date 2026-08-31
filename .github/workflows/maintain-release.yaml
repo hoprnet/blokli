@@ -1,0 +1,76 @@
+---
+name: Maintain release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Git tag to branch from (e.g. v0.12.0). Commit SHAs are not accepted.
+        required: true
+        type: string
+
+concurrency:
+  group: maintain-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  create-branch:
+    name: Create release branch
+    runs-on: depot-ubuntu-24.04-2
+    permissions:
+      contents: read
+    steps:
+      - name: Validate tag and resolve branch name
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::'$TAG' is not a valid release tag (expected vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-PRERELEASE). Commit SHAs are not accepted, only tags."
+            exit 1
+          fi
+
+          ref_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}")" || {
+            echo "::error::Tag '$TAG' does not exist in ${GITHUB_REPOSITORY}."
+            exit 1
+          }
+
+          object_type="$(jq -r '.object.type' <<<"$ref_json")"
+          object_sha="$(jq -r '.object.sha' <<<"$ref_json")"
+
+          if [[ "$object_type" == "tag" ]]; then
+            commit_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${object_sha}" --jq '.object.sha')"
+          else
+            commit_sha="$object_sha"
+          fi
+
+          version="${TAG#v}"
+          IFS='.' read -r major minor _ <<<"$version"
+          branch="release/${major}.${minor}"
+
+          echo "branch=${branch}" | tee -a "$GITHUB_OUTPUT"
+          echo "commit_sha=${commit_sha}" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Generate GitHub App token
+        id: bot-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.GH_APP_HOPRNET_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_HOPRNET_BOT_PRIVATE_KEY }}
+          owner: hoprnet
+          repositories: blokli
+          permission-contents: write
+
+      - name: Create release branch
+        env:
+          GH_TOKEN: ${{ steps.bot-token.outputs.token }}
+          TAG: ${{ inputs.tag }}
+          BRANCH: ${{ steps.resolve.outputs.branch }}
+          COMMIT_SHA: ${{ steps.resolve.outputs.commit_sha }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f ref="refs/heads/${BRANCH}" \
+            -f sha="${COMMIT_SHA}"
+
+          echo "Created branch \`${BRANCH}\` from tag \`${TAG}\` (${COMMIT_SHA})." >> "$GITHUB_STEP_SUMMARY"
