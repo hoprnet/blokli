@@ -255,15 +255,66 @@ async fn test_transaction_updated_with_nonexistent_transaction() -> Result<()> {
 
     let mut stream = ctx.schema.execute_stream(&query).boxed();
 
-    // Subscription should start, but not emit anything yet
-    // (transaction might be added later)
-    let timeout_result = tokio::time::timeout(Duration::from_millis(300), stream.next()).await;
-
-    // Should timeout (no transaction to emit)
-    assert!(
-        timeout_result.is_err(),
-        "Should timeout waiting for nonexistent transaction"
+    let response = stream.next().await.expect("Should return an error");
+    assert!(!response.errors.is_empty(), "Expected a transaction-not-found error");
+    assert_eq!(
+        response.errors[0].message,
+        format!("Transaction not found: {non_existent_id}")
     );
+    assert_eq!(
+        response.errors[0]
+            .extensions
+            .as_ref()
+            .and_then(|extensions| extensions.get("code")),
+        Some(&async_graphql::Value::from("NOT_FOUND"))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_transaction_updated_recovers_terminal_state_after_event_overflow() -> Result<()> {
+    let store = Arc::new(TransactionStore::with_capacity(1));
+    let db = BlokliDb::new_in_memory().await?;
+    let schema = Schema::build(QueryRoot, EmptyMutation, SubscriptionRoot)
+        .data(db.conn(TargetDb::Index).clone())
+        .data(ChainId(31337))
+        .data(NetworkName("test".to_string()))
+        .data(ContractAddresses::default())
+        .data(store.clone())
+        .finish();
+
+    let tx_id = uuid::Uuid::new_v4();
+    let other_id = uuid::Uuid::new_v4();
+    for id in [tx_id, other_id] {
+        store.insert(TransactionRecord {
+            id,
+            raw_transaction: vec![0x01],
+            transaction_hash: Hash::default(),
+            status: TransactionStatus::Submitted,
+            submitted_at: chrono::Utc::now(),
+            confirmed_at: None,
+            error_message: None,
+            safe_execution: None,
+        })?;
+    }
+
+    let query = format!(r#"subscription {{ transactionUpdated(id: "{tx_id}") {{ id status }} }}"#);
+    let mut stream = schema.execute_stream(&query).boxed();
+
+    let initial = stream.next().await.expect("Should emit initial state");
+    let initial = serde_json::to_value(initial)?;
+    assert_eq!(initial["data"]["transactionUpdated"]["status"], "SUBMITTED");
+
+    store.update_status(tx_id, TransactionStatus::Confirmed, None)?;
+    store.update_status(other_id, TransactionStatus::Confirmed, None)?;
+
+    let terminal = tokio::time::timeout(Duration::from_secs(1), stream.next())
+        .await
+        .expect("Timed out waiting for reconciled state")
+        .expect("Stream should emit reconciled state");
+    let terminal = serde_json::to_value(terminal)?;
+    assert_eq!(terminal["data"]["transactionUpdated"]["status"], "CONFIRMED");
 
     Ok(())
 }
