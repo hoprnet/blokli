@@ -285,15 +285,16 @@ fields. SQLite uses separate index and raw-log databases.
 
 #### Indexer Configuration
 
-| Config Key                                      | Default | Environment Variable                                   | Description                                           |
-| :---------------------------------------------- | :------ | :----------------------------------------------------- | :---------------------------------------------------- |
-| `indexer.fast_sync`                             | `true`  | `BLOKLI_INDEXER_FAST_SYNC`                             | Enables the fast initial synchronization path         |
-| `indexer.enable_logs_snapshot`                  | `false` | `BLOKLI_INDEXER_ENABLE_LOGS_SNAPSHOT`                  | Restores raw logs from a snapshot before catch-up     |
-| `indexer.enable_safe_indexing`                  | `false` | `BLOKLI_INDEXER_ENABLE_SAFE_INDEXING`                  | Indexes Safe events after Safe discovery              |
-| `indexer.logs_snapshot_url`                     | unset   | `BLOKLI_INDEXER_LOGS_SNAPSHOT_URL`                     | URL of a `.tar.xz` archive containing `hopr_logs.sql` |
-| `indexer.subscription.event_bus_capacity`       | `1000`  | `BLOKLI_INDEXER_SUBSCRIPTION_EVENT_BUS_CAPACITY`       | Channel-event bus capacity                            |
-| `indexer.subscription.shutdown_signal_capacity` | `10`    | `BLOKLI_INDEXER_SUBSCRIPTION_SHUTDOWN_SIGNAL_CAPACITY` | Shutdown signal buffer capacity                       |
-| `indexer.subscription.batch_size`               | `100`   | `BLOKLI_INDEXER_SUBSCRIPTION_BATCH_SIZE`               | Historical subscription query batch size              |
+| Config Key                                       | Default | Environment Variable                                   | Description                                                                   |
+| :----------------------------------------------- | :------ | :----------------------------------------------------- | :---------------------------------------------------------------------------- |
+| `indexer.fast_sync`                              | `true`  | `BLOKLI_INDEXER_FAST_SYNC`                             | Enables the fast initial synchronization path                                 |
+| `indexer.enable_logs_snapshot`                   | `false` | `BLOKLI_INDEXER_ENABLE_LOGS_SNAPSHOT`                  | Restores raw logs from a snapshot before catch-up                             |
+| `indexer.enable_safe_indexing`                   | `false` | `BLOKLI_INDEXER_ENABLE_SAFE_INDEXING`                  | Indexes Safe events after Safe discovery                                      |
+| `indexer.additional_node_stake_factory_releases` | `[]`    | —                                                      | Historical contracts releases whose StakeFactory deployments are also indexed |
+| `indexer.logs_snapshot_url`                      | unset   | `BLOKLI_INDEXER_LOGS_SNAPSHOT_URL`                     | URL of a `.tar.xz` archive containing `hopr_logs.sql`                         |
+| `indexer.subscription.event_bus_capacity`        | `1000`  | `BLOKLI_INDEXER_SUBSCRIPTION_EVENT_BUS_CAPACITY`       | Channel-event bus capacity                                                    |
+| `indexer.subscription.shutdown_signal_capacity`  | `10`    | `BLOKLI_INDEXER_SUBSCRIPTION_SHUTDOWN_SIGNAL_CAPACITY` | Shutdown signal buffer capacity                                               |
+| `indexer.subscription.batch_size`                | `100`   | `BLOKLI_INDEXER_SUBSCRIPTION_BATCH_SIZE`               | Historical subscription query batch size                                      |
 
 #### API Configuration
 

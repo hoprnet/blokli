@@ -1,3 +1,5 @@
+use hopr_types::primitive::prelude::Address;
+
 /// Configuration for the chain indexer functionality
 #[derive(Debug, Clone, smart_default::SmartDefault)]
 pub struct IndexerConfig {
@@ -37,6 +39,10 @@ pub struct IndexerConfig {
     /// Default is `false`.
     #[default(false)]
     pub enable_curvy_indexing: bool,
+
+    /// Historical StakeFactory addresses whose deployment events should also be indexed.
+    #[default(_code = "Vec::new()")]
+    pub additional_node_stake_factories: Vec<Address>,
 
     /// URL to download logs snapshot from.
     /// This should point to a publicly accessible tar.xz file containing
@@ -103,6 +109,7 @@ impl IndexerConfig {
             enable_logs_snapshot,
             enable_safe_indexing,
             enable_curvy_indexing,
+            additional_node_stake_factories: Vec::new(),
             logs_snapshot_url,
             data_directory,
             event_bus_capacity,

@@ -260,12 +260,43 @@ impl Args {
             ))
         })?;
 
+        let mut additional_stake_factory_deployments = Vec::new();
+        for release in &config.indexer.additional_node_stake_factory_releases {
+            let deployment = config.network.resolve_stake_factory(*release).ok_or_else(|| {
+                BloklidError::NonSpecific(format!(
+                    "Network '{}' is not defined in historical contracts release '{}'",
+                    config.network, release
+                ))
+            })?;
+
+            if deployment.chain_id != network_config.chain_id {
+                return Err(BloklidError::NonSpecific(format!(
+                    "Historical contracts release '{}' resolves network '{}' to chain ID {}, expected {}",
+                    release, config.network, deployment.chain_id, network_config.chain_id
+                )));
+            }
+            if deployment.address == Address::default() {
+                return Err(ConfigError::Parse(format!(
+                    "Historical contracts release '{}' resolves network '{}' to the zero StakeFactory address",
+                    release, config.network
+                ))
+                .into());
+            }
+
+            additional_stake_factory_deployments.push(deployment);
+        }
+
+        let indexer_start_block_number = additional_stake_factory_deployments
+            .iter()
+            .map(|deployment| deployment.indexer_start_block_number)
+            .fold(network_config.indexer_start_block_number, u32::min);
+
         let chain_config = ChainConfig {
             chain_id: network_config.chain_id,
             tx_polling_interval: config.network.tx_polling_interval(),
             confirmations: config.network.confirmations(),
             max_block_range: config.max_block_range,
-            channel_contract_deploy_block: network_config.indexer_start_block_number,
+            channel_contract_deploy_block: indexer_start_block_number,
             max_requests_per_sec: config.max_rpc_requests_per_sec,
             expected_block_time: config.network.expected_block_time(),
         };
@@ -299,10 +330,46 @@ impl Args {
             contracts.curvy_aggregator = curvy_aggregator;
         }
 
+        let mut additional_node_stake_factories = additional_stake_factory_deployments
+            .into_iter()
+            .map(|deployment| deployment.address)
+            .filter(|address| *address != contracts.node_stake_factory)
+            .collect::<Vec<_>>();
+        additional_node_stake_factories.sort_unstable();
+        additional_node_stake_factories.dedup();
+
+        let non_factory_contracts = [
+            contracts.token,
+            contracts.channels,
+            contracts.announcements,
+            contracts.module_implementation,
+            contracts.node_safe_migration,
+            contracts.node_safe_registry,
+            contracts.ticket_price_oracle,
+            contracts.winning_probability_oracle,
+            contracts.xhopr_token,
+            contracts.curvy_aggregator,
+            contracts.curvy_vault,
+            contracts.curvy_portal_factory,
+            contracts.service_registry,
+        ];
+        if let Some(conflicting_address) = additional_node_stake_factories
+            .iter()
+            .find(|address| non_factory_contracts.contains(address))
+        {
+            return Err(ConfigError::Parse(format!(
+                "Historical StakeFactory address '{}' conflicts with another configured contract",
+                conflicting_address
+            ))
+            .into());
+        }
+        config.indexer.resolved_additional_node_stake_factories = additional_node_stake_factories;
+
         config.contracts = contracts;
 
         tracing::info!(
             contract_addresses = ?config.contracts,
+            additional_node_stake_factories = ?config.indexer.resolved_additional_node_stake_factories,
             "Resolved contract addresses",
         );
 
@@ -436,6 +503,41 @@ mod tests {
 
         assert!(config.contracts_override.is_none());
         assert_eq!(config.contracts.curvy_aggregator, Address::from([0xbb; 20]));
+    }
+
+    #[test]
+    fn test_historical_stake_factory_release_is_resolved() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "piz-palu-staging"
+            rpc_url = "http://localhost:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+            [indexer]
+            additional_node_stake_factory_releases = ["v4.13.0"]
+        "#
+        )
+        .unwrap();
+        let args = Args {
+            verbose: 0,
+            config: Some(file.path().to_path_buf()),
+            command: None,
+        };
+
+        let config = args.load_config(false).expect("historical factory should resolve");
+
+        assert_eq!(config.chain_network.unwrap().channel_contract_deploy_block, 47_638_474);
+        assert_eq!(
+            config.indexer.resolved_additional_node_stake_factories,
+            vec![
+                "0x5b16003552bafc1be2aaa21d961fb90b1da23f17"
+                    .parse()
+                    .expect("address should parse")
+            ]
+        );
     }
 
     #[test]

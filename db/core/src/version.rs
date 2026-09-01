@@ -33,7 +33,8 @@ use crate::errors::{DbSqlError, Result};
 /// - `"1.3.0"`: SC set updated through a binding update.
 /// - `"1.4.0"`: Service registry contract added to the indexed set.
 /// - `"1.5.0"`: Curvy event history, dense indices, notes-tree shards, and checkpoints.
-pub const SCHEMA_VERSION: &str = "1.5.0";
+/// - `"1.6.0"`: Historical StakeFactory deployments added to the indexed contract set.
+pub const SCHEMA_VERSION: &str = "1.6.0";
 
 /// The singleton ID used for the schema_version table.
 const SCHEMA_VERSION_TABLE_ID: i64 = 1;

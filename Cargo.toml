@@ -60,6 +60,7 @@ futures-util = "0.3.32"
 hex = "0.4.3"
 hex-literal = "1.1.0"
 hopr-bindings = { version = "5.0.0" }
+hopr-bindings-v4-13 = { package = "hopr-bindings", version = "=4.13.0" }
 hopr-types = { version = "4.0.0" }
 http = "1.4.2"
 humantime-serde = "1.1.1"

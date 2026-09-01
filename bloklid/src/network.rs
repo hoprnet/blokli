@@ -6,7 +6,33 @@
 use std::{fmt, str::FromStr};
 
 use hopr_bindings::config::{NetworksWithContractAddresses, SingleNetworkContractAddresses};
+//use hopr_bindings_v4_13::config::NetworksWithContractAddresses as NetworksWithContractAddressesV4_13;
+use hopr_types::primitive::prelude::Address;
 use serde::{Deserialize, Serialize};
+
+/// Contracts releases whose deployment metadata Blokli can use for historical indexing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ContractsRelease {
+    // /// Contracts release v4.13.0.
+    // #[serde(rename = "v4.13.0")]
+    // V4_13_0,
+}
+
+impl fmt::Display for ContractsRelease {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            // ContractsRelease::V4_13_0 => formatter.write_str("v4.13.0"),
+        }
+    }
+}
+
+/// Stake factory deployment metadata normalized from a historical bindings release.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StakeFactoryDeployment {
+    pub address: Address,
+    pub chain_id: u64,
+    pub indexer_start_block_number: u32,
+}
 
 /// Supported HOPR networks.
 ///
@@ -88,6 +114,23 @@ impl Network {
     pub fn resolve(&self) -> Option<SingleNetworkContractAddresses> {
         let networks = NetworksWithContractAddresses::default();
         networks.networks.get(self.as_str()).copied()
+    }
+
+    /// Resolves a historical StakeFactory deployment for this network.
+    pub fn resolve_stake_factory(&self, release: ContractsRelease) -> Option<StakeFactoryDeployment> {
+        match release {
+            // ContractsRelease::V4_13_0 => {
+            //     let networks = NetworksWithContractAddressesV4_13::default();
+            //     let network = networks.networks.get(self.as_str())?;
+            //     let address_bytes: [u8; 20] = network.addresses.node_stake_factory.as_slice().try_into().ok()?;
+
+            //     Some(StakeFactoryDeployment {
+            //         address: Address::from(address_bytes),
+            //         chain_id: network.chain_id,
+            //         indexer_start_block_number: network.indexer_start_block_number,
+            //     })
+            // }
+        }
     }
 
     /// Returns the transaction polling interval in milliseconds.
@@ -242,6 +285,20 @@ mod tests {
         assert!(
             piz_palu_staging.is_some(),
             "PizPaluStaging network should be defined in hopr-bindings"
+        );
+    }
+
+    #[test]
+    fn test_resolve_v4_13_stake_factory() {
+        let deployment = Network::PizPaluStaging
+            .resolve_stake_factory(ContractsRelease::V4_13_0)
+            .expect("v4.13.0 should define piz-palu-staging");
+
+        assert_eq!(deployment.chain_id, 100);
+        assert_eq!(deployment.indexer_start_block_number, 47_638_474);
+        assert_eq!(
+            deployment.address.to_string(),
+            "0x5b16003552bafc1be2aaa21d961fb90b1da23f17"
         );
     }
 }

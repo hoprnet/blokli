@@ -77,6 +77,8 @@ fn increment_indexer_contract_log_count(contract: &str) {
 pub struct ContractEventHandlers<T, Db> {
     /// Contract addresses whose events are processed, including the optional Curvy Aggregator.
     pub(super) addresses: Arc<ContractAddresses>,
+    /// Historical StakeFactory addresses observed in addition to the active factory.
+    pub(super) additional_node_stake_factories: Arc<Vec<Address>>,
     /// callbacks to inform other modules
     pub(super) db: Db,
     /// rpc operations to interact with the chain
@@ -126,12 +128,29 @@ where
     ) -> Self {
         Self {
             addresses: Arc::new(addresses),
+            additional_node_stake_factories: Arc::new(Vec::new()),
             db,
             _rpc_operations: rpc_operations,
             indexer_state,
             enable_safe_indexing,
             enable_curvy_indexing,
         }
+    }
+
+    /// Adds historical StakeFactory addresses whose deployment events should be indexed.
+    pub fn with_additional_node_stake_factories(mut self, addresses: Vec<Address>) -> Self {
+        let mut addresses = addresses
+            .into_iter()
+            .filter(|address| !address.is_zero() && *address != self.addresses.node_stake_factory)
+            .collect::<Vec<_>>();
+        addresses.sort_unstable();
+        addresses.dedup();
+        self.additional_node_stake_factories = Arc::new(addresses);
+        self
+    }
+
+    fn is_node_stake_factory(&self, address: Address) -> bool {
+        address == self.addresses.node_stake_factory || self.additional_node_stake_factories.contains(&address)
     }
 
     fn is_safe_contract_topic(topic: &[u8; 32]) -> bool {
@@ -211,7 +230,7 @@ where
             let event = HoprAnnouncementsEvents::decode_log(&primitive_log)?;
             self.on_announcement_event(tx, event.data, bn, tx_idx, log_idx, is_synced)
                 .await
-        } else if log.address.eq(&self.addresses.node_stake_factory) {
+        } else if self.is_node_stake_factory(log.address) {
             let event = HoprNodeStakeFactoryEvents::decode_log(&primitive_log)?;
             let block = log.block_number;
             let tx_idx = log.tx_index;
@@ -330,6 +349,8 @@ where
             addresses.push(self.addresses.service_registry);
         }
 
+        addresses.extend(self.additional_node_stake_factories.iter().copied());
+
         if self.enable_curvy_indexing {
             addresses.push(self.addresses.curvy_aggregator);
         }
@@ -367,7 +388,7 @@ where
             crate::constants::topics::winning_prob_oracle()
         } else if contract.eq(&self.addresses.node_safe_registry) {
             crate::constants::topics::node_safe_registry()
-        } else if contract.eq(&self.addresses.node_stake_factory) {
+        } else if self.is_node_stake_factory(contract) {
             crate::constants::topics::stake_factory()
         } else if contract.eq(&self.addresses.token) {
             crate::constants::topics::token()
@@ -452,6 +473,32 @@ mod tests {
         state::IndexerEvent,
         traits::ChainLogHandler,
     };
+
+    #[tokio::test]
+    async fn test_additional_stake_factory_is_indexed_with_factory_topics() -> anyhow::Result<()> {
+        let additional_factory = Address::from([0x42; 20]);
+        let rpc_operations = ClonableMockOperations {
+            inner: Arc::new(MockIndexerRpcOperations::new()),
+        };
+        let db = BlokliDb::new_in_memory().await?;
+        let (handlers, ..) = init_handlers_with_events(rpc_operations, db);
+        let handlers = handlers.with_additional_node_stake_factories(vec![additional_factory, additional_factory]);
+
+        assert_eq!(
+            handlers
+                .contract_addresses()
+                .into_iter()
+                .filter(|address| *address == additional_factory)
+                .count(),
+            1
+        );
+        assert_eq!(
+            handlers.contract_address_topics(additional_factory),
+            crate::constants::topics::stake_factory()
+        );
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_collect_log_event_publishes_after_transaction_commit() -> anyhow::Result<()> {
