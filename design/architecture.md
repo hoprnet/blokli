@@ -400,9 +400,9 @@ selectors against permitted operations. Prevents submission of malicious or unin
 **TransactionStore**: In-memory storage using concurrent hash map (DashMap) for thread-safe access. Tracks transaction records with UUID
 identifiers, maintains status lifecycle, and provides query interface for GraphQL resolvers.
 
-**TransactionMonitor**: Background process continuously monitoring pending transactions. Queries blockchain for transaction receipts,
-updates transaction status based on confirmation depth, handles timeouts and reverted transactions, and publishes status updates to event
-bus for subscriptions.
+**TransactionMonitor**: Background process continuously monitoring pending transactions with bounded concurrent receipt checks. For Safe
+transactions, it requires a decoded inner execution outcome before publishing a terminal update; failures or timeouts remain non-terminal
+and are retried. Optional revert-reason tracing is bounded separately. Status updates are published to the subscription event bus.
 
 **Transaction Lifecycle States**:
 
@@ -460,8 +460,9 @@ monitoring via subscriptions.
 **Design Principles**:
 
 1. **Ephemeral State**: Transaction records exist only during server runtime
-2. **Event-Driven**: Status updates broadcast to subscribers immediately
-3. **Zero Polling**: Subscriptions use event bus instead of database polling
+2. **Immediate Notifications**: Status updates broadcast to subscribers immediately
+3. **Event-Driven with Reconciliation**: Subscriptions use the event bus for immediate updates and periodically reconcile against the
+   in-memory store so a dropped notification cannot leave a stream stale
 4. **Thread-Safe**: Lock-free concurrent access using `DashMap`
 
 **Data Flow**:
@@ -488,6 +489,7 @@ GraphQL Subscription Receives Update
 - **Overflow Strategy**: Set to `true` - slow subscribers miss old events
 - **Event Types**: `TransactionEvent::StatusUpdated` with delta fields
 - **Subscriber Pattern**: Fresh receivers avoid backlog
+- **Recovery**: Overflow and periodic reconciliation re-read the authoritative in-memory record
 
 **Transaction Lifecycle**:
 
@@ -511,7 +513,8 @@ GraphQL Subscription Receives Update
 - No persistence across restarts
 - No historical query support beyond current session
 - Requires manual cleanup of old transactions
-- Event overflow may cause subscribers to miss updates
+- Event overflow can delay updates until the subscription reconciles with the store
+- Async transaction IDs are local to one process, so transaction submission and tracking require the same running API instance
 
 **Future Considerations**:
 

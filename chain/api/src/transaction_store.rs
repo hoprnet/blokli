@@ -6,11 +6,12 @@
 
 use std::sync::Arc;
 
-use async_broadcast::{Receiver, Sender, broadcast};
+use async_broadcast::{InactiveReceiver, Receiver, Sender, TrySendError, broadcast};
 use chrono::{DateTime, Utc};
 use dashmap::{DashMap, mapref::entry::Entry};
 use hopr_types::{crypto::types::Hash, primitive::traits::ToHex};
 use thiserror::Error;
+use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use crate::metrics::{
@@ -133,11 +134,11 @@ pub struct TransactionStore {
     transactions: Arc<DashMap<Uuid, TransactionRecord>>,
     /// Event bus sender for broadcasting transaction status updates
     event_bus: Sender<TransactionEvent>,
-    /// Initial receiver kept alive to maintain channel state
+    /// Inactive receiver kept alive to maintain channel state
     ///
-    /// This receiver is never used but must be kept alive to prevent the
-    /// async_broadcast channel from entering a closed state.
-    _event_bus_rx: Arc<Receiver<TransactionEvent>>,
+    /// It prevents the channel from closing without retaining events when no
+    /// transaction subscriptions are active.
+    _inactive_event_bus_rx: Arc<InactiveReceiver<TransactionEvent>>,
 }
 
 impl std::fmt::Debug for TransactionStore {
@@ -145,7 +146,7 @@ impl std::fmt::Debug for TransactionStore {
         f.debug_struct("TransactionStore")
             .field("transactions", &self.transactions)
             .field("event_bus", &"Sender<TransactionEvent>")
-            .field("_event_bus_rx", &"Arc<Receiver<TransactionEvent>>")
+            .field("_inactive_event_bus_rx", &"Arc<InactiveReceiver<TransactionEvent>>")
             .finish()
     }
 }
@@ -168,8 +169,10 @@ impl TransactionStore {
     ///
     /// A new TransactionStore instance ready for use
     pub fn with_capacity(event_bus_capacity: usize) -> Self {
-        // Create broadcast channel, keeping the initial receiver alive
+        // Keep an inactive receiver alive so the channel remains open without
+        // retaining events when there are no real subscribers.
         let (mut event_bus, event_bus_rx) = broadcast(event_bus_capacity);
+        let inactive_event_bus_rx = event_bus_rx.deactivate();
 
         // Set overflow behavior to allow new receivers to miss old messages if they can't keep up
         event_bus.set_overflow(true);
@@ -177,7 +180,7 @@ impl TransactionStore {
         Self {
             transactions: Arc::new(DashMap::new()),
             event_bus,
-            _event_bus_rx: Arc::new(event_bus_rx),
+            _inactive_event_bus_rx: Arc::new(inactive_event_bus_rx),
         }
     }
 
@@ -257,7 +260,7 @@ impl TransactionStore {
         }
 
         // Publish event to subscribers with delta fields only
-        let _ = self.event_bus.try_broadcast(TransactionEvent::StatusUpdated {
+        self.broadcast_status_update(TransactionEvent::StatusUpdated {
             id,
             status,
             error_message: error_msg,
@@ -297,7 +300,7 @@ impl TransactionStore {
         record_transaction_status(STATUS_CONFIRMED);
 
         // Broadcast event so subscribers are notified of the confirmation
-        let _ = self.event_bus.try_broadcast(TransactionEvent::StatusUpdated {
+        self.broadcast_status_update(TransactionEvent::StatusUpdated {
             id,
             status: TransactionStatus::Confirmed,
             error_message: None,
@@ -324,8 +327,7 @@ impl TransactionStore {
     /// Subscribe to transaction status update events
     ///
     /// Creates a new receiver that will receive all future transaction status updates.
-    /// Each status update will broadcast a `TransactionEvent::StatusUpdated` event
-    /// containing the transaction ID and the complete updated record.
+    /// Each status update broadcasts a `TransactionEvent::StatusUpdated` delta.
     ///
     /// # Returns
     ///
@@ -333,6 +335,38 @@ impl TransactionStore {
     pub fn subscribe(&self) -> Receiver<TransactionEvent> {
         // Get a fresh receiver from the sender to avoid inheriting backlog
         self.event_bus.new_receiver()
+    }
+
+    fn broadcast_status_update(&self, event: TransactionEvent) {
+        let TransactionEvent::StatusUpdated { id, status, .. } = &event;
+        let id = *id;
+        let status = *status;
+
+        match self.event_bus.try_broadcast(event) {
+            Ok(Some(_)) => {
+                warn!(
+                    transaction_id = %id,
+                    ?status,
+                    "Transaction event bus overflowed and dropped its oldest event"
+                );
+            }
+            Ok(None) => {}
+            Err(TrySendError::Inactive(_)) => {
+                debug!(
+                    transaction_id = %id,
+                    ?status,
+                    "No active transaction subscribers; status remains available in the store"
+                );
+            }
+            Err(error) => {
+                error!(
+                    transaction_id = %id,
+                    ?status,
+                    %error,
+                    "Failed to broadcast transaction status update"
+                );
+            }
+        }
     }
 }
 
