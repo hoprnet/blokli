@@ -530,3 +530,9 @@ pub fn invalid_schema_version_header() -> async_graphql::Error {
     async_graphql::Error::new("Invalid X-Blokli-Schema-Version header: expected a non-negative integer")
         .extend_with(|_, e| e.set("code", codes::INVALID_SCHEMA_VERSION_HEADER))
 }
+
+/// Creates an async_graphql::Error for a transaction tracking ID that is not present on this server.
+pub fn transaction_not_found(transaction_id: impl std::fmt::Display) -> async_graphql::Error {
+    async_graphql::Error::new(messages::not_found("Transaction", transaction_id))
+        .extend_with(|_, e| e.set("code", codes::NOT_FOUND))
+}

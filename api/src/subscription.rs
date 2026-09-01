@@ -1,6 +1,6 @@
 //! GraphQL subscription root and resolver implementations
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use async_broadcast::Receiver;
 use async_graphql::{Context, ID, Result, Subscription};
@@ -36,6 +36,7 @@ use hopr_types::primitive::{
 };
 use rand::seq::SliceRandom;
 use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
+use tokio::time::{MissedTickBehavior, interval};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -1167,10 +1168,10 @@ impl SubscriptionRoot {
     /// Provides updates whenever the status of the specified transaction changes,
     /// including validation, submission, confirmation, revert, and failure events.
     ///
-    /// Uses event-driven architecture to receive updates immediately when transaction
-    /// status changes, with zero polling overhead. Follows a 2-phase approach:
+    /// Uses event-driven delivery for immediate updates plus periodic store reconciliation
+    /// to recover from dropped notifications. Follows a 2-phase approach:
     /// - Phase 1: Emit current transaction state if it exists
-    /// - Phase 2: Listen for future status update events
+    /// - Phase 2: Listen for status update events and reconcile with current state
     #[graphql(name = "transactionUpdated")]
     async fn transaction_updated(
         &self,
@@ -1186,6 +1187,9 @@ impl SubscriptionRoot {
         // Subscribe to transaction events before checking current state
         // to avoid race condition where we miss an update
         let mut event_receiver = transaction_store.subscribe();
+        let initial_record = transaction_store
+            .get(transaction_id)
+            .map_err(|_| errors::transaction_not_found(transaction_id))?;
 
         Ok(stream! {
             let is_terminal_status = |s: &StoreTransactionStatus| {
@@ -1199,59 +1203,69 @@ impl SubscriptionRoot {
                 )
             };
 
-            // Phase 1: Emit current state if transaction exists
-            if let Ok(record) = transaction_store.get(transaction_id) {
-                let is_terminal = is_terminal_status(&record.status);
+            // Phase 1: Emit the state captured after subscribing to the event bus.
+            let mut last_status = initial_record.status;
+            let is_terminal = is_terminal_status(&last_status);
 
-                yield Transaction {
-                    id: ID::from(record.id.to_string()),
-                    status: convert_transaction_status(record.status),
-                    submitted_at: record.submitted_at,
-                    transaction_hash: Hex32(record.transaction_hash.to_hex()),
-                    safe_execution: convert_safe_execution(record.safe_execution),
-                };
+            yield Transaction {
+                id: ID::from(initial_record.id.to_string()),
+                status: convert_transaction_status(initial_record.status),
+                submitted_at: initial_record.submitted_at,
+                transaction_hash: Hex32(initial_record.transaction_hash.to_hex()),
+                safe_execution: convert_safe_execution(initial_record.safe_execution),
+            };
 
-                if is_terminal {
-                    return;
-                }
+            if is_terminal {
+                return;
             }
 
-            // Phase 2: Listen for future status update events
+            // Phase 2: Listen for events and periodically reconcile with the store. The
+            // reconciliation makes a dropped notification recoverable.
+            let mut reconciliation = interval(Duration::from_secs(5));
+            reconciliation.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            reconciliation.tick().await;
+
             loop {
-                match event_receiver.recv().await {
-                    // Use pattern matching guard to filter for matching transaction ID
-                    Ok(TransactionEvent::StatusUpdated { id, .. })
-                        if id == transaction_id =>
-                    {
-                        // Fetch full record to get consistent status + safe_execution
-                        if let Ok(record) = transaction_store.get(transaction_id) {
-                            let is_terminal = is_terminal_status(&record.status);
-
-                            yield Transaction {
-                                id: ID::from(id.to_string()),
-                                status: convert_transaction_status(record.status),
-                                submitted_at: record.submitted_at,
-                                transaction_hash: Hex32(record.transaction_hash.to_hex()),
-                                safe_execution: convert_safe_execution(record.safe_execution),
-                            };
-
-                            if is_terminal {
-                                break;
+                let should_reconcile = tokio::select! {
+                    event = event_receiver.recv() => {
+                        match event {
+                            Ok(TransactionEvent::StatusUpdated { id, .. }) => id == transaction_id,
+                            Err(async_broadcast::RecvError::Closed) => break,
+                            Err(async_broadcast::RecvError::Overflowed(missed)) => {
+                                warn!(
+                                    %transaction_id,
+                                    missed,
+                                    "Transaction subscription missed events; reconciling from the store"
+                                );
+                                true
                             }
                         }
                     }
-                    Ok(_) => {
-                        // Ignore events for other transactions
-                    }
-                    Err(async_broadcast::RecvError::Closed) => {
-                        // Event bus closed, terminate subscription
-                        break;
-                    }
-                    Err(async_broadcast::RecvError::Overflowed(_)) => {
-                        // Missed some events due to slow consumer, continue listening
-                        // This is acceptable since we only care about the latest status
-                        warn!("Transaction subscription for {} missed some events due to overflow", transaction_id);
+                    _ = reconciliation.tick() => true,
+                };
+
+                if !should_reconcile {
+                    continue;
+                }
+
+                if let Ok(record) = transaction_store.get(transaction_id) {
+                    if record.status == last_status {
                         continue;
+                    }
+
+                    last_status = record.status;
+                    let is_terminal = is_terminal_status(&last_status);
+
+                    yield Transaction {
+                        id: ID::from(record.id.to_string()),
+                        status: convert_transaction_status(record.status),
+                        submitted_at: record.submitted_at,
+                        transaction_hash: Hex32(record.transaction_hash.to_hex()),
+                        safe_execution: convert_safe_execution(record.safe_execution),
+                    };
+
+                    if is_terminal {
+                        break;
                     }
                 }
             }
