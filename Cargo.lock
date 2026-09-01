@@ -1922,7 +1922,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-api"
-version = "0.23.5"
+version = "0.23.6"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1985,7 +1985,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-chain-api"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "alloy-sol-types",
  "anyhow",
@@ -2179,7 +2179,7 @@ dependencies = [
 
 [[package]]
 name = "bloklid"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "anyhow",
  "async-signal",
