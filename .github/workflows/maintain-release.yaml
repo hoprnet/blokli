@@ -61,6 +61,7 @@ jobs:
           owner: hoprnet
           repositories: blokli
           permission-contents: write
+          permission-workflows: write
 
       - name: Create release branch
         env:
