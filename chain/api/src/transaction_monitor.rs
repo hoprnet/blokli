@@ -225,6 +225,14 @@ impl<R: ReceiptProvider, S: SafeAddressChecker> TransactionMonitor<R, S> {
                 .await
                 {
                     Ok(Ok(result)) => result,
+                    Ok(Err(SafeExecutionInspectionError::InvalidTransactionTarget)) => {
+                        warn!(
+                            id = %record.id,
+                            tx_hash = %tx_hash,
+                            "Failed to decode transaction target; confirming without Safe execution inspection"
+                        );
+                        None
+                    }
                     Ok(Err(error)) => {
                         warn!(
                             id = %record.id,
