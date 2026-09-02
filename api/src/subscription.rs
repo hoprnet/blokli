@@ -7,7 +7,7 @@ use async_graphql::{Context, ID, Result, Subscription};
 use async_stream::{stream, try_stream};
 use blokli_api_types::{
     Account, Channel, ChannelUpdate, CurvyCommittedNote, CurvyCommittedNullifier, CurvyEventPosition, CurvyPendingNote,
-    Hex32, OpenedChannelsGraphEntry, RedeemTicketDetails, Safe, ServiceRegistryConfig, ServiceTypeUpdate,
+    OpenedChannelsGraphEntry, RedeemTicketDetails, Safe, ServiceRegistryConfig, ServiceTypeUpdate,
     ServiceTypeUpdateKind, ServiceUpdate, ServiceUpdateKind, TicketParameters, TokenValueString, Transaction, UInt64,
 };
 use blokli_chain_api::transaction_store::{
@@ -48,8 +48,8 @@ use uuid::Uuid;
 
 use crate::{
     conversions::{
-        convert_safe_execution, convert_transaction_status, service_entry_from_aggregate,
-        service_registry_config_from_model, service_type_from_aggregate,
+        service_entry_from_aggregate, service_registry_config_from_model, service_type_from_aggregate,
+        transaction_from_record,
     },
     curvy, errors,
     query::owners_for_safe,
@@ -1820,16 +1820,10 @@ impl SubscriptionRoot {
             };
 
             // Phase 1: Emit the state captured after subscribing to the event bus.
-            let mut last_status = initial_record.status;
-            let is_terminal = is_terminal_status(&last_status);
+            let mut last_record = initial_record.clone();
+            let is_terminal = is_terminal_status(&last_record.status);
 
-            yield Transaction {
-                id: ID::from(initial_record.id.to_string()),
-                status: convert_transaction_status(initial_record.status),
-                submitted_at: initial_record.submitted_at,
-                transaction_hash: Hex32(initial_record.transaction_hash.to_hex()),
-                safe_execution: convert_safe_execution(initial_record.safe_execution),
-            };
+            yield transaction_from_record(initial_record);
 
             if is_terminal {
                 return;
@@ -1865,20 +1859,14 @@ impl SubscriptionRoot {
                 }
 
                 if let Ok(record) = transaction_store.get(transaction_id) {
-                    if record.status == last_status {
+                    if record == last_record {
                         continue;
                     }
 
-                    last_status = record.status;
-                    let is_terminal = is_terminal_status(&last_status);
+                    last_record = record.clone();
+                    let is_terminal = is_terminal_status(&last_record.status);
 
-                    yield Transaction {
-                        id: ID::from(record.id.to_string()),
-                        status: convert_transaction_status(record.status),
-                        submitted_at: record.submitted_at,
-                        transaction_hash: Hex32(record.transaction_hash.to_hex()),
-                        safe_execution: convert_safe_execution(record.safe_execution),
-                    };
+                    yield transaction_from_record(record);
 
                     if is_terminal {
                         break;

@@ -32,7 +32,7 @@ pub enum TransactionStoreError {
 ///
 /// Populated after a transaction targeting a Safe contract is confirmed on-chain.
 /// Extracted from ExecutionSuccess/ExecutionFailure events in the receipt logs.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct SafeExecutionResult {
     /// Whether the internal Safe transaction succeeded
     pub success: bool,
@@ -107,7 +107,7 @@ pub enum TransactionEvent {
 }
 
 /// Record of a submitted transaction
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct TransactionRecord {
     /// Unique identifier for the transaction
     pub id: Uuid,
