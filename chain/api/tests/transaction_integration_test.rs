@@ -114,6 +114,10 @@ async fn setup_test_environment(
         poll_interval: Duration::from_millis(200),
         timeout: Duration::from_secs(300),
         per_transaction_delay: Duration::from_millis(100),
+        request_timeout: Duration::from_secs(30),
+        safe_inspection_timeout: Duration::from_secs(30),
+        revert_reason_timeout: Duration::from_secs(30),
+        max_concurrent_checks: 16,
     };
 
     let transaction_monitor = Arc::new(TransactionMonitor::new(

@@ -6,12 +6,28 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
+use blokli_chain_api::transaction_store::{TransactionRecord, TransactionStatus, TransactionStore};
 use blokli_db_entity::chain_info;
 use futures::StreamExt;
+use hopr_types::crypto::types::Hash;
 use sea_orm::{EntityTrait, Set, sea_query::OnConflict};
 use serde_json::json;
 use tower::ServiceExt;
 use uuid::Uuid;
+
+fn insert_submitted_transaction(store: &TransactionStore, id: Uuid) -> anyhow::Result<()> {
+    store.insert(TransactionRecord {
+        id,
+        raw_transaction: vec![0x01],
+        transaction_hash: Hash::default(),
+        status: TransactionStatus::Submitted,
+        submitted_at: chrono::Utc::now(),
+        confirmed_at: None,
+        error_message: None,
+        safe_execution: None,
+    })?;
+    Ok(())
+}
 
 #[test_log::test(tokio::test)]
 async fn test_sse_keepalive_comments_emitted() -> anyhow::Result<()> {
@@ -38,10 +54,12 @@ async fn test_sse_keepalive_comments_emitted() -> anyhow::Result<()> {
     tokio::time::sleep(Duration::from_millis(150)).await;
 
     // Subscribe with no events and assert the keepalive comment arrives.
+    let transaction_id = Uuid::new_v4();
+    insert_submitted_transaction(&ctx.transaction_store, transaction_id)?;
     let request_body = json!({
         "query": format!(
             "subscription TransactionUpdated {{ transactionUpdated(id: \"{}\") {{ id status }} }}",
-            Uuid::new_v4()
+            transaction_id
         )
     });
 
@@ -59,6 +77,11 @@ async fn test_sse_keepalive_comments_emitted() -> anyhow::Result<()> {
     assert_eq!(response.status(), StatusCode::OK);
 
     let mut stream = response.into_body().into_data_stream();
+    let _initial_state = tokio::time::timeout(Duration::from_millis(200), stream.next())
+        .await
+        .expect("Timed out waiting for initial transaction state")
+        .expect("SSE stream closed before initial transaction state")
+        .expect("SSE stream returned error");
     let frame = tokio::time::timeout(Duration::from_millis(200), stream.next())
         .await
         .expect("Timed out waiting for keepalive")
@@ -180,6 +203,7 @@ async fn test_sse_identifier_uniqueness() -> anyhow::Result<()> {
     tokio::time::sleep(Duration::from_millis(150)).await;
 
     // Create two subscription requests
+    let transaction_id1 = Uuid::new_v4();
     let request1 = Request::builder()
         .method("POST")
         .uri("/graphql")
@@ -189,13 +213,14 @@ async fn test_sse_identifier_uniqueness() -> anyhow::Result<()> {
             serde_json::to_string(&json!({
                 "query": format!(
                     "subscription TransactionUpdated {{ transactionUpdated(id: \"{}\") {{ id status }} }}",
-                    Uuid::new_v4()
+                    transaction_id1
                 )
             }))
             .expect("Failed to serialize JSON"),
         ))
         .expect("Failed to build request");
 
+    let transaction_id2 = Uuid::new_v4();
     let request2 = Request::builder()
         .method("POST")
         .uri("/graphql")
@@ -205,7 +230,7 @@ async fn test_sse_identifier_uniqueness() -> anyhow::Result<()> {
             serde_json::to_string(&json!({
                 "query": format!(
                     "subscription TransactionUpdated {{ transactionUpdated(id: \"{}\") {{ id status }} }}",
-                    Uuid::new_v4()
+                    transaction_id2
                 )
             }))
             .expect("Failed to serialize JSON"),
@@ -215,6 +240,8 @@ async fn test_sse_identifier_uniqueness() -> anyhow::Result<()> {
     // Need to create two separate app instances since oneshot consumes the app
     let ctx1 = common::setup_http_test_environment().await?;
     let ctx2 = common::setup_http_test_environment().await?;
+    insert_submitted_transaction(&ctx1.transaction_store, transaction_id1)?;
+    insert_submitted_transaction(&ctx2.transaction_store, transaction_id2)?;
 
     // Get current block numbers for each context to avoid lag issues
     let current_block1 = ctx1.rpc_operations.get_block_number().await?;
@@ -268,6 +295,17 @@ async fn test_sse_identifier_uniqueness() -> anyhow::Result<()> {
 
     let mut stream1 = response1.into_body().into_data_stream();
     let mut stream2 = response2.into_body().into_data_stream();
+
+    let _initial_state1 = tokio::time::timeout(Duration::from_millis(200), stream1.next())
+        .await
+        .expect("Timed out waiting for initial transaction state 1")
+        .expect("SSE stream 1 closed before initial transaction state")
+        .expect("SSE stream 1 returned error");
+    let _initial_state2 = tokio::time::timeout(Duration::from_millis(200), stream2.next())
+        .await
+        .expect("Timed out waiting for initial transaction state 2")
+        .expect("SSE stream 2 closed before initial transaction state")
+        .expect("SSE stream 2 returned error");
 
     let frame1 = tokio::time::timeout(Duration::from_millis(200), stream1.next())
         .await
