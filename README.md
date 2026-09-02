@@ -348,7 +348,7 @@ xhopr_token = "0x0000000000000000000000000000000000000000"
 ```
 
 Curvy configuration is independent of the HOPR `[contracts]` override. Set only the Aggregator proxy and enable Curvy indexing; Blokli
-resolves the Vault and PortalFactory from the Aggregator during startup:
+resolves the Vault and optional PortalFactory from the Aggregator during startup:
 
 ```toml
 curvy_aggregator = "0x0000000000000000000000000000000000000000"
@@ -357,7 +357,9 @@ curvy_aggregator = "0x0000000000000000000000000000000000000000"
 enable_curvy_indexing = true
 ```
 
-The equivalent environment variables are `BLOKLI_CURVY_AGGREGATOR` and `BLOKLI_INDEXER_ENABLE_CURVY_INDEXING`.
+The equivalent environment variables are `BLOKLI_CURVY_AGGREGATOR` and `BLOKLI_INDEXER_ENABLE_CURVY_INDEXING`. The Aggregator and resolved
+Vault must be non-zero. A zero PortalFactory is accepted for direct-shield-only deployments; Portal-specific GraphQL queries are unavailable
+in that configuration.
 
 #### Contract Deployer Environment Variables
 
