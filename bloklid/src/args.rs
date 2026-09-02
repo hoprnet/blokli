@@ -9,6 +9,7 @@ use validator::Validate;
 use crate::{
     config::Config,
     errors::{self, BloklidError, ConfigError},
+    historical_bindings::resolve_stake_factory,
     network::Network,
 };
 
@@ -262,10 +263,10 @@ impl Args {
 
         let mut additional_stake_factory_deployments = Vec::new();
         for release in &config.indexer.additional_node_stake_factory_releases {
-            let deployment = config.network.resolve_stake_factory(*release).ok_or_else(|| {
+            let deployment = resolve_stake_factory(release, config.network.as_str()).ok_or_else(|| {
                 BloklidError::NonSpecific(format!(
-                    "Network '{}' is not defined in historical contracts release '{}'",
-                    config.network, release
+                    "Historical contracts release '{}' is not supported for network '{}'",
+                    release, config.network
                 ))
             })?;
 
@@ -506,18 +507,18 @@ mod tests {
     }
 
     #[test]
-    fn test_historical_stake_factory_release_is_resolved() {
+    fn test_unsupported_historical_contracts_release_is_rejected() {
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
             r#"
-            network = "piz-palu-staging"
+            network = "jura-dev"
             rpc_url = "http://localhost:8545"
             [database]
             type = "postgresql"
             url = "postgres://file:5432/db"
             [indexer]
-            additional_node_stake_factory_releases = ["v4.13.0"]
+            additional_node_stake_factory_releases = ["v1.2.3"]
         "#
         )
         .unwrap();
@@ -527,17 +528,10 @@ mod tests {
             command: None,
         };
 
-        let config = args.load_config(false).expect("historical factory should resolve");
+        let error = args.load_config(false).expect_err("unsupported release should fail");
 
-        assert_eq!(config.chain_network.unwrap().channel_contract_deploy_block, 47_638_474);
-        assert_eq!(
-            config.indexer.resolved_additional_node_stake_factories,
-            vec![
-                "0x5b16003552bafc1be2aaa21d961fb90b1da23f17"
-                    .parse()
-                    .expect("address should parse")
-            ]
-        );
+        assert!(error.to_string().contains("v1.2.3"));
+        assert!(error.to_string().contains("not supported"));
     }
 
     #[test]

@@ -5,7 +5,7 @@ use blokli_chain_types::{ChainConfig, ContractAddresses};
 use blokli_db::utils::redact_database_url;
 use hopr_types::primitive::primitives::Address;
 
-use crate::network::{ContractsRelease, Network};
+use crate::{historical_bindings::ContractsRelease, network::Network};
 
 fn default_rpc_url() -> String {
     "http://localhost:8545".to_string()
@@ -1040,14 +1040,12 @@ mod tests {
     fn test_historical_stake_factory_release_config() {
         let config = r#"
          [indexer]
-         additional_node_stake_factory_releases = ["v4.13.0"]
+         additional_node_stake_factory_releases = ["v1.2.3"]
      "#;
         let cfg: Config = toml::from_str(config).expect("historical release should parse");
 
-        assert_eq!(
-            cfg.indexer.additional_node_stake_factory_releases,
-            vec![ContractsRelease::V4_13_0]
-        );
+        assert_eq!(cfg.indexer.additional_node_stake_factory_releases.len(), 1);
+        assert_eq!(cfg.indexer.additional_node_stake_factory_releases[0].as_str(), "v1.2.3");
     }
 
     #[test]

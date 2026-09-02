@@ -2,6 +2,7 @@ mod args;
 mod config;
 mod constants;
 mod errors;
+mod historical_bindings;
 mod network;
 mod telemetry;
 mod telemetry_common;
