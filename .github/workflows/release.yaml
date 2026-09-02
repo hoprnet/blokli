@@ -13,6 +13,11 @@ on:
           - patch
           - minor
           - major
+      deploy:
+        description: Whether to deploy after release
+        required: true
+        type: boolean
+        default: true
 concurrency:
   group: release
   cancel-in-progress: false
@@ -104,31 +109,31 @@ jobs:
   deploy-staging:
     name: Deploy Gnosis Staging
     runs-on: depot-ubuntu-24.04-2
+    if: inputs.deploy == 'true'
     needs:
       - build-binaries
       - build-docker
       - release
     permissions:
       contents: read
-      id-token: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - name: Compute revision suffix
-        id: revision
-        run: echo "suffix=v$(echo '${{ needs.build-docker.outputs.docker_build_version }}' | tr '.' '-')" | tee -a "$GITHUB_OUTPUT"
-      - name: Setup GCP
-        id: gcp
-        uses: hoprnet/hopr-workflows/actions/setup-gcp@ac3e0b6137b0ba470a30c373aab2ceba9e0879e4
+      - name: Generate GitHub App token
+        id: bot-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          workload_identity_provider: ${{ vars.WIF_PROVIDER_STAGING }}
-          service_account: ${{ vars.WIF_SERVICE_ACCOUNT_STAGING }}
-          install_sdk: "true"
-      - name: Deploy to Cloud Run
-        uses: google-github-actions/deploy-cloudrun@2028e2d7d30a78c6910e0632e48dd561b064884d # v3.0.1
+          client-id: ${{ secrets.GH_APP_GNOSISVPN_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_GNOSISVPN_BOT_PRIVATE_KEY }}
+          owner: gnosis
+          repositories: gnosis_vpn-infrastructure
+          permission-contents: write
+      - name: Deploy to Gnosis Staging
+        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
         with:
-          service: blokli
-          region: europe-west1
-          image: europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid:${{ needs.build-docker.outputs.docker_build_version }}
-          suffix: ${{ steps.revision.outputs.suffix }}
-          flags: --timeout=600s
+          token: ${{ steps.bot-token.outputs.token }}
+          repository: gnosis/gnosis_vpn-infrastructure
+          event-type: deploy_blokli
+          client-payload: |-
+            {
+              "deployment_environment": "staging",
+              "tag": "${{ needs.build-docker.outputs.docker_build_version }}"
+            }
