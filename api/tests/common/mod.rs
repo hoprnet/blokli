@@ -360,6 +360,8 @@ pub struct HttpTestContext {
     pub db: DatabaseConnection,
     /// RPC operations for blockchain queries
     pub rpc_operations: Arc<RpcOperations<ReqwestClient>>,
+    /// In-memory transaction store used by the HTTP API
+    pub transaction_store: Arc<TransactionStore>,
 }
 
 /// Setup test environment for HTTP endpoint testing.
@@ -435,6 +437,7 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
         app,
         db: db.clone(),
         rpc_operations: ctx.rpc_operations,
+        transaction_store: ctx.transaction_store,
     })
 }
 
@@ -543,6 +546,10 @@ pub async fn setup_transaction_test_environment(
         poll_interval,
         timeout: Duration::from_secs(30),
         per_transaction_delay: Duration::from_millis(10),
+        request_timeout: Duration::from_secs(5),
+        safe_inspection_timeout: Duration::from_secs(5),
+        revert_reason_timeout: Duration::from_secs(5),
+        max_concurrent_checks: 4,
     };
 
     let transaction_monitor = Arc::new(TransactionMonitor::new(
