@@ -1820,10 +1820,11 @@ impl SubscriptionRoot {
             };
 
             // Phase 1: Emit the state captured after subscribing to the event bus.
-            let mut last_record = initial_record.clone();
+            let mut last_record = initial_record;
+            last_record.raw_transaction.clear();
             let is_terminal = is_terminal_status(&last_record.status);
 
-            yield transaction_from_record(initial_record);
+            yield transaction_from_record(last_record.clone());
 
             if is_terminal {
                 return;
@@ -1858,7 +1859,9 @@ impl SubscriptionRoot {
                     continue;
                 }
 
-                if let Ok(record) = transaction_store.get(transaction_id) {
+                if let Ok(mut record) = transaction_store.get(transaction_id) {
+                    record.raw_transaction.clear();
+
                     if record == last_record {
                         continue;
                     }
