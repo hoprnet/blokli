@@ -296,6 +296,22 @@ fields. SQLite uses separate index and raw-log databases.
 | `indexer.subscription.shutdown_signal_capacity`  | `10`    | `BLOKLI_INDEXER_SUBSCRIPTION_SHUTDOWN_SIGNAL_CAPACITY` | Shutdown signal buffer capacity                                               |
 | `indexer.subscription.batch_size`                | `100`   | `BLOKLI_INDEXER_SUBSCRIPTION_BATCH_SIZE`               | Historical subscription query batch size                                      |
 
+##### Adding a historical StakeFactory release
+
+Historical bindings must be pinned exactly while the current `hopr-bindings` dependency remains on its normal version requirement. To add a
+release:
+
+1. Add a uniquely named `hopr-bindings` dependency alias with the exact release version (`=MAJOR.MINOR.PATCH`) to the workspace dependencies
+   in `Cargo.toml`.
+2. Add that dependency alias with `{ workspace = true }` to `bloklid/Cargo.toml`.
+3. Map the release tag to the dependency's Rust crate alias in the `historical_bindings!` catalog near the top of
+   `bloklid/src/historical_bindings.rs`.
+4. Add the release tag to `indexer.additional_node_stake_factory_releases` in the deployment configuration.
+5. Bump the indexed schema minor version in `db/core/src/version.rs` so existing databases resynchronize from the earlier start block.
+
+The catalog macro generates deployment-resolution tests for every network and verifies that historical StakeFactory events remain decodable
+with the current bindings.
+
 #### API Configuration
 
 | Config Key                            | Default          | Environment Variable                         | Description                                   |
