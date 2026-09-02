@@ -1,10 +1,14 @@
 //! Resolution of historical contract deployments from pinned bindings releases.
-
 use std::{fmt, str::FromStr};
 
 use hopr_types::primitive::prelude::Address;
 use semver::Version;
 use serde::{Deserialize, Serialize};
+
+use crate::macros::historical_bindings;
+
+// Add historical bindings releases here after declaring their pinned Cargo dependency aliases.
+historical_bindings! {}
 
 /// A canonical GitHub contracts release tag such as `v1.2.3`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,49 +67,17 @@ pub struct StakeFactoryDeployment {
     pub indexer_start_block_number: u32,
 }
 
-/// Generates the resolver for every supported historical bindings release.
-///
-/// Each entry maps a contracts release tag to an exactly pinned Cargo dependency alias. The
-/// generated resolver normalizes the version-specific manifest into [`StakeFactoryDeployment`].
-macro_rules! historical_bindings {
-    ($($release:literal => $bindings:ident),* $(,)?) => {
-        /// Resolves a StakeFactory from the deployment manifest of a supported historical release.
-        pub fn resolve_stake_factory(
-            release: &ContractsRelease,
-            network_name: &str,
-        ) -> Option<StakeFactoryDeployment> {
-            let _ = network_name;
-            match release.as_str() {
-                $(
-                    $release => {
-                        let networks = $bindings::config::NetworksWithContractAddresses::default();
-                        let network = networks.networks.get(network_name)?;
-                        let address_bytes: [u8; 20] = network
-                            .addresses
-                            .node_stake_factory
-                            .as_slice()
-                            .try_into()
-                            .ok()?;
-
-                        Some(StakeFactoryDeployment {
-                            address: Address::from(address_bytes),
-                            chain_id: network.chain_id,
-                            indexer_start_block_number: network.indexer_start_block_number,
-                        })
-                    }
-                )*
-                _ => None,
-            }
-        }
-    };
-}
-
-// Add historical bindings releases here after declaring their pinned Cargo dependency aliases.
-historical_bindings! {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod populated_catalog {
+        use super::*;
+
+        historical_bindings! {
+            "v5.0.0" => hopr_bindings,
+        }
+    }
 
     #[test]
     fn test_contracts_release_parsing() {

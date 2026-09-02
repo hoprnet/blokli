@@ -3,6 +3,7 @@ mod config;
 mod constants;
 mod errors;
 mod historical_bindings;
+mod macros;
 mod network;
 mod telemetry;
 mod telemetry_common;
