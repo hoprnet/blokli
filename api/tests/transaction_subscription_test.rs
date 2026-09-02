@@ -213,6 +213,48 @@ async fn test_transaction_updated_receives_status_changes() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_transaction_updated_emits_same_status_record_changes() -> Result<()> {
+    let ctx = setup_test_environment().await?;
+
+    let tx_id = uuid::Uuid::new_v4();
+    ctx.store.insert(TransactionRecord {
+        id: tx_id,
+        raw_transaction: vec![0x01, 0x02, 0x03],
+        transaction_hash: Hash::default(),
+        status: TransactionStatus::Submitted,
+        submitted_at: chrono::Utc::now(),
+        confirmed_at: None,
+        error_message: None,
+        safe_execution: None,
+    })?;
+
+    let query = format!(r#"subscription {{ transactionUpdated(id: "{tx_id}") {{ id status }} }}"#);
+    let mut stream = ctx.schema.execute_stream(&query).boxed();
+
+    let initial = tokio::time::timeout(Duration::from_secs(1), stream.next())
+        .await
+        .expect("Timeout waiting for initial state")
+        .expect("Stream should produce a value");
+    let initial = serde_json::to_value(initial)?;
+    assert_eq!(initial["data"]["transactionUpdated"]["status"], "SUBMITTED");
+
+    ctx.store.update_status(
+        tx_id,
+        TransactionStatus::Submitted,
+        Some("updated diagnostic context".to_string()),
+    )?;
+
+    let update = tokio::time::timeout(Duration::from_secs(1), stream.next())
+        .await
+        .expect("Timeout waiting for same-status record update")
+        .expect("Stream should emit the changed record");
+    let update = serde_json::to_value(update)?;
+    assert_eq!(update["data"]["transactionUpdated"]["status"], "SUBMITTED");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_transaction_updated_with_invalid_uuid() -> Result<()> {
     let ctx = setup_test_environment().await?;
 
