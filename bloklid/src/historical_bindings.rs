@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use crate::macros::historical_bindings;
 
 // Add historical bindings releases here after declaring their pinned Cargo dependency aliases.
-historical_bindings! {}
+historical_bindings! {
+    "v5.0.0" => hopr_bindings,
+}
 
 /// A canonical GitHub contracts release tag such as `v1.2.3`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,14 +72,6 @@ pub struct StakeFactoryDeployment {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    mod populated_catalog {
-        use super::*;
-
-        historical_bindings! {
-            "v5.0.0" => hopr_bindings,
-        }
-    }
 
     #[test]
     fn test_contracts_release_parsing() {

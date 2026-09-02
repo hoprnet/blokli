@@ -121,8 +121,9 @@ logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz"
 # Safe discovery via registry/stake-factory events remains enabled regardless
 enable_safe_indexing = false
 
-# Additional historical HoprNodeStakeFactory deployments to index. Supported
-# release tags are compiled into Blokli when a historical deployment is selected.
+# Additional historical HoprNodeStakeFactory deployments to index. Only release
+# tags compiled into Blokli are accepted; an unknown tag is rejected at startup.
+# Naming the current release is a no-op, since that factory is already indexed.
 # additional_node_stake_factory_releases = []
 
 # Enable note/nullifier indexing from the configured Curvy Aggregator.

@@ -189,7 +189,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
             let database = require_database(&cfg)?;
 
             let indexer_config = blokli_chain_indexer::IndexerConfig {
-                start_block_number: chain_network.channel_contract_deploy_block as u64,
+                start_block_number: chain_network.indexer_start_block_number as u64,
                 fast_sync: cfg.indexer.fast_sync,
                 enable_logs_snapshot: cfg.indexer.enable_logs_snapshot,
                 enable_safe_indexing: cfg.indexer.enable_safe_indexing,

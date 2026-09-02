@@ -298,7 +298,10 @@ fields. SQLite uses separate index and raw-log databases.
 
 ##### Adding a historical StakeFactory release
 
-Historical bindings must be pinned exactly while the current `hopr-bindings` dependency remains on its normal version requirement. To add a
+The catalog always carries the current `hopr-bindings` release, which resolves to the StakeFactory blokli already indexes and is therefore a
+no-op when configured. Any tag outside the catalog is rejected at startup.
+
+Older bindings must be pinned exactly while the current `hopr-bindings` dependency remains on its normal version requirement. To add such a
 release:
 
 1. Add a uniquely named `hopr-bindings` dependency alias with the exact release version (`=MAJOR.MINOR.PATCH`) to the workspace dependencies

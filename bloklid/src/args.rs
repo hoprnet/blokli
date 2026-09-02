@@ -297,7 +297,7 @@ impl Args {
             tx_polling_interval: config.network.tx_polling_interval(),
             confirmations: config.network.confirmations(),
             max_block_range: config.max_block_range,
-            channel_contract_deploy_block: indexer_start_block_number,
+            indexer_start_block_number,
             max_requests_per_sec: config.max_rpc_requests_per_sec,
             expected_block_time: config.network.expected_block_time(),
         };

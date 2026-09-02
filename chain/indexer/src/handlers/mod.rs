@@ -318,22 +318,29 @@ where
     ///
     /// # Returns
     ///
-    /// `Vec<Address>` containing the monitored contract addresses in the following order:
-    /// announcements, channels, ticket_price_oracle, winning_probability_oracle,
-    /// node_safe_registry, node_stake_factory, token, and - only where it is deployed -
-    /// service_registry, followed by the configured Curvy Aggregator address when indexing is enabled.
+    /// `Vec<Address>` containing the monitored contract addresses. The seven always-present
+    /// entries come first, in this order: announcements, channels, ticket_price_oracle,
+    /// winning_probability_oracle, node_safe_registry, node_stake_factory, token. They are
+    /// followed by up to three groups of optional entries, in this order: the service registry
+    /// where it is deployed, then every historical StakeFactory configured through
+    /// [`with_additional_node_stake_factories`], then the Curvy Aggregator when Curvy indexing
+    /// is enabled.
     ///
-    /// The service registry is the one optional entry. Networks without a deployed registry
-    /// carry the zero address for it, and filtering `eth_getLogs` on the null address is both
-    /// meaningless and expensive, so it is skipped there.
+    /// Neither the length nor the position of the optional entries is stable across networks
+    /// and configurations, so callers must not index into the result or assume a fixed size.
+    ///
+    /// Networks without a deployed service registry carry the zero address for it, and filtering
+    /// `eth_getLogs` on the null address is both meaningless and expensive, so it is skipped there.
+    ///
+    /// [`with_additional_node_stake_factories`]: ContractEventHandlers::with_additional_node_stake_factories
     ///
     /// # Examples
     ///
     /// ```ignore
     /// let addrs = handlers.contract_addresses();
-    /// assert_eq!(addrs.len(), 8); // 7 where the service registry is not deployed
-    /// // order: announcements, channels, ticket_price_oracle, winning_probability_oracle,
-    /// // node_safe_registry, node_stake_factory, token, optional service_registry, optional Curvy Aggregator
+    /// // Seven mandatory contracts, plus whichever optional entries this deployment carries.
+    /// assert!(addrs.len() >= 7);
+    /// assert!(addrs.contains(&handlers.contract_addresses_map().channels));
     /// ```
     fn contract_addresses(&self) -> Vec<Address> {
         let mut addresses = vec![
