@@ -17,7 +17,7 @@ on:
         description: Whether to deploy after release
         required: true
         type: boolean
-        default: true
+        default: false
 concurrency:
   group: release
   cancel-in-progress: false
