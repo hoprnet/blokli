@@ -603,3 +603,9 @@ pub fn feature_disabled(feature: &str) -> async_graphql::Error {
     async_graphql::Error::new(messages::feature_disabled(feature))
         .extend_with(|_, extensions| extensions.set("code", codes::FEATURE_DISABLED))
 }
+
+/// Creates an async_graphql::Error for a transaction tracking ID that is not present on this server.
+pub fn transaction_not_found(transaction_id: impl std::fmt::Display) -> async_graphql::Error {
+    async_graphql::Error::new(messages::not_found("Transaction", transaction_id))
+        .extend_with(|_, e| e.set("code", codes::NOT_FOUND))
+}
