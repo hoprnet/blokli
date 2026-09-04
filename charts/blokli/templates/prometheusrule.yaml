@@ -68,6 +68,32 @@ spec:
         namespace: {{ $namespace }}
     {{- end }}
     {{- end }}
+    {{- with $r.checksumStalled }}
+    {{- if .enabled }}
+    - alert: blokli-indexer-checksum-stalled
+      annotations:
+        summary: Blokli indexer's running checksum isn't mutating despite block-number progress.
+        # blokli-indexer-stalled only catches a full stall (block number frozen while the chain head
+        # advances). It's possible for block_number to keep advancing while the checksum itself never
+        # changes — e.g. logs/events silently dropped or miscounted during processing — which would slip
+        # past that alert entirely. This one requires block_number to be moving so it doesn't just
+        # duplicate blokli-indexer-stalled.
+        description: >-
+          The Blokli indexer's checksum in network {{ $network }} has not changed in the last
+          {{ .windowMinutes }}m while blokli_indexer_block_number has advanced over the same window,
+          sustained for over {{ .for }}.
+        runbook_url: https://github.com/hoprnet/blokli/blob/main/runbooks/blokli-indexer-checksum-stalled.md
+      expr: |-
+        changes(max(blokli_indexer_checksum{job="{{ $fullname }}"})[{{ .windowMinutes }}m:1m]) == 0
+        and
+        delta(blokli_indexer_block_number{job="{{ $fullname }}"}[{{ .windowMinutes }}m]) > 0
+      for: {{ .for }}
+      labels:
+        severity: warning
+        network: {{ $network }}
+        namespace: {{ $namespace }}
+    {{- end }}
+    {{- end }}
     {{- with $r.unhealthy }}
     {{- if .enabled }}
     - alert: blokli-unhealthy
@@ -102,27 +128,55 @@ spec:
         namespace: {{ $namespace }}
     {{- end }}
     {{- end }}
-    {{- with $r.transactionFailed }}
+    {{- with $r.transactionFailedShort }}
     {{- if .enabled }}
-    - alert: blokli-transaction-failed
+    - alert: blokli-transaction-failed-short
       annotations:
-        summary: Spike in Blokli transaction failures (reverted/timeout/submission_failed).
-        # A flat ">0" trigger pages on every isolated RPC blip, which this app doesn't yet handle
-        # gracefully — so instead this fires on a spike: the recent failure rate well above its own
-        # recent baseline, with an absolute floor (minFailures) so 1-2 failures against a near-zero
-        # baseline don't count as a "spike" on their own.
+        summary: A burst of Blokli transactions is failing (reverted/timeout/submission_failed).
+        # Catches a sharp burst: a high failure share over a short window. minFailures stops a couple of
+        # failures during very low traffic from counting on their own. See blokli-transaction-failed-long
+        # for the companion alert that catches a lower but steady drip of failures instead.
         description: >-
-          Transaction failures in network {{ $network }} are running at {{`{{ $value | printf "%.1f" }}`}}x
-          their {{ .baselineWindowHours }}h baseline rate.
+          {{`{{ $value | humanizePercentage }}`}} of transactions in network {{ $network }} failed over the
+          last {{ .windowMinutes }}m — above the {{ mulf .ratio 100 }}% threshold, with at least
+          {{ .minFailures }} failures.
         runbook_url: https://github.com/hoprnet/blokli/blob/main/runbooks/blokli-transaction-failed.md
       expr: |-
         (
-          sum(rate(blokli_transaction_status_total{status=~"reverted|timeout|submission_failed", job="{{ $fullname }}"}[{{ .windowMinutes }}m]))
+          sum(increase(blokli_transaction_status_total{status=~"reverted|timeout|submission_failed", job="{{ $fullname }}"}[{{ .windowMinutes }}m]))
           /
-          sum(rate(blokli_transaction_status_total{status=~"reverted|timeout|submission_failed", job="{{ $fullname }}"}[{{ .baselineWindowHours }}h]))
-        ) > {{ .spikeMultiplier }}
+          sum(increase(blokli_transaction_status_total{status!="validation_failed", job="{{ $fullname }}"}[{{ .windowMinutes }}m]))
+        ) > {{ .ratio }}
         and
         sum(increase(blokli_transaction_status_total{status=~"reverted|timeout|submission_failed", job="{{ $fullname }}"}[{{ .windowMinutes }}m])) >= {{ .minFailures }}
+      for: {{ .for }}
+      labels:
+        severity: warning
+        network: {{ $network }}
+        namespace: {{ $namespace }}
+    {{- end }}
+    {{- end }}
+    {{- with $r.transactionFailedLong }}
+    {{- if .enabled }}
+    - alert: blokli-transaction-failed-long
+      annotations:
+        summary: Blokli transactions have been failing at a low but steady rate (reverted/timeout/submission_failed).
+        # Catches a low but steady drip of failures over a long window that blokli-transaction-failed-short
+        # would never trip on. minFailures stops a couple of failures during very low traffic from
+        # counting on their own.
+        description: >-
+          {{`{{ $value | humanizePercentage }}`}} of transactions in network {{ $network }} failed over the
+          last {{ .windowHours }}h — above the {{ mulf .ratio 100 }}% threshold, with at least
+          {{ .minFailures }} failures.
+        runbook_url: https://github.com/hoprnet/blokli/blob/main/runbooks/blokli-transaction-failed.md
+      expr: |-
+        (
+          sum(increase(blokli_transaction_status_total{status=~"reverted|timeout|submission_failed", job="{{ $fullname }}"}[{{ .windowHours }}h]))
+          /
+          sum(increase(blokli_transaction_status_total{status!="validation_failed", job="{{ $fullname }}"}[{{ .windowHours }}h]))
+        ) > {{ .ratio }}
+        and
+        sum(increase(blokli_transaction_status_total{status=~"reverted|timeout|submission_failed", job="{{ $fullname }}"}[{{ .windowHours }}h])) >= {{ .minFailures }}
       for: {{ .for }}
       labels:
         severity: warning
@@ -135,7 +189,7 @@ spec:
     - alert: blokli-transaction-validation-failed
       annotations:
         summary: Repeated transactions submitted to Blokli were rejected before reaching the chain.
-        # minFailures is an absolute floor, not a spike/baseline ratio (unlike blokli-transaction-failed):
+        # minFailures is an absolute floor, not a failure-ratio threshold (unlike blokli-transaction-failed-short/-long):
         # validation_failed is deterministic local-allowlist rejection, not RPC-driven, so there's no
         # legitimate nonzero "normal" rate to compare against. The floor just tolerates a handful of
         # one-off bad requests (stale client, a few scanner probes) without paging on the first one.
