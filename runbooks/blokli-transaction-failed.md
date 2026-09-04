@@ -28,7 +28,7 @@ wasn't topped up as intended.
 ## Diagnosis
 
 - Check which alert fired to know whether this is a burst (`-short`) or a sustained low-grade failure rate (`-long`).
-- Break down by outcome to see what's driving it:
+- Break down by outcome to see what's driving it, using the window that matches the alert that fired (`15m` for `-short`, `6h` for `-long`):
   `sum by (status) (increase(blokli_transaction_status_total{status=~"reverted|timeout|submission_failed"}[15m]))`
 - Query the Blokli GraphQL API for the specific failing transaction(s) and their `errorMessage`/`safeExecution.revertReason`.
 - `reverted`: fetch the revert reason (`debug_traceTransaction`, see `verify_rpc_capabilities` in `chain/api/src/lib.rs`) — e.g.

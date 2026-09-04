@@ -8,11 +8,11 @@ Each runbook describes the alert, its impact, and the steps to diagnose and reso
 
 Alerts related to on-chain indexing progress and correctness.
 
-| Alert                                                         | Severity | Responsible     | Description                                                                               |
-| -------------------------------------------------------------- | -------- | --------------- | ------------------------------------------------------------------------------------------ |
-| [Indexer Lag High](blokli-indexer-lag-high.md)                 | Warning  | DevOps Engineer | The indexer is falling behind the chain head by more than the configured block threshold  |
-| [Indexer Stalled](blokli-indexer-stalled.md)                   | Critical | DevOps Engineer | The indexer has made zero progress while the chain head keeps advancing                   |
-| [Indexer Checksum Stalled](blokli-indexer-checksum-stalled.md) | Warning  | DevOps Engineer | The indexer's running checksum isn't mutating despite block-number progress               |
+| Alert                                                          | Severity | Responsible     | Description                                                                              |
+| -------------------------------------------------------------- | -------- | --------------- | ---------------------------------------------------------------------------------------- |
+| [Indexer Lag High](blokli-indexer-lag-high.md)                 | Warning  | DevOps Engineer | The indexer is falling behind the chain head by more than the configured block threshold |
+| [Indexer Stalled](blokli-indexer-stalled.md)                   | Critical | DevOps Engineer | The indexer has made zero progress while the chain head keeps advancing                  |
+| [Indexer Checksum Stalled](blokli-indexer-checksum-stalled.md) | Warning  | DevOps Engineer | The indexer's running checksum isn't mutating despite block-number progress              |
 
 ## Readiness
 
@@ -27,11 +27,11 @@ Alerts derived from the same readiness logic that gates the `/readyz` endpoint.
 
 Alerts related to raw transactions submitted through the Blokli API (e.g. channel funding).
 
-| Alert                                                                    | Severity | Responsible     | Description                                                                                            |
-| ------------------------------------------------------------------------ | -------- | --------------- | -------------------------------------------------------------------------------------------------------- |
-| [Transaction Failed (short)](blokli-transaction-failed.md)               | Warning  | DevOps Engineer | A burst of transaction failures (reverted/timeout/submission_failed) over a short window                 |
-| [Transaction Failed (long)](blokli-transaction-failed.md)                | Warning  | DevOps Engineer | A low but steady rate of transaction failures (reverted/timeout/submission_failed) over a long window    |
-| [Transaction Validation Failed](blokli-transaction-validation-failed.md) | Warning  | DevOps Engineer | A submitted transaction was rejected before broadcast (e.g. disallowed target contract/function)         |
+| Alert                                                                    | Severity | Responsible     | Description                                                                                           |
+| ------------------------------------------------------------------------ | -------- | --------------- | ----------------------------------------------------------------------------------------------------- |
+| [Transaction Failed (short)](blokli-transaction-failed.md)               | Warning  | DevOps Engineer | A burst of transaction failures (reverted/timeout/submission_failed) over a short window              |
+| [Transaction Failed (long)](blokli-transaction-failed.md)                | Warning  | DevOps Engineer | A low but steady rate of transaction failures (reverted/timeout/submission_failed) over a long window |
+| [Transaction Validation Failed](blokli-transaction-validation-failed.md) | Warning  | DevOps Engineer | A submitted transaction was rejected before broadcast (e.g. disallowed target contract/function)      |
 
 ## RPC / Upstream Provider
 
