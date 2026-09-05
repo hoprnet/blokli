@@ -1525,8 +1525,9 @@ notes-root mismatch. The production binary remains HOPR-only.
 The deployment artifact and generated Blokli configuration include the Curvy Aggregator, Vault, and PortalFactory addresses. The local HOPR
 token is registered in the Curvy Vault after the development assets. The configured Aggregator extends the indexer's address/topic filter
 only when Curvy indexing is explicitly enabled. Pending-note, committed-note, and committed-nullifier events are stored as append-only,
-position-keyed records; zero padding is omitted and array-valued events are normalized into one row per array item. PortalFactory has no
-indexed event in the supported surface.
+position-keyed records; zero padding is omitted and array-valued events are normalized into one row per array item. PortalFactory is
+optional for direct-shield-only deployments and has no indexed event in the supported surface. When absent, only the Portal-specific GraphQL
+queries are unavailable.
 
 Committed notes and nullifiers receive independent dense, zero-based indices. The note index is the canonical leaf position in Curvy's
 depth-30 Poseidon tree. The indexer advances a constant-space frontier transactionally with each committed-note event and persists completed

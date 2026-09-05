@@ -25,7 +25,7 @@ max_rpc_requests_per_sec = 0
 max_block_range = 10000
 
 # Optional Curvy Aggregator proxy. When Curvy indexing is enabled, Blokli
-# resolves the Vault and PortalFactory from this contract during startup.
+# resolves the Vault and optional PortalFactory from this contract during startup.
 # This setting does not override any HOPR contract address.
 # curvy_aggregator = "0x0000000000000000000000000000000000000000"
 
@@ -122,8 +122,8 @@ logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz"
 enable_safe_indexing = false
 
 # Enable note/nullifier indexing from the configured Curvy Aggregator.
-# Requires curvy_aggregator to be non-zero. The Vault and PortalFactory are
-# resolved from the configured Aggregator before indexing starts.
+# Requires curvy_aggregator and its resolved Vault to be non-zero. A zero
+# PortalFactory is allowed, but Portal-specific GraphQL queries are unavailable.
 enable_curvy_indexing = false
 
 # GraphQL subscription behavior configuration
