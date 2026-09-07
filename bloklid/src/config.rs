@@ -278,8 +278,8 @@ pub struct Config {
     #[serde(default, rename = "contracts")]
     pub contracts_override: Option<ContractAddresses>,
 
-    /// Optional Curvy Aggregator proxy address. The Vault and PortalFactory
-    /// addresses are resolved from this contract during startup.
+    /// Optional Curvy Aggregator proxy address. The Vault and optional
+    /// PortalFactory addresses are resolved from this contract during startup.
     /// This overrides the value in `[contracts]` when both are configured.
     #[serde_as(as = "Option<serde_with::DisplayFromStr>")]
     #[serde(default)]
