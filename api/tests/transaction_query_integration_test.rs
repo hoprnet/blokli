@@ -7,71 +7,39 @@
 //! - UUID format validation
 //! - Non-existent transaction handling
 
-mod common;
-
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use anyhow::Result;
 use async_graphql::{EmptySubscription, Schema};
-use blokli_api::{
-    mutation::MutationRoot,
-    query::QueryRoot,
-    schema::{ChainId, NetworkName},
-};
+use blokli_api::{mutation::MutationRoot, query::QueryRoot};
 use blokli_chain_api::transaction_store::{
     SafeExecutionResult, TransactionRecord, TransactionStatus, TransactionStore,
 };
-use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
 use hopr_types::crypto::types::Hash;
-use tokio::task::AbortHandle;
 
 /// Test context for transaction query tests
 struct TestContext {
     store: Arc<TransactionStore>,
     schema: Schema<QueryRoot, MutationRoot, EmptySubscription>,
-    _monitor_handle: Option<AbortHandle>,
 }
 
-impl Drop for TestContext {
-    fn drop(&mut self) {
-        // Stop the monitor if it's running
-        if let Some(handle) = self._monitor_handle.take() {
-            handle.abort();
-        }
-    }
-}
-
-/// Set up test environment
+/// Set up the only dependencies exercised by transaction-query tests.
+///
+/// These tests read the in-memory transaction store; they neither submit a
+/// transaction nor poll a chain. Starting Anvil, deploying contracts, and
+/// spawning a transaction monitor here added several seconds per test without
+/// exercising any additional production path.
 async fn setup_test_environment() -> Result<TestContext> {
-    // Use common transaction test helper
-    let tx_ctx = common::setup_transaction_test_environment(
-        Duration::from_secs(1),     // block_time
-        Duration::from_millis(100), // poll_interval
-        2,                          // finality
-        None,                       // executor_config (use default)
-    )
-    .await?;
-
-    // Create in-memory database
     let db = BlokliDb::new_in_memory().await?;
+    let store = Arc::new(TransactionStore::new());
 
-    // Build GraphQL schema with EmptySubscription variant
     let schema = Schema::build(QueryRoot, MutationRoot, EmptySubscription)
         .data(db.conn(TargetDb::Index).clone())
-        .data(ChainId(31337)) // Anvil chain ID
-        .data(NetworkName("test".to_string()))
-        .data(ContractAddresses::default())
-        .data(tx_ctx.executor.clone())
-        .data(tx_ctx.store.clone())
-        .data(blokli_api::schema::GasMultiplier(1.0))
+        .data(store.clone())
         .finish();
 
-    Ok(TestContext {
-        store: tx_ctx.store.clone(),
-        schema,
-        _monitor_handle: tx_ctx.monitor_handle.clone(),
-    })
+    Ok(TestContext { store, schema })
 }
 
 /// Helper to execute GraphQL query and return result

@@ -45,6 +45,14 @@ async fn execute_graphql_query(
     schema.execute(query).await
 }
 
+/// Build the schema needed for input-validation cases.
+///
+/// Invalid addresses are rejected by the resolver before it reads any schema
+/// context or calls RPC, so these cases do not need an Anvil deployment.
+fn validation_test_schema() -> Schema<QueryRoot, MutationRoot, SubscriptionRoot> {
+    Schema::build(QueryRoot, MutationRoot, SubscriptionRoot).finish()
+}
+
 /// Queries the calculated module address via GraphQL.
 async fn query_calculate_module_address(
     schema: &Schema<QueryRoot, MutationRoot, SubscriptionRoot>,
@@ -128,13 +136,13 @@ async fn test_calculate_module_address_success() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_calculate_module_address_invalid_owner_format() -> anyhow::Result<()> {
-    let ctx = common::setup_simple_test_environment().await?;
+    let schema = validation_test_schema();
 
     let invalid_owner = "not-a-valid-address";
-    let safe_address = ctx.test_accounts[1].public().to_address().to_hex();
+    let safe_address = "0x0000000000000000000000000000000000000001";
 
     // Query with invalid owner
-    let data = query_calculate_module_address(&ctx.schema, invalid_owner, 0, &safe_address).await?;
+    let data = query_calculate_module_address(&schema, invalid_owner, 0, safe_address).await?;
     let result = &data["calculateModuleAddress"];
 
     // Verify error response
@@ -159,13 +167,13 @@ async fn test_calculate_module_address_invalid_owner_format() -> anyhow::Result<
 
 #[tokio::test]
 async fn test_calculate_module_address_invalid_safe_format() -> anyhow::Result<()> {
-    let ctx = common::setup_simple_test_environment().await?;
+    let schema = validation_test_schema();
 
-    let owner_address = ctx.test_accounts[0].public().to_address().to_hex();
+    let owner_address = "0x0000000000000000000000000000000000000001";
     let invalid_safe = "0xZZZ";
 
     // Query with invalid safe address
-    let data = query_calculate_module_address(&ctx.schema, &owner_address, 0, invalid_safe).await?;
+    let data = query_calculate_module_address(&schema, owner_address, 0, invalid_safe).await?;
     let result = &data["calculateModuleAddress"];
 
     // Verify error response
@@ -190,13 +198,13 @@ async fn test_calculate_module_address_invalid_safe_format() -> anyhow::Result<(
 
 #[tokio::test]
 async fn test_calculate_module_address_empty_owner() -> anyhow::Result<()> {
-    let ctx = common::setup_simple_test_environment().await?;
+    let schema = validation_test_schema();
 
     let empty_owner = "";
-    let safe_address = ctx.test_accounts[1].public().to_address().to_hex();
+    let safe_address = "0x0000000000000000000000000000000000000001";
 
     // Query with empty owner
-    let data = query_calculate_module_address(&ctx.schema, empty_owner, 0, &safe_address).await?;
+    let data = query_calculate_module_address(&schema, empty_owner, 0, safe_address).await?;
     let result = &data["calculateModuleAddress"];
 
     // Verify error response
@@ -212,13 +220,13 @@ async fn test_calculate_module_address_empty_owner() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_calculate_module_address_empty_safe() -> anyhow::Result<()> {
-    let ctx = common::setup_simple_test_environment().await?;
+    let schema = validation_test_schema();
 
-    let owner_address = ctx.test_accounts[0].public().to_address().to_hex();
+    let owner_address = "0x0000000000000000000000000000000000000001";
     let empty_safe = "";
 
     // Query with empty safe address
-    let data = query_calculate_module_address(&ctx.schema, &owner_address, 0, empty_safe).await?;
+    let data = query_calculate_module_address(&schema, owner_address, 0, empty_safe).await?;
     let result = &data["calculateModuleAddress"];
 
     // Verify error response
