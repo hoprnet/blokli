@@ -444,7 +444,7 @@ config:
   dataDirectory: "/data"
   ## @param config.curvyAggregator Curvy Aggregator proxy address (required when Curvy indexing is enabled)
   ##
-  curvyAggregator: ""
+  curvyAggregator: "0x0000000000000000000000000000000000000000"
   # Indexer settings
   indexer:
     ## @param config.indexer.fastSync Enable fast sync mode
