@@ -14,7 +14,7 @@ transaction targets a contract or function not on the allowlist. Because this re
 always indicates a caller/integration issue (wrong contract address, outdated allowlist, a bug in the transaction-building code) rather than
 an on-chain or RPC problem.
 
-`minFailures` is a plain floor, not a spike/baseline ratio like [Blokli Transaction Failed](blokli-transaction-failed.md) uses:
+`minFailures` is a plain floor, not a failure-ratio threshold like [Blokli Transaction Failed](blokli-transaction-failed.md) uses:
 `validation_failed` is deterministic (a request either matches the allowlist or it doesn't), not RPC-driven, so there's no legitimate
 nonzero "normal" rate to compare against. The floor exists purely to tolerate a handful of one-off bad requests — a stale client, a
 temporary bug, or a few scanner/malicious probes — without paging on the very first one, while still catching a sustained pattern.

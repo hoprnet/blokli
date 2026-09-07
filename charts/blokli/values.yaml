@@ -227,6 +227,16 @@ monitoring:
         ## @param monitoring.prometheusRule.rules.indexerStalled.for How long the stalled condition must persist before firing
         ##
         for: 2m
+      checksumStalled:
+        ## @param monitoring.prometheusRule.rules.checksumStalled.enabled Enable the blokli-indexer-checksum-stalled alert
+        ##
+        enabled: true
+        ## @param monitoring.prometheusRule.rules.checksumStalled.windowMinutes Look-back window (minutes) used to detect a static checksum against block-number progress
+        ##
+        windowMinutes: 10
+        ## @param monitoring.prometheusRule.rules.checksumStalled.for How long the stalled-checksum condition must persist before firing
+        ##
+        for: 5m
       unhealthy:
         ## @param monitoring.prometheusRule.rules.unhealthy.enabled Enable the blokli-unhealthy alert
         ##
@@ -241,23 +251,36 @@ monitoring:
         ## @param monitoring.prometheusRule.rules.stateCorrupted.for How long the corrupted status must persist before firing
         ##
         for: 1m
-      transactionFailed:
-        ## @param monitoring.prometheusRule.rules.transactionFailed.enabled Enable the blokli-transaction-failed alert
+      transactionFailedShort:
+        ## @param monitoring.prometheusRule.rules.transactionFailedShort.enabled Enable the blokli-transaction-failed-short alert
         ##
         enabled: true
-        ## @param monitoring.prometheusRule.rules.transactionFailed.windowMinutes Short look-back window (minutes) for the recent failure rate
+        ## @param monitoring.prometheusRule.rules.transactionFailedShort.windowMinutes Look-back window (minutes) used to catch a sharp burst of failures
         ##
         windowMinutes: 15
-        ## @param monitoring.prometheusRule.rules.transactionFailed.minFailures Minimum absolute number of failures in windowMinutes before this counts as a spike at all, regardless of ratio
+        ## @param monitoring.prometheusRule.rules.transactionFailedShort.ratio Fraction (0-1) of on-chain submission attempts failing over windowMinutes before firing
+        ##
+        ratio: 0.5
+        ## @param monitoring.prometheusRule.rules.transactionFailedShort.minFailures Minimum absolute number of failures in windowMinutes before this can fire, so 1-2 failures against very low volume don't count on their own
         ##
         minFailures: 3
-        ## @param monitoring.prometheusRule.rules.transactionFailed.baselineWindowHours Longer look-back window (hours) establishing the "normal" recent failure rate to compare against
+        ## @param monitoring.prometheusRule.rules.transactionFailedShort.for How long the condition must persist across evaluations before firing
         ##
-        baselineWindowHours: 6
-        ## @param monitoring.prometheusRule.rules.transactionFailed.spikeMultiplier How many times higher than the baseline rate the recent rate must be to count as a spike
+        for: 1m
+      transactionFailedLong:
+        ## @param monitoring.prometheusRule.rules.transactionFailedLong.enabled Enable the blokli-transaction-failed-long alert
         ##
-        spikeMultiplier: 3
-        ## @param monitoring.prometheusRule.rules.transactionFailed.for How long the spike must persist across evaluations before firing
+        enabled: true
+        ## @param monitoring.prometheusRule.rules.transactionFailedLong.windowHours Look-back window (hours) used to catch a lower but sustained/regular failure rate that a short window would miss
+        ##
+        windowHours: 6
+        ## @param monitoring.prometheusRule.rules.transactionFailedLong.ratio Fraction (0-1) of on-chain submission attempts failing over windowHours before firing
+        ##
+        ratio: 0.05
+        ## @param monitoring.prometheusRule.rules.transactionFailedLong.minFailures Minimum absolute number of failures in windowHours before this can fire
+        ##
+        minFailures: 5
+        ## @param monitoring.prometheusRule.rules.transactionFailedLong.for How long the condition must persist across evaluations before firing
         ##
         for: 1m
       transactionValidationFailed:
