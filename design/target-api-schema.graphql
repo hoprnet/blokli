@@ -923,7 +923,7 @@ type ModuleAddress {
 type MutationRoot {
 	"""
 	Submit a transaction with fire-and-forget mode
-
+	
 	Validates the pre-signed raw transaction data and submits it to the chain.
 	Returns the transaction hash immediately after submission.
 	Does not wait for confirmation and does not track transaction status.
@@ -1421,7 +1421,7 @@ type QueryRoot {
 	
 	This query makes a direct RPC call to the blockchain to get a current token balance.
 	No database storage is used - balance is fetched directly from the chain.
-
+	
 	Only the HOPR token variants `HOPR` and `XHOPR` are supported. `NATIVE` is rejected —
 	use the `nativeBalance` query for the native (xDAI) balance.
 	"""
@@ -2524,10 +2524,10 @@ type SubscriptionRoot {
 	Provides updates whenever the status of the specified transaction changes,
 	including validation, submission, confirmation, revert, and failure events.
 	
-	Uses event-driven architecture to receive updates immediately when transaction
-	status changes, with zero polling overhead. Follows a 2-phase approach:
+	Uses event-driven delivery for immediate updates plus periodic store reconciliation
+	to recover from dropped notifications. Follows a 2-phase approach:
 	- Phase 1: Emit current transaction state if it exists
-	- Phase 2: Listen for future status update events
+	- Phase 2: Listen for status update events and reconcile with current state
 	"""
 	transactionUpdated(
 		"""
