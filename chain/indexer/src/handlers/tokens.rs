@@ -2,7 +2,7 @@ use blokli_chain_rpc::HoprIndexerRpcOperations;
 use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{BlokliDbAllOperations, OpenTransaction};
 use hopr_bindings::hopr_token::HoprToken::HoprTokenEvents;
-use hopr_types::primitive::prelude::Address;
+use hopr_types::primitive::prelude::{Address, HoprBalance, IntoEndian};
 use tracing::{debug, trace};
 
 use super::ContractEventHandlers;
@@ -42,7 +42,13 @@ where
                     %owner, %spender, allowance = %approved.value,
                     "on_token_approval_event",
 
-                )
+                );
+
+                return Ok(vec![IndexerEvent::HoprApprovalUpdated {
+                    owner,
+                    spender,
+                    allowance: HoprBalance::from_be_bytes(approved.value.to_be_bytes::<32>()),
+                }]);
             }
             HoprTokenEvents::AuthorizedOperator(authorized) => {
                 debug!(
