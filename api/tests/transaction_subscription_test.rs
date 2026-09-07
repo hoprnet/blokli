@@ -48,12 +48,10 @@ struct TestContext {
 /// these tests, so Anvil deployment and transaction-monitor startup are not
 /// part of this coverage.
 async fn setup_test_environment() -> Result<TestContext> {
-    let db = BlokliDb::new_in_memory().await?;
     let chain_key = ChainKeypair::from_secret([1_u8; 32].as_ref())?;
     let store = Arc::new(TransactionStore::new());
 
     let schema = Schema::build(QueryRoot, EmptyMutation, SubscriptionRoot)
-        .data(db.conn(TargetDb::Index).clone())
         .data(store.clone())
         .finish();
 

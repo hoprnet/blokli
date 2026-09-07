@@ -404,7 +404,7 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
         ))
         .transport(transport.clone(), transport.guess_local());
     let rpc_operations = Arc::new(RpcOperations::new(
-        rpc_client.clone(),
+        rpc_client,
         ReqwestClient::new(),
         RpcOperationsConfig {
             chain_id,
@@ -420,17 +420,7 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
 
     let transaction_store = Arc::new(TransactionStore::new());
     let transaction_validator = Arc::new(TransactionValidator::new());
-    let rpc_adapter = Arc::new(RpcAdapter::new(RpcOperations::new(
-        rpc_client,
-        ReqwestClient::new(),
-        RpcOperationsConfig {
-            chain_id,
-            contract_addrs,
-            expected_block_time,
-            ..Default::default()
-        },
-        None,
-    )?));
+    let rpc_adapter = Arc::new(RpcAdapter::new((*rpc_operations).clone()));
     let transaction_executor = Arc::new(RawTransactionExecutor::with_shared_dependencies(
         rpc_adapter,
         transaction_store.clone(),

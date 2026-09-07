@@ -10,18 +10,17 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use async_graphql::{EmptySubscription, Schema};
-use blokli_api::{mutation::MutationRoot, query::QueryRoot};
+use async_graphql::{EmptyMutation, EmptySubscription, Schema};
+use blokli_api::query::QueryRoot;
 use blokli_chain_api::transaction_store::{
     SafeExecutionResult, TransactionRecord, TransactionStatus, TransactionStore,
 };
-use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
 use hopr_types::crypto::types::Hash;
 
 /// Test context for transaction query tests
 struct TestContext {
     store: Arc<TransactionStore>,
-    schema: Schema<QueryRoot, MutationRoot, EmptySubscription>,
+    schema: Schema<QueryRoot, EmptyMutation, EmptySubscription>,
 }
 
 /// Set up the only dependencies exercised by transaction-query tests.
@@ -31,11 +30,9 @@ struct TestContext {
 /// spawning a transaction monitor here added several seconds per test without
 /// exercising any additional production path.
 async fn setup_test_environment() -> Result<TestContext> {
-    let db = BlokliDb::new_in_memory().await?;
     let store = Arc::new(TransactionStore::new());
 
-    let schema = Schema::build(QueryRoot, MutationRoot, EmptySubscription)
-        .data(db.conn(TargetDb::Index).clone())
+    let schema = Schema::build(QueryRoot, EmptyMutation, EmptySubscription)
         .data(store.clone())
         .finish();
 
@@ -43,7 +40,7 @@ async fn setup_test_environment() -> Result<TestContext> {
 }
 
 /// Helper to execute GraphQL query and return result
-async fn execute_query(schema: &Schema<QueryRoot, MutationRoot, EmptySubscription>, query: &str) -> serde_json::Value {
+async fn execute_query(schema: &Schema<QueryRoot, EmptyMutation, EmptySubscription>, query: &str) -> serde_json::Value {
     let response = schema.execute(query).await;
     serde_json::to_value(response).expect("Failed to serialize response")
 }
