@@ -26,6 +26,11 @@ data:
     # Network configuration
     network = "{{ .Values.config.network }}"
     max_rpc_requests_per_sec = {{ .Values.config.maxRpcRequestsPerSec }}
+    {{- if .Values.config.indexer.enableCurvyIndexing }}
+    curvy_aggregator = "{{ required "config.curvyAggregator is required when config.indexer.enableCurvyIndexing is true" .Values.config.curvyAggregator }}"
+    {{- else if .Values.config.curvyAggregator }}
+    curvy_aggregator = "{{ .Values.config.curvyAggregator }}"
+    {{- end }}
 
     # Indexer settings
     [indexer]
@@ -34,6 +39,7 @@ data:
     {{- if .Values.config.indexer.enableSafeIndexing }}
     enable_safe_indexing = {{ .Values.config.indexer.enableSafeIndexing }}
     {{- end }}
+    enable_curvy_indexing = {{ .Values.config.indexer.enableCurvyIndexing }}
     {{- if .Values.config.indexer.enableLogsSnapshot }}
     logs_snapshot_url = "{{ required "config.indexer.logsSnapshotUrl is required" .Values.config.indexer.logsSnapshotUrl }}"
     {{- end }}
