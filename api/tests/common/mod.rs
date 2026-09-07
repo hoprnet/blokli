@@ -385,18 +385,58 @@ pub struct HttpTestContext {
 /// ```
 #[allow(dead_code)]
 pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
-    // Use custom config to enable migrations and only 1 test account
-    let config = TestEnvironmentConfig {
-        run_migrations: true,
-        num_test_accounts: 1,
-        ..Default::default()
-    };
-    let expected_block_time = config.expected_block_time.as_secs();
+    let _ = env_logger::builder().is_test(true).try_init();
+    let expected_block_time = Duration::from_secs(1);
+    let anvil = create_anvil(Some(expected_block_time));
+    let chain_id = anvil.chain_id();
+    let contract_addrs = ContractAddresses::default();
 
-    let ctx = setup_test_environment(config).await?;
+    // HTTP readiness and endpoint tests only need a healthy RPC endpoint. They
+    // never call a deployed HOPR contract, so avoid deploying the full suite
+    // and waiting for finality for every test case.
+    let transport = ReqwestTransport::new(anvil.endpoint_url());
+    let rpc_client = ClientBuilder::default()
+        .layer(RetryBackoffLayer::new_with_policy(
+            2,
+            100,
+            100,
+            DefaultRetryPolicy::default(),
+        ))
+        .transport(transport.clone(), transport.guess_local());
+    let rpc_operations = Arc::new(RpcOperations::new(
+        rpc_client.clone(),
+        ReqwestClient::new(),
+        RpcOperationsConfig {
+            chain_id,
+            contract_addrs,
+            expected_block_time,
+            ..Default::default()
+        },
+        None,
+    )?);
 
-    // Database connection with migrations already applied (via config.run_migrations)
-    let db = ctx.db.as_ref().expect("Database should be present");
+    let db = sea_orm::Database::connect("sqlite::memory:").await?;
+    Migrator::up(&db, None).await?;
+
+    let transaction_store = Arc::new(TransactionStore::new());
+    let transaction_validator = Arc::new(TransactionValidator::new());
+    let rpc_adapter = Arc::new(RpcAdapter::new(RpcOperations::new(
+        rpc_client,
+        ReqwestClient::new(),
+        RpcOperationsConfig {
+            chain_id,
+            contract_addrs,
+            expected_block_time,
+            ..Default::default()
+        },
+        None,
+    )?));
+    let transaction_executor = Arc::new(RawTransactionExecutor::with_shared_dependencies(
+        rpc_adapter,
+        transaction_store.clone(),
+        transaction_validator,
+        RawTransactionExecutorConfig::default(),
+    ));
 
     // Create IndexerState for subscriptions (with small buffers)
     let indexer_state = IndexerState::new(1, 1);
@@ -404,8 +444,8 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
     // Create API config with health settings
     let api_config = ApiConfig {
         playground_enabled: false,
-        chain_id: ctx.chain_id,
-        contract_addresses: ctx.contract_addrs,
+        chain_id,
+        contract_addresses: contract_addrs,
         sse_keepalive: SseKeepAliveConfig {
             enabled: true,
             interval: Duration::from_millis(50),
@@ -424,22 +464,22 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
         ApiDatabases::single(db.clone()),
         "test-network".to_string(),
         api_config,
-        expected_block_time,
+        expected_block_time.as_secs(),
         3, // Test finality value
         indexer_state,
-        ctx.transaction_executor.clone(),
-        ctx.transaction_store.clone(),
-        ctx.rpc_operations.clone(),
+        transaction_executor,
+        transaction_store.clone(),
+        rpc_operations.clone(),
     )
     .await
     .expect("Failed to build app");
 
     Ok(HttpTestContext {
-        anvil: ctx.anvil,
+        anvil,
         app,
-        db: db.clone(),
-        rpc_operations: ctx.rpc_operations,
-        transaction_store: ctx.transaction_store,
+        db,
+        rpc_operations,
+        transaction_store,
     })
 }
 
