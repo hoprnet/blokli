@@ -181,7 +181,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | `config.rpcUrl`                                      | Blockchain RPC URL                                                                                            | `""`                |
 | `config.maxRpcRequestsPerSec`                        | Maximum RPC requests per second (0 = unlimited)                                                               | `0`                 |
 | `config.dataDirectory`                               | Data directory path (should match persistence mount path)                                                     | `/data`             |
-| `config.curvyAggregator`                              | Curvy Aggregator proxy address (required when Curvy indexing is enabled)                                      | `""`                |
+| `config.curvyAggregator`                             | Curvy Aggregator proxy address (required when Curvy indexing is enabled)                                      | `""`                |
 | `config.indexer.fastSync`                            | Enable fast sync mode                                                                                         | `true`              |
 | `config.indexer.enableLogsSnapshot`                  | Enable logs snapshot feature                                                                                  | `false`             |
 | `config.indexer.enableSafeIndexing`                  | Enable Safe contract event indexing for discovered Safes                                                      | `false`             |
