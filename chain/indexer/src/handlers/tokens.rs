@@ -118,3 +118,128 @@ where
         Ok(vec![])
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use blokli_chain_types::AlloyAddressExt;
+    use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb};
+    use hex_literal::hex;
+    use hopr_bindings::{
+        exports::alloy::primitives::{Address as AlloyAddress, U256},
+        hopr_token::HoprToken::{Approval, Transfer},
+    };
+    use hopr_types::primitive::prelude::{Address, ToHex};
+
+    use crate::{
+        errors::CoreEthereumIndexerError,
+        handlers::test_utils::test_helpers::{
+            CHANNELS_ADDR, ClonableMockOperations, MockIndexerRpcOperations, SAFE_INSTANCE_ADDR, TOKEN_ADDR,
+            XHOPR_TOKEN_ADDR, event_to_log, init_handlers_with_events,
+        },
+        state::IndexerEvent,
+        traits::ChainLogHandler,
+    };
+
+    fn approval(value: U256) -> Approval {
+        Approval {
+            owner: AlloyAddress::from_hopr_address(*SAFE_INSTANCE_ADDR),
+            spender: AlloyAddress::from_hopr_address(*CHANNELS_ADDR),
+            value,
+        }
+    }
+
+    #[tokio::test]
+    async fn approval_preserves_absolute_uint256_values() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let rpc = ClonableMockOperations {
+            inner: Arc::new(MockIndexerRpcOperations::new()),
+        };
+        let (handlers, _, mut receiver) = init_handlers_with_events(rpc, db);
+        // Distinct high and low limbs catch truncation and byte-order mistakes.
+        let asymmetric = U256::from_be_bytes(hex!("0123456789abcdef112233445566778899aabbccddeeff001020304050607080"));
+        let mut updates = Vec::new();
+        // Reduction, increase, revocation, >u128, and maximum uint256.
+        for value in [
+            U256::from(1000),
+            U256::from(2),
+            U256::from(9000),
+            U256::ZERO,
+            asymmetric,
+            U256::MAX,
+        ] {
+            handlers
+                .collect_log_event(event_to_log(approval(value), *TOKEN_ADDR), true)
+                .await?;
+            match receiver.try_recv()? {
+                IndexerEvent::HoprApprovalUpdated {
+                    owner,
+                    spender,
+                    allowance,
+                } => {
+                    updates.push((owner.to_hex(), spender.to_hex(), allowance.amount().to_string()));
+                }
+                event => panic!("Expected Approval update, got {event:?}"),
+            }
+        }
+        insta::assert_yaml_snapshot!(updates);
+        assert!(receiver.try_recv().is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn approval_handler_does_not_publish_before_commit_or_during_sync() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let rpc = ClonableMockOperations {
+            inner: Arc::new(MockIndexerRpcOperations::new()),
+        };
+        let (handlers, _, mut receiver) = init_handlers_with_events(rpc, db.clone());
+        let log = event_to_log(approval(U256::MAX), *TOKEN_ADDR);
+        let tx = db.begin_transaction().await?;
+        let events = handlers.process_log_event(&tx, log.clone(), true).await?;
+        assert!(matches!(events.as_slice(), [IndexerEvent::HoprApprovalUpdated { .. }]));
+        assert!(
+            receiver.try_recv().is_err(),
+            "handler must only return events inside the transaction"
+        );
+        tx.rollback().await?;
+        assert!(receiver.try_recv().is_err(), "rolled back processing must not publish");
+
+        handlers.collect_log_event(log.clone(), false).await?;
+        assert!(
+            receiver.try_recv().is_err(),
+            "historical synchronization must not publish"
+        );
+        handlers.collect_log_event(log, true).await?;
+        assert!(matches!(receiver.try_recv()?, IndexerEvent::HoprApprovalUpdated { .. }));
+        assert!(receiver.try_recv().is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn approval_rejects_other_tokens_and_leaves_transfers_unchanged() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let rpc = ClonableMockOperations {
+            inner: Arc::new(MockIndexerRpcOperations::new()),
+        };
+        let (handlers, _, mut receiver) = init_handlers_with_events(rpc, db);
+        for token in [*XHOPR_TOKEN_ADDR, Address::from([0x42; 20])] {
+            let result = handlers
+                .collect_log_event(event_to_log(approval(U256::MAX), token), true)
+                .await;
+            assert!(matches!(result, Err(CoreEthereumIndexerError::UnknownContract(address)) if address == token));
+            assert!(receiver.try_recv().is_err());
+        }
+        let transfer = Transfer {
+            from: AlloyAddress::from_hopr_address(*SAFE_INSTANCE_ADDR),
+            to: AlloyAddress::from_hopr_address(*CHANNELS_ADDR),
+            value: U256::MAX,
+        };
+        handlers
+            .collect_log_event(event_to_log(transfer, *TOKEN_ADDR), true)
+            .await?;
+        assert!(receiver.try_recv().is_err());
+        Ok(())
+    }
+}

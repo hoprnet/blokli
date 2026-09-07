@@ -1,5 +1,5 @@
 #[cfg(test)]
-pub(super) mod test_helpers {
+pub(crate) mod test_helpers {
     use std::{sync::Arc, time::Duration};
 
     use blokli_chain_rpc::HoprIndexerRpcOperations;
