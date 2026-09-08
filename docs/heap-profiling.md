@@ -25,16 +25,16 @@ writes a final snapshot during a graceful shutdown. The samples use a 512 KiB
 interval (`lg_prof_sample:19`), keeping profiling overhead suitable for this
 diagnostic run.
 
-The profiling image also handles `SIGUSR1` by writing an immediate snapshot;
-this is the preferred way to capture a profile during syncing:
+The profiling image handles `SIGUSR1` in a dedicated task, so it writes an
+immediate snapshot even while fast sync is running. This is the preferred way
+to capture a profile during syncing:
 
 ```sh
 kubectl -n hopr exec <pod> -- kill -USR1 1
 ```
 
-It registers the `SIGTERM` handler before indexing starts, so Kubernetes can
-also terminate the process cleanly during a long fast-sync. Do not use
-`SIGKILL`: it cannot write a final profile.
+The log line includes the exact path of the created file. Do not use `SIGKILL`:
+it cannot write a final profile.
 
 After the sync, copy `/profiles/jeprof.*.heap` from the pod and inspect a
 snapshot with the matching unstripped `bloklid` binary from the profiling image.

@@ -10,10 +10,16 @@ mod telemetry_common;
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
+#[cfg(feature = "heap-profiler")]
 use std::{
+    ffi::{CStr, CString, c_char, c_void},
     io,
+    mem::size_of_val,
+    process, ptr,
+    time::{SystemTime, UNIX_EPOCH},
+};
+use std::{
     process::ExitCode,
-    ptr,
     sync::{Arc, RwLock},
     time::Duration,
 };
@@ -178,13 +184,29 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
     }
 
     // Register handlers before starting the indexer. Fast sync can run for a
-    // long time inside `BlokliChain::start`, so registering below it would make
-    // PID 1 ignore SIGTERM until syncing has completed.
+    // long time inside `BlokliChain::start`, so a profiling dump listener must
+    // be active independently of the startup path.
+    let mut signals = Signals::new([Signal::Hup, Signal::Int, Signal::Term])?;
     #[cfg(feature = "heap-profiler")]
-    let signal_types = [Signal::Hup, Signal::Int, Signal::Term, Signal::Usr1];
-    #[cfg(not(feature = "heap-profiler"))]
-    let signal_types = [Signal::Hup, Signal::Int, Signal::Term];
-    let mut signals = Signals::new(signal_types)?;
+    let _heap_profile_signal_task = {
+        let mut heap_profile_signals = Signals::new([Signal::Usr1])?;
+        tokio::spawn(async move {
+            loop {
+                match heap_profile_signals.try_next().await {
+                    Ok(Some(Signal::Usr1)) => match dump_heap_profile() {
+                        Ok(profile_path) => tracing::info!(%profile_path, "wrote jemalloc heap profile"),
+                        Err(error) => tracing::error!(%error, "failed to write jemalloc heap profile"),
+                    },
+                    Ok(Some(_)) => tracing::warn!("received unexpected heap-profiler signal"),
+                    Ok(None) => break,
+                    Err(error) => {
+                        tracing::error!(%error, "heap-profiler signal listener stopped");
+                        break;
+                    }
+                }
+            }
+        })
+    };
 
     // Initialize components
     let (process_handles, api_handle) = {
@@ -403,6 +425,9 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
         (process_handles, api_handle)
     };
 
+    #[cfg(feature = "heap-profiler")]
+    tracing::info!("daemon running; send SIGUSR1 to dump the heap, SIGHUP to reload config, SIGINT/SIGTERM to stop");
+    #[cfg(not(feature = "heap-profiler"))]
     tracing::info!("daemon running; send SIGHUP to reload config, SIGINT/SIGTERM to stop");
 
     while let Some(signal) = signals.try_next().await? {
@@ -427,11 +452,6 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 tracing::info!("received SIGINT/SIGTERM; shutting down");
                 break;
             }
-            #[cfg(feature = "heap-profiler")]
-            Signal::Usr1 => match dump_heap_profile() {
-                Ok(()) => tracing::info!("wrote jemalloc heap profile"),
-                Err(error) => tracing::error!(%error, "failed to write jemalloc heap profile"),
-            },
             _ => {
                 tracing::warn!("received unknown signal; ignoring");
             }
@@ -458,22 +478,64 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
 
 /// Requests a jemalloc profile dump using the configured `prof_prefix`.
 #[cfg(feature = "heap-profiler")]
-fn dump_heap_profile() -> io::Result<()> {
+fn dump_heap_profile() -> io::Result<String> {
+    let profile_prefix = jemalloc_profile_prefix()?;
+    let timestamp_millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(io::Error::other)?
+        .as_millis();
+    let profile_path = format!("{profile_prefix}.manual-{}.{}.heap", process::id(), timestamp_millis);
+    let profile_path_c =
+        CString::new(profile_path.as_str()).map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    let mut profile_path_ptr = profile_path_c.as_ptr();
+
     let result = unsafe {
         tikv_jemalloc_sys::mallctl(
             c"prof.dump".as_ptr(),
             ptr::null_mut(),
             ptr::null_mut(),
+            (&mut profile_path_ptr as *mut *const c_char).cast::<c_void>(),
+            size_of_val(&profile_path_ptr),
+        )
+    };
+
+    if result == 0 {
+        Ok(profile_path)
+    } else {
+        Err(io::Error::from_raw_os_error(result))
+    }
+}
+
+/// Returns the active jemalloc profile prefix configured through `MALLOC_CONF`.
+#[cfg(feature = "heap-profiler")]
+fn jemalloc_profile_prefix() -> io::Result<String> {
+    let mut profile_prefix: *const c_char = ptr::null();
+    let mut profile_prefix_len = size_of_val(&profile_prefix);
+    let result = unsafe {
+        tikv_jemalloc_sys::mallctl(
+            c"opt.prof_prefix".as_ptr(),
+            (&mut profile_prefix as *mut *const c_char).cast::<c_void>(),
+            &mut profile_prefix_len,
             ptr::null_mut(),
             0,
         )
     };
 
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::from_raw_os_error(result))
+    if result != 0 {
+        return Err(io::Error::from_raw_os_error(result));
     }
+    if profile_prefix.is_null() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "jemalloc returned an empty profile prefix",
+        ));
+    }
+
+    let profile_prefix = unsafe { CStr::from_ptr(profile_prefix) };
+    profile_prefix
+        .to_str()
+        .map(str::to_owned)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
 fn require_database(config: &Config) -> errors::Result<&DatabaseConfig> {
