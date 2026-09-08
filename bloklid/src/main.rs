@@ -11,7 +11,9 @@ mod telemetry_common;
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 use std::{
+    io,
     process::ExitCode,
+    ptr,
     sync::{Arc, RwLock},
     time::Duration,
 };
@@ -174,6 +176,15 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
             .map_err(|_| BloklidError::NonSpecific("failed to lock config for logging".into()))?;
         tracing::info!(config = %cfg.display_redacted(), "loaded redacted configuration");
     }
+
+    // Register handlers before starting the indexer. Fast sync can run for a
+    // long time inside `BlokliChain::start`, so registering below it would make
+    // PID 1 ignore SIGTERM until syncing has completed.
+    #[cfg(feature = "heap-profiler")]
+    let signal_types = [Signal::Hup, Signal::Int, Signal::Term, Signal::Usr1];
+    #[cfg(not(feature = "heap-profiler"))]
+    let signal_types = [Signal::Hup, Signal::Int, Signal::Term];
+    let mut signals = Signals::new(signal_types)?;
 
     // Initialize components
     let (process_handles, api_handle) = {
@@ -394,7 +405,6 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
 
     tracing::info!("daemon running; send SIGHUP to reload config, SIGINT/SIGTERM to stop");
 
-    let mut signals = Signals::new([Signal::Hup, Signal::Int, Signal::Term])?;
     while let Some(signal) = signals.try_next().await? {
         match signal {
             Signal::Hup => {
@@ -417,6 +427,11 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 tracing::info!("received SIGINT/SIGTERM; shutting down");
                 break;
             }
+            #[cfg(feature = "heap-profiler")]
+            Signal::Usr1 => match dump_heap_profile() {
+                Ok(()) => tracing::info!("wrote jemalloc heap profile"),
+                Err(error) => tracing::error!(%error, "failed to write jemalloc heap profile"),
+            },
             _ => {
                 tracing::warn!("received unknown signal; ignoring");
             }
@@ -439,6 +454,26 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
 
     tracing::info!("bloklid stopped gracefully");
     Ok(())
+}
+
+/// Requests a jemalloc profile dump using the configured `prof_prefix`.
+#[cfg(feature = "heap-profiler")]
+fn dump_heap_profile() -> io::Result<()> {
+    let result = unsafe {
+        tikv_jemalloc_sys::mallctl(
+            c"prof.dump".as_ptr(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            0,
+        )
+    };
+
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::from_raw_os_error(result))
+    }
 }
 
 fn require_database(config: &Config) -> errors::Result<&DatabaseConfig> {

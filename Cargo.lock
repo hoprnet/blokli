@@ -2244,6 +2244,7 @@ dependencies = [
  "temp-env",
  "tempfile",
  "thiserror",
+ "tikv-jemalloc-sys",
  "tikv-jemallocator",
  "tokio",
  "toml",
