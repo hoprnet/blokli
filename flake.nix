@@ -242,7 +242,8 @@
                   inherit binary;
                   name = "bloklid";
                 })
-              ];
+              ]
+              ++ lib.optionals (variant == "heap-profiler") [ platformPkgs.gnutar ];
             };
 
           # Build the local Anvil image with HOPR and Curvy contracts deployed.

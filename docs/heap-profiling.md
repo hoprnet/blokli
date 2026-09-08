@@ -37,7 +37,14 @@ also terminate the process cleanly during a long fast-sync. Do not use
 `SIGKILL`: it cannot write a final profile.
 
 After the sync, copy `/profiles/jeprof.*.heap` from the pod and inspect a
-snapshot with the matching unstripped `bloklid` binary from the profiling image:
+snapshot with the matching unstripped `bloklid` binary from the profiling image.
+The profiling image includes `tar`, so Kubernetes can copy the directory:
+
+```sh
+kubectl -n hopr cp <pod>:/profiles ./blokli-heap-profiles
+```
+
+Inspect a snapshot with `jeprof`:
 
 ```sh
 jeprof --show_bytes --text /path/to/bloklid /path/to/jeprof.*.heap
