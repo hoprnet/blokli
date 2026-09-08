@@ -1007,7 +1007,7 @@ mod tests {
         let transport_client = ReqwestTransport::new(url::Url::parse(&server.url()).unwrap());
 
         let rpc_client = ClientBuilder::default()
-            .layer(RetryBackoffLayer::new(2, 100, 100))
+            .layer(RetryBackoffLayer::new(2, 1, 1))
             .transport(transport_client.clone(), transport_client.guess_local());
 
         let provider = ProviderBuilder::new().connect_client(rpc_client);
@@ -1041,7 +1041,7 @@ mod tests {
         let transport_client = ReqwestTransport::new(url::Url::parse(&server.url()).unwrap());
 
         let rpc_client = ClientBuilder::default()
-            .layer(RetryBackoffLayer::new(2, 100, 100))
+            .layer(RetryBackoffLayer::new(2, 1, 1))
             .transport(transport_client.clone(), transport_client.guess_local());
 
         // TODO: FIXME: implement a CustomRetryBackoff policy/service and test its `requests_enqueued`
@@ -1092,7 +1092,7 @@ mod tests {
         let transport_client = ReqwestTransport::new(url::Url::parse(&server.url()).unwrap());
 
         let rpc_client = ClientBuilder::default()
-            .layer(RetryBackoffLayer::new_with_policy(2, 100, 100, ZeroRetryPolicy))
+            .layer(RetryBackoffLayer::new_with_policy(2, 1, 1, ZeroRetryPolicy))
             .transport(transport_client.clone(), transport_client.guess_local());
 
         let provider = ProviderBuilder::new().connect_client(rpc_client);
@@ -1146,8 +1146,8 @@ mod tests {
         let rpc_client = ClientBuilder::default()
             .layer(RetryBackoffLayer::new_with_policy(
                 2,
-                100,
-                100,
+                1,
+                1,
                 simple_json_rpc_retry_policy,
             ))
             .transport(transport_client.clone(), transport_client.guess_local());
@@ -1203,8 +1203,8 @@ mod tests {
         let rpc_client = ClientBuilder::default()
             .layer(RetryBackoffLayer::new_with_policy(
                 2,
-                100,
-                100,
+                1,
+                1,
                 simple_json_rpc_retry_policy,
             ))
             .transport(transport_client.clone(), transport_client.guess_local());
@@ -1262,8 +1262,8 @@ mod tests {
         let rpc_client = ClientBuilder::default()
             .layer(RetryBackoffLayer::new_with_policy(
                 2,
-                100,
-                100,
+                1,
+                1,
                 simple_json_rpc_retry_policy,
             ))
             .transport(transport_client.clone(), transport_client.guess_local());
@@ -1321,8 +1321,8 @@ mod tests {
         let rpc_client = ClientBuilder::default()
             .layer(RetryBackoffLayer::new_with_policy(
                 2,
-                100,
-                100,
+                1,
+                1,
                 simple_json_rpc_retry_policy,
             ))
             .transport(transport_client.clone(), transport_client.guess_local());

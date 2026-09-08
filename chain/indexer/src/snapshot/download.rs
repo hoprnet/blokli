@@ -454,15 +454,21 @@ mod tests {
     #[tokio::test]
     async fn test_enhanced_error_messages() {
         let temp_dir = TempDir::new().unwrap();
-        let downloader = SnapshotDownloader::new().expect("Failed to create SnapshotDownloader");
+        let downloader = SnapshotDownloader::with_config(DownloadConfig {
+            max_retries: 0,
+            ..Default::default()
+        })
+        .expect("Failed to create SnapshotDownloader");
 
         // Test invalid URL error
         let result = downloader.download_snapshot("invalid://url", temp_dir.path()).await;
         assert!(result.is_err());
 
-        // Test file not found error
+        // Test an HTTP not-found response without depending on a public service.
+        let mut server = mockito::Server::new_async().await;
+        let _not_found = server.mock("GET", "/snapshot").with_status(404).expect(1).create();
         let result = downloader
-            .download_snapshot("https://httpbin.org/status/404", temp_dir.path())
+            .download_snapshot(&format!("{}/snapshot", server.url()), temp_dir.path())
             .await;
         assert!(result.is_err());
     }

@@ -62,6 +62,7 @@ anyhow          = { workspace = true }
 hex-literal     = { workspace = true }
 insta           = { workspace = true, features = ["yaml"] }
 mockall         = { workspace = true }
+mockito         = { workspace = true }
 primitive-types = { workspace = true }
 test-log        = { workspace = true }
 tokio           = { workspace = true }
