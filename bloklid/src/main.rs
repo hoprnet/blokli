@@ -545,12 +545,7 @@ fn require_database(config: &Config) -> errors::Result<&DatabaseConfig> {
 
 #[cfg(all(test, feature = "heap-profiler", unix))]
 mod tests {
-    use std::{
-        env,
-        path::Path,
-        process::Command,
-        time::Duration,
-    };
+    use std::{env, path::Path, process::Command, time::Duration};
 
     use tokio::{
         signal::unix::{SignalKind, signal},
@@ -603,6 +598,9 @@ mod tests {
                 .expect("jemalloc should write a heap profile")
         });
 
-        assert!(Path::new(&profile_path).is_file(), "heap profile should exist at {profile_path}");
+        assert!(
+            Path::new(&profile_path).is_file(),
+            "heap profile should exist at {profile_path}"
+        );
     }
 }
