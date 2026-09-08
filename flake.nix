@@ -379,6 +379,7 @@
             '';
             extraPackages = with pkgs; [
               gh
+              bun
               nodejs
               ast-grep
               foundry-bin

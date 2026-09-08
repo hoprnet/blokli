@@ -442,6 +442,9 @@ config:
   ## @param config.dataDirectory Data directory path (should match persistence mount path)
   ##
   dataDirectory: "/data"
+  ## @param config.curvyAggregator Curvy Aggregator proxy address (required when Curvy indexing is enabled)
+  ##
+  curvyAggregator: ""
   # Indexer settings
   indexer:
     ## @param config.indexer.fastSync Enable fast sync mode
@@ -453,6 +456,9 @@ config:
     ## @param config.indexer.enableSafeIndexing Enable Safe contract event indexing for discovered Safes
     ##
     enableSafeIndexing: false
+    ## @param config.indexer.enableCurvyIndexing Enable Curvy event indexing using config.curvyAggregator
+    ##
+    enableCurvyIndexing: false
     ## @param config.indexer.logsSnapshotUrl URL for logs snapshot download (required when enableLogsSnapshot is true)
     ##
     logsSnapshotUrl: ""
