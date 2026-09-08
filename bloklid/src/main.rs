@@ -36,6 +36,8 @@ use blokli_db::{
 use clap::Parser;
 use futures::TryStreamExt;
 use tokio::net::TcpListener;
+#[cfg(all(feature = "heap-profiler", unix))]
+use tokio::signal::unix::{SignalKind, signal};
 
 use crate::{
     config::{Config, DatabaseConfig},
@@ -187,22 +189,15 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
     // long time inside `BlokliChain::start`, so a profiling dump listener must
     // be active independently of the startup path.
     let mut signals = Signals::new([Signal::Hup, Signal::Int, Signal::Term])?;
-    #[cfg(feature = "heap-profiler")]
+    #[cfg(all(feature = "heap-profiler", unix))]
     let _heap_profile_signal_task = {
-        let mut heap_profile_signals = Signals::new([Signal::Usr1])?;
+        let mut heap_profile_signals = signal(SignalKind::user_defined1())?;
+        tracing::info!("heap profiler SIGUSR1 listener active");
         tokio::spawn(async move {
-            loop {
-                match heap_profile_signals.try_next().await {
-                    Ok(Some(Signal::Usr1)) => match dump_heap_profile() {
-                        Ok(profile_path) => tracing::info!(%profile_path, "wrote jemalloc heap profile"),
-                        Err(error) => tracing::error!(%error, "failed to write jemalloc heap profile"),
-                    },
-                    Ok(Some(_)) => tracing::warn!("received unexpected heap-profiler signal"),
-                    Ok(None) => break,
-                    Err(error) => {
-                        tracing::error!(%error, "heap-profiler signal listener stopped");
-                        break;
-                    }
+            while heap_profile_signals.recv().await.is_some() {
+                match dump_heap_profile() {
+                    Ok(profile_path) => tracing::info!(%profile_path, "wrote jemalloc heap profile"),
+                    Err(error) => tracing::error!(%error, "failed to write jemalloc heap profile"),
                 }
             }
         })
@@ -506,7 +501,7 @@ fn dump_heap_profile() -> io::Result<String> {
     }
 }
 
-/// Returns the active jemalloc profile prefix configured through `MALLOC_CONF`.
+/// Returns the active jemalloc profile prefix configured through `_RJEM_MALLOC_CONF`.
 #[cfg(feature = "heap-profiler")]
 fn jemalloc_profile_prefix() -> io::Result<String> {
     let mut profile_prefix: *const c_char = ptr::null();
@@ -546,4 +541,68 @@ fn require_database(config: &Config) -> errors::Result<&DatabaseConfig> {
                 .to_string(),
         )
     })
+}
+
+#[cfg(all(test, feature = "heap-profiler", unix))]
+mod tests {
+    use std::{
+        env,
+        path::Path,
+        process::Command,
+        time::Duration,
+    };
+
+    use tokio::{
+        signal::unix::{SignalKind, signal},
+        time::timeout,
+    };
+
+    use super::dump_heap_profile;
+
+    const HEAP_PROFILE_TEST_CHILD: &str = "BLOKLI_HEAP_PROFILE_TEST_CHILD";
+
+    #[test]
+    fn test_heap_profile_signal_writes_snapshot() {
+        if env::var_os(HEAP_PROFILE_TEST_CHILD).is_some() {
+            test_heap_profile_signal_writes_snapshot_in_child();
+            return;
+        }
+
+        let temp_dir = tempfile::tempdir().expect("test profile directory should be created");
+        let profile_prefix = temp_dir.path().join("jeprof");
+        let current_exe = env::current_exe().expect("test executable path should be available");
+        let status = Command::new(current_exe)
+            .args(["--exact", "tests::test_heap_profile_signal_writes_snapshot"])
+            .env(HEAP_PROFILE_TEST_CHILD, "1")
+            .env(
+                "_RJEM_MALLOC_CONF",
+                format!("prof:true,prof_active:true,prof_prefix:{}", profile_prefix.display()),
+            )
+            .status()
+            .expect("child heap profiler test should start");
+
+        assert!(status.success(), "child heap profiler test should pass");
+    }
+
+    fn test_heap_profile_signal_writes_snapshot_in_child() {
+        let runtime = tokio::runtime::Runtime::new().expect("Tokio runtime should be created");
+        let profile_path = runtime.block_on(async {
+            let mut signals = signal(SignalKind::user_defined1()).expect("SIGUSR1 listener should be created");
+            let dump_task = tokio::spawn(async move {
+                signals.recv().await.expect("SIGUSR1 stream should remain active");
+                dump_heap_profile()
+            });
+
+            let signal_result = unsafe { libc::kill(libc::getpid(), libc::SIGUSR1) };
+            assert_eq!(signal_result, 0, "SIGUSR1 should be sent to the test process");
+
+            timeout(Duration::from_secs(5), dump_task)
+                .await
+                .expect("SIGUSR1 dump should complete")
+                .expect("SIGUSR1 dump task should not panic")
+                .expect("jemalloc should write a heap profile")
+        });
+
+        assert!(Path::new(&profile_path).is_file(), "heap profile should exist at {profile_path}");
+    }
 }

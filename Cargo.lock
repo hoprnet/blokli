@@ -2232,6 +2232,7 @@ dependencies = [
  "hopr-bindings",
  "hopr-types",
  "humantime-serde",
+ "libc",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry-prometheus-text-exporter",

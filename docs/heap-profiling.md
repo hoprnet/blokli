@@ -5,11 +5,13 @@ jemalloc with allocation profiling enabled and keeps line-level symbols in the
 binary. The normal `bloklid` image and its allocator are unchanged.
 
 Deploy the profiling image with a disk-backed volume for profiles (not a
-`medium: Memory` `emptyDir`) and the following environment variable:
+`medium: Memory` `emptyDir`) and the following environment variable. Blokli's
+jemalloc build uses the `_rjem_` symbol prefix, so the variable name must be
+`_RJEM_MALLOC_CONF` rather than `MALLOC_CONF`:
 
 ```yaml
 env:
-  - name: MALLOC_CONF
+  - name: _RJEM_MALLOC_CONF
     value: prof:true,prof_active:true,lg_prof_sample:19,prof_gdump:true,prof_final:true,prof_prefix:/profiles/jeprof
 volumeMounts:
   - name: heap-profiles

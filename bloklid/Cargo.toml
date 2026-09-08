@@ -93,6 +93,7 @@ hopr-types = { workspace = true, features = [
 [dev-dependencies]
 anyhow      = { workspace = true }
 async-trait = { workspace = true }
+libc        = { workspace = true }
 temp-env    = { workspace = true }
 thiserror   = { workspace = true }
 tokio       = { workspace = true, features = ["full"] }
