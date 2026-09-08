@@ -6,6 +6,10 @@ mod network;
 mod telemetry;
 mod telemetry_common;
 
+#[cfg(feature = "heap-profiler")]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 use std::{
     process::ExitCode,
     sync::{Arc, RwLock},

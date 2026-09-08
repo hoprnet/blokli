@@ -121,6 +121,7 @@ temp-env = "0.3.6"
 tempfile = "3.27.0"
 test-log = { version = "0.2.21", features = ["trace"] }
 thiserror = "2.0.18"
+tikv-jemallocator = "0.7.0"
 tokio = { version = "1.52.3", features = [
   "fs",
   "macros",
@@ -181,6 +182,14 @@ lto           = "fat"
 opt-level     = 3
 panic         = "abort"
 strip         = true
+
+# This is intentionally only used by the diagnostic Docker image. It retains
+# enough symbols for jemalloc's `jeprof` reports without changing release
+# binaries.
+[profile.heap-profiler]
+debug    = 1
+inherits = "release"
+strip    = false
 
 # Workspace-level lints to prevent common issues
 [workspace.lints.clippy]

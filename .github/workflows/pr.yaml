@@ -166,7 +166,7 @@ jobs:
       gpg_private_key: ${{ secrets.GPG_HOPRNET_PRIVATE_KEY }}
   # ── Build: Docker ───────────────────────────────────────────────────────────
   build-docker:
-    name: Docker
+    name: Docker profiling - TO BE REMOVED
     uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@25898d13dab1b3fbf4c33c394e7c581578a2b0d7 # build-docker-v3.2.0
     needs: build-binaries
     permissions:
@@ -181,7 +181,7 @@ jobs:
           {
             "runner": "depot-ubuntu-24.04-4",
             "architecture": "x86_64-linux",
-            "build_command": "nix build -L --option fallback true .#docker-bloklid-x86_64-linux",
+            "build_command": "nix build -L --option fallback true .#docker-bloklid-x86_64-linux-heap-profiler",
             "smoke_test_command": "nix develop -c just smoke-test"
           }
         ]

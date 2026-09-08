@@ -52,6 +52,13 @@ let
       "${name}-dev" = builders.${platform}.callPackage nixLib.mkRustPackage (
         args // { CARGO_PROFILE = "dev"; }
       );
+      "${name}-heap-profiler" = builders.${platform}.callPackage nixLib.mkRustPackage (
+        args
+        // {
+          CARGO_PROFILE = "heap-profiler";
+          cargoExtraArgs = "-p bloklid --bins --locked --features heap-profiler";
+        }
+      );
     };
 
   bloklidPackages = builtins.foldl' (a: b: a // b) { } (

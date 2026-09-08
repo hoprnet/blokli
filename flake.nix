@@ -221,7 +221,7 @@
             );
 
           # Helper: build a standard bloklid Docker image for a target platform.
-          # variant is null (release), "dev", or "profile".
+          # variant is null (release), "dev", or "heap-profiler".
           mkBloklidDocker =
             targetPlatform: variant:
             let
@@ -279,9 +279,11 @@
           bloklidDocker = {
             docker-bloklid-x86_64-linux = mkBloklidDocker "x86_64-linux" null;
             docker-bloklid-x86_64-linux-dev = mkBloklidDocker "x86_64-linux" "dev";
+            docker-bloklid-x86_64-linux-heap-profiler = mkBloklidDocker "x86_64-linux" "heap-profiler";
             docker-bloklid-anvil-x86_64-linux = mkBloklidAnvilDocker "x86_64-linux";
             docker-bloklid-aarch64-linux = mkBloklidDocker "aarch64-linux" null;
             docker-bloklid-aarch64-linux-dev = mkBloklidDocker "aarch64-linux" "dev";
+            docker-bloklid-aarch64-linux-heap-profiler = mkBloklidDocker "aarch64-linux" "heap-profiler";
             docker-bloklid-anvil-aarch64-linux = mkBloklidAnvilDocker "aarch64-linux";
           };
 
