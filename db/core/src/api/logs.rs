@@ -102,6 +102,16 @@ pub trait BlokliDbLogOperations {
         processed: Option<bool>,
     ) -> Result<Vec<u64>>;
 
+    /// Retrieves one ascending page of distinct block numbers after an optional cursor.
+    ///
+    /// This avoids retaining every historical block number while rebuilding indexed state.
+    async fn get_logs_block_numbers_page(
+        &self,
+        after_block_number: Option<u64>,
+        processed: Option<bool>,
+        limit: u64,
+    ) -> Result<Vec<u64>>;
+
     /// Marks a specific log entry as processed.
     ///
     /// # Arguments

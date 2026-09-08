@@ -26,13 +26,15 @@ use crate::{
     },
     db::BlokliDb,
     errors::DbSqlError,
-    numeric::{block_range_to_i64, i64_to_u64, log_position_to_i64},
+    numeric::{block_range_to_i64, i64_to_u64, log_position_to_i64, u64_to_i64},
 };
 
 #[derive(FromQueryResult)]
 struct BlockNumber {
     block_number: i64,
 }
+
+const CHECKSUM_BATCH_SIZE: u64 = 500;
 
 #[async_trait]
 impl BlokliDbLogOperations for BlokliDb {
@@ -275,6 +277,38 @@ impl BlokliDbLogOperations for BlokliDb {
             .collect()
     }
 
+    async fn get_logs_block_numbers_page(
+        &self,
+        after_block_number: Option<u64>,
+        processed: Option<bool>,
+        limit: u64,
+    ) -> Result<Vec<u64>> {
+        let after_block_number = after_block_number
+            .map(|block_number| u64_to_i64(block_number, "after_block_number").map_err(DbError::from))
+            .transpose()?;
+
+        LogStatus::find()
+            .select_only()
+            .column(log_status::Column::BlockNumber)
+            .distinct()
+            .apply_if(after_block_number, |q, block_number| {
+                q.filter(log_status::Column::BlockNumber.gt(block_number))
+            })
+            .apply_if(processed, |q, value| q.filter(log_status::Column::Processed.eq(value)))
+            .order_by_asc(log_status::Column::BlockNumber)
+            .limit(limit)
+            .into_model::<BlockNumber>()
+            .all(self.conn(TargetDb::Logs))
+            .await
+            .map_err(|e| {
+                error!(error = ?e, "failed to get paginated log block numbers from db");
+                DbError::from(DbSqlError::from(e))
+            })?
+            .into_iter()
+            .map(|block| i64_to_u64(block.block_number, "block_number").map_err(DbError::from))
+            .collect()
+    }
+
     async fn set_logs_processed(&self, block_number: Option<u64>, block_offset: Option<u64>) -> Result<()> {
         let (min_block_number, max_block_number) =
             block_range_to_i64(block_number, block_offset).map_err(DbError::from)?;
@@ -376,18 +410,26 @@ impl BlokliDbLogOperations for BlokliDb {
                         .and_then(|c| Hash::try_from(c.as_slice()).ok())
                         .unwrap_or_default();
 
-                    let query = LogStatus::find()
-                        .filter(log_status::Column::Checksum.is_null())
-                        .order_by_asc(log_status::Column::BlockNumber)
-                        .order_by_asc(log_status::Column::TxIndex)
-                        .order_by_asc(log_status::Column::LogIndex)
-                        .find_also_related(Log);
+                    loop {
+                        let entries = LogStatus::find()
+                            .filter(log_status::Column::Checksum.is_null())
+                            .order_by_asc(log_status::Column::BlockNumber)
+                            .order_by_asc(log_status::Column::TxIndex)
+                            .order_by_asc(log_status::Column::LogIndex)
+                            .limit(CHECKSUM_BATCH_SIZE)
+                            .find_also_related(Log)
+                            .all(tx.as_ref())
+                            .await
+                            .map_err(|e| DbError::from(DbSqlError::from(e)))?;
 
-                    match query.all(tx.as_ref()).await {
-                        Ok(entries) => {
-                            let mut entries = entries.into_iter();
-                            while let Some((status, Some(log_entry))) = entries.next() {
-                                let slog = create_log(log_entry.clone(), status.clone())?;
+                        if entries.is_empty() {
+                            break;
+                        }
+
+                        let mut updated_count = 0;
+                        let mut update_failed = false;
+                        for (status, log_entry) in entries {
+                            if let Some(log_entry) = log_entry {
                                 // we compute the hash of a single log as a combination of the block
                                 // hash, TX hash, and the log index
                                 let log_hash = Hash::create(&[
@@ -404,18 +446,30 @@ impl BlokliDbLogOperations for BlokliDb {
                                 match updated_status.update(tx.as_ref()).await {
                                     Ok(_) => {
                                         last_checksum = next_checksum;
-                                        trace!(log = %slog, checksum = %next_checksum, "Generated log checksum");
+                                        updated_count += 1;
+                                        trace!(
+                                            block_number = log_entry.block_number,
+                                            tx_index = log_entry.tx_index,
+                                            log_index = log_entry.log_index,
+                                            checksum = %next_checksum,
+                                            "Generated log checksum"
+                                        );
                                     }
                                     Err(error) => {
                                         error!(%error, "Failed to update log status checksum in db");
+                                        update_failed = true;
                                         break;
                                     }
                                 }
                             }
-                            Ok(last_checksum)
                         }
-                        Err(e) => Err(DbError::from(DbSqlError::from(e))),
+
+                        if update_failed || updated_count == 0 {
+                            break;
+                        }
                     }
+
+                    Ok(last_checksum)
                 })
             })
             .await
@@ -885,6 +939,15 @@ mod tests {
         let block_numbers_unprocessed_second = db.get_logs_block_numbers(Some(2), Some(0), Some(false)).await.unwrap();
         assert_eq!(block_numbers_unprocessed_second.len(), 1);
         assert_eq!(block_numbers_unprocessed_second[0], 2);
+
+        let first_page = db.get_logs_block_numbers_page(None, None, 2).await.unwrap();
+        assert_eq!(first_page, [1, 2]);
+
+        let second_page = db.get_logs_block_numbers_page(Some(2), None, 2).await.unwrap();
+        assert_eq!(second_page, [3]);
+
+        let unprocessed_page = db.get_logs_block_numbers_page(None, Some(false), 1).await.unwrap();
+        assert_eq!(unprocessed_page, [2]);
     }
 
     #[tokio::test]
@@ -950,6 +1013,40 @@ mod tests {
             updated_log_3.clone().checksum.unwrap(),
         );
         assert_ne!(updated_log_1, updated_log_3);
+    }
+
+    #[tokio::test]
+    async fn test_update_logs_checksums_processes_multiple_batches() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+        let template = SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: [Hash::create(&[b"topic"]).into()].into(),
+            data: [1, 2, 3, 4].into(),
+            tx_index: 1,
+            block_hash: Hash::create(&[b"block_hash"]).into(),
+            tx_hash: Hash::create(&[b"tx_hash"]).into(),
+            log_index: 1,
+            removed: false,
+            ..Default::default()
+        };
+        let logs = (1..=CHECKSUM_BATCH_SIZE + 1)
+            .map(|block_number| SerializableLog {
+                block_number,
+                ..template.clone()
+            })
+            .collect();
+
+        db.store_logs(logs)
+            .await
+            .unwrap()
+            .into_iter()
+            .for_each(|result| assert!(result.is_ok()));
+
+        db.update_logs_checksums().await.unwrap();
+
+        let logs = db.get_logs(None, None).await.unwrap();
+        assert_eq!(logs.len(), usize::try_from(CHECKSUM_BATCH_SIZE + 1).unwrap());
+        assert!(logs.into_iter().all(|log| log.checksum.is_some()));
     }
 
     /// After the `1.3.0` -> `1.4.0` schema bump clears the logs database, `ensure_logs_origin`

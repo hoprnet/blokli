@@ -295,32 +295,45 @@ where
                 METRIC_INDEXER_SYNC_SOURCE.set(&["rpc"], 0.0);
             }
 
-            let log_block_numbers = self.db.get_logs_block_numbers(None, None, processed).await?;
-            let _first_log_block_number = log_block_numbers.first().copied().unwrap_or(0);
             let _head = chain_head.load(Ordering::Relaxed);
-            for block_number in log_block_numbers {
-                debug!(
-                    block_number,
-                    first_log_block_number = _first_log_block_number,
-                    head = _head,
-                    "computing processed logs"
-                );
-                // Do not pollute the logs with the fast-sync progress
-                Self::process_block_by_id(
-                    &db,
-                    &logs_handler,
-                    block_number,
-                    is_synced.load(Ordering::Relaxed),
-                    &self.indexer_state,
-                )
-                .await?;
+            let mut after_block_number = None;
+            let mut first_log_block_number = None;
 
-                #[cfg(all(feature = "telemetry", not(test)))]
-                {
-                    let progress =
-                        (block_number - _first_log_block_number) as f64 / (_head - _first_log_block_number) as f64;
-                    METRIC_INDEXER_SYNC_PROGRESS.set(&["fast_sync"], progress);
+            loop {
+                let block_numbers = self
+                    .db
+                    .get_logs_block_numbers_page(after_block_number, processed, 1_000)
+                    .await?;
+                let Some(last_block_number) = block_numbers.last().copied() else {
+                    break;
+                };
+
+                for block_number in block_numbers {
+                    let first_block_number = *first_log_block_number.get_or_insert(block_number);
+                    debug!(
+                        block_number,
+                        first_log_block_number = first_block_number,
+                        head = _head,
+                        "computing processed logs"
+                    );
+                    // Do not pollute the logs with the fast-sync progress
+                    Self::process_block_by_id(
+                        &db,
+                        &logs_handler,
+                        block_number,
+                        is_synced.load(Ordering::Relaxed),
+                        &self.indexer_state,
+                    )
+                    .await?;
+
+                    #[cfg(all(feature = "telemetry", not(test)))]
+                    {
+                        let progress = (block_number - first_block_number) as f64 / (_head - first_block_number) as f64;
+                        METRIC_INDEXER_SYNC_PROGRESS.set(&["fast_sync"], progress);
+                    }
                 }
+
+                after_block_number = Some(last_block_number);
             }
         }
 
