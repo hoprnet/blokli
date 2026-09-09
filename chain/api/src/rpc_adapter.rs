@@ -17,7 +17,7 @@ use tracing::{debug, error, warn};
 
 use crate::{
     transaction_executor::{ConfirmationError, RpcClient},
-    transaction_monitor::{ReceiptLog, ReceiptProvider},
+    transaction_monitor::{ReceiptLog, ReceiptProvider, TransactionReceipt},
 };
 
 /// RPC adapter that implements RpcClient and ReceiptProvider traits for RpcOperations
@@ -136,6 +136,29 @@ impl<R: HttpRequestor + 'static + Clone> RpcClient for RpcAdapter<R> {
 
 #[async_trait]
 impl<R: HttpRequestor + 'static + Clone> ReceiptProvider for RpcAdapter<R> {
+    async fn get_transaction_receipt(&self, tx_hash: Hash) -> Result<Option<TransactionReceipt>, String> {
+        debug!(?tx_hash, "fetching transaction receipt");
+        let b256_hash = B256::from_slice(tx_hash.as_ref());
+        match self.rpc.provider.get_transaction_receipt(b256_hash).await {
+            Ok(Some(receipt)) => {
+                let success = receipt.status();
+                let logs = receipt
+                    .inner
+                    .logs()
+                    .iter()
+                    .map(|log| ReceiptLog {
+                        address: log.address().into_array(),
+                        topics: log.topics().iter().map(|topic| topic.0).collect(),
+                        data: log.data().data.to_vec(),
+                    })
+                    .collect();
+                Ok(Some(TransactionReceipt { success, logs }))
+            }
+            Ok(None) => Ok(None),
+            Err(error) => Err(format!("Receipt error: {error}")),
+        }
+    }
+
     /// Get the status of a transaction by its hash
     ///
     /// Returns:
