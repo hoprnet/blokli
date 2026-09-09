@@ -4,7 +4,10 @@
 //! submitted through the GraphQL API. Transactions are stored with their submission
 //! status and can be queried by UUID.
 
-use std::sync::Arc;
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+};
 
 use async_broadcast::{InactiveReceiver, Receiver, Sender, TrySendError, broadcast};
 use chrono::{DateTime, Utc};
@@ -18,6 +21,7 @@ use crate::metrics::{
     STATUS_CONFIRMED, STATUS_REVERTED, STATUS_SUBMISSION_FAILED, STATUS_TIMEOUT, STATUS_VALIDATION_FAILED,
     record_transaction_status,
 };
+use crate::safe_execution::decode_transaction_to_address;
 
 /// Errors that can occur when working with the transaction store
 #[derive(Error, Debug, Clone, PartialEq)]
@@ -310,6 +314,22 @@ impl TransactionStore {
         Ok(())
     }
 
+    /// Add an optional revert reason after a Safe failure was already published.
+    /// This deliberately does not emit a status transition: clients have already
+    /// received the authoritative Safe failure outcome.
+    pub fn update_safe_revert_reason(&self, id: Uuid, revert_reason: String) -> Result<(), TransactionStoreError> {
+        self.transactions
+            .get_mut(&id)
+            .map(|mut entry| {
+                if let Some(safe_execution) = entry.value_mut().safe_execution.as_mut() {
+                    if !safe_execution.success {
+                        safe_execution.revert_reason = Some(revert_reason);
+                    }
+                }
+            })
+            .ok_or(TransactionStoreError::NotFound(id))
+    }
+
     /// List all transactions with a specific status
     pub fn list_by_status(&self, status: TransactionStatus) -> Vec<TransactionRecord> {
         self.transactions
@@ -317,6 +337,54 @@ impl TransactionStore {
             .filter(|entry| entry.value().status == status)
             .map(|entry| entry.value().clone())
             .collect()
+    }
+
+    /// Return submitted work in round-robin target order. The target is decoded
+    /// from the signed envelope, so it is not supplied by a client header or IP.
+    pub fn list_submitted_fair(&self) -> Vec<TransactionRecord> {
+        let mut by_identity: HashMap<String, VecDeque<TransactionRecord>> = HashMap::new();
+        for entry in self
+            .transactions
+            .iter()
+            .filter(|entry| entry.value().status == TransactionStatus::Submitted)
+        {
+            let record = entry.value().clone();
+            by_identity
+                .entry(transaction_identity(&record.raw_transaction))
+                .or_default()
+                .push_back(record);
+        }
+        let mut queues: Vec<VecDeque<TransactionRecord>> = by_identity.into_values().collect();
+        let mut fair = Vec::new();
+        loop {
+            let mut progressed = false;
+            for queue in &mut queues {
+                if let Some(record) = queue.pop_front() {
+                    fair.push(record);
+                    progressed = true;
+                }
+            }
+            if !progressed {
+                break;
+            }
+        }
+        fair
+    }
+
+    /// Check capacity before a raw transaction is broadcast. This uses the
+    /// signed transaction target as a stable identity and deliberately never a
+    /// client IP address.
+    pub fn can_admit_submission(&self, raw_transaction: &[u8], max_submitted: usize, max_per_identity: usize) -> bool {
+        let submitted = self.list_by_status(TransactionStatus::Submitted);
+        if submitted.len() >= max_submitted {
+            return false;
+        }
+        let identity = transaction_identity(raw_transaction);
+        submitted
+            .into_iter()
+            .filter(|record| transaction_identity(&record.raw_transaction) == identity)
+            .count()
+            < max_per_identity
     }
 
     /// Get the total count of transactions in the store
@@ -368,6 +436,12 @@ impl TransactionStore {
             }
         }
     }
+}
+
+fn transaction_identity(raw_transaction: &[u8]) -> String {
+    decode_transaction_to_address(raw_transaction)
+        .map(hex::encode)
+        .unwrap_or_else(|| "undecodable-signed-transaction".to_string())
 }
 
 impl Default for TransactionStore {
