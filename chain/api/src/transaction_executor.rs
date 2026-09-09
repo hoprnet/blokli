@@ -88,6 +88,8 @@ pub struct RawTransactionExecutorConfig {
     pub max_submitted_transactions: usize,
     /// Per signed-transaction-target limit for awaiting receipt monitoring.
     pub max_submitted_transactions_per_identity: usize,
+    /// Enable optional Safe revert-reason tracing in synchronous transaction execution.
+    pub enable_revert_reason_tracing: bool,
 }
 
 impl Default for RawTransactionExecutorConfig {
@@ -97,6 +99,7 @@ impl Default for RawTransactionExecutorConfig {
             confirmation_timeout: Duration::from_secs(60),
             max_submitted_transactions: 1_024,
             max_submitted_transactions_per_identity: 64,
+            enable_revert_reason_tracing: true,
         }
     }
 }
@@ -318,8 +321,13 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         if let (Some(receipt_provider), Some(safe_checker)) =
             (self.receipt_provider.as_ref(), self.safe_checker.as_ref())
         {
-            record.safe_execution =
-                enrich_safe_execution(&record, receipt_provider.as_ref(), safe_checker.as_ref()).await;
+            record.safe_execution = enrich_safe_execution(
+                &record,
+                receipt_provider.as_ref(),
+                safe_checker.as_ref(),
+                self.config.enable_revert_reason_tracing,
+            )
+            .await;
         }
 
         if let Err(e) = self.transaction_store.insert(record.clone()) {
