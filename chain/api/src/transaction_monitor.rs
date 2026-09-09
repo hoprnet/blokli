@@ -350,10 +350,11 @@ impl<R: ReceiptProvider + 'static, S: SafeAddressChecker> TransactionMonitor<R, 
                     error!(id = %record.id, tx_hash = %tx_hash, error = %e, "Failed to confirm transaction");
                 } else if let Some(result) = safe_execution.as_ref() {
                     record_safe_execution(result.success);
-                    if safe_failure && self.config.enable_revert_reason_tracing {
-                        if self.trace_jobs.try_send(TraceJob { id: record.id, tx_hash }).is_err() {
-                            warn!(id = %record.id, "Safe failure trace queue is full; skipping optional enrichment");
-                        }
+                    if safe_failure
+                        && self.config.enable_revert_reason_tracing
+                        && self.trace_jobs.try_send(TraceJob { id: record.id, tx_hash }).is_err()
+                    {
+                        warn!(id = %record.id, "Safe failure trace queue is full; skipping optional enrichment");
                     }
                 }
             }
