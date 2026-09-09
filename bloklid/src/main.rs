@@ -548,6 +548,7 @@ mod tests {
     use std::{env, path::Path, process::Command, time::Duration};
 
     use tokio::{
+        runtime::Runtime,
         signal::unix::{SignalKind, signal},
         time::timeout,
     };
@@ -580,7 +581,7 @@ mod tests {
     }
 
     fn test_heap_profile_signal_writes_snapshot_in_child() {
-        let runtime = tokio::runtime::Runtime::new().expect("Tokio runtime should be created");
+        let runtime = Runtime::new().expect("Tokio runtime should be created");
         let profile_path = runtime.block_on(async {
             let mut signals = signal(SignalKind::user_defined1()).expect("SIGUSR1 listener should be created");
             let dump_task = tokio::spawn(async move {
