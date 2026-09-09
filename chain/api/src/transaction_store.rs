@@ -17,11 +17,13 @@ use thiserror::Error;
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
-use crate::metrics::{
-    STATUS_CONFIRMED, STATUS_REVERTED, STATUS_SUBMISSION_FAILED, STATUS_TIMEOUT, STATUS_VALIDATION_FAILED,
-    record_transaction_status,
+use crate::{
+    metrics::{
+        STATUS_CONFIRMED, STATUS_REVERTED, STATUS_SUBMISSION_FAILED, STATUS_TIMEOUT, STATUS_VALIDATION_FAILED,
+        record_transaction_status,
+    },
+    safe_execution::decode_transaction_to_address,
 };
-use crate::safe_execution::decode_transaction_to_address;
 
 /// Errors that can occur when working with the transaction store
 #[derive(Error, Debug, Clone, PartialEq)]
