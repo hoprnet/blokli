@@ -427,7 +427,13 @@ impl<R: ReceiptProvider + 'static, S: SafeAddressChecker> TransactionMonitor<R, 
         record: &crate::transaction_store::TransactionRecord,
     ) -> Option<SafeExecutionResult> {
         let safe_checker = self.safe_checker.as_ref()?;
-        enrich_safe_execution(record, self.receipt_provider.as_ref(), safe_checker.as_ref()).await
+        enrich_safe_execution(
+            record,
+            self.receipt_provider.as_ref(),
+            safe_checker.as_ref(),
+            self.config.enable_revert_reason_tracing,
+        )
+        .await
     }
 }
 
@@ -507,6 +513,7 @@ pub async fn enrich_safe_execution(
     record: &crate::transaction_store::TransactionRecord,
     receipt_provider: &(impl ReceiptProvider + ?Sized),
     safe_checker: &(impl SafeAddressChecker + ?Sized),
+    enable_revert_reason_tracing: bool,
 ) -> Option<SafeExecutionResult> {
     let mut result = match inspect_safe_execution(record, receipt_provider, safe_checker).await {
         Ok(result) => result,
@@ -517,7 +524,7 @@ pub async fn enrich_safe_execution(
     };
 
     if let Some(safe_result) = result.as_mut() {
-        if !safe_result.success {
+        if !safe_result.success && enable_revert_reason_tracing {
             safe_result.revert_reason = receipt_provider
                 .get_revert_reason(record.transaction_hash)
                 .await
