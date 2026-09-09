@@ -38,10 +38,10 @@
 //!     published_block: 1000,
 //!     published_tx_index: 5,
 //!     published_log_index: 2,
-//! })).await;
+//! }));
 //! ```
 
-use async_broadcast::{Receiver, Sender, broadcast};
+use async_broadcast::{InactiveReceiver, Receiver, Sender, TrySendError, broadcast};
 
 /// Position in the blockchain for ordering events and temporal queries
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -146,9 +146,9 @@ impl StateChange {
 #[derive(Clone)]
 pub struct EventBus {
     sender: Sender<StateChange>,
-    // Keep one receiver alive to prevent SendError when no subscribers exist
+    // Keep the channel open when no clients are subscribed without retaining its events.
     #[allow(dead_code)]
-    _keepalive: Receiver<StateChange>,
+    _keepalive: InactiveReceiver<StateChange>,
 }
 
 impl EventBus {
@@ -166,18 +166,20 @@ impl EventBus {
     /// let event_bus = EventBus::new(1000);
     /// ```
     pub fn new(capacity: usize) -> Self {
-        let (sender, receiver) = broadcast(capacity);
+        let (mut sender, receiver) = broadcast(capacity);
+        sender.set_overflow(true);
         Self {
             sender,
-            _keepalive: receiver,
+            _keepalive: receiver.deactivate(),
         }
     }
 
     /// Create event bus from an existing sender
     ///
     /// Useful when you need to share the same channel across multiple components.
-    pub fn from_sender(sender: Sender<StateChange>) -> Self {
-        let _keepalive = sender.new_receiver();
+    pub fn from_sender(mut sender: Sender<StateChange>) -> Self {
+        sender.set_overflow(true);
+        let _keepalive = sender.new_receiver().deactivate();
         Self { sender, _keepalive }
     }
 
@@ -203,8 +205,8 @@ impl EventBus {
 
     /// Publish a state change event to all subscribers
     ///
-    /// This is non-blocking and will succeed as long as there's capacity in the channel.
-    /// If the channel is full, it will drop the oldest event.
+    /// This never waits for a subscriber. If a subscriber is behind the configured capacity,
+    /// it misses the oldest event rather than blocking indexing.
     ///
     /// # Arguments
     ///
@@ -212,11 +214,9 @@ impl EventBus {
     ///
     /// # Returns
     ///
-    /// Returns Ok(()) if the event was successfully published,
-    /// or Err if all receivers have been dropped.
-    pub async fn publish(&self, event: StateChange) -> Result<(), async_broadcast::SendError<StateChange>> {
-        self.sender.broadcast(event).await?;
-        Ok(())
+    /// Returns `Err` only if the event bus is closed.
+    pub fn publish(&self, event: StateChange) -> Result<(), TrySendError<StateChange>> {
+        self.sender.try_broadcast(event).map(|_| ())
     }
 
     /// Get the number of active subscribers
@@ -242,7 +242,7 @@ mod tests {
             published_log_index: 2,
         });
 
-        event_bus.publish(event.clone()).await.unwrap();
+        event_bus.publish(event.clone()).unwrap();
 
         let received = subscriber.recv().await.unwrap();
         assert!(matches!(received, StateChange::AccountState(_)));
@@ -254,8 +254,7 @@ mod tests {
         let mut subscriber1 = event_bus.subscribe();
         let mut subscriber2 = event_bus.subscribe();
 
-        // Count includes keepalive receiver + 2 subscribers
-        assert_eq!(event_bus.subscriber_count(), 3);
+        assert_eq!(event_bus.subscriber_count(), 2);
 
         let event = StateChange::ChannelState(ChannelStateChange {
             channel_id: 10,
@@ -265,13 +264,44 @@ mod tests {
             published_log_index: 1,
         });
 
-        event_bus.publish(event.clone()).await.unwrap();
+        event_bus.publish(event.clone()).unwrap();
 
         let received1 = subscriber1.recv().await.unwrap();
         let received2 = subscriber2.recv().await.unwrap();
 
         assert!(matches!(received1, StateChange::ChannelState(_)));
         assert!(matches!(received2, StateChange::ChannelState(_)));
+    }
+
+    #[tokio::test]
+    async fn test_event_bus_drops_old_events_for_slow_subscribers() {
+        let event_bus = EventBus::new(1);
+        let mut subscriber = event_bus.subscribe();
+
+        let first = StateChange::ChannelState(ChannelStateChange {
+            channel_id: 10,
+            state_id: 100,
+            published_block: 2000,
+            published_tx_index: 3,
+            published_log_index: 1,
+        });
+        let second = StateChange::ChannelState(ChannelStateChange {
+            channel_id: 10,
+            state_id: 101,
+            published_block: 2001,
+            published_tx_index: 0,
+            published_log_index: 0,
+        });
+
+        event_bus.publish(first).unwrap();
+        event_bus.publish(second).unwrap();
+
+        assert!(subscriber.recv().await.is_err());
+        let received = subscriber.recv().await.unwrap();
+        let StateChange::ChannelState(change) = received else {
+            panic!("expected a channel state change");
+        };
+        assert_eq!(change.state_id, 101);
     }
 
     #[test]

@@ -312,7 +312,7 @@ async fn insert_channel_state_and_emit(
 
     // Only emit events for genuine new inserts to avoid duplicate downstream processing on restart
     if is_new {
-        // Emit state change event (fire and forget - don't block on event delivery)
+        // Emit state change without allowing slow subscribers to block indexing.
         let event = StateChange::ChannelState(ChannelStateChange {
             channel_id,
             state_id: inserted.id,
@@ -321,13 +321,9 @@ async fn insert_channel_state_and_emit(
             published_log_index: log_index,
         });
 
-        // Spawn event emission as a background task to avoid blocking
-        let event_bus = db.event_bus.clone();
-        tokio::spawn(async move {
-            if let Err(e) = event_bus.publish(event).await {
-                tracing::warn!("Failed to publish channel state change event: {}", e);
-            }
-        });
+        if let Err(error) = db.event_bus.publish(event) {
+            tracing::warn!(%error, "failed to publish channel state change event");
+        }
     }
 
     Ok(inserted)
