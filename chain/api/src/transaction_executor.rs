@@ -38,6 +38,8 @@ pub enum TransactionExecutorError {
     Timeout(String),
     #[error("Transaction execution failed: {0}")]
     ExecutionFailed(String),
+    #[error("Transaction submission is temporarily overloaded")]
+    Overloaded,
 }
 
 /// Terminal outcome of waiting for a submitted transaction's confirmation.
@@ -82,6 +84,10 @@ pub struct RawTransactionExecutorConfig {
     pub default_confirmations: u64,
     /// Maximum time to wait for confirmations
     pub confirmation_timeout: Duration,
+    /// Global number of transactions awaiting receipt monitoring.
+    pub max_submitted_transactions: usize,
+    /// Per signed-transaction-target limit for awaiting receipt monitoring.
+    pub max_submitted_transactions_per_identity: usize,
 }
 
 impl Default for RawTransactionExecutorConfig {
@@ -89,6 +95,8 @@ impl Default for RawTransactionExecutorConfig {
         Self {
             default_confirmations: 3,
             confirmation_timeout: Duration::from_secs(60),
+            max_submitted_transactions: 1_024,
+            max_submitted_transactions_per_identity: 64,
         }
     }
 }
@@ -212,6 +220,15 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             warn!(error = %e, "Transaction validation failed");
             record_transaction_status(STATUS_VALIDATION_FAILED);
             return Err(e.into());
+        }
+
+        if !self.transaction_store.can_admit_submission(
+            &raw_tx,
+            self.config.max_submitted_transactions,
+            self.config.max_submitted_transactions_per_identity,
+        ) {
+            warn!("Rejecting raw transaction before broadcast because submission capacity is exhausted");
+            return Err(TransactionExecutorError::Overloaded);
         }
 
         // Submit to RPC first to get transaction hash
@@ -464,6 +481,23 @@ mod tests {
         assert_eq!(record.id, uuid);
         assert_eq!(record.status, TransactionStatus::Submitted);
         assert_eq!(record.transaction_hash, test_tx_hash());
+    }
+
+    #[tokio::test]
+    async fn test_async_overload_is_rejected_before_broadcast() {
+        let rpc_client = MockRpcClient::new();
+        let executor = RawTransactionExecutor::new(
+            rpc_client,
+            TransactionStore::new(),
+            TransactionValidator::new(),
+            RawTransactionExecutorConfig {
+                max_submitted_transactions: 0,
+                ..Default::default()
+            },
+        );
+
+        let result = executor.send_raw_transaction_async(vec![0x01]).await;
+        assert!(matches!(result, Err(TransactionExecutorError::Overloaded)));
     }
 
     #[tokio::test]
