@@ -93,6 +93,8 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         contract_addresses: ContractAddresses,
         indexer_cfg: IndexerConfig,
         rpc_url: String,
+        transaction_executor_config: RawTransactionExecutorConfig,
+        transaction_monitor_config: TransactionMonitorConfig,
     ) -> Result<Self> {
         // TODO(#7140): replace this DefaultRetryPolicy with a custom one that computes backoff with the number of
         // retries
@@ -150,7 +152,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
                 rpc_adapter.clone(),
                 transaction_store.clone(),
                 transaction_validator,
-                RawTransactionExecutorConfig::default(),
+                transaction_executor_config,
             )
             .with_safe_enrichment(rpc_adapter.clone(), safe_checker.clone()),
         );
@@ -158,7 +160,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         let transaction_monitor = Arc::new(TransactionMonitor::new(
             transaction_store.clone(),
             (*rpc_adapter).clone(),
-            TransactionMonitorConfig::default(),
+            transaction_monitor_config,
             Some(safe_checker),
         ));
 
