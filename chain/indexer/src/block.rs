@@ -898,7 +898,7 @@ where
             logs_to_process.push(log);
         }
 
-        if !logs_to_process.is_empty() {
+        if logs_handler.supports_atomic_batches() && !logs_to_process.is_empty() {
             match logs_handler
                 .collect_log_events(logs_to_process.clone(), is_synced)
                 .await
@@ -929,6 +929,25 @@ where
                                 panic!("failed to process log, panicking to prevent data loss")
                             }
                         }
+                    }
+                }
+            }
+        } else {
+            for log in logs_to_process {
+                match logs_handler.collect_log_event(log.clone(), is_synced).await {
+                    Ok(()) => match db.set_log_processed(log).await {
+                        Ok(_) => {}
+                        Err(error) => {
+                            error!(block_id, %error, "failed to mark log as processed, panicking to prevent data loss");
+                            panic!("failed to mark log as processed, panicking to prevent data loss")
+                        }
+                    },
+                    Err(CoreEthereumIndexerError::ProcessError(error)) => {
+                        error!(block_id, %error, "failed to process log, continuing indexing");
+                    }
+                    Err(error) => {
+                        error!(block_id, %error, "failed to process log, panicking to prevent data loss");
+                        panic!("failed to process log, panicking to prevent data loss")
                     }
                 }
             }
@@ -1571,6 +1590,10 @@ mod tests {
         async fn collect_log_event(&self, _log: SerializableLog, _is_synced: bool) -> crate::errors::Result<()> {
             self.single_log_calls.fetch_add(1, StdOrdering::SeqCst);
             Ok(())
+        }
+
+        fn supports_atomic_batches(&self) -> bool {
+            true
         }
 
         async fn collect_log_events(&self, logs: Vec<SerializableLog>, _is_synced: bool) -> crate::errors::Result<()> {

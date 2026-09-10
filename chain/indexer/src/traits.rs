@@ -60,6 +60,16 @@ pub trait ChainLogHandler {
         Ok(())
     }
 
+    /// Whether [`Self::collect_log_events`] applies its entire input atomically.
+    ///
+    /// The indexer marks a successful atomic batch as processed together, and may retry an
+    /// unsuccessful atomic batch one log at a time. Handlers using the default sequential batch
+    /// implementation must therefore keep this `false`: some earlier logs may already have
+    /// applied side effects when a later log fails.
+    fn supports_atomic_batches(&self) -> bool {
+        false
+    }
+
     /// Returns whether a fetched, canonical log should be dispatched to the contract handler.
     /// Removed logs are filtered by the indexer before this hook is called.
     fn should_process_log(&self, _log: &SerializableLog) -> bool {

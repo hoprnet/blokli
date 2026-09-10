@@ -386,6 +386,10 @@ where
         self.collect_log_events(vec![slog], is_synced).await
     }
 
+    fn supports_atomic_batches(&self) -> bool {
+        true
+    }
+
     async fn collect_log_events(&self, slogs: Vec<SerializableLog>, is_synced: bool) -> Result<()> {
         let myself = self.clone();
         let events = self
