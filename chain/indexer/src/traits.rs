@@ -1,11 +1,17 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use blokli_chain_types::ContractAddresses;
 use hopr_bindings::exports::alloy::primitives::B256;
-use hopr_types::primitive::prelude::*;
+use hopr_types::{crypto::prelude::Hash, primitive::prelude::*};
 
 use crate::errors::Result;
+
+/// Chain data fetched ahead of processing a group of logs, keyed by transaction hash.
+///
+/// Currently this holds the raw EIP-2718 transaction bytes that Safe module execution failures
+/// need in order to tell a rejected ticket redemption from any other failed call.
+pub type PrefetchedTransactions = HashMap<Hash, Vec<u8>>;
 
 #[async_trait]
 pub trait ChainLogHandler {
@@ -51,15 +57,34 @@ pub trait ChainLogHandler {
 
     /// Processes an ordered group of blockchain logs.
     ///
-    /// The default invokes [`Self::collect_log_event`] sequentially and is not atomic.
-    /// Implementations may override it to apply the complete group atomically, and must return
-    /// `true` from [`Self::supports_atomic_batches`] when they do.
-    async fn collect_log_events(&self, logs: Vec<SerializableLog>, is_synced: bool) -> Result<()> {
+    /// The default invokes [`Self::collect_log_event`] sequentially, is not atomic, and ignores
+    /// `prefetched`. Implementations may override it to apply the complete group atomically, and
+    /// must return `true` from [`Self::supports_atomic_batches`] when they do.
+    ///
+    /// `prefetched` carries chain data already fetched for these logs by
+    /// [`Self::prefetch_log_data`]; it may be empty or incomplete, so an implementation that needs
+    /// an entry must be able to fetch it itself.
+    async fn collect_log_events(
+        &self,
+        logs: Vec<SerializableLog>,
+        is_synced: bool,
+        _prefetched: PrefetchedTransactions,
+    ) -> Result<()> {
         for log in logs {
             self.collect_log_event(log, is_synced).await?;
         }
 
         Ok(())
+    }
+
+    /// Fetches ahead of time whatever chain data the given logs will need while being processed.
+    ///
+    /// The indexer calls this for blocks it has not committed yet, so that the RPC latency
+    /// overlaps with the commit of earlier blocks. The result is handed straight back to
+    /// [`Self::collect_log_events`]. A failed lookup is simply absent from the result: the
+    /// processing path then fetches it itself, so this hook never changes indexing outcomes.
+    async fn prefetch_log_data(&self, _logs: &[SerializableLog]) -> PrefetchedTransactions {
+        PrefetchedTransactions::new()
     }
 
     /// Whether [`Self::collect_log_events`] applies its entire input atomically.

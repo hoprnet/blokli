@@ -15,7 +15,10 @@ use tracing::{debug, info, warn};
 #[cfg(all(feature = "telemetry", not(test)))]
 use super::increment_indexer_contract_log_count;
 use super::{ContractEventHandlers, u64_to_u32, u256_to_u32, u256_to_u64};
-use crate::{custom_abis::safe_contract_events::SafeContract::SafeContractEvents, errors::Result, state::IndexerEvent};
+use crate::{
+    custom_abis::safe_contract_events::SafeContract::SafeContractEvents, errors::Result, state::IndexerEvent,
+    traits::PrefetchedTransactions,
+};
 
 #[cfg(all(feature = "telemetry", not(test)))]
 fn safe_contract_event_metric_label(event: &SafeContractEvents) -> &'static str {
@@ -58,6 +61,7 @@ where
         safe_address: Address,
         module_address: Address,
         log: &Log,
+        prefetched: &PrefetchedTransactions,
     ) -> Result<()> {
         let Some(_) = self.db.get_safe_contract_by_address(Some(tx), safe_address).await? else {
             warn!(safe_address = %safe_address, "Safe execution failure observed for unknown safe");
@@ -65,19 +69,24 @@ where
         };
 
         let tx_hash = Hash::from(log.tx_hash);
-        let tx_bytes = self
-            ._rpc_operations
-            .get_transaction_bytes(tx_hash)
-            .await
-            .map_err(|error| {
-                warn!(
-                    safe_address = %safe_address,
-                    tx_hash = %tx_hash,
-                    error = %error,
-                    "Failed to fetch Safe transaction bytes for rejection detection"
-                );
-                error
-            })?;
+        // The bytes are normally pre-fetched concurrently before the block's database transaction
+        // is opened; falling back to a direct lookup covers a pre-fetch miss or failure.
+        let tx_bytes = match prefetched.get(&tx_hash) {
+            Some(bytes) => bytes.clone(),
+            None => self
+                ._rpc_operations
+                .get_transaction_bytes(tx_hash)
+                .await
+                .map_err(|error| {
+                    warn!(
+                        safe_address = %safe_address,
+                        tx_hash = %tx_hash,
+                        error = %error,
+                        "Failed to fetch Safe transaction bytes for rejection detection"
+                    );
+                    error
+                })?,
+        };
 
         let contract_addresses = to_hopr_contract_addresses(self.addresses.as_ref());
 
@@ -188,7 +197,27 @@ where
         safe_address: hopr_types::primitive::prelude::Address,
         log: &Log,
         event: SafeContractEvents,
+        is_synced: bool,
+    ) -> Result<Vec<IndexerEvent>> {
+        self.on_safe_contract_event_with_prefetch(
+            tx,
+            safe_address,
+            log,
+            event,
+            is_synced,
+            &PrefetchedTransactions::new(),
+        )
+        .await
+    }
+
+    pub(super) async fn on_safe_contract_event_with_prefetch(
+        &self,
+        tx: &OpenTransaction,
+        safe_address: hopr_types::primitive::prelude::Address,
+        log: &Log,
+        event: SafeContractEvents,
         _is_synced: bool,
+        prefetched: &PrefetchedTransactions,
     ) -> Result<Vec<IndexerEvent>> {
         #[cfg(all(feature = "telemetry", not(test)))]
         increment_indexer_contract_log_count(safe_contract_event_metric_label(&event));
@@ -400,8 +429,14 @@ where
             }
             SafeContractEvents::ExecutionFromModuleSuccess(_execution) => {}
             SafeContractEvents::ExecutionFromModuleFailure(execution) => {
-                self.maybe_record_rejected_ticket_redemption(tx, safe_address, execution.module.to_hopr_address(), log)
-                    .await?;
+                self.maybe_record_rejected_ticket_redemption(
+                    tx,
+                    safe_address,
+                    execution.module.to_hopr_address(),
+                    log,
+                    prefetched,
+                )
+                .await?;
             }
         }
 
@@ -438,8 +473,9 @@ mod tests {
         handlers::test_utils::test_helpers::{
             ANNOUNCEMENTS_ADDR, CHANNELS_ADDR, ClonableMockOperations, MockIndexerRpcOperations,
             NODE_SAFE_REGISTRY_ADDR, SELF_CHAIN_KEYPAIR, SERVICE_REGISTRY_ADDR, TICKET_PRICE_ORACLE_ADDR, TOKEN_ADDR,
-            WIN_PROB_ORACLE_ADDR, init_handlers,
+            WIN_PROB_ORACLE_ADDR, event_to_log_at_block, init_handlers,
         },
+        traits::ChainLogHandler,
     };
 
     fn address_with_byte(byte: u8) -> Address {
@@ -724,6 +760,123 @@ mod tests {
         assert_eq!(stats.redeemed_amount, HoprBalance::zero());
         assert_eq!(stats.rejection_count, 1);
         assert_eq!(stats.rejected_amount, HoprBalance::from(7_u64));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_collect_log_events_prefetches_each_transaction_only_once() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe_address = address_with_byte(35);
+        let module_address = address_with_byte(36);
+        let issuer = ChainKeypair::from_secret(&[43_u8; 32])?;
+        let redeemer = SELF_CHAIN_KEYPAIR.clone();
+        let tx_hash = hash_with_byte(92);
+        let tx_bytes =
+            build_redeem_ticket_tx_bytes(&issuer, &redeemer, module_address, test_contract_addresses(), 7, 3).await?;
+
+        // Both failure logs share a transaction hash, so the pre-fetch must de-duplicate them into
+        // a single batched RPC round-trip performed before the database transaction is opened.
+        let mut rpc = MockIndexerRpcOperations::new();
+        rpc.expect_get_transaction_bytes_batch()
+            .times(1)
+            .withf(move |tx_hashes| tx_hashes == [tx_hash])
+            .returning(move |_| vec![Ok(tx_bytes.clone())]);
+        rpc.expect_get_transaction_bytes().never();
+
+        let handlers = init_handlers(ClonableMockOperations { inner: Arc::new(rpc) }, db.clone());
+
+        db.create_safe_contract(
+            None,
+            safe_address,
+            module_address,
+            redeemer.public().to_address(),
+            100,
+            0,
+            0,
+        )
+        .await?;
+
+        let logs = [0_u64, 1]
+            .into_iter()
+            .map(|log_index| {
+                let mut slog = event_to_log_at_block(
+                    SafeContract::ExecutionFromModuleFailure {
+                        module: AlloyAddress::from_hopr_address(module_address),
+                    },
+                    safe_address,
+                    105,
+                    0,
+                    log_index,
+                );
+                slog.tx_hash = tx_hash.into();
+                slog
+            })
+            .collect::<Vec<_>>();
+
+        handlers
+            .collect_log_events(logs, true, PrefetchedTransactions::new())
+            .await?;
+
+        let stats = db
+            .get_aggregated_redeemed_stats(Some(safe_address), Some(redeemer.public().to_address()))
+            .await?;
+        assert_eq!(stats.rejection_count, 2);
+        assert_eq!(stats.rejected_amount, HoprBalance::from(14_u64));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_collect_log_events_reuses_pipeline_prefetched_transactions() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe_address = address_with_byte(37);
+        let module_address = address_with_byte(38);
+        let issuer = ChainKeypair::from_secret(&[44_u8; 32])?;
+        let redeemer = SELF_CHAIN_KEYPAIR.clone();
+        let tx_hash = hash_with_byte(93);
+        let tx_bytes =
+            build_redeem_ticket_tx_bytes(&issuer, &redeemer, module_address, test_contract_addresses(), 5, 4).await?;
+
+        // The block pipeline already fetched this transaction, so processing must not go to the
+        // chain again.
+        let mut rpc = MockIndexerRpcOperations::new();
+        rpc.expect_get_transaction_bytes_batch().never();
+        rpc.expect_get_transaction_bytes().never();
+
+        let handlers = init_handlers(ClonableMockOperations { inner: Arc::new(rpc) }, db.clone());
+
+        db.create_safe_contract(
+            None,
+            safe_address,
+            module_address,
+            redeemer.public().to_address(),
+            100,
+            0,
+            0,
+        )
+        .await?;
+
+        let mut slog = event_to_log_at_block(
+            SafeContract::ExecutionFromModuleFailure {
+                module: AlloyAddress::from_hopr_address(module_address),
+            },
+            safe_address,
+            106,
+            0,
+            0,
+        );
+        slog.tx_hash = tx_hash.into();
+
+        handlers
+            .collect_log_events(vec![slog], true, PrefetchedTransactions::from([(tx_hash, tx_bytes)]))
+            .await?;
+
+        let stats = db
+            .get_aggregated_redeemed_stats(Some(safe_address), Some(redeemer.public().to_address()))
+            .await?;
+        assert_eq!(stats.rejection_count, 1);
+        assert_eq!(stats.rejected_amount, HoprBalance::from(5_u64));
 
         Ok(())
     }

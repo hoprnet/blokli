@@ -17,7 +17,7 @@ use blokli_db::{
 };
 use blokli_db_entity::{channel_state, prelude::ChannelState};
 use futures::{
-    StreamExt,
+    Stream, StreamExt,
     channel::mpsc::channel,
     future::{AbortHandle, abortable},
 };
@@ -43,8 +43,14 @@ use crate::{
     errors::{CoreEthereumIndexerError, Result},
     numeric::{u64_to_i64, u64_to_u32},
     snapshot::{SnapshotInfo, SnapshotManager},
-    traits::ChainLogHandler,
+    traits::{ChainLogHandler, PrefetchedTransactions},
 };
+
+/// Number of not-yet-committed blocks whose chain data the indexer fetches ahead of time.
+///
+/// Only the read-only RPC lookups overlap: blocks are still stored, processed and committed
+/// strictly in canonical order, one database transaction per block.
+const BLOCK_PREFETCH_DEPTH: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Display)]
 enum LogFilterPhase {
@@ -457,16 +463,27 @@ where
                 )
                 .await
                 .expect("log filters should be constructible");
-                let mut event_stream = rpc
+                let block_stream = rpc
                     .try_stream_logs(stream_start_block, log_filters, true)
                     .expect("block stream should be constructible");
+                let mut event_stream = Box::pin(Self::prefetch_block_data(&logs_handler, block_stream));
 
-                while let Some(block) = event_stream.next().await {
+                while let Some((block, prefetched)) = event_stream.next().await {
                     Self::store_block_logs(&db, &logs_handler, &block)
                         .await
                         .expect("live block logs should be stored");
 
-                    Self::process_block(&db, &logs_handler, block.clone(), false, true, &indexer_state, true).await;
+                    Self::process_block(
+                        &db,
+                        &logs_handler,
+                        block.clone(),
+                        false,
+                        true,
+                        &indexer_state,
+                        true,
+                        prefetched,
+                    )
+                    .await;
 
                     stream_start_block = block.block_id.saturating_add(1);
 
@@ -664,6 +681,30 @@ where
         }
     }
 
+    /// Wraps a stream of blocks so that each block's chain data is fetched ahead of its turn.
+    ///
+    /// Up to [`BLOCK_PREFETCH_DEPTH`] blocks are pre-fetched concurrently, but items are yielded
+    /// strictly in stream order. Only the read-only RPC lookups are pipelined: the consumer still
+    /// stores, processes and commits one block at a time, in canonical order, each in its own
+    /// database transaction. Reorg detection, failure handling and ordering are therefore
+    /// unaffected — a pre-fetch that fails simply yields no entry and is retried inline.
+    fn prefetch_block_data<'a, S>(
+        logs_handler: &'a U,
+        blocks: S,
+    ) -> impl Stream<Item = (BlockWithLogs, PrefetchedTransactions)> + 'a
+    where
+        S: Stream<Item = BlockWithLogs> + 'a,
+        U: ChainLogHandler,
+    {
+        blocks
+            .map(move |block| async move {
+                let logs = block.logs.iter().cloned().collect::<Vec<_>>();
+                let prefetched = logs_handler.prefetch_log_data(&logs).await;
+                (block, prefetched)
+            })
+            .buffered(BLOCK_PREFETCH_DEPTH)
+    }
+
     /// Processes a block by its ID.
     ///
     /// This function retrieves logs for the given block ID and processes them using the database
@@ -708,7 +749,17 @@ where
             }
         }
 
-        Ok(Self::process_block(db, logs_handler, block, true, is_synced, indexer_state, true).await)
+        Ok(Self::process_block(
+            db,
+            logs_handler,
+            block,
+            true,
+            is_synced,
+            indexer_state,
+            true,
+            PrefetchedTransactions::new(),
+        )
+        .await)
     }
 
     async fn store_block_logs(db: &Db, logs_handler: &U, block: &BlockWithLogs) -> Result<()>
@@ -771,15 +822,26 @@ where
             return Ok(());
         }
 
-        let mut event_stream = rpc.try_stream_logs(start_block, log_filters, false)?;
+        let block_stream = rpc.try_stream_logs(start_block, log_filters, false)?;
+        let mut event_stream = Box::pin(Self::prefetch_block_data(logs_handler, block_stream));
 
-        while let Some(block) = event_stream.next().await {
+        while let Some((block, prefetched)) = event_stream.next().await {
             if block.block_id > end_block {
                 break;
             }
 
             Self::store_block_logs(db, logs_handler, &block).await?;
-            Self::process_block(db, logs_handler, block.clone(), false, false, indexer_state, false).await;
+            Self::process_block(
+                db,
+                logs_handler,
+                block.clone(),
+                false,
+                false,
+                indexer_state,
+                false,
+                prefetched,
+            )
+            .await;
 
             let progress = if end_block == start_block {
                 100_f64
@@ -822,6 +884,7 @@ where
     /// # Returns
     ///
     /// An Option with unit type if the operation succeeds.
+    #[allow(clippy::too_many_arguments)]
     async fn process_block(
         db: &Db,
         logs_handler: &U,
@@ -830,6 +893,7 @@ where
         is_synced: bool,
         indexer_state: &IndexerState,
         finalize_block: bool,
+        prefetched: PrefetchedTransactions,
     ) -> Option<()>
     where
         U: ChainLogHandler + 'static,
@@ -900,7 +964,7 @@ where
 
         if logs_handler.supports_atomic_batches() && !logs_to_process.is_empty() {
             match logs_handler
-                .collect_log_events(logs_to_process.clone(), is_synced)
+                .collect_log_events(logs_to_process.clone(), is_synced, prefetched)
                 .await
             {
                 Ok(()) => {
@@ -1344,7 +1408,7 @@ mod tests {
         collections::BTreeSet,
         pin::Pin,
         sync::{
-            Arc,
+            Arc, Mutex as StdMutex,
             atomic::{AtomicBool as StdAtomicBool, AtomicUsize as StdAtomicUsize, Ordering as StdOrdering},
         },
         time::Duration,
@@ -1596,10 +1660,104 @@ mod tests {
             true
         }
 
-        async fn collect_log_events(&self, logs: Vec<SerializableLog>, _is_synced: bool) -> crate::errors::Result<()> {
+        async fn collect_log_events(
+            &self,
+            logs: Vec<SerializableLog>,
+            _is_synced: bool,
+            _prefetched: PrefetchedTransactions,
+        ) -> crate::errors::Result<()> {
             self.batch_size.store(logs.len(), StdOrdering::SeqCst);
             Ok(())
         }
+    }
+
+    /// Handler recording, per block, when its pre-fetch started and finished.
+    #[derive(Clone, Default)]
+    struct PrefetchTrackingLogHandler {
+        /// Block ids in the order their pre-fetch was started.
+        prefetch_order: Arc<StdMutex<Vec<u64>>>,
+        /// Number of pre-fetches currently in flight and the maximum ever observed.
+        in_flight: Arc<StdAtomicUsize>,
+        max_in_flight: Arc<StdAtomicUsize>,
+    }
+
+    #[async_trait]
+    impl ChainLogHandler for PrefetchTrackingLogHandler {
+        fn contract_addresses(&self) -> Vec<Address> {
+            Vec::new()
+        }
+
+        fn contract_addresses_map(&self) -> Arc<ContractAddresses> {
+            Arc::new(ContractAddresses::default())
+        }
+
+        fn contract_address_topics(&self, _contract: Address) -> Vec<B256> {
+            Vec::new()
+        }
+
+        async fn collect_log_event(&self, _log: SerializableLog, _is_synced: bool) -> crate::errors::Result<()> {
+            Ok(())
+        }
+
+        async fn prefetch_log_data(&self, logs: &[SerializableLog]) -> PrefetchedTransactions {
+            let block_number = logs.first().map(|log| log.block_number).unwrap_or_default();
+            self.prefetch_order
+                .lock()
+                .expect("prefetch order mutex should not be poisoned")
+                .push(block_number);
+
+            let in_flight = self.in_flight.fetch_add(1, StdOrdering::SeqCst) + 1;
+            self.max_in_flight.fetch_max(in_flight, StdOrdering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            self.in_flight.fetch_sub(1, StdOrdering::SeqCst);
+
+            PrefetchedTransactions::from([(
+                Hash::from(logs.first().map(|log| log.tx_hash).unwrap_or_default()),
+                vec![block_number as u8],
+            )])
+        }
+    }
+
+    #[tokio::test]
+    async fn test_prefetch_block_data_overlaps_blocks_but_preserves_order() -> anyhow::Result<()> {
+        let handler = PrefetchTrackingLogHandler::default();
+
+        let blocks = (1_u64..=8)
+            .map(|block_number| BlockWithLogs {
+                block_id: block_number,
+                logs: BTreeSet::from([SerializableLog {
+                    address: Address::new(b"my address 123456789"),
+                    tx_hash: Hash::create(&[format!("tx {block_number}").as_bytes()]).into(),
+                    block_number,
+                    ..Default::default()
+                }]),
+            })
+            .collect::<Vec<_>>();
+
+        let stream = Indexer::<MockHoprIndexerOps, PrefetchTrackingLogHandler, BlokliDb>::prefetch_block_data(
+            &handler,
+            futures::stream::iter(blocks),
+        );
+        let results = stream.collect::<Vec<_>>().await;
+
+        // Blocks are handed to the consumer strictly in canonical order, each with its own data.
+        let consumed = results.iter().map(|(block, _)| block.block_id).collect::<Vec<_>>();
+        assert_eq!(consumed, (1_u64..=8).collect::<Vec<_>>());
+        for (block, prefetched) in &results {
+            assert_eq!(prefetched.values().next(), Some(&vec![block.block_id as u8]));
+        }
+
+        // ... while several blocks were fetched at the same time, which is the point of the pipeline.
+        assert!(
+            handler.max_in_flight.load(StdOrdering::SeqCst) > 1,
+            "pre-fetches should overlap"
+        );
+        assert!(
+            handler.max_in_flight.load(StdOrdering::SeqCst) <= BLOCK_PREFETCH_DEPTH,
+            "pre-fetch depth should stay bounded"
+        );
+
+        Ok(())
     }
 
     #[tokio::test]
@@ -1630,6 +1788,7 @@ mod tests {
             false,
             &IndexerState::default(),
             false,
+            PrefetchedTransactions::new(),
         )
         .await;
 
@@ -1674,6 +1833,7 @@ mod tests {
             false,
             &IndexerState::default(),
             false,
+            PrefetchedTransactions::new(),
         )
         .await;
 
@@ -1724,6 +1884,7 @@ mod tests {
             false,
             &IndexerState::default(),
             false,
+            PrefetchedTransactions::new(),
         )
         .await;
 

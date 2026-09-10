@@ -48,6 +48,7 @@ pub(super) mod test_helpers {
             async fn block_number(&self) -> blokli_chain_rpc::errors::Result<u64>;
             async fn get_transaction_sender(&self, tx_hash: hopr_types::crypto::types::Hash) -> blokli_chain_rpc::errors::Result<Address>;
             async fn get_transaction_bytes(&self, tx_hash: hopr_types::crypto::types::Hash) -> blokli_chain_rpc::errors::Result<Vec<u8>>;
+            async fn get_transaction_bytes_batch(&self, tx_hashes: &[hopr_types::crypto::types::Hash]) -> Vec<blokli_chain_rpc::errors::Result<Vec<u8>>>;
 
             fn try_stream_logs<'a>(
                 &'a self,
@@ -97,6 +98,13 @@ pub(super) mod test_helpers {
             tx_hash: hopr_types::crypto::types::Hash,
         ) -> blokli_chain_rpc::errors::Result<Vec<u8>> {
             self.inner.get_transaction_bytes(tx_hash).await
+        }
+
+        async fn get_transaction_bytes_batch(
+            &self,
+            tx_hashes: &[hopr_types::crypto::types::Hash],
+        ) -> Vec<blokli_chain_rpc::errors::Result<Vec<u8>>> {
+            self.inner.get_transaction_bytes_batch(tx_hashes).await
         }
 
         fn try_stream_logs<'a>(
@@ -160,7 +168,7 @@ pub(super) mod test_helpers {
 
     /// Test helper to create handlers with event capture capability
     pub fn init_handlers_with_events<
-        T: HoprIndexerRpcOperations + Clone + Send + 'static,
+        T: HoprIndexerRpcOperations + Clone + Send + Sync + 'static,
         Db: BlokliDbAllOperations + Clone,
     >(
         rpc_operations: T,
@@ -201,7 +209,10 @@ pub(super) mod test_helpers {
     }
 
     /// Test helper to create handlers without event capture (for tests that don't need it)
-    pub fn init_handlers<T: HoprIndexerRpcOperations + Clone + Send + 'static, Db: BlokliDbAllOperations + Clone>(
+    pub fn init_handlers<
+        T: HoprIndexerRpcOperations + Clone + Send + Sync + 'static,
+        Db: BlokliDbAllOperations + Clone,
+    >(
         rpc_operations: T,
         db: Db,
     ) -> ContractEventHandlers<T, Db> {
