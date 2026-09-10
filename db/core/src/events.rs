@@ -13,8 +13,7 @@
 //!
 //! ```rust,ignore
 //! // Create event bus
-//! let (tx, rx) = async_broadcast::broadcast(1000);
-//! let event_bus = EventBus::new(tx);
+//! let event_bus = EventBus::new(1000);
 //!
 //! // Subscribe to events
 //! let mut subscriber = event_bus.subscribe();
@@ -32,13 +31,24 @@
 //! });
 //!
 //! // Publish events (done by database layer)
-//! event_bus.publish(StateChange::AccountState(AccountStateChange {
+//! match event_bus.publish(StateChange::AccountState(AccountStateChange {
 //!     account_id: 1,
 //!     state_id: 42,
 //!     published_block: 1000,
 //!     published_tx_index: 5,
 //!     published_log_index: 2,
-//! }));
+//! })) {
+//!     Ok(true) => {
+//!         // Event delivered to at least one active subscriber.
+//!     }
+//!     Ok(false) => {
+//!         // No active subscribers; this is an expected no-op.
+//!     }
+//!     Err(error) => {
+//!         // Handle a full or closed event bus.
+//!         eprintln!("failed to publish state change: {error}");
+//!     }
+//! }
 //! ```
 
 use async_broadcast::{InactiveReceiver, Receiver, Sender, TrySendError, broadcast};

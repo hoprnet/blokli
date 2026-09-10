@@ -36,9 +36,10 @@ pub trait ChainLogHandler {
 
     /// Processes a single blockchain log.
     ///
-    /// This method processes individual blockchain logs, replacing the previous
-    /// batch processing approach for better error isolation and granular control.
-    /// Events are published internally via the IndexerState event bus.
+    /// This is the per-log primitive used by the default
+    /// [`Self::collect_log_events`] implementation. Handlers may override the batch method to
+    /// process a group atomically; in that case this method remains the fallback used for
+    /// isolated retries.
     ///
     /// # Arguments
     /// * `log` - The blockchain log to process
@@ -48,10 +49,11 @@ pub trait ChainLogHandler {
     /// * `Result<()>` - Success or error
     async fn collect_log_event(&self, log: SerializableLog, is_synced: bool) -> Result<()>;
 
-    /// Processes an ordered group of blockchain logs atomically where supported by the handler.
+    /// Processes an ordered group of blockchain logs.
     ///
-    /// Implementations may override this to share one database transaction across the group. The
-    /// default retains the single-log behavior for handlers that do not provide batching.
+    /// The default invokes [`Self::collect_log_event`] sequentially and is not atomic.
+    /// Implementations may override it to apply the complete group atomically, and must return
+    /// `true` from [`Self::supports_atomic_batches`] when they do.
     async fn collect_log_events(&self, logs: Vec<SerializableLog>, is_synced: bool) -> Result<()> {
         for log in logs {
             self.collect_log_event(log, is_synced).await?;
