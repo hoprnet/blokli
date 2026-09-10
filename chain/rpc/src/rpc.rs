@@ -112,6 +112,18 @@ pub struct RpcOperationsConfig {
     #[validate(range(min = 0))]
     #[default = 2000]
     pub max_block_range_fetch_size: u64,
+
+    /// Number of `eth_getLogs` subranges the indexer may request concurrently.
+    ///
+    /// Requests are issued together but their results are still consumed in block order, so this
+    /// only hides endpoint latency. Concurrency is used solely once the adaptive block-range limit
+    /// has settled; while it is still being probed, requests stay sequential regardless of this
+    /// value. `0` or `1` disables concurrency entirely.
+    ///
+    /// Defaults to 4 concurrent subranges.
+    #[validate(range(min = 0))]
+    #[default = 4]
+    pub max_concurrent_log_ranges: u32,
     /// Interval for polling on TX submission
     ///
     /// Defaults to 7 seconds.
@@ -203,6 +215,10 @@ impl LogBlockRangeLimit {
 
     fn current(&self) -> u64 {
         self.stable.unwrap_or(self.candidate).clamp(1, self.cap)
+    }
+
+    fn is_stable(&self) -> bool {
+        self.stable.is_some()
     }
 
     fn record_success(&mut self, requested_span: u64, attempted_limit: u64) -> Option<u64> {
@@ -622,6 +638,15 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
 impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
     pub(crate) fn log_block_range_limit(&self) -> u64 {
         self.with_log_block_range_limit(|range_limit| range_limit.current())
+    }
+
+    /// Whether the adaptive block-range search has settled on a span the provider accepts.
+    ///
+    /// While the search is still probing, a span is not yet known to work or fail, so callers must
+    /// keep issuing one request at a time: concurrent requests at the same span could record a
+    /// success and a failure for it and contradict the search.
+    pub(crate) fn log_block_range_is_stable(&self) -> bool {
+        self.with_log_block_range_limit(|range_limit| range_limit.is_stable())
     }
 
     pub(crate) fn record_log_block_range_success(&self, requested_span: u64, attempted_limit: u64) {

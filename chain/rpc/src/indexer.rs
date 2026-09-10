@@ -129,23 +129,82 @@ fn contains_rpc_fetch_error(results: &[Result<Log>]) -> bool {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct AdaptiveLogSubrange {
+    start_block: u64,
     end_block: u64,
     requested_span: u64,
     attempted_limit: u64,
 }
 
+/// Plans the next window of consecutive, non-overlapping subranges covering `[next_block,
+/// to_block]`.
+///
+/// The window holds a single subrange while the adaptive limit is still being probed: until a span
+/// is known to work, concurrent requests at the same span could report both a success and a
+/// failure for it and contradict the limit search. Once the limit is stable, up to
+/// `max_concurrent_ranges` subranges are planned at that same span.
+fn plan_subrange_window(
+    next_block: u64,
+    to_block: u64,
+    attempted_limit: u64,
+    limit_is_stable: bool,
+    max_concurrent_ranges: usize,
+) -> Vec<AdaptiveLogSubrange> {
+    let window_size = if limit_is_stable {
+        max_concurrent_ranges.max(1)
+    } else {
+        1
+    };
+
+    let mut window = Vec::with_capacity(window_size);
+    let mut start_block = next_block;
+
+    while window.len() < window_size && start_block <= to_block {
+        let subrange = subrange_at(start_block, to_block, attempted_limit);
+        window.push(subrange);
+
+        if subrange.end_block >= to_block {
+            break;
+        }
+        start_block = subrange.end_block + 1;
+    }
+
+    window
+}
+
+/// Describes the subrange starting at `start_block` that the current block-range limit allows.
+fn subrange_at(start_block: u64, to_block: u64, attempted_limit: u64) -> AdaptiveLogSubrange {
+    let span = attempted_limit.max(1);
+    let end_block = to_block.min(start_block.saturating_add(span.saturating_sub(1)));
+
+    AdaptiveLogSubrange {
+        start_block,
+        end_block,
+        requested_span: end_block.saturating_sub(start_block) + 1,
+        attempted_limit,
+    }
+}
+
 // impl<P: JsonRpcClient + 'static, R: HttpRequestor + 'static> RpcOperations<P, R> {
 impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
+    /// Plans a single subrange, for callers that fetch one range at a time.
     fn next_adaptive_subrange(&self, next_block: u64, to_block: u64) -> AdaptiveLogSubrange {
-        let attempted_limit = self.log_block_range_limit();
-        let end_block = to_block.min(next_block.saturating_add(attempted_limit.saturating_sub(1)));
-        let requested_span = end_block - next_block + 1;
+        subrange_at(next_block, to_block, self.log_block_range_limit())
+    }
 
-        AdaptiveLogSubrange {
-            end_block,
-            requested_span,
-            attempted_limit,
-        }
+    /// Plans the next window of subranges to fetch, using the current adaptive block-range limit.
+    fn next_subrange_window(&self, next_block: u64, to_block: u64) -> Vec<AdaptiveLogSubrange> {
+        plan_subrange_window(
+            next_block,
+            to_block,
+            self.log_block_range_limit(),
+            self.log_block_range_is_stable(),
+            self.max_concurrent_log_ranges(),
+        )
+    }
+
+    /// Number of subranges this instance may request concurrently, never below one.
+    fn max_concurrent_log_ranges(&self) -> usize {
+        (self.cfg.max_concurrent_log_ranges as usize).max(1)
     }
 
     /// Retrieves logs in the given range (`from_block` and `to_block` are inclusive).
@@ -153,54 +212,93 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         stream! {
             let mut next_block = from_block;
 
-            while next_block <= to_block {
-                let subrange = self.next_adaptive_subrange(next_block, to_block);
-                let ranged_filters = filters
-                    .iter()
-                    .cloned()
-                    .map(|filter| filter.from_block(next_block).to_block(subrange.end_block))
-                    .collect::<Vec<_>>();
+            'window: while next_block <= to_block {
+                let window = self.next_subrange_window(next_block, to_block);
+                if window.is_empty() {
+                    break;
+                }
 
                 debug!(
                     from_block = next_block,
-                    to_block = subrange.end_block,
-                    attempted_block_range = subrange.attempted_limit,
-                    "polling logs from block subrange"
+                    to_block = window.last().map(|subrange| subrange.end_block).unwrap_or(next_block),
+                    subranges = window.len(),
+                    attempted_block_range = window[0].attempted_limit,
+                    "polling logs from block subranges"
                 );
 
-                let results = fetch_subrange_logs_concurrently(ranged_filters, |filter| async move {
-                    let prov_clone = self.provider.clone();
+                // Issue the whole window at once, but keep the responses grouped per subrange and
+                // in block order: the decisions below, and the logs handed to the caller, must stay
+                // exactly what fetching one subrange at a time would have produced.
+                let window_results = futures::stream::iter(window.iter().copied().map(|subrange| {
+                    let ranged_filters = filters
+                        .iter()
+                        .cloned()
+                        .map(|filter| filter.from_block(subrange.start_block).to_block(subrange.end_block))
+                        .collect::<Vec<_>>();
 
-                    match prov_clone.get_logs(&filter).await {
-                        Ok(logs) => Ok(logs),
-                        Err(error) => {
-                            error!(
-                                from = ?filter.get_from_block(),
-                                to = ?filter.get_to_block(),
-                                error = %error,
-                                "failed to fetch logs in block subrange"
-                            );
-                            let rpc_error = RpcError::from(error);
-                            Err(rpc_error)
-                        }
+                    async move {
+                        fetch_subrange_logs_concurrently(ranged_filters, |filter| async move {
+                            let prov_clone = self.provider.clone();
+
+                            match prov_clone.get_logs(&filter).await {
+                                Ok(logs) => Ok(logs),
+                                Err(error) => {
+                                    error!(
+                                        from = ?filter.get_from_block(),
+                                        to = ?filter.get_to_block(),
+                                        error = %error,
+                                        "failed to fetch logs in block subrange"
+                                    );
+                                    let rpc_error = RpcError::from(error);
+                                    Err(rpc_error)
+                                }
+                            }
+                        })
+                        .await
                     }
-                })
+                }))
+                .buffered(self.max_concurrent_log_ranges())
+                .collect::<Vec<_>>()
                 .await;
 
-                if let Some(error) = contains_log_block_range_limit_error(&results) {
-                    let update = self.record_log_block_range_failure(subrange.requested_span, error);
-                    if update.retry {
-                        continue;
+                for (subrange, results) in window.into_iter().zip(window_results) {
+                    if let Some(error) = contains_log_block_range_limit_error(&results) {
+                        // The limit has changed, so every later subrange of this window was planned
+                        // at a span the provider just rejected. Drop them unread and re-plan from
+                        // this subrange.
+                        let update = self.record_log_block_range_failure(subrange.requested_span, error);
+                        if update.retry {
+                            next_block = subrange.start_block;
+                            continue 'window;
+                        }
+
+                        for result in results {
+                            yield result;
+                        }
+
+                        next_block = subrange.end_block + 1;
+                        continue 'window;
                     }
-                } else if !contains_rpc_fetch_error(&results) {
+
+                    if contains_rpc_fetch_error(&results) {
+                        // The consumer restarts the batch on the error yielded here, so the rest of
+                        // the window would be discarded anyway.
+                        for result in results {
+                            yield result;
+                        }
+
+                        next_block = subrange.end_block + 1;
+                        continue 'window;
+                    }
+
                     self.record_log_block_range_success(subrange.requested_span, subrange.attempted_limit);
-                }
 
-                for result in results {
-                    yield result;
-                }
+                    for result in results {
+                        yield result;
+                    }
 
-                next_block = subrange.end_block + 1;
+                    next_block = subrange.end_block + 1;
+                }
             }
         }
         .boxed()
@@ -627,7 +725,7 @@ mod tests {
     use crate::{
         HoprIndexerRpcOperations,
         errors::{HttpRequestError, RpcError},
-        indexer::{fetch_subrange_logs_concurrently, split_range},
+        indexer::{fetch_subrange_logs_concurrently, plan_subrange_window, split_range},
         rpc::{RpcOperations, RpcOperationsConfig},
         transport::HttpRequestor,
     };
@@ -668,6 +766,25 @@ mod tests {
             "jsonrpc": "2.0",
             "id": 1,
             "result": []
+        })
+        .to_string()
+    }
+
+    fn logs_response_at(block_number: u64) -> String {
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": [{
+                "address": format!("{:#x}", AlloyAddress::ZERO),
+                "topics": [format!("{:#x}", B256::ZERO)],
+                "data": "0x010203",
+                "blockNumber": format!("{block_number:#x}"),
+                "transactionHash": format!("{:#x}", B256::ZERO),
+                "transactionIndex": "0x1",
+                "blockHash": format!("{:#x}", B256::ZERO),
+                "logIndex": "0x2",
+                "removed": false
+            }]
         })
         .to_string()
     }
@@ -746,6 +863,122 @@ mod tests {
         assert_eq!(final_subrange.end_block, 9);
         assert_eq!(final_subrange.requested_span, 2);
         assert_eq!(final_subrange.attempted_limit, 3);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_plan_subrange_window_stays_sequential_while_the_limit_is_unstable() {
+        // Until a span is known to work, two concurrent requests at that span could report a
+        // success and a failure for it and contradict the limit search.
+        let window = plan_subrange_window(0, 100, 10, false, 4);
+
+        assert_eq!(window.len(), 1);
+        assert_eq!(window[0].start_block, 0);
+        assert_eq!(window[0].end_block, 9);
+        assert_eq!(window[0].requested_span, 10);
+    }
+
+    #[test]
+    fn test_plan_subrange_window_is_contiguous_and_bounded_once_stable() {
+        let window = plan_subrange_window(0, 100, 10, true, 4);
+
+        assert_eq!(window.len(), 4);
+        assert_eq!(window[0].start_block, 0);
+
+        // No gap and no overlap between consecutive subranges: a gap would silently skip logs.
+        for pair in window.windows(2) {
+            assert_eq!(pair[1].start_block, pair[0].end_block + 1);
+        }
+        for subrange in &window {
+            assert_eq!(subrange.requested_span, subrange.end_block - subrange.start_block + 1);
+            assert!(subrange.end_block <= 100);
+        }
+    }
+
+    #[test]
+    fn test_plan_subrange_window_clips_to_the_end_of_the_range() {
+        let window = plan_subrange_window(95, 100, 10, true, 4);
+        assert_eq!(window.len(), 1);
+        assert_eq!(window[0].end_block, 100);
+        assert_eq!(window[0].requested_span, 6);
+
+        let exact = plan_subrange_window(0, 5, 2, true, 4);
+        assert_eq!(exact.len(), 3);
+        assert_eq!(exact.last().expect("window is not empty").end_block, 5);
+
+        assert!(plan_subrange_window(10, 5, 2, true, 4).is_empty());
+
+        // A configured value below one must not disable fetching altogether.
+        assert_eq!(plan_subrange_window(0, 100, 10, true, 0).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_stream_logs_yields_concurrent_window_in_block_order() -> anyhow::Result<()> {
+        let mut server = mockito::Server::new_async().await;
+        let rpc = create_test_rpc_operations_with_max_range(&server.url(), 2)?;
+
+        // The first full-span request settles the limit, after which the remaining subranges are
+        // fetched as one concurrent window.
+        let probe = mock_get_logs_range(&mut server, 0, 1, logs_response_at(1));
+        let second = mock_get_logs_range(&mut server, 2, 3, logs_response_at(3));
+        let third = mock_get_logs_range(&mut server, 4, 5, logs_response_at(5));
+        let fourth = mock_get_logs_range(&mut server, 6, 7, logs_response_at(7));
+
+        let results = rpc.stream_logs(vec![Filter::new()], 0, 7).collect::<Vec<_>>().await;
+
+        probe.assert();
+        second.assert();
+        third.assert();
+        fourth.assert();
+
+        let blocks = results
+            .into_iter()
+            .map(|result| result.map(|log| log.block_number))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        assert_eq!(blocks, vec![1, 3, 5, 7], "logs must reach the caller in block order");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_stream_logs_replans_window_without_skipping_blocks_after_range_limit_error() -> anyhow::Result<()> {
+        let mut server = mockito::Server::new_async().await;
+        let rpc = create_test_rpc_operations_with_max_range(&server.url(), 2)?;
+
+        // Settle the limit at 2, then fail one subrange in the middle of the concurrent window.
+        let probe = mock_get_logs_range(&mut server, 0, 1, logs_response_at(1));
+        let before_failure = mock_get_logs_range(&mut server, 2, 3, logs_response_at(3));
+        let failing = mock_get_logs_range(&mut server, 4, 5, range_limit_error_response());
+        // Planned in the same window as the failing subrange; its result must be discarded and the
+        // blocks re-fetched rather than skipped.
+        let discarded = mock_get_logs_range(&mut server, 6, 7, logs_response_at(7));
+        let retried_4 = mock_get_logs_range(&mut server, 4, 4, logs_response_at(4));
+        let retried_5 = mock_get_logs_range(&mut server, 5, 5, logs_response_at(5));
+        let retried_6 = mock_get_logs_range(&mut server, 6, 6, logs_response_at(6));
+        let retried_7 = mock_get_logs_range(&mut server, 7, 7, logs_response_at(7));
+
+        let results = rpc.stream_logs(vec![Filter::new()], 0, 7).collect::<Vec<_>>().await;
+
+        probe.assert();
+        before_failure.assert();
+        failing.assert();
+        discarded.assert();
+        retried_4.assert();
+        retried_5.assert();
+        retried_6.assert();
+        retried_7.assert();
+
+        let blocks = results
+            .into_iter()
+            .map(|result| result.map(|log| log.block_number))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        assert_eq!(
+            blocks,
+            vec![1, 3, 4, 5, 6, 7],
+            "every block of the failed window must still be delivered, in order"
+        );
+        assert_eq!(rpc.log_block_range_limit(), 1);
 
         Ok(())
     }

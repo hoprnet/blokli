@@ -19,6 +19,10 @@ fn default_network() -> Network {
     Network::default()
 }
 
+fn default_max_concurrent_log_ranges() -> u32 {
+    4
+}
+
 fn default_max_block_range() -> u32 {
     10000
 }
@@ -266,6 +270,10 @@ pub struct Config {
     #[serde(default = "default_max_block_range")]
     pub max_block_range: u32,
 
+    #[default(4)]
+    #[serde(default = "default_max_concurrent_log_ranges")]
+    pub max_concurrent_log_ranges: u32,
+
     #[serde(default)]
     pub indexer: IndexerConfig,
 
@@ -307,6 +315,10 @@ impl Config {
             self.max_rpc_requests_per_sec
         ));
         output.push_str(&format!("  max_block_range: {}\n", self.max_block_range));
+        output.push_str(&format!(
+            "  max_concurrent_log_ranges: {}\n",
+            self.max_concurrent_log_ranges
+        ));
 
         if let Some(db_config) = &self.database {
             output.push_str(&format!("  database: {}\n", db_config.display_redacted()));
