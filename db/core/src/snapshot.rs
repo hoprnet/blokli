@@ -24,8 +24,8 @@ pub const SNAPSHOT_SQL_FILE: &str = "hopr_logs.sql";
 const SNAPSHOT_PAGE_SIZE: u64 = 10_000;
 const DEFAULT_IMPORT_BATCH_SIZE: usize = 1_000;
 const SQLITE_MAX_VARIABLE_NUMBER: usize = 999;
-const LOG_INSERT_COLUMNS: usize = 10;
-const LOG_STATUS_INSERT_COLUMNS: usize = 8;
+pub(crate) const LOG_INSERT_COLUMNS: usize = 10;
+pub(crate) const LOG_STATUS_INSERT_COLUMNS: usize = 8;
 const LOG_TOPIC_INFO_INSERT_COLUMNS: usize = 3;
 const TIMESTAMP_FORMAT: &str = "%Y-%m-%d %H:%M:%S%.f";
 
@@ -414,7 +414,7 @@ pub fn validate_logs_snapshot_sql(sql_path: &Path) -> Result<LogsSnapshotInfo> {
     })
 }
 
-fn import_batch_size(backend: DatabaseBackend, nr_of_columns: usize) -> usize {
+pub(crate) fn import_batch_size(backend: DatabaseBackend, nr_of_columns: usize) -> usize {
     if backend == DatabaseBackend::Sqlite {
         (SQLITE_MAX_VARIABLE_NUMBER / nr_of_columns).max(1)
     } else {

@@ -93,6 +93,14 @@ impl Args {
             ("BLOKLI_MAX_RPC_REQUESTS_PER_SEC", "max_rpc_requests_per_sec"),
             ("BLOKLI_MAX_BLOCK_RANGE", "max_block_range"),
             ("BLOKLI_MAX_CONCURRENT_LOG_RANGES", "max_concurrent_log_ranges"),
+            (
+                "BLOKLI_INDEXER_SAFE_TX_PREFETCH_BATCH_SIZE",
+                "indexer.safe_tx_prefetch.batch_size",
+            ),
+            (
+                "BLOKLI_INDEXER_SAFE_TX_PREFETCH_CONCURRENCY",
+                "indexer.safe_tx_prefetch.concurrency",
+            ),
             ("BLOKLI_CURVY_AGGREGATOR", "curvy_aggregator"),
             ("DATABASE_URL", "database.url"),
             ("PGHOST", "database.host"),

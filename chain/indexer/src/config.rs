@@ -1,3 +1,35 @@
+/// Tuning for the concurrent pre-fetch of transactions needed to decode Safe execution failures.
+///
+/// The lookups run before a block's database transaction is opened, so these values trade requests
+/// in flight against how long a slow endpoint can stall indexing. Values below one are treated as
+/// one, so the pre-fetch can be narrowed but never disabled into a stall.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, smart_default::SmartDefault)]
+pub struct SafeTxPrefetchConfig {
+    /// Number of transaction hashes packed into a single batched JSON-RPC request.
+    ///
+    /// Default is `16`.
+    #[default(16)]
+    pub batch_size: usize,
+
+    /// Maximum number of batched requests in flight at once.
+    ///
+    /// Default is `8`.
+    #[default(8)]
+    pub concurrency: usize,
+}
+
+impl SafeTxPrefetchConfig {
+    /// Hashes per batched request, never below one.
+    pub fn batch_size(&self) -> usize {
+        self.batch_size.max(1)
+    }
+
+    /// Batched requests in flight, never below one.
+    pub fn concurrency(&self) -> usize {
+        self.concurrency.max(1)
+    }
+}
+
 /// Configuration for the chain indexer functionality
 #[derive(Debug, Clone, smart_default::SmartDefault)]
 pub struct IndexerConfig {
@@ -65,6 +97,10 @@ pub struct IndexerConfig {
     /// Default is `10`.
     #[default(10)]
     pub shutdown_signal_capacity: usize,
+
+    /// Tuning for the concurrent pre-fetch of Safe transactions.
+    #[default(_code = "SafeTxPrefetchConfig::default()")]
+    pub safe_tx_prefetch: SafeTxPrefetchConfig,
 }
 
 impl IndexerConfig {
@@ -107,6 +143,7 @@ impl IndexerConfig {
             data_directory,
             event_bus_capacity,
             shutdown_signal_capacity,
+            safe_tx_prefetch: SafeTxPrefetchConfig::default(),
         }
     }
 

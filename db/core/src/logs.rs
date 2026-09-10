@@ -11,8 +11,8 @@ use hopr_types::{
     primitive::prelude::{Address, DateTime, SerializableLog, ToHex, Utc},
 };
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, DbErr, EntityTrait, FromQueryResult, IntoActiveModel, PaginatorTrait,
-    QueryFilter, QueryOrder, QuerySelect,
+    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DbErr, EntityTrait, FromQueryResult, IntoActiveModel,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
     entity::Set,
     query::QueryTrait,
     sea_query::{Expr, OnConflict, Value},
@@ -28,10 +28,39 @@ use crate::{
     db::BlokliDb,
     errors::DbSqlError,
     numeric::{block_range_to_i64, i64_to_u64, log_position_to_i64},
+    snapshot::{LOG_INSERT_COLUMNS, LOG_STATUS_INSERT_COLUMNS, import_batch_size},
 };
 
-/// Number of log positions whose processed flag is updated by a single statement.
-const LOG_STATUS_UPDATE_CHUNK_SIZE: usize = 500;
+/// Number of bound values a single log position contributes to a statement.
+const LOG_POSITION_COLUMNS: usize = 3;
+
+/// Builds a condition matching exactly the given `(block_number, tx_index, log_index)` positions.
+fn log_positions_condition(positions: &[(i64, i64, i64)]) -> Condition {
+    positions
+        .iter()
+        .fold(Condition::any(), |condition, (block_number, tx_index, log_index)| {
+            condition.add(
+                Condition::all()
+                    .add(log_status::Column::BlockNumber.eq(*block_number))
+                    .add(log_status::Column::TxIndex.eq(*tx_index))
+                    .add(log_status::Column::LogIndex.eq(*log_index)),
+            )
+        })
+}
+
+/// Same as [`log_positions_condition`], for the `log` table.
+fn log_table_positions_condition(positions: &[(i64, i64, i64)]) -> Condition {
+    positions
+        .iter()
+        .fold(Condition::any(), |condition, (block_number, tx_index, log_index)| {
+            condition.add(
+                Condition::all()
+                    .add(log::Column::BlockNumber.eq(*block_number))
+                    .add(log::Column::TxIndex.eq(*tx_index))
+                    .add(log::Column::LogIndex.eq(*log_index)),
+            )
+        })
+}
 
 #[derive(FromQueryResult)]
 struct BlockNumber {
@@ -73,7 +102,6 @@ impl BlokliDbLogOperations for BlokliDb {
         let mut log_models = Vec::with_capacity(log_count);
         let mut status_models = Vec::with_capacity(log_count);
         let mut seen_positions = HashSet::with_capacity(log_count);
-        let mut block_numbers = Vec::new();
 
         for log in logs {
             let position = log_position_to_i64(log.block_number, log.tx_index, log.log_index).map_err(DbError::from)?;
@@ -89,9 +117,6 @@ impl BlokliDbLogOperations for BlokliDb {
             if !seen_positions.insert(position) {
                 continue;
             }
-            if !block_numbers.contains(&position.0) {
-                block_numbers.push(position.0);
-            }
             log_models.push(log_model);
             status_models.push((position, status_model));
         }
@@ -100,52 +125,62 @@ impl BlokliDbLogOperations for BlokliDb {
             .await?
             .perform(|tx| {
                 Box::pin(async move {
-                    // Insert every log of the batch in one statement, leaving already stored logs
-                    // untouched.
-                    match Log::insert_many(log_models)
-                        .on_conflict(
-                            OnConflict::columns([
-                                log::Column::LogIndex,
-                                log::Column::TxIndex,
-                                log::Column::BlockNumber,
-                            ])
-                            .do_nothing()
-                            .to_owned(),
-                        )
-                        .exec_without_returning(tx.as_ref())
-                        .await
-                    {
-                        Ok(_) | Err(DbErr::RecordNotInserted) => {}
-                        Err(e) => {
-                            error!(error = ?e, "failed to insert logs into db");
-                            return Err(DbError::General(e.to_string()));
+                    let backend = tx.as_ref().get_database_backend();
+
+                    // Insert the batch with as few statements as the backend's bind-parameter
+                    // limit allows, leaving already stored logs untouched.
+                    for chunk in log_models.chunks(import_batch_size(backend, LOG_INSERT_COLUMNS)) {
+                        match Log::insert_many(chunk.to_vec())
+                            .on_conflict(
+                                OnConflict::columns([
+                                    log::Column::LogIndex,
+                                    log::Column::TxIndex,
+                                    log::Column::BlockNumber,
+                                ])
+                                .do_nothing()
+                                .to_owned(),
+                            )
+                            .exec_without_returning(tx.as_ref())
+                            .await
+                        {
+                            Ok(_) | Err(DbErr::RecordNotInserted) => {}
+                            Err(e) => {
+                                error!(error = ?e, "failed to insert logs into db");
+                                return Err(DbError::General(e.to_string()));
+                            }
                         }
                     }
 
-                    // Read the identifiers back for the whole batch at once. This covers both the
-                    // rows just inserted and the ones that were already stored, so the log_status
-                    // rows below always point at the right log.
-                    let stored = Log::find()
-                        .select_only()
-                        .columns([
-                            log::Column::Id,
-                            log::Column::BlockNumber,
-                            log::Column::TxIndex,
-                            log::Column::LogIndex,
-                        ])
-                        .filter(log::Column::BlockNumber.is_in(block_numbers))
-                        .into_model::<StoredLogPosition>()
-                        .all(tx.as_ref())
-                        .await
-                        .map_err(|e| {
-                            error!(error = ?e, "failed to read back stored log identifiers");
-                            DbError::General(e.to_string())
-                        })?;
+                    // Read the identifiers back for exactly the positions of this batch. This
+                    // covers both the rows just inserted and the ones that were already stored, so
+                    // the log_status rows below always point at the right log.
+                    let positions = status_models.iter().map(|(position, _)| *position).collect::<Vec<_>>();
+                    let mut log_ids = HashMap::with_capacity(positions.len());
 
-                    let log_ids = stored
-                        .into_iter()
-                        .map(|row| ((row.block_number, row.tx_index, row.log_index), row.id))
-                        .collect::<HashMap<_, _>>();
+                    for chunk in positions.chunks(import_batch_size(backend, LOG_POSITION_COLUMNS)) {
+                        let stored = Log::find()
+                            .select_only()
+                            .columns([
+                                log::Column::Id,
+                                log::Column::BlockNumber,
+                                log::Column::TxIndex,
+                                log::Column::LogIndex,
+                            ])
+                            .filter(log_table_positions_condition(chunk))
+                            .into_model::<StoredLogPosition>()
+                            .all(tx.as_ref())
+                            .await
+                            .map_err(|e| {
+                                error!(error = ?e, "failed to read back stored log identifiers");
+                                DbError::General(e.to_string())
+                            })?;
+
+                        log_ids.extend(
+                            stored
+                                .into_iter()
+                                .map(|row| ((row.block_number, row.tx_index, row.log_index), row.id)),
+                        );
+                    }
 
                     let mut status_models_with_ids = Vec::with_capacity(status_models.len());
                     for (position, mut status_model) in status_models {
@@ -162,25 +197,29 @@ impl BlokliDbLogOperations for BlokliDb {
 
                     // Statuses of logs already present must not be reset, hence the same
                     // do-nothing conflict handling as before.
-                    match LogStatus::insert_many(status_models_with_ids)
-                        .on_conflict(
-                            OnConflict::columns([
-                                log_status::Column::LogIndex,
-                                log_status::Column::TxIndex,
-                                log_status::Column::BlockNumber,
-                            ])
-                            .do_nothing()
-                            .to_owned(),
-                        )
-                        .exec_without_returning(tx.as_ref())
-                        .await
-                    {
-                        Ok(_) | Err(DbErr::RecordNotInserted) => Ok(()),
-                        Err(e) => {
-                            error!(error = ?e, "failed to insert log statuses into db");
-                            Err(DbError::General(e.to_string()))
+                    for chunk in status_models_with_ids.chunks(import_batch_size(backend, LOG_STATUS_INSERT_COLUMNS)) {
+                        match LogStatus::insert_many(chunk.to_vec())
+                            .on_conflict(
+                                OnConflict::columns([
+                                    log_status::Column::LogIndex,
+                                    log_status::Column::TxIndex,
+                                    log_status::Column::BlockNumber,
+                                ])
+                                .do_nothing()
+                                .to_owned(),
+                            )
+                            .exec_without_returning(tx.as_ref())
+                            .await
+                        {
+                            Ok(_) | Err(DbErr::RecordNotInserted) => {}
+                            Err(e) => {
+                                error!(error = ?e, "failed to insert log statuses into db");
+                                return Err(DbError::General(e.to_string()));
+                            }
                         }
                     }
+
+                    Ok(())
                 })
             })
             .await?;
@@ -338,10 +377,17 @@ impl BlokliDbLogOperations for BlokliDb {
     }
 
     async fn set_log_batch_processed(&self, logs: Vec<SerializableLog>) -> Result<()> {
-        let positions = logs
-            .into_iter()
-            .map(|log| log_position_to_i64(log.block_number, log.tx_index, log.log_index).map_err(DbError::from))
-            .collect::<Result<Vec<_>>>()?;
+        let mut seen_positions = HashSet::with_capacity(logs.len());
+        let mut positions = Vec::with_capacity(logs.len());
+
+        for log in logs {
+            let position = log_position_to_i64(log.block_number, log.tx_index, log.log_index).map_err(DbError::from)?;
+            // A repeated position would only grow the condition and force extra statements.
+            if seen_positions.insert(position) {
+                positions.push(position);
+            }
+        }
+
         if positions.is_empty() {
             return Ok(());
         }
@@ -352,26 +398,17 @@ impl BlokliDbLogOperations for BlokliDb {
             .perform(|tx| {
                 Box::pin(async move {
                     // One statement per chunk instead of one per log. The chunking keeps the
-                    // generated condition within the bind-parameter and expression-depth limits of
-                    // both supported backends.
-                    for chunk in positions.chunks(LOG_STATUS_UPDATE_CHUNK_SIZE) {
-                        let mut condition = Condition::any();
-                        for (block_number, tx_index, log_index) in chunk {
-                            condition = condition.add(
-                                Condition::all()
-                                    .add(log_status::Column::BlockNumber.eq(*block_number))
-                                    .add(log_status::Column::TxIndex.eq(*tx_index))
-                                    .add(log_status::Column::LogIndex.eq(*log_index)),
-                            );
-                        }
+                    // generated condition within the bind-parameter limits of both backends.
+                    let chunk_size = import_batch_size(tx.as_ref().get_database_backend(), LOG_POSITION_COLUMNS);
 
+                    for chunk in positions.chunks(chunk_size) {
                         LogStatus::update_many()
                             .col_expr(log_status::Column::Processed, Expr::value(Value::Bool(Some(true))))
                             .col_expr(
                                 log_status::Column::ProcessedAt,
                                 Expr::value(Value::ChronoDateTimeUtc(Some(now))),
                             )
-                            .filter(condition)
+                            .filter(log_positions_condition(chunk))
                             .exec(tx.as_ref())
                             .await
                             .map_err(DbSqlError::from)

@@ -31,7 +31,7 @@ use hopr_types::{
 use tracing::{debug, error, trace, warn};
 
 use crate::{
-    IndexerState,
+    IndexerState, SafeTxPrefetchConfig,
     custom_abis::safe_contract_events::SafeContract::{ExecutionFromModuleFailure, SafeContractEvents},
     errors::{CoreEthereumIndexerError, Result},
     numeric::{u64_to_u32, u256_to_u32, u256_to_u64},
@@ -71,16 +71,6 @@ fn increment_indexer_contract_log_count(contract: &str) {
     METRIC_INDEXER_LOG_COUNTERS.increment(&[contract]);
 }
 
-/// Maximum number of concurrent JSON-RPC requests issued while pre-fetching the raw transactions
-/// needed to decode Safe module execution failures.
-const SAFE_TX_PREFETCH_CONCURRENCY: usize = 8;
-
-/// Number of transaction hashes packed into a single batched JSON-RPC request.
-///
-/// Kept modest so that a provider enforcing a batch-size limit still accepts the request, and so
-/// that one slow batch cannot stall every outstanding lookup.
-const SAFE_TX_PREFETCH_BATCH_SIZE: usize = 16;
-
 /// Event handling an object for on-chain operations
 ///
 /// Once an on-chain operation is recorded by the [crate::block::Indexer], it is pre-processed
@@ -97,6 +87,8 @@ pub struct ContractEventHandlers<T, Db> {
     pub(super) indexer_state: IndexerState,
     pub(super) enable_safe_indexing: bool,
     pub(super) enable_curvy_indexing: bool,
+    /// Tuning for the concurrent pre-fetch of Safe transactions.
+    pub(super) safe_tx_prefetch: SafeTxPrefetchConfig,
 }
 
 impl<T, Db> Debug for ContractEventHandlers<T, Db> {
@@ -125,6 +117,7 @@ where
     /// * `db` - Database connection for persistent storage
     /// * `rpc_operations` - RPC interface for direct blockchain queries
     /// * `indexer_state` - Indexer state for publishing events to subscribers
+    /// * `safe_tx_prefetch` - Tuning for the concurrent pre-fetch of Safe transactions
     ///
     /// # Returns
     /// * `Self` - New instance of `ContractEventHandlers`
@@ -135,6 +128,7 @@ where
         indexer_state: IndexerState,
         enable_safe_indexing: bool,
         enable_curvy_indexing: bool,
+        safe_tx_prefetch: SafeTxPrefetchConfig,
     ) -> Self {
         Self {
             addresses: Arc::new(addresses),
@@ -143,6 +137,7 @@ where
             indexer_state,
             enable_safe_indexing,
             enable_curvy_indexing,
+            safe_tx_prefetch,
         }
     }
 
@@ -193,7 +188,7 @@ where
         debug!(count = tx_hashes.len(), "pre-fetching Safe transaction bytes");
 
         let batches = tx_hashes
-            .chunks(SAFE_TX_PREFETCH_BATCH_SIZE)
+            .chunks(self.safe_tx_prefetch.batch_size())
             .map(<[Hash]>::to_vec)
             .collect::<Vec<_>>();
 
@@ -214,7 +209,7 @@ where
                     .collect::<Vec<_>>()
             }
         }))
-        .buffer_unordered(SAFE_TX_PREFETCH_CONCURRENCY)
+        .buffer_unordered(self.safe_tx_prefetch.concurrency())
         .flat_map(futures::stream::iter)
         .collect()
         .await

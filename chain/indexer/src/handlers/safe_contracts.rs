@@ -469,11 +469,12 @@ mod tests {
 
     use super::*;
     use crate::{
+        SafeTxPrefetchConfig,
         custom_abis::safe_contract_events::SafeContract,
         handlers::test_utils::test_helpers::{
             ANNOUNCEMENTS_ADDR, CHANNELS_ADDR, ClonableMockOperations, MockIndexerRpcOperations,
             NODE_SAFE_REGISTRY_ADDR, SELF_CHAIN_KEYPAIR, SERVICE_REGISTRY_ADDR, TICKET_PRICE_ORACLE_ADDR, TOKEN_ADDR,
-            WIN_PROB_ORACLE_ADDR, event_to_log_at_block, init_handlers,
+            WIN_PROB_ORACLE_ADDR, event_to_log_at_block, init_handlers, init_handlers_with_prefetch_config,
         },
         traits::ChainLogHandler,
     };
@@ -823,6 +824,72 @@ mod tests {
             .await?;
         assert_eq!(stats.rejection_count, 2);
         assert_eq!(stats.rejected_amount, HoprBalance::from(14_u64));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_collect_log_events_honours_configured_prefetch_batch_size() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe_address = address_with_byte(39);
+        let module_address = address_with_byte(40);
+        let issuer = ChainKeypair::from_secret(&[45_u8; 32])?;
+        let redeemer = SELF_CHAIN_KEYPAIR.clone();
+        let tx_bytes =
+            build_redeem_ticket_tx_bytes(&issuer, &redeemer, module_address, test_contract_addresses(), 1, 6).await?;
+
+        // A batch size of one must split three distinct hashes across three requests.
+        let mut rpc = MockIndexerRpcOperations::new();
+        rpc.expect_get_transaction_bytes_batch()
+            .times(3)
+            .withf(|tx_hashes| tx_hashes.len() == 1)
+            .returning(move |_| vec![Ok(tx_bytes.clone())]);
+
+        let handlers = init_handlers_with_prefetch_config(
+            ClonableMockOperations { inner: Arc::new(rpc) },
+            db.clone(),
+            SafeTxPrefetchConfig {
+                batch_size: 1,
+                concurrency: 2,
+            },
+        );
+
+        db.create_safe_contract(
+            None,
+            safe_address,
+            module_address,
+            redeemer.public().to_address(),
+            100,
+            0,
+            0,
+        )
+        .await?;
+
+        let logs = [0_u64, 1, 2]
+            .into_iter()
+            .map(|index| {
+                let mut slog = event_to_log_at_block(
+                    SafeContract::ExecutionFromModuleFailure {
+                        module: AlloyAddress::from_hopr_address(module_address),
+                    },
+                    safe_address,
+                    107,
+                    index,
+                    index,
+                );
+                slog.tx_hash = hash_with_byte(100 + index as u8).into();
+                slog
+            })
+            .collect::<Vec<_>>();
+
+        handlers
+            .collect_log_events(logs, true, PrefetchedTransactions::new())
+            .await?;
+
+        let stats = db
+            .get_aggregated_redeemed_stats(Some(safe_address), Some(redeemer.public().to_address()))
+            .await?;
+        assert_eq!(stats.rejection_count, 3);
 
         Ok(())
     }

@@ -20,7 +20,7 @@ pub(super) mod test_helpers {
     };
 
     use super::super::ContractEventHandlers;
-    use crate::{IndexerState, state::IndexerEvent};
+    use crate::{IndexerState, SafeTxPrefetchConfig, state::IndexerEvent};
 
     lazy_static::lazy_static! {
         pub static ref SELF_PRIV_KEY: OffchainKeypair = OffchainKeypair::from_secret(&hex!("492057cf93e99b31d2a85bc5e98a9c3aa0021feec52c227cc8170e8f7d047775")).expect("lazy static keypair should be constructible");
@@ -203,9 +203,24 @@ pub(super) mod test_helpers {
             indexer_state.clone(),
             true,
             false,
+            SafeTxPrefetchConfig::default(),
         );
 
         (handlers, indexer_state, event_receiver)
+    }
+
+    /// Test helper to create handlers with a specific Safe transaction pre-fetch configuration
+    pub fn init_handlers_with_prefetch_config<
+        T: HoprIndexerRpcOperations + Clone + Send + Sync + 'static,
+        Db: BlokliDbAllOperations + Clone,
+    >(
+        rpc_operations: T,
+        db: Db,
+        safe_tx_prefetch: SafeTxPrefetchConfig,
+    ) -> ContractEventHandlers<T, Db> {
+        let mut handlers = init_handlers(rpc_operations, db);
+        handlers.safe_tx_prefetch = safe_tx_prefetch;
+        handlers
     }
 
     /// Test helper to create handlers without event capture (for tests that don't need it)

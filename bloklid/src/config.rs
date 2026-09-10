@@ -19,6 +19,14 @@ fn default_network() -> Network {
     Network::default()
 }
 
+fn default_safe_tx_prefetch_batch_size() -> usize {
+    16
+}
+
+fn default_safe_tx_prefetch_concurrency() -> usize {
+    8
+}
+
 fn default_max_concurrent_log_ranges() -> u32 {
     4
 }
@@ -423,6 +431,24 @@ pub struct IndexerConfig {
 
     #[serde(default)]
     pub subscription: SubscriptionConfig,
+
+    #[serde(default)]
+    pub safe_tx_prefetch: SafeTxPrefetchConfig,
+}
+
+/// Tuning for the concurrent pre-fetch of transactions needed to decode Safe execution failures
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
+#[serde(deny_unknown_fields)]
+pub struct SafeTxPrefetchConfig {
+    /// Number of transaction hashes packed into a single batched JSON-RPC request
+    #[default(16)]
+    #[serde(default = "default_safe_tx_prefetch_batch_size")]
+    pub batch_size: usize,
+
+    /// Maximum number of batched requests in flight at once
+    #[default(8)]
+    #[serde(default = "default_safe_tx_prefetch_concurrency")]
+    pub concurrency: usize,
 }
 
 /// Configuration for GraphQL subscription behavior
