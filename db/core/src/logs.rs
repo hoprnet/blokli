@@ -319,6 +319,39 @@ impl BlokliDbLogOperations for BlokliDb {
         }
     }
 
+    async fn set_log_batch_processed(&self, logs: Vec<SerializableLog>) -> Result<()> {
+        let positions = logs
+            .into_iter()
+            .map(|log| log_position_to_i64(log.block_number, log.tx_index, log.log_index).map_err(DbError::from))
+            .collect::<Result<Vec<_>>>()?;
+        let now = Utc::now();
+
+        self.nest_transaction_in_db(None, TargetDb::Logs)
+            .await?
+            .perform(|tx| {
+                Box::pin(async move {
+                    for (block_number, tx_index, log_index) in positions {
+                        LogStatus::update_many()
+                            .col_expr(log_status::Column::Processed, Expr::value(Value::Bool(Some(true))))
+                            .col_expr(
+                                log_status::Column::ProcessedAt,
+                                Expr::value(Value::ChronoDateTimeUtc(Some(now))),
+                            )
+                            .filter(log_status::Column::BlockNumber.eq(block_number))
+                            .filter(log_status::Column::TxIndex.eq(tx_index))
+                            .filter(log_status::Column::LogIndex.eq(log_index))
+                            .exec(tx.as_ref())
+                            .await
+                            .map_err(DbSqlError::from)
+                            .map_err(DbError::from)?;
+                    }
+
+                    Ok(())
+                })
+            })
+            .await
+    }
+
     async fn set_logs_unprocessed(&self, block_number: Option<u64>, block_offset: Option<u64>) -> Result<()> {
         let (min_block_number, max_block_number) =
             block_range_to_i64(block_number, block_offset).map_err(DbError::from)?;

@@ -113,6 +113,12 @@ pub trait BlokliDbLogOperations {
     /// A `Result` which is `Ok(())` if the operation succeeds or an error if it fails.
     async fn set_log_processed(&self, log: SerializableLog) -> Result<()>;
 
+    /// Marks the supplied log entries as processed in a single transaction.
+    ///
+    /// The supplied logs may span multiple blocks. Entries not present in `logs` are left
+    /// unchanged.
+    async fn set_log_batch_processed(&self, logs: Vec<SerializableLog>) -> Result<()>;
+
     /// Marks multiple log entries as processed.
     ///
     /// # Arguments

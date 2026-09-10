@@ -48,6 +48,18 @@ pub trait ChainLogHandler {
     /// * `Result<()>` - Success or error
     async fn collect_log_event(&self, log: SerializableLog, is_synced: bool) -> Result<()>;
 
+    /// Processes an ordered group of blockchain logs atomically where supported by the handler.
+    ///
+    /// Implementations may override this to share one database transaction across the group. The
+    /// default retains the single-log behavior for handlers that do not provide batching.
+    async fn collect_log_events(&self, logs: Vec<SerializableLog>, is_synced: bool) -> Result<()> {
+        for log in logs {
+            self.collect_log_event(log, is_synced).await?;
+        }
+
+        Ok(())
+    }
+
     /// Returns whether a fetched, canonical log should be dispatched to the contract handler.
     /// Removed logs are filtered by the indexer before this hook is called.
     fn should_process_log(&self, _log: &SerializableLog) -> bool {

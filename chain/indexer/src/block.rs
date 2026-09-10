@@ -877,9 +877,8 @@ where
             }
         }
 
-        // FIXME: The block indexing and marking as processed should be done in a single
-        // transaction. This is difficult since currently this would be across databases.
-        // Process all logs - events are published internally via IndexerState
+        let mut logs_to_process = Vec::new();
+
         for log in block.logs.clone() {
             if log.removed || !logs_handler.should_process_log(&log) {
                 debug!(
@@ -895,20 +894,42 @@ where
                 }
                 continue;
             }
-            match logs_handler.collect_log_event(log.clone(), is_synced).await {
-                Ok(()) => match db.set_log_processed(log).await {
-                    Ok(_) => {}
-                    Err(error) => {
-                        error!(block_id, %error, "failed to mark log as processed, panicking to prevent data loss");
-                        panic!("failed to mark log as processed, panicking to prevent data loss")
+
+            logs_to_process.push(log);
+        }
+
+        if !logs_to_process.is_empty() {
+            match logs_handler
+                .collect_log_events(logs_to_process.clone(), is_synced)
+                .await
+            {
+                Ok(()) => {
+                    if let Err(error) = db.set_log_batch_processed(logs_to_process).await {
+                        error!(block_id, %error, "failed to mark batched logs as processed, panicking to prevent data loss");
+                        panic!("failed to mark batched logs as processed, panicking to prevent data loss")
                     }
-                },
-                Err(CoreEthereumIndexerError::ProcessError(error)) => {
-                    error!(block_id, %error, "failed to process log, continuing indexing");
                 }
                 Err(error) => {
-                    error!(block_id, %error, "failed to process log, panicking to prevent data loss");
-                    panic!("failed to process log, panicking to prevent data loss")
+                    error!(block_id, %error, "failed to process batched logs, retrying individually");
+
+                    for log in logs_to_process {
+                        match logs_handler.collect_log_event(log.clone(), is_synced).await {
+                            Ok(()) => match db.set_log_processed(log).await {
+                                Ok(_) => {}
+                                Err(error) => {
+                                    error!(block_id, %error, "failed to mark log as processed, panicking to prevent data loss");
+                                    panic!("failed to mark log as processed, panicking to prevent data loss")
+                                }
+                            },
+                            Err(CoreEthereumIndexerError::ProcessError(error)) => {
+                                error!(block_id, %error, "failed to process log, continuing indexing");
+                            }
+                            Err(error) => {
+                                error!(block_id, %error, "failed to process log, panicking to prevent data loss");
+                                panic!("failed to process log, panicking to prevent data loss")
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1305,7 +1326,7 @@ mod tests {
         pin::Pin,
         sync::{
             Arc,
-            atomic::{AtomicBool as StdAtomicBool, Ordering as StdOrdering},
+            atomic::{AtomicBool as StdAtomicBool, AtomicUsize as StdAtomicUsize, Ordering as StdOrdering},
         },
         time::Duration,
     };
@@ -1527,6 +1548,37 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Default)]
+    struct BatchTrackingLogHandler {
+        batch_size: Arc<StdAtomicUsize>,
+        single_log_calls: Arc<StdAtomicUsize>,
+    }
+
+    #[async_trait]
+    impl ChainLogHandler for BatchTrackingLogHandler {
+        fn contract_addresses(&self) -> Vec<Address> {
+            Vec::new()
+        }
+
+        fn contract_addresses_map(&self) -> Arc<ContractAddresses> {
+            Arc::new(ContractAddresses::default())
+        }
+
+        fn contract_address_topics(&self, _contract: Address) -> Vec<B256> {
+            Vec::new()
+        }
+
+        async fn collect_log_event(&self, _log: SerializableLog, _is_synced: bool) -> crate::errors::Result<()> {
+            self.single_log_calls.fetch_add(1, StdOrdering::SeqCst);
+            Ok(())
+        }
+
+        async fn collect_log_events(&self, logs: Vec<SerializableLog>, _is_synced: bool) -> crate::errors::Result<()> {
+            self.batch_size.store(logs.len(), StdOrdering::SeqCst);
+            Ok(())
+        }
+    }
+
     #[tokio::test]
     async fn test_process_block_marks_rejected_log_processed_without_dispatching() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
@@ -1606,6 +1658,63 @@ mod tests {
         assert!(!handler.collect_called.load(StdOrdering::SeqCst));
         assert_eq!(
             db.get_log(log.block_number, log.tx_index, log.log_index)
+                .await?
+                .processed,
+            Some(true)
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_block_batches_dispatchable_logs_and_marks_them_processed() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let handler = BatchTrackingLogHandler::default();
+        let first_log = SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: vec![Hash::create(&[b"my topic"]).into()],
+            data: vec![1, 2, 3],
+            tx_hash: Hash::create(&[b"my first tx hash"]).into(),
+            block_hash: Hash::create(&[b"my block hash"]).into(),
+            tx_index: 1,
+            block_number: 100,
+            log_index: 2,
+            ..Default::default()
+        };
+        let second_log = SerializableLog {
+            tx_hash: Hash::create(&[b"my second tx hash"]).into(),
+            tx_index: 2,
+            log_index: 3,
+            ..first_log.clone()
+        };
+        let store_results = db.store_logs(vec![first_log.clone(), second_log.clone()]).await?;
+        assert!(store_results.into_iter().all(|result| result.is_ok()));
+
+        let result = Indexer::<MockHoprIndexerOps, BatchTrackingLogHandler, BlokliDb>::process_block(
+            &db,
+            &handler,
+            BlockWithLogs {
+                block_id: first_log.block_number,
+                logs: BTreeSet::from([first_log.clone(), second_log.clone()]),
+            },
+            false,
+            false,
+            &IndexerState::default(),
+            false,
+        )
+        .await;
+
+        assert!(result.is_some());
+        assert_eq!(handler.batch_size.load(StdOrdering::SeqCst), 2);
+        assert_eq!(handler.single_log_calls.load(StdOrdering::SeqCst), 0);
+        assert_eq!(
+            db.get_log(first_log.block_number, first_log.tx_index, first_log.log_index)
+                .await?
+                .processed,
+            Some(true)
+        );
+        assert_eq!(
+            db.get_log(second_log.block_number, second_log.tx_index, second_log.log_index)
                 .await?
                 .processed,
             Some(true)

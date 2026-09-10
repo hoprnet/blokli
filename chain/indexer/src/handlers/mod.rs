@@ -383,28 +383,37 @@ where
     }
 
     async fn collect_log_event(&self, slog: SerializableLog, is_synced: bool) -> Result<()> {
+        self.collect_log_events(vec![slog], is_synced).await
+    }
+
+    async fn collect_log_events(&self, slogs: Vec<SerializableLog>, is_synced: bool) -> Result<()> {
         let myself = self.clone();
         let events = self
             .db
             .begin_transaction()
             .await?
             .perform(move |tx| {
-                let log = slog.clone();
-                let tx_hash = Hash::from(log.tx_hash);
-                let log_id = log.log_index;
-                let block_id = log.block_number;
-
                 Box::pin(async move {
-                    match myself.process_log_event(tx, log, is_synced).await {
-                        Ok(events) => {
-                            debug!(block_id, %tx_hash, log_id, "processed log successfully");
-                            Ok(events)
-                        }
-                        Err(error) => {
-                            error!(block_id, %tx_hash, log_id, %error, "error processing log in tx");
-                            Err(error)
+                    let mut events = Vec::new();
+
+                    for log in slogs {
+                        let tx_hash = Hash::from(log.tx_hash);
+                        let log_id = log.log_index;
+                        let block_id = log.block_number;
+
+                        match myself.process_log_event(tx, log, is_synced).await {
+                            Ok(log_events) => {
+                                debug!(block_id, %tx_hash, log_id, "processed log successfully");
+                                events.extend(log_events);
+                            }
+                            Err(error) => {
+                                error!(block_id, %tx_hash, log_id, %error, "error processing log in tx");
+                                return Err(error);
+                            }
                         }
                     }
+
+                    Ok(events)
                 })
             })
             .await?;
