@@ -92,7 +92,6 @@ impl Args {
             ("BLOKLI_RPC_URL", "rpc_url"),
             ("BLOKLI_MAX_RPC_REQUESTS_PER_SEC", "max_rpc_requests_per_sec"),
             ("BLOKLI_MAX_BLOCK_RANGE", "max_block_range"),
-            ("BLOKLI_MAX_CONCURRENT_LOG_RANGES", "max_concurrent_log_ranges"),
             (
                 "BLOKLI_INDEXER_SAFE_TX_PREFETCH_BATCH_SIZE",
                 "indexer.safe_tx_prefetch.batch_size",
@@ -274,7 +273,6 @@ impl Args {
             tx_polling_interval: config.network.tx_polling_interval(),
             confirmations: config.network.confirmations(),
             max_block_range: config.max_block_range,
-            max_concurrent_log_ranges: config.max_concurrent_log_ranges,
             channel_contract_deploy_block: network_config.indexer_start_block_number,
             max_requests_per_sec: config.max_rpc_requests_per_sec,
             expected_block_time: config.network.expected_block_time(),
@@ -323,6 +321,17 @@ impl Args {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Mutex, MutexGuard};
+
+    /// Serialises the tests that read or mutate the process environment.
+    ///
+    /// `load_config` layers environment variables over the config file, so a `temp_env` mutation
+    /// in a concurrently running test would otherwise be observed here and change the result.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn env_guard() -> MutexGuard<'static, ()> {
+        ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
     use std::{io::Write, os::unix::ffi::OsStringExt, time::Duration};
 
     use super::*;
@@ -389,6 +398,7 @@ mod tests {
 
     #[test]
     fn test_env_var_override() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -423,6 +433,7 @@ mod tests {
 
     #[test]
     fn test_curvy_aggregator_is_resolved_without_full_contract_override() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -450,6 +461,7 @@ mod tests {
 
     #[test]
     fn test_explicit_zero_curvy_aggregator_is_rejected() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -478,6 +490,7 @@ mod tests {
 
     #[test]
     fn test_canonical_env_var_override() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -512,6 +525,7 @@ mod tests {
 
     #[test]
     fn test_env_only_database_config() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -552,6 +566,7 @@ mod tests {
 
     #[test]
     fn test_missing_database_config_fails() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -583,6 +598,7 @@ mod tests {
 
     #[test]
     fn test_env_var_string_values_are_parsed_by_config_rs() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -615,6 +631,7 @@ mod tests {
 
     #[test]
     fn test_database_config_defaults_max_connections_to_10() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -649,6 +666,7 @@ mod tests {
 
     #[test]
     fn test_database_config_max_connections_from_config_file() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -687,6 +705,7 @@ mod tests {
 
     #[test]
     fn test_sqlite_database_config_max_connections_defaults() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -722,6 +741,7 @@ mod tests {
 
     #[test]
     fn test_env_var_blokli_database_max_connections_integer_casting() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -759,6 +779,7 @@ mod tests {
 
     #[test]
     fn test_env_var_blokli_database_max_connections_for_sqlite() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -797,6 +818,7 @@ mod tests {
 
     #[test]
     fn test_boolean_env_var_with_true_string() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -830,6 +852,7 @@ mod tests {
 
     #[test]
     fn test_boolean_env_var_with_digit_one() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -863,6 +886,7 @@ mod tests {
 
     #[test]
     fn test_boolean_env_var_with_digit_zero() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -896,6 +920,7 @@ mod tests {
 
     #[test]
     fn test_boolean_env_var_false_string() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -929,6 +954,7 @@ mod tests {
 
     #[test]
     fn test_enable_safe_indexing_env_var_true_string() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -962,6 +988,7 @@ mod tests {
 
     #[test]
     fn test_numeric_env_var_still_parsed_as_integer() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -995,6 +1022,7 @@ mod tests {
 
     #[test]
     fn test_float_env_var_parsed_as_f64() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -1028,6 +1056,7 @@ mod tests {
 
     #[test]
     fn test_invalid_gas_multiplier_rejected() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -1064,6 +1093,7 @@ mod tests {
 
     #[test]
     fn test_max_block_range_default() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -1092,6 +1122,7 @@ mod tests {
 
     #[test]
     fn test_max_block_range_from_config_file() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -1124,6 +1155,7 @@ mod tests {
 
     #[test]
     fn test_max_block_range_env_override() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -1156,6 +1188,7 @@ mod tests {
 
     #[test]
     fn test_max_block_range_zero_enables_auto_mode() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -1185,6 +1218,7 @@ mod tests {
 
     #[test]
     fn test_max_rpc_requests_per_sec_zero_from_config() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -1218,6 +1252,7 @@ mod tests {
 
     #[test]
     fn test_max_rpc_requests_per_sec_env_override_zero() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -1251,6 +1286,7 @@ mod tests {
 
     #[test]
     fn test_telemetry_env_overrides() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -1288,6 +1324,7 @@ mod tests {
 
     #[test]
     fn test_blokli_config_path_env_var_used_when_no_config_flag() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -1321,6 +1358,7 @@ mod tests {
 
     #[test]
     fn test_blokli_config_path_takes_precedence_over_config_flag() {
+        let _env = env_guard();
         let mut flag_file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             flag_file,
@@ -1369,6 +1407,7 @@ mod tests {
 
     #[test]
     fn test_blokli_config_path_empty_string_is_treated_as_unset() {
+        let _env = env_guard();
         temp_env::with_var("BLOKLI_CONFIG_PATH", Some(""), || {
             let args = Args {
                 verbose: 0,

@@ -89,8 +89,6 @@ pub struct ChainConfig {
     pub confirmations: u16,
     /// Maximum block range ceiling for adaptive RPC log queries
     pub max_block_range: u32,
-    /// Number of adaptive log subranges fetched concurrently (0 or 1 disables concurrency)
-    pub max_concurrent_log_ranges: u32,
     /// Starting block number for channel contract (where indexing should begin)
     pub channel_contract_deploy_block: u32,
     /// Maximum RPC requests per second (None = default, Some(0) = unlimited)

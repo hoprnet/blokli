@@ -24,13 +24,6 @@ max_rpc_requests_per_sec = 0
 # default 10000-block ceiling.
 max_block_range = 10000
 
-# Number of eth_getLogs subranges the indexer requests concurrently (default: 4)
-# Only used once the adaptive block range above has settled; while it is still
-# being probed, requests stay sequential. Results are always consumed in block
-# order, so this only hides RPC latency - raise it for a distant endpoint, and
-# set it to 1 to disable concurrency.
-max_concurrent_log_ranges = 4
-
 # Optional Curvy Aggregator proxy. When Curvy indexing is enabled, Blokli
 # resolves the Vault and optional PortalFactory from this contract during startup.
 # This setting does not override any HOPR contract address.
