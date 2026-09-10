@@ -214,9 +214,14 @@ impl EventBus {
     ///
     /// # Returns
     ///
-    /// Returns `Err` only if the event bus is closed.
-    pub fn publish(&self, event: StateChange) -> Result<(), TrySendError<StateChange>> {
-        self.sender.try_broadcast(event).map(|_| ())
+    /// Returns `Ok(true)` when an event was delivered to active subscribers and `Ok(false)`
+    /// when none are subscribed. The latter is an expected no-op during indexing.
+    pub fn publish(&self, event: StateChange) -> Result<bool, TrySendError<StateChange>> {
+        match self.sender.try_broadcast(event) {
+            Ok(_) => Ok(true),
+            Err(TrySendError::Inactive(_)) => Ok(false),
+            Err(error) => Err(error),
+        }
     }
 
     /// Get the number of active subscribers
@@ -246,6 +251,20 @@ mod tests {
 
         let received = subscriber.recv().await.unwrap();
         assert!(matches!(received, StateChange::AccountState(_)));
+    }
+
+    #[test]
+    fn test_event_bus_discards_events_without_active_subscribers() {
+        let event_bus = EventBus::new(1);
+        let event = StateChange::AccountState(AccountStateChange {
+            account_id: 1,
+            state_id: 42,
+            published_block: 1000,
+            published_tx_index: 5,
+            published_log_index: 2,
+        });
+
+        assert!(!event_bus.publish(event).unwrap());
     }
 
     #[tokio::test]
