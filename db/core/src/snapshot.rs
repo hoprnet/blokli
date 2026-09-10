@@ -23,7 +23,7 @@ use crate::{
 pub const SNAPSHOT_SQL_FILE: &str = "hopr_logs.sql";
 const SNAPSHOT_PAGE_SIZE: u64 = 10_000;
 const DEFAULT_IMPORT_BATCH_SIZE: usize = 1_000;
-const SQLITE_MAX_VARIABLE_NUMBER: usize = 999;
+pub(crate) const SQLITE_MAX_VARIABLE_NUMBER: usize = 999;
 pub(crate) const LOG_INSERT_COLUMNS: usize = 10;
 pub(crate) const LOG_STATUS_INSERT_COLUMNS: usize = 8;
 const LOG_TOPIC_INFO_INSERT_COLUMNS: usize = 3;

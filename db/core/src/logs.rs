@@ -11,8 +11,8 @@ use hopr_types::{
     primitive::prelude::{Address, DateTime, SerializableLog, ToHex, Utc},
 };
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DbErr, EntityTrait, FromQueryResult, IntoActiveModel,
-    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
+    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseBackend, DbErr, EntityTrait, FromQueryResult,
+    IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
     entity::Set,
     query::QueryTrait,
     sea_query::{Expr, OnConflict, Value},
@@ -33,6 +33,24 @@ use crate::{
 
 /// Number of bound values a single log position contributes to a statement.
 const LOG_POSITION_COLUMNS: usize = 3;
+
+/// Values the processed-flag update binds outside its position filter: `processed` and
+/// `processed_at`.
+const LOG_STATUS_UPDATE_FIXED_BINDS: usize = 2;
+
+/// Number of log positions a single statement may filter on.
+///
+/// `reserved_binds` accounts for values the statement binds outside the position filter, so that
+/// the total stays within the backend's bind-variable limit: without it a statement sized purely
+/// by the filter would overshoot (on SQLite, `3 * 333 + 2` exceeds the 999-variable limit).
+fn log_position_chunk_size(backend: DatabaseBackend, reserved_binds: usize) -> usize {
+    let positions = import_batch_size(backend, LOG_POSITION_COLUMNS);
+
+    // Dropping one position frees LOG_POSITION_COLUMNS bind slots.
+    positions
+        .saturating_sub(reserved_binds.div_ceil(LOG_POSITION_COLUMNS))
+        .max(1)
+}
 
 /// Builds a condition matching exactly the given `(block_number, tx_index, log_index)` positions.
 fn log_positions_condition(positions: &[(i64, i64, i64)]) -> Condition {
@@ -157,7 +175,7 @@ impl BlokliDbLogOperations for BlokliDb {
                     let positions = status_models.iter().map(|(position, _)| *position).collect::<Vec<_>>();
                     let mut log_ids = HashMap::with_capacity(positions.len());
 
-                    for chunk in positions.chunks(import_batch_size(backend, LOG_POSITION_COLUMNS)) {
+                    for chunk in positions.chunks(log_position_chunk_size(backend, 0)) {
                         let stored = Log::find()
                             .select_only()
                             .columns([
@@ -398,8 +416,10 @@ impl BlokliDbLogOperations for BlokliDb {
             .perform(|tx| {
                 Box::pin(async move {
                     // One statement per chunk instead of one per log. The chunking keeps the
-                    // generated condition within the bind-parameter limits of both backends.
-                    let chunk_size = import_batch_size(tx.as_ref().get_database_backend(), LOG_POSITION_COLUMNS);
+                    // position filter *and* the two SET values within the backend's bind-parameter
+                    // limit.
+                    let chunk_size =
+                        log_position_chunk_size(tx.as_ref().get_database_backend(), LOG_STATUS_UPDATE_FIXED_BINDS);
 
                     for chunk in positions.chunks(chunk_size) {
                         LogStatus::update_many()
@@ -636,6 +656,7 @@ mod tests {
     use hopr_types::crypto::prelude::Hash;
 
     use super::*;
+    use crate::snapshot::SQLITE_MAX_VARIABLE_NUMBER;
 
     fn test_log(block_number: u64, tx_index: u64, log_index: u64) -> SerializableLog {
         SerializableLog {
@@ -832,6 +853,47 @@ mod tests {
             );
             assert_eq!(stored.processed_at.is_some(), expected_processed);
         }
+    }
+
+    #[test]
+    fn test_log_position_chunk_size_leaves_room_for_extra_binds() {
+        let positions = log_position_chunk_size(DatabaseBackend::Sqlite, LOG_STATUS_UPDATE_FIXED_BINDS);
+        let bound_values = positions * LOG_POSITION_COLUMNS + LOG_STATUS_UPDATE_FIXED_BINDS;
+
+        assert!(
+            bound_values <= SQLITE_MAX_VARIABLE_NUMBER,
+            "a chunk binds {bound_values} values, over the SQLite limit of {SQLITE_MAX_VARIABLE_NUMBER}"
+        );
+
+        // Without reserved binds the whole allowance goes to positions.
+        let unreserved = log_position_chunk_size(DatabaseBackend::Sqlite, 0);
+        assert!(unreserved * LOG_POSITION_COLUMNS <= SQLITE_MAX_VARIABLE_NUMBER);
+        assert!(unreserved >= positions);
+    }
+
+    #[tokio::test]
+    async fn test_set_log_batch_processed_spans_multiple_chunks() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        // More positions than one statement may filter on, so the update must span several
+        // chunks and still mark every log.
+        let chunk_size = log_position_chunk_size(DatabaseBackend::Sqlite, LOG_STATUS_UPDATE_FIXED_BINDS);
+        let log_count = chunk_size + 10;
+        let logs = (0..log_count as u64)
+            .map(|index| test_log(1, index / 100, index % 100))
+            .collect::<Vec<_>>();
+
+        db.store_logs(logs.clone()).await?;
+        db.set_log_batch_processed(logs.clone()).await?;
+
+        let stored = db.get_logs(None, None).await?;
+        assert_eq!(stored.len(), log_count);
+        assert!(
+            stored.iter().all(|log| log.processed == Some(true)),
+            "every log of a multi-chunk batch must be marked processed"
+        );
+
+        Ok(())
     }
 
     #[tokio::test]
