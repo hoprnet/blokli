@@ -7,6 +7,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
+    time::Instant,
 };
 
 use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
@@ -28,7 +29,7 @@ use hopr_bindings::{
 #[cfg(all(feature = "telemetry", not(test)))]
 use hopr_types::primitive::prelude::ToHex;
 #[cfg(all(feature = "telemetry", not(test)))]
-use hopr_types::telemetry::{MultiGauge, SimpleGauge};
+use hopr_types::telemetry::{MultiGauge, MultiHistogram, SimpleGauge};
 use hopr_types::{
     crypto::types::Hash,
     primitive::prelude::{Address, SerializableLog},
@@ -84,6 +85,20 @@ lazy_static::lazy_static! {
             &["source"],
     ).unwrap();
 
+
+    /// Wall-clock time the indexer spends in each per-block step.
+    ///
+    /// The historical phases run these steps sequentially, so `rate(..._sum[5m])` per step reads
+    /// as the fraction of wall-clock time that step accounts for. Comparing it against
+    /// `blokli_rpc_call_time_sec` shows whether a sync is bound by the RPC endpoint or by the
+    /// database.
+    static ref METRIC_INDEXER_BLOCK_STEP_TIME: MultiHistogram =
+        MultiHistogram::new(
+            "blokli_indexer_block_step_time_sec",
+            "Wall-clock time spent per block in each indexing step",
+            vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 5.0],
+            &["step"]
+    ).unwrap();
 }
 
 /// Information about a detected blockchain reorganization.
@@ -95,6 +110,15 @@ pub struct ReorgInfo {
     pub affected_block_range: (u64, u64),
     /// Number of logs that were marked as removed
     pub removed_log_count: usize,
+}
+
+/// Records how long one per-block indexing step took.
+///
+/// Steps are recorded separately so a sync can be attributed to the database (`store`, `load`,
+/// `process`) or, by comparison with `blokli_rpc_call_time_sec`, to the RPC endpoint.
+fn record_block_step(_step: &str, _started: Instant) {
+    #[cfg(all(feature = "telemetry", not(test)))]
+    METRIC_INDEXER_BLOCK_STEP_TIME.observe(&[_step], _started.elapsed().as_secs_f64());
 }
 
 #[cfg(any(test, feature = "telemetry"))]
@@ -469,10 +493,13 @@ where
                 let mut event_stream = Box::pin(Self::prefetch_block_data(&logs_handler, block_stream));
 
                 while let Some((block, prefetched)) = event_stream.next().await {
+                    let store_started = Instant::now();
                     Self::store_block_logs(&db, &logs_handler, &block)
                         .await
                         .expect("live block logs should be stored");
+                    record_block_step("store", store_started);
 
+                    let process_started = Instant::now();
                     Self::process_block(
                         &db,
                         &logs_handler,
@@ -484,6 +511,7 @@ where
                         prefetched,
                     )
                     .await;
+                    record_block_step("process", process_started);
 
                     stream_start_block = block.block_id.saturating_add(1);
 
@@ -730,6 +758,7 @@ where
         U: ChainLogHandler + 'static,
         Db: BlokliDbLogOperations + 'static,
     {
+        let load_started = Instant::now();
         let logs = db.get_logs(Some(block_id), Some(0)).await?;
         let mut block = BlockWithLogs {
             block_id,
@@ -749,7 +778,10 @@ where
             }
         }
 
-        Ok(Self::process_block(
+        record_block_step("load", load_started);
+
+        let process_started = Instant::now();
+        let result = Self::process_block(
             db,
             logs_handler,
             block,
@@ -759,7 +791,10 @@ where
             true,
             PrefetchedTransactions::new(),
         )
-        .await)
+        .await;
+        record_block_step("process", process_started);
+
+        Ok(result)
     }
 
     async fn store_block_logs(db: &Db, logs_handler: &U, block: &BlockWithLogs) -> Result<()>
@@ -830,7 +865,11 @@ where
                 break;
             }
 
+            let store_started = Instant::now();
             Self::store_block_logs(db, logs_handler, &block).await?;
+            record_block_step("store", store_started);
+
+            let process_started = Instant::now();
             Self::process_block(
                 db,
                 logs_handler,
@@ -842,6 +881,7 @@ where
                 prefetched,
             )
             .await;
+            record_block_step("process", process_started);
 
             let progress = if end_block == start_block {
                 100_f64
