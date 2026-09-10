@@ -390,7 +390,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         })
     }
 
-    /// Resolves the Curvy Vault and PortalFactory from the configured Aggregator proxy.
+    /// Resolves the Curvy Vault and optional PortalFactory from the configured Aggregator proxy.
     ///
     /// The Aggregator is the sole Curvy bootstrap address. Resolution happens once
     /// during daemon startup so the indexer and GraphQL API share one validated
@@ -409,9 +409,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
             ));
         }
         if portal_factory_address == AlloyAddress::ZERO {
-            return Err(RpcError::Other(
-                "Curvy Aggregator returned the zero address for Curvy PortalFactory".to_string(),
-            ));
+            warn!("Curvy Aggregator returned the zero address for Curvy PortalFactory");
         }
 
         self.cfg.contract_addrs.curvy_vault = vault_address.to_hopr_address();

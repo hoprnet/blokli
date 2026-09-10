@@ -2524,10 +2524,10 @@ type SubscriptionRoot {
 	Provides updates whenever the status of the specified transaction changes,
 	including validation, submission, confirmation, revert, and failure events.
 	
-	Uses event-driven architecture to receive updates immediately when transaction
-	status changes, with zero polling overhead. Follows a 2-phase approach:
+	Uses event-driven delivery for immediate updates plus periodic store reconciliation
+	to recover from dropped notifications. Follows a 2-phase approach:
 	- Phase 1: Emit current transaction state if it exists
-	- Phase 2: Listen for future status update events
+	- Phase 2: Listen for status update events and reconcile with current state
 	"""
 	transactionUpdated(
 		"""

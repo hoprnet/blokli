@@ -2070,6 +2070,7 @@ dependencies = [
  "insta",
  "lazy_static",
  "mockall",
+ "mockito",
  "multiaddr",
  "primitive-types 0.14.0",
  "reqwest",
