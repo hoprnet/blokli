@@ -153,7 +153,7 @@ impl StateChange {
 ///
 /// Uses async-broadcast for efficient multi-subscriber distribution.
 /// Subscribers can join at any time and will receive all future events.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct EventBus {
     sender: Sender<StateChange>,
     // Keep the channel open when no clients are subscribed without retaining its events.

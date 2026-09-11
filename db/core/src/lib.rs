@@ -25,7 +25,11 @@ pub mod state_queries;
 pub mod utils;
 pub mod version;
 
-use std::{path::PathBuf, time::Instant};
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex, MutexGuard},
+    time::Instant,
+};
 
 use async_trait::async_trait;
 use futures::future::BoxFuture;
@@ -39,6 +43,7 @@ use crate::{
     // corrupted_channels::BlokliDbCorruptedChannelOperations,
     db::BlokliDb,
     errors::{DbSqlError, Result},
+    events::{EventBus, StateChange},
     info::BlokliDbInfoOperations,
     node_safe_registrations::BlokliDbNodeSafeRegistrationOperations,
     safe_contracts::BlokliDbSafeContractOperations,
@@ -59,9 +64,57 @@ pub type DbTimestamp = chrono::DateTime<chrono::Utc>;
 /// The wrapping behavior is needed to allow transaction agnostic functionalities
 /// of the DB traits.
 #[derive(Debug)]
-pub struct OpenTransaction(DatabaseTransaction, TargetDb);
+pub struct OpenTransaction {
+    transaction: DatabaseTransaction,
+    target: TargetDb,
+    deferred_events: Arc<Mutex<Vec<StateChange>>>,
+    parent_deferred_events: Option<Arc<Mutex<Vec<StateChange>>>>,
+    event_bus: Option<EventBus>,
+}
 
 impl OpenTransaction {
+    pub(crate) fn new(transaction: DatabaseTransaction, target: TargetDb, event_bus: EventBus) -> Self {
+        Self {
+            transaction,
+            target,
+            deferred_events: Arc::new(Mutex::new(Vec::new())),
+            parent_deferred_events: None,
+            event_bus: Some(event_bus),
+        }
+    }
+
+    fn nested(
+        transaction: DatabaseTransaction,
+        target: TargetDb,
+        parent_deferred_events: Arc<Mutex<Vec<StateChange>>>,
+    ) -> Self {
+        Self {
+            transaction,
+            target,
+            deferred_events: Arc::new(Mutex::new(Vec::new())),
+            parent_deferred_events: Some(parent_deferred_events),
+            event_bus: None,
+        }
+    }
+
+    /// Queues a database state-change event for publication after the root transaction commits.
+    ///
+    /// Events are deliberately not broadcast while the transaction is open: a later rollback
+    /// must not expose state changes which never became durable.
+    fn deferred_events_lock(&self) -> MutexGuard<'_, Vec<StateChange>> {
+        match self.deferred_events.lock() {
+            Ok(events) => events,
+            Err(error) => {
+                tracing::warn!("deferred event queue lock poisoned; continuing with recovered queue");
+                error.into_inner()
+            }
+        }
+    }
+
+    pub fn defer_event(&self, event: StateChange) {
+        self.deferred_events_lock().push(event);
+    }
+
     /// Executes the given `callback` inside the transaction
     /// and commits the transaction if it succeeds or rollbacks otherwise.
     #[tracing::instrument(level = "trace", name = "Sql::perform_in_transaction", skip_all, err)]
@@ -91,24 +144,60 @@ impl OpenTransaction {
 
     /// Commits the transaction.
     pub async fn commit(self) -> Result<()> {
-        Ok(self.0.commit().await?)
+        let Self {
+            transaction,
+            deferred_events,
+            parent_deferred_events,
+            event_bus,
+            ..
+        } = self;
+        transaction.commit().await?;
+
+        let mut deferred_events = match deferred_events.lock() {
+            Ok(events) => events,
+            Err(error) => {
+                tracing::warn!("deferred event queue lock poisoned; continuing with recovered queue");
+                error.into_inner()
+            }
+        };
+        let events = std::mem::take(&mut *deferred_events);
+        drop(deferred_events);
+
+        if let Some(parent_deferred_events) = parent_deferred_events {
+            let mut parent_events = match parent_deferred_events.lock() {
+                Ok(events) => events,
+                Err(error) => {
+                    tracing::warn!("deferred event queue lock poisoned; continuing with recovered queue");
+                    error.into_inner()
+                }
+            };
+            parent_events.extend(events);
+        } else if let Some(event_bus) = event_bus {
+            for event in events {
+                if let Err(error) = event_bus.publish(event) {
+                    tracing::warn!(%error, "failed to publish deferred database state change event");
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Rollbacks the transaction.
     pub async fn rollback(self) -> Result<()> {
-        Ok(self.0.rollback().await?)
+        Ok(self.transaction.rollback().await?)
     }
 }
 
 impl AsRef<DatabaseTransaction> for OpenTransaction {
     fn as_ref(&self) -> &DatabaseTransaction {
-        &self.0
+        &self.transaction
     }
 }
 
 impl From<OpenTransaction> for DatabaseTransaction {
     fn from(value: OpenTransaction) -> Self {
-        value.0
+        value.transaction
     }
 }
 
@@ -229,8 +318,15 @@ pub trait BlokliDbGeneralModelOperations {
     /// nesting across different databases is forbidden and the method will panic.
     async fn nest_transaction_in_db(&self, tx: OptTx<'_>, target_db: TargetDb) -> Result<OpenTransaction> {
         if let Some(t) = tx {
-            assert_eq!(t.1, target_db, "attempt to create nest into tx from a different db");
-            Ok(OpenTransaction(t.as_ref().begin().await?, target_db))
+            assert_eq!(
+                t.target, target_db,
+                "attempt to create nest into tx from a different db"
+            );
+            Ok(OpenTransaction::nested(
+                t.as_ref().begin().await?,
+                target_db,
+                t.deferred_events.clone(),
+            ))
         } else {
             self.begin_transaction_in_db(target_db).await
         }
@@ -261,7 +357,11 @@ impl BlokliDbGeneralModelOperations for BlokliDb {
     /// For SQLite with dual databases: uses the appropriate connection based on `target_db`.
     async fn begin_transaction_in_db(&self, target_db: TargetDb) -> Result<OpenTransaction> {
         let db_conn = self.conn(target_db);
-        Ok(OpenTransaction(db_conn.begin_with_config(None, None).await?, target_db))
+        Ok(OpenTransaction::new(
+            db_conn.begin_with_config(None, None).await?,
+            target_db,
+            self.event_bus.clone(),
+        ))
     }
 
     async fn import_logs_snapshot(self, src_dir: PathBuf) -> Result<LogsSnapshotInfo> {
