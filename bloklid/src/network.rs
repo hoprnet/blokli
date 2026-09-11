@@ -22,6 +22,9 @@ pub enum Network {
     #[default]
     #[serde(alias = "jura-dev")]
     JuraDev,
+    /// Jura staging (staging network)
+    #[serde(alias = "jura-staging")]
+    JuraStaging,
     /// Jura production (staging network)
     #[serde(alias = "jura-prod")]
     JuraProd,
@@ -42,6 +45,7 @@ impl Network {
         vec![
             Network::AnvilLocalhost,
             Network::JuraDev,
+            Network::JuraStaging,
             Network::JuraProd,
             Network::PizPaluDev,
             Network::PizPaluStaging,
@@ -63,6 +67,7 @@ impl Network {
         match self {
             Network::AnvilLocalhost => "anvil-localhost",
             Network::JuraDev => "jura-dev",
+            Network::JuraStaging => "jura-staging",
             Network::JuraProd => "jura-prod",
             Network::PizPaluDev => "piz-palu-dev",
             Network::PizPaluStaging => "piz-palu-staging",
@@ -95,6 +100,7 @@ impl Network {
         match self {
             Network::AnvilLocalhost => 100,
             Network::JuraDev => 1000,
+            Network::JuraStaging => 1000,
             Network::JuraProd => 1000,
             Network::PizPaluDev => 1000,
             Network::PizPaluStaging => 1000,
@@ -106,6 +112,7 @@ impl Network {
         match self {
             Network::AnvilLocalhost => 1,
             Network::JuraDev => 3,
+            Network::JuraStaging => 3,
             Network::JuraProd => 3,
             Network::PizPaluDev => 3,
             Network::PizPaluStaging => 3,
@@ -117,6 +124,7 @@ impl Network {
         match self {
             Network::AnvilLocalhost => 1,
             Network::JuraDev => 5,
+            Network::JuraStaging => 5,
             Network::JuraProd => 5,
             Network::PizPaluDev => 5,
             Network::PizPaluStaging => 5,
@@ -137,6 +145,7 @@ impl FromStr for Network {
         match s.to_lowercase().as_str() {
             "anvil-localhost" | "anvil_localhost" | "localhost" => Ok(Network::AnvilLocalhost),
             "jura-dev" => Ok(Network::JuraDev),
+            "jura-staging" => Ok(Network::JuraStaging),
             "jura-prod" => Ok(Network::JuraProd),
             "piz-palu-dev" => Ok(Network::PizPaluDev),
             "piz-palu-staging" => Ok(Network::PizPaluStaging),
@@ -192,6 +201,7 @@ mod tests {
     fn test_network_display() {
         assert_eq!(Network::AnvilLocalhost.to_string(), "anvil-localhost");
         assert_eq!(Network::JuraDev.to_string(), "jura-dev");
+        assert_eq!(Network::JuraStaging.to_string(), "jura-staging");
         assert_eq!(Network::JuraProd.to_string(), "jura-prod");
         assert_eq!(Network::PizPaluDev.to_string(), "piz-palu-dev");
         assert_eq!(Network::PizPaluStaging.to_string(), "piz-palu-staging");
@@ -200,9 +210,10 @@ mod tests {
     #[test]
     fn test_network_all() {
         let networks = Network::all();
-        assert_eq!(networks.len(), 5);
+        assert_eq!(networks.len(), 6);
         assert!(networks.contains(&Network::AnvilLocalhost));
         assert!(networks.contains(&Network::JuraDev));
+        assert!(networks.contains(&Network::JuraStaging));
         assert!(networks.contains(&Network::JuraProd));
         assert!(networks.contains(&Network::PizPaluDev));
         assert!(networks.contains(&Network::PizPaluStaging));
