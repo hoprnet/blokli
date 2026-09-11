@@ -1,6 +1,6 @@
 use std::{
     fmt::{Debug, Formatter},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, MutexGuard},
 };
 
 use async_lock::Semaphore;
@@ -104,20 +104,29 @@ impl LogBatchContext {
             .map(Vec::as_slice)
     }
 
+    /// Locks the collector, recovering the queue if a panic elsewhere poisoned it.
+    ///
+    /// Dropping these logs would leave committed state with no counterpart in the logs database,
+    /// so the queue is worth more than the poison flag — the same trade-off the database makes for
+    /// its deferred event queue.
+    fn backfilled_logs_lock(&self) -> MutexGuard<'_, Vec<SerializableLog>> {
+        match self.backfilled_logs.lock() {
+            Ok(logs) => logs,
+            Err(error) => {
+                warn!("backfilled log queue lock poisoned; continuing with recovered queue");
+                error.into_inner()
+            }
+        }
+    }
+
     /// Defers persisting a dynamically discovered log until after the transaction commits.
     pub(super) fn record_backfilled_log(&self, slog: SerializableLog) {
-        match self.backfilled_logs.lock() {
-            Ok(mut logs) => logs.push(slog),
-            Err(error) => error!(%error, "backfilled log collector mutex is poisoned"),
-        }
+        self.backfilled_logs_lock().push(slog);
     }
 
     /// Takes the logs recorded during the batch, leaving the collector empty.
     fn take_backfilled_logs(&self) -> Vec<SerializableLog> {
-        self.backfilled_logs
-            .lock()
-            .map(|mut logs| std::mem::take(&mut *logs))
-            .unwrap_or_default()
+        std::mem::take(&mut *self.backfilled_logs_lock())
     }
 }
 
