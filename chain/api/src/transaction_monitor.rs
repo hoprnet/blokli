@@ -9,10 +9,14 @@ use async_trait::async_trait;
 use futures::{StreamExt, stream};
 use hopr_types::crypto::types::Hash;
 use thiserror::Error;
-use tokio::time::{sleep, timeout};
+use tokio::{
+    sync::{Semaphore, mpsc},
+    time::{Instant, sleep, timeout},
+};
 use tracing::{debug, error, info, warn};
 
 use crate::{
+    metrics::{record_safe_execution, record_safe_inspection_retry, record_trace_failure, record_trace_timeout},
     safe_execution::{decode_transaction_to_address, inspect_safe_execution_logs},
     transaction_store::{SafeExecutionResult, TransactionStatus, TransactionStore},
 };
@@ -28,9 +32,29 @@ pub struct ReceiptLog {
     pub data: Vec<u8>,
 }
 
+/// The parts of an Ethereum receipt needed by the monitor.  Keeping status and
+/// logs together is deliberate: a Safe outcome must be derived from the same
+/// receipt that established outer inclusion.
+#[derive(Debug, Clone)]
+pub struct TransactionReceipt {
+    /// Outer EVM receipt status.
+    pub success: bool,
+    /// Receipt logs, including Safe execution events.
+    pub logs: Vec<ReceiptLog>,
+}
+
 /// Trait for querying transaction receipts from the RPC
 #[async_trait]
 pub trait ReceiptProvider: Send + Sync {
+    /// Fetch the complete receipt once. `None` means the transaction is not
+    /// mined yet.
+    async fn get_transaction_receipt(&self, tx_hash: Hash) -> Result<Option<TransactionReceipt>, String> {
+        let Some(success) = self.get_transaction_status(tx_hash).await? else {
+            return Ok(None);
+        };
+        let logs = self.get_transaction_receipt_logs(tx_hash).await?.unwrap_or_default();
+        Ok(Some(TransactionReceipt { success, logs }))
+    }
     /// Get the status of a transaction by its hash
     /// Returns Some(true) if confirmed, Some(false) if reverted, None if still pending
     async fn get_transaction_status(&self, tx_hash: Hash) -> Result<Option<bool>, String>;
@@ -124,6 +148,22 @@ pub struct TransactionMonitorConfig {
     pub revert_reason_timeout: Duration,
     /// Maximum number of transaction checks performed concurrently
     pub max_concurrent_checks: usize,
+    /// Maximum trace jobs waiting for an optional revert-reason lookup. `0` means unbounded.
+    pub max_queued_trace_jobs: usize,
+    /// Number of trace workers. These workers never consume receipt-monitor capacity.
+    /// `0` means unbounded.
+    pub max_concurrent_trace_jobs: usize,
+    /// Disable optional debug tracing while retaining Safe failure publication.
+    pub enable_revert_reason_tracing: bool,
+}
+
+/// Translate a `0` limit into an effectively unbounded one.
+///
+/// Tokio's channel and semaphore both reject a zero capacity, so unbounded is
+/// expressed as the largest capacity they accept. Neither preallocates, so this
+/// costs nothing until the capacity is actually used.
+fn unbounded_if_zero(limit: usize) -> usize {
+    if limit == 0 { Semaphore::MAX_PERMITS } else { limit }
 }
 
 impl Default for TransactionMonitorConfig {
@@ -136,6 +176,9 @@ impl Default for TransactionMonitorConfig {
             safe_inspection_timeout: Duration::from_secs(30),
             revert_reason_timeout: Duration::from_secs(30),
             max_concurrent_checks: 16,
+            max_queued_trace_jobs: 128,
+            max_concurrent_trace_jobs: 2,
+            enable_revert_reason_tracing: true,
         }
     }
 }
@@ -146,6 +189,13 @@ pub struct TransactionMonitor<R: ReceiptProvider, S: SafeAddressChecker> {
     receipt_provider: Arc<R>,
     safe_checker: Option<Arc<S>>,
     config: TransactionMonitorConfig,
+    trace_jobs: mpsc::Sender<TraceJob>,
+}
+
+#[derive(Debug, Clone)]
+struct TraceJob {
+    id: uuid::Uuid,
+    tx_hash: Hash,
 }
 
 impl<R: ReceiptProvider, S: SafeAddressChecker> std::fmt::Debug for TransactionMonitor<R, S> {
@@ -157,7 +207,7 @@ impl<R: ReceiptProvider, S: SafeAddressChecker> std::fmt::Debug for TransactionM
     }
 }
 
-impl<R: ReceiptProvider, S: SafeAddressChecker> TransactionMonitor<R, S> {
+impl<R: ReceiptProvider + 'static, S: SafeAddressChecker> TransactionMonitor<R, S> {
     /// Create a new transaction monitor
     pub fn new(
         transaction_store: Arc<TransactionStore>,
@@ -165,11 +215,57 @@ impl<R: ReceiptProvider, S: SafeAddressChecker> TransactionMonitor<R, S> {
         config: TransactionMonitorConfig,
         safe_checker: Option<Arc<S>>,
     ) -> Self {
-        Self {
-            transaction_store,
-            receipt_provider: Arc::new(receipt_provider),
-            safe_checker,
-            config,
+        let (trace_jobs, mut trace_rx) = mpsc::channel::<TraceJob>(unbounded_if_zero(config.max_queued_trace_jobs));
+        if config.enable_revert_reason_tracing {
+            let provider = Arc::new(receipt_provider);
+            let trace_provider = provider.clone();
+            let store = transaction_store.clone();
+            let trace_timeout = config.revert_reason_timeout;
+            let permits = Arc::new(Semaphore::new(unbounded_if_zero(config.max_concurrent_trace_jobs)));
+            tokio::spawn(async move {
+                while let Some(job) = trace_rx.recv().await {
+                    let Ok(permit) = permits.clone().acquire_owned().await else {
+                        break;
+                    };
+                    let provider = trace_provider.clone();
+                    let store = store.clone();
+                    tokio::spawn(async move {
+                        let started = Instant::now();
+                        match timeout(trace_timeout, provider.get_revert_reason(job.tx_hash)).await {
+                            Ok(Ok(reason)) => {
+                                if let Some(reason) = reason {
+                                    let _ = store.update_safe_revert_reason(job.id, reason);
+                                }
+                            }
+                            Ok(Err(error)) => {
+                                record_trace_failure();
+                                warn!(id = %job.id, tx_hash = %job.tx_hash, %error, "Failed to enrich Safe failure");
+                            }
+                            Err(_) => {
+                                record_trace_timeout();
+                                warn!(id = %job.id, tx_hash = %job.tx_hash, "Safe failure trace timed out");
+                            }
+                        }
+                        debug!(id = %job.id, elapsed = ?started.elapsed(), "Safe failure trace job completed");
+                        drop(permit);
+                    });
+                }
+            });
+            Self {
+                transaction_store,
+                receipt_provider: provider,
+                safe_checker,
+                config,
+                trace_jobs,
+            }
+        } else {
+            Self {
+                transaction_store,
+                receipt_provider: Arc::new(receipt_provider),
+                safe_checker,
+                config,
+                trace_jobs,
+            }
         }
     }
 
@@ -191,7 +287,7 @@ impl<R: ReceiptProvider, S: SafeAddressChecker> TransactionMonitor<R, S> {
 
     /// Perform a single poll of all submitted transactions
     async fn poll_once(&self) -> Result<(), String> {
-        let submitted = self.transaction_store.list_by_status(TransactionStatus::Submitted);
+        let submitted = self.transaction_store.list_submitted_fair();
 
         debug!("Polling {} submitted transactions", submitted.len());
 
@@ -206,21 +302,21 @@ impl<R: ReceiptProvider, S: SafeAddressChecker> TransactionMonitor<R, S> {
 
     async fn check_transaction(&self, record: crate::transaction_store::TransactionRecord) {
         let tx_hash = record.transaction_hash;
-        let receipt_status = timeout(
+        let receipt = timeout(
             self.config.request_timeout,
-            self.receipt_provider.get_transaction_status(tx_hash),
+            self.receipt_provider.get_transaction_receipt(tx_hash),
         )
         .await;
 
-        match receipt_status {
-            Ok(Ok(Some(true))) => {
+        match receipt {
+            Ok(Ok(Some(receipt))) if receipt.success => {
                 info!(id = %record.id, tx_hash = %tx_hash, "Outer transaction confirmed");
 
                 // A successful outer receipt is not sufficient for Safe transactions: the
                 // inner execution outcome must be known before notifying the client.
-                let mut safe_execution = match timeout(
+                let safe_execution = match timeout(
                     self.config.safe_inspection_timeout,
-                    self.try_inspect_safe_execution(&record),
+                    self.try_inspect_safe_execution(&record, &receipt.logs),
                 )
                 .await
                 {
@@ -234,6 +330,7 @@ impl<R: ReceiptProvider, S: SafeAddressChecker> TransactionMonitor<R, S> {
                         None
                     }
                     Ok(Err(error)) => {
+                        record_safe_inspection_retry();
                         warn!(
                             id = %record.id,
                             tx_hash = %tx_hash,
@@ -243,6 +340,7 @@ impl<R: ReceiptProvider, S: SafeAddressChecker> TransactionMonitor<R, S> {
                         return;
                     }
                     Err(_) => {
+                        record_safe_inspection_retry();
                         warn!(
                             id = %record.id,
                             tx_hash = %tx_hash,
@@ -253,45 +351,24 @@ impl<R: ReceiptProvider, S: SafeAddressChecker> TransactionMonitor<R, S> {
                     }
                 };
 
-                // Revert-reason tracing is optional. The Safe failure event already provides
-                // the mandatory inner outcome, so tracing failure must not delay publication.
-                if let Some(safe_result) = safe_execution.as_mut() {
-                    if !safe_result.success {
-                        match timeout(
-                            self.config.revert_reason_timeout,
-                            self.receipt_provider.get_revert_reason(record.transaction_hash),
-                        )
-                        .await
-                        {
-                            Ok(Ok(reason)) => safe_result.revert_reason = reason,
-                            Ok(Err(error)) => {
-                                warn!(
-                                    id = %record.id,
-                                    tx_hash = %tx_hash,
-                                    %error,
-                                    "Failed to enrich Safe execution failure with revert reason"
-                                );
-                            }
-                            Err(_) => {
-                                warn!(
-                                    id = %record.id,
-                                    tx_hash = %tx_hash,
-                                    timeout = ?self.config.revert_reason_timeout,
-                                    "Revert-reason tracing timed out"
-                                );
-                            }
-                        }
-                    }
-                }
+                let safe_failure = safe_execution.as_ref().is_some_and(|result| !result.success);
 
                 if let Err(e) = self
                     .transaction_store
-                    .confirm_with_safe_execution(record.id, safe_execution)
+                    .confirm_with_safe_execution(record.id, safe_execution.clone())
                 {
                     error!(id = %record.id, tx_hash = %tx_hash, error = %e, "Failed to confirm transaction");
+                } else if let Some(result) = safe_execution.as_ref() {
+                    record_safe_execution(result.success);
+                    if safe_failure
+                        && self.config.enable_revert_reason_tracing
+                        && self.trace_jobs.try_send(TraceJob { id: record.id, tx_hash }).is_err()
+                    {
+                        warn!(id = %record.id, "Safe failure trace queue is full; skipping optional enrichment");
+                    }
                 }
             }
-            Ok(Ok(Some(false))) => {
+            Ok(Ok(Some(_))) => {
                 warn!(id = %record.id, tx_hash = %tx_hash, "Transaction reverted");
                 if let Err(e) = self.transaction_store.update_status(
                     record.id,
@@ -346,11 +423,12 @@ impl<R: ReceiptProvider, S: SafeAddressChecker> TransactionMonitor<R, S> {
     async fn try_inspect_safe_execution(
         &self,
         record: &crate::transaction_store::TransactionRecord,
+        logs: &[ReceiptLog],
     ) -> Result<Option<SafeExecutionResult>, SafeExecutionInspectionError> {
         let Some(safe_checker) = self.safe_checker.as_ref() else {
             return Ok(None);
         };
-        inspect_safe_execution(record, self.receipt_provider.as_ref(), safe_checker.as_ref()).await
+        inspect_safe_execution_logs_for_record(record, safe_checker.as_ref(), logs).await
     }
 
     #[cfg(test)]
@@ -359,7 +437,13 @@ impl<R: ReceiptProvider, S: SafeAddressChecker> TransactionMonitor<R, S> {
         record: &crate::transaction_store::TransactionRecord,
     ) -> Option<SafeExecutionResult> {
         let safe_checker = self.safe_checker.as_ref()?;
-        enrich_safe_execution(record, self.receipt_provider.as_ref(), safe_checker.as_ref()).await
+        enrich_safe_execution(
+            record,
+            self.receipt_provider.as_ref(),
+            safe_checker.as_ref(),
+            self.config.enable_revert_reason_tracing,
+        )
+        .await
     }
 }
 
@@ -402,6 +486,28 @@ pub async fn inspect_safe_execution(
     Ok(Some(result))
 }
 
+/// Decode a Safe outcome from receipt logs which have already been fetched by
+/// the monitor. This keeps Safe inspection and outer receipt status atomic from
+/// the client's point of view and prevents a second receipt RPC request.
+async fn inspect_safe_execution_logs_for_record(
+    record: &crate::transaction_store::TransactionRecord,
+    safe_checker: &(impl SafeAddressChecker + ?Sized),
+    logs: &[ReceiptLog],
+) -> Result<Option<SafeExecutionResult>, SafeExecutionInspectionError> {
+    let to_addr = decode_transaction_to_address(&record.raw_transaction)
+        .ok_or(SafeExecutionInspectionError::InvalidTransactionTarget)?;
+    let Some(safe_address) = safe_checker
+        .find_safe_for_target(&to_addr)
+        .await
+        .map_err(SafeExecutionInspectionError::SafeLookup)?
+    else {
+        return Ok(None);
+    };
+    inspect_safe_execution_logs(&safe_address, logs)
+        .map(Some)
+        .ok_or(SafeExecutionInspectionError::ExecutionEventMissing)
+}
+
 /// Attempt to extract Safe execution results for a confirmed transaction.
 ///
 /// Decodes the raw transaction to extract the `to` address, checks if it is a
@@ -417,6 +523,7 @@ pub async fn enrich_safe_execution(
     record: &crate::transaction_store::TransactionRecord,
     receipt_provider: &(impl ReceiptProvider + ?Sized),
     safe_checker: &(impl SafeAddressChecker + ?Sized),
+    enable_revert_reason_tracing: bool,
 ) -> Option<SafeExecutionResult> {
     let mut result = match inspect_safe_execution(record, receipt_provider, safe_checker).await {
         Ok(result) => result,
@@ -427,7 +534,7 @@ pub async fn enrich_safe_execution(
     };
 
     if let Some(safe_result) = result.as_mut() {
-        if !safe_result.success {
+        if !safe_result.success && enable_revert_reason_tracing {
             safe_result.revert_reason = receipt_provider
                 .get_revert_reason(record.transaction_hash)
                 .await
@@ -440,7 +547,10 @@ pub async fn enrich_safe_execution(
 
 #[cfg(test)]
 mod tests {
-    use std::future::pending;
+    use std::{
+        future::pending,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
 
     use alloy_sol_types::SolEvent;
     use chrono::{DateTime, Utc};
@@ -484,6 +594,7 @@ mod tests {
         hanging_revert_reasons: Arc<DashMap<Hash, ()>>,
         // Transactions whose receipt lookup never completes
         hanging_statuses: Arc<DashMap<Hash, ()>>,
+        receipt_calls: Arc<AtomicUsize>,
     }
 
     impl MockReceiptProvider {
@@ -494,6 +605,7 @@ mod tests {
                 revert_reasons: Arc::new(DashMap::new()),
                 hanging_revert_reasons: Arc::new(DashMap::new()),
                 hanging_statuses: Arc::new(DashMap::new()),
+                receipt_calls: Arc::new(AtomicUsize::new(0)),
             }
         }
 
@@ -520,10 +632,30 @@ mod tests {
         fn set_revert_reason_hanging(&self, tx_hash: Hash) {
             self.hanging_revert_reasons.insert(tx_hash, ());
         }
+
+        fn receipt_call_count(&self) -> usize {
+            self.receipt_calls.load(Ordering::Relaxed)
+        }
     }
 
     #[async_trait]
     impl ReceiptProvider for MockReceiptProvider {
+        async fn get_transaction_receipt(&self, tx_hash: Hash) -> Result<Option<TransactionReceipt>, String> {
+            self.receipt_calls.fetch_add(1, Ordering::Relaxed);
+            if self.hanging_statuses.contains_key(&tx_hash) {
+                return pending().await;
+            }
+            let Some(Some(success)) = self.statuses.get(&tx_hash).map(|entry| *entry.value()) else {
+                return Ok(None);
+            };
+            let logs = match self.receipt_logs.get(&tx_hash) {
+                Some(entry) => entry.value().clone()?,
+                None => None,
+            }
+            .unwrap_or_default();
+            Ok(Some(TransactionReceipt { success, logs }))
+        }
+
         async fn get_transaction_status(&self, tx_hash: Hash) -> Result<Option<bool>, String> {
             if self.hanging_statuses.contains_key(&tx_hash) {
                 return pending().await;
@@ -903,6 +1035,44 @@ mod tests {
             .unwrap();
 
         assert_eq!(store.get(TEST_UUID).unwrap().status, TransactionStatus::Submitted);
+    }
+
+    #[tokio::test]
+    async fn test_known_safe_uses_one_receipt_for_status_and_execution_logs() {
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+        let safe_address = [0xAA; 20];
+        let tx_hash = test_tx_hash();
+        provider.set_status(tx_hash, Some(true));
+        provider.set_receipt_logs(
+            tx_hash,
+            vec![ReceiptLog {
+                address: safe_address,
+                topics: vec![ExecutionSuccess::SIGNATURE_HASH.0],
+                data: vec![0u8; 64],
+            }],
+        );
+        store
+            .insert(TransactionRecord {
+                id: TEST_UUID,
+                raw_transaction: create_raw_tx_to(&safe_address).await,
+                transaction_hash: tx_hash,
+                status: TransactionStatus::Submitted,
+                submitted_at: Utc::now(),
+                confirmed_at: None,
+                error_message: None,
+                safe_execution: None,
+            })
+            .unwrap();
+
+        let safe_checker = MockSafeAddressChecker::new();
+        safe_checker.add_safe(safe_address);
+        let monitor = create_monitor_with_safe_checker(store.clone(), provider, safe_checker);
+        monitor.poll_once().await.unwrap();
+
+        let record = store.get(TEST_UUID).unwrap();
+        assert_eq!(record.status, TransactionStatus::Confirmed);
+        assert_eq!(monitor.receipt_provider.receipt_call_count(), 1);
     }
 
     #[tokio::test]

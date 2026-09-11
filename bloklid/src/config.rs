@@ -330,6 +330,26 @@ impl Config {
             self.api.max_query_complexity
         ));
         output.push_str(&format!(
+            "  api.transactions.max_submitted_transactions: {}\n",
+            self.api.transactions.max_submitted_transactions
+        ));
+        output.push_str(&format!(
+            "  api.transactions.max_submitted_transactions_per_identity: {}\n",
+            self.api.transactions.max_submitted_transactions_per_identity
+        ));
+        output.push_str(&format!(
+            "  api.transactions.max_queued_trace_jobs: {}\n",
+            self.api.transactions.max_queued_trace_jobs
+        ));
+        output.push_str(&format!(
+            "  api.transactions.max_concurrent_trace_jobs: {}\n",
+            self.api.transactions.max_concurrent_trace_jobs
+        ));
+        output.push_str(&format!(
+            "  api.transactions.enable_revert_reason_tracing: {}\n",
+            self.api.transactions.enable_revert_reason_tracing
+        ));
+        output.push_str(&format!(
             "  api.sse_keepalive.enabled: {}\n",
             self.api.sse_keepalive.enabled
         ));
@@ -447,6 +467,9 @@ pub struct ApiConfig {
     #[serde(default)]
     pub health: HealthConfig,
 
+    #[serde(default)]
+    pub transactions: TransactionConfig,
+
     #[default(8)]
     #[serde(default = "default_max_query_depth")]
     pub max_query_depth: usize,
@@ -454,6 +477,39 @@ pub struct ApiConfig {
     #[default(500)]
     #[serde(default = "default_max_query_complexity")]
     pub max_query_complexity: usize,
+}
+
+/// Configuration for transaction submission and optional Safe revert tracing.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
+#[serde(deny_unknown_fields)]
+pub struct TransactionConfig {
+    /// Global limit for transactions awaiting receipt monitoring. `0` means unbounded.
+    ///
+    /// Applies to asynchronous submissions only, since they are the only ones
+    /// tracked by the background receipt monitor.
+    #[default(1024)]
+    #[serde(default = "default_max_submitted_transactions")]
+    pub max_submitted_transactions: usize,
+
+    /// Per-signer limit for transactions awaiting receipt monitoring. `0` means unbounded.
+    #[default(64)]
+    #[serde(default = "default_max_submitted_transactions_per_identity")]
+    pub max_submitted_transactions_per_identity: usize,
+
+    /// Maximum number of optional Safe revert-reason trace jobs waiting to run. `0` means unbounded.
+    #[default(128)]
+    #[serde(default = "default_max_queued_trace_jobs")]
+    pub max_queued_trace_jobs: usize,
+
+    /// Number of concurrent optional Safe revert-reason trace jobs. `0` means unbounded.
+    #[default(2)]
+    #[serde(default = "default_max_concurrent_trace_jobs")]
+    pub max_concurrent_trace_jobs: usize,
+
+    /// Whether to request optional Safe revert reasons through debug tracing.
+    #[default(true)]
+    #[serde(default = "default_true")]
+    pub enable_revert_reason_tracing: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
@@ -538,6 +594,22 @@ fn default_max_query_depth() -> usize {
 
 fn default_max_query_complexity() -> usize {
     500
+}
+
+fn default_max_submitted_transactions() -> usize {
+    1024
+}
+
+fn default_max_submitted_transactions_per_identity() -> usize {
+    64
+}
+
+fn default_max_queued_trace_jobs() -> usize {
+    128
+}
+
+fn default_max_concurrent_trace_jobs() -> usize {
+    2
 }
 
 fn default_max_indexer_lag() -> u64 {

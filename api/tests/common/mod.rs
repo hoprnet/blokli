@@ -520,6 +520,9 @@ pub async fn setup_transaction_test_environment(
         safe_inspection_timeout: Duration::from_secs(5),
         revert_reason_timeout: Duration::from_secs(5),
         max_concurrent_checks: 4,
+        max_queued_trace_jobs: 8,
+        max_concurrent_trace_jobs: 4,
+        enable_revert_reason_tracing: true,
     };
 
     let transaction_monitor = Arc::new(TransactionMonitor::new(

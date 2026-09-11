@@ -21,6 +21,22 @@ pub const STATUS_VALIDATION_FAILED: &str = "validation_failed";
 pub const STATUS_SUBMISSION_FAILED: &str = "submission_failed";
 
 #[cfg(all(feature = "telemetry", not(test)))]
+lazy_static::lazy_static! {
+    static ref METRIC_BLOKLI_SAFE_EXECUTION_TOTAL: hopr_metrics::MultiCounter =
+        hopr_metrics::MultiCounter::new(
+            "blokli_safe_execution_total",
+            "Safe execution outcomes and inspection retries",
+            &["outcome"],
+        ).unwrap();
+    static ref METRIC_BLOKLI_TRACE_TOTAL: hopr_metrics::MultiCounter =
+        hopr_metrics::MultiCounter::new(
+            "blokli_safe_trace_total",
+            "Optional Safe revert trace failures and timeouts",
+            &["outcome"],
+        ).unwrap();
+}
+
+#[cfg(all(feature = "telemetry", not(test)))]
 use hopr_types::telemetry as hopr_metrics;
 
 #[cfg(all(feature = "telemetry", not(test)))]
@@ -49,4 +65,28 @@ lazy_static::lazy_static! {
 pub fn record_transaction_status(status: &str) {
     #[cfg(all(feature = "telemetry", not(test)))]
     METRIC_BLOKLI_TRANSACTION_STATUS_TOTAL.increment(&[status]);
+}
+
+#[allow(unused_variables)]
+pub fn record_safe_execution(success: bool) {
+    #[cfg(all(feature = "telemetry", not(test)))]
+    METRIC_BLOKLI_SAFE_EXECUTION_TOTAL.increment(&[if success { "success" } else { "failure" }]);
+}
+
+#[allow(unused_variables)]
+pub fn record_safe_inspection_retry() {
+    #[cfg(all(feature = "telemetry", not(test)))]
+    METRIC_BLOKLI_SAFE_EXECUTION_TOTAL.increment(&["inspection_retry"]);
+}
+
+#[allow(unused_variables)]
+pub fn record_trace_failure() {
+    #[cfg(all(feature = "telemetry", not(test)))]
+    METRIC_BLOKLI_TRACE_TOTAL.increment(&["failure"]);
+}
+
+#[allow(unused_variables)]
+pub fn record_trace_timeout() {
+    #[cfg(all(feature = "telemetry", not(test)))]
+    METRIC_BLOKLI_TRACE_TOTAL.increment(&["timeout"]);
 }

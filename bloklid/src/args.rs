@@ -132,6 +132,26 @@ impl Args {
             ("BLOKLI_API_BIND_ADDRESS", "api.bind_address"),
             ("BLOKLI_API_PLAYGROUND_ENABLED", "api.playground_enabled"),
             ("BLOKLI_API_GAS_MULTIPLIER", "api.gas_multiplier"),
+            (
+                "BLOKLI_API_TRANSACTIONS_MAX_SUBMITTED_TRANSACTIONS",
+                "api.transactions.max_submitted_transactions",
+            ),
+            (
+                "BLOKLI_API_TRANSACTIONS_MAX_SUBMITTED_TRANSACTIONS_PER_IDENTITY",
+                "api.transactions.max_submitted_transactions_per_identity",
+            ),
+            (
+                "BLOKLI_API_TRANSACTIONS_MAX_QUEUED_TRACE_JOBS",
+                "api.transactions.max_queued_trace_jobs",
+            ),
+            (
+                "BLOKLI_API_TRANSACTIONS_MAX_CONCURRENT_TRACE_JOBS",
+                "api.transactions.max_concurrent_trace_jobs",
+            ),
+            (
+                "BLOKLI_API_TRANSACTIONS_ENABLE_REVERT_REASON_TRACING",
+                "api.transactions.enable_revert_reason_tracing",
+            ),
             ("BLOKLI_API_SSE_KEEPALIVE_ENABLED", "api.sse_keepalive.enabled"),
             ("BLOKLI_API_SSE_KEEPALIVE_INTERVAL", "api.sse_keepalive.interval"),
             ("BLOKLI_API_SSE_KEEPALIVE_TEXT", "api.sse_keepalive.text"),
@@ -188,6 +208,7 @@ impl Args {
             "indexer.enable_safe_indexing",
             "api.enabled",
             "api.playground_enabled",
+            "api.transactions.enable_revert_reason_tracing",
             "api.sse_keepalive.enabled",
         ];
 
@@ -1305,5 +1326,57 @@ mod tests {
                 "Expected NoConfiguration error, got: {result:?}"
             );
         });
+    }
+
+    #[test]
+    fn test_transaction_limits_and_tracing_are_configurable() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "jura-dev"
+            rpc_url = "http://localhost:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+            [api.transactions]
+            max_submitted_transactions = 200
+            max_submitted_transactions_per_identity = 20
+            max_queued_trace_jobs = 40
+            max_concurrent_trace_jobs = 3
+            enable_revert_reason_tracing = false
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        temp_env::with_vars(
+            [
+                ("BLOKLI_API_TRANSACTIONS_MAX_SUBMITTED_TRANSACTIONS", Some("300")),
+                (
+                    "BLOKLI_API_TRANSACTIONS_MAX_SUBMITTED_TRANSACTIONS_PER_IDENTITY",
+                    Some("30"),
+                ),
+                ("BLOKLI_API_TRANSACTIONS_MAX_QUEUED_TRACE_JOBS", Some("50")),
+                ("BLOKLI_API_TRANSACTIONS_MAX_CONCURRENT_TRACE_JOBS", Some("4")),
+                ("BLOKLI_API_TRANSACTIONS_ENABLE_REVERT_REASON_TRACING", Some("true")),
+            ],
+            || {
+                let args = Args {
+                    verbose: 0,
+                    config: Some(path),
+                    command: None,
+                };
+
+                let config = args
+                    .load_config(false)
+                    .expect("Failed to load transaction configuration");
+                assert_eq!(config.api.transactions.max_submitted_transactions, 300);
+                assert_eq!(config.api.transactions.max_submitted_transactions_per_identity, 30);
+                assert_eq!(config.api.transactions.max_queued_trace_jobs, 50);
+                assert_eq!(config.api.transactions.max_concurrent_trace_jobs, 4);
+                assert!(config.api.transactions.enable_revert_reason_tracing);
+            },
+        );
     }
 }
