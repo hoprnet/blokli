@@ -300,7 +300,8 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
             rpc_url,
             transaction_executor_config,
             transaction_monitor_config,
-        ).await?;
+        )
+        .await?;
         let contracts = blokli_chain.contract_addresses();
 
         // Verify RPC supports required capabilities (debug tracing)
