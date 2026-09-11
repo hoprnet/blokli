@@ -17,7 +17,10 @@ use hopr_bindings::exports::alloy::{
     eips::eip2718::Encodable2718,
     primitives::{Address as AlloyAddress, B256, U256},
     providers::Provider,
-    rpc::types::{Filter, Log as AlloyLog},
+    rpc::{
+        client::BatchRequest,
+        types::{Filter, Log as AlloyLog, Transaction as AlloyTransaction},
+    },
 };
 #[cfg(all(feature = "telemetry", not(test)))]
 use hopr_types::telemetry::SimpleGauge;
@@ -244,6 +247,50 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
             .ok_or_else(|| RpcError::TransactionNotFound(tx_hash))?;
 
         Ok(tx.inner.encoded_2718())
+    }
+
+    /// Sends all `eth_getTransactionByHash` lookups as a single JSON-RPC batch request.
+    ///
+    /// Only one HTTP round-trip is paid for the whole set, which is what makes this worthwhile on
+    /// a distant endpoint. If the batch request itself fails, every hash is reported with that
+    /// same transport error; per-hash failures inside a successful batch stay independent.
+    async fn get_transaction_bytes_batch(&self, tx_hashes: &[Hash]) -> Vec<Result<Vec<u8>>> {
+        if tx_hashes.is_empty() {
+            return Vec::new();
+        }
+
+        let mut batch = BatchRequest::new(self.provider.client());
+        let mut waiters = Vec::with_capacity(tx_hashes.len());
+
+        for tx_hash in tx_hashes {
+            let params = (B256::from_slice(tx_hash.as_ref()),);
+            match batch.add_call::<_, Option<AlloyTransaction>>("eth_getTransactionByHash", &params) {
+                Ok(waiter) => waiters.push(Ok(waiter)),
+                Err(error) => waiters.push(Err(RpcError::from(error))),
+            }
+        }
+
+        if let Err(error) = batch.send().await {
+            error!(count = tx_hashes.len(), %error, "batched transaction lookup failed");
+            return tx_hashes
+                .iter()
+                .map(|_| Err(RpcError::Other(format!("batched transaction lookup failed: {error}"))))
+                .collect();
+        }
+
+        let mut results = Vec::with_capacity(tx_hashes.len());
+        for (tx_hash, waiter) in tx_hashes.iter().zip(waiters) {
+            results.push(match waiter {
+                Ok(waiter) => match waiter.await {
+                    Ok(Some(tx)) => Ok(tx.inner.encoded_2718()),
+                    Ok(None) => Err(RpcError::TransactionNotFound(*tx_hash)),
+                    Err(error) => Err(RpcError::from(error)),
+                },
+                Err(error) => Err(error),
+            });
+        }
+
+        results
     }
 
     /// Produces an incremental stream of completed block log batches starting from a given block.

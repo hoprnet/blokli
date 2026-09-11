@@ -136,6 +136,7 @@ async fn test_service_registration_reaches_query_and_subscription() -> anyhow::R
         indexer_state.clone(),
         false,
         false,
+        Default::default(),
     );
     let topics = handlers.contract_address_topics(addresses.service_registry);
 

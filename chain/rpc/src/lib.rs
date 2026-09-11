@@ -456,6 +456,25 @@ pub trait HoprIndexerRpcOperations {
     /// outer module transaction and determine which inner HOPR action rejected.
     async fn get_transaction_bytes(&self, tx_hash: Hash) -> Result<Vec<u8>>;
 
+    /// Retrieves the encoded signed transaction bytes for several transaction hashes at once.
+    ///
+    /// Returns exactly one result per input hash, in the same order, so a single missing or
+    /// malformed transaction does not discard the successfully retrieved ones.
+    ///
+    /// The default implementation simply issues one [`Self::get_transaction_bytes`] request per
+    /// hash. Implementations backed by a JSON-RPC provider should override it to send the lookups
+    /// as one batched request, which saves a round-trip per hash on high-latency endpoints.
+    async fn get_transaction_bytes_batch(&self, tx_hashes: &[Hash]) -> Vec<Result<Vec<u8>>>
+    where
+        Self: Sync,
+    {
+        let mut results = Vec::with_capacity(tx_hashes.len());
+        for tx_hash in tx_hashes {
+            results.push(self.get_transaction_bytes(*tx_hash).await);
+        }
+        results
+    }
+
     /// Streams blockchain logs using selective filtering based on synchronization state.
     ///
     /// This method intelligently selects which log filters to use based on whether

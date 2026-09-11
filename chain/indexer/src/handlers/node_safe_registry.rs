@@ -9,7 +9,7 @@ use tracing::{debug, info, warn};
 
 #[cfg(all(feature = "telemetry", not(test)))]
 use super::increment_indexer_contract_log_count;
-use super::{ContractEventHandlers, helpers::construct_account_update, u256_to_u64};
+use super::{ContractEventHandlers, LogBatchContext, helpers::construct_account_update, u256_to_u64};
 use crate::{
     errors::{CoreEthereumIndexerError, Result},
     state::IndexerEvent,
@@ -43,7 +43,7 @@ where
     /// # let tx = todo!();
     /// # let log = todo!();
     /// # let event = todo!();
-    /// handlers.on_node_safe_registry_event(&tx, &log, event, true).await?;
+    /// handlers.on_node_safe_registry_event(&tx, &log, event, true, &batch_context).await?;
     /// # Ok(())
     /// # }
     /// ```
@@ -104,6 +104,7 @@ where
         log: &blokli_chain_rpc::Log,
         event: HoprNodeSafeRegistryEvents,
         is_synced: bool,
+        batch: &LogBatchContext,
     ) -> Result<Vec<IndexerEvent>> {
         #[cfg(all(feature = "telemetry", not(test)))]
         increment_indexer_contract_log_count("node_safe_registry");
@@ -186,7 +187,8 @@ where
                     .await?;
 
                 if !safe_previously_known && is_synced {
-                    self.backfill_safe_logs_in_discovery_block(tx, safe_addr, block).await?;
+                    self.backfill_safe_logs_in_discovery_block(tx, safe_addr, block, batch)
+                        .await?;
                     let epoch = self.indexer_state.mark_safe_filters_dirty();
                     info!(
                         safe_address = %safe_addr.to_hex(),

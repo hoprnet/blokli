@@ -1,17 +1,19 @@
 use std::{
     fmt::{Debug, Formatter},
-    sync::Arc,
+    sync::{Arc, Mutex, MutexGuard},
 };
 
+use async_lock::Semaphore;
 use async_trait::async_trait;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, Log};
 use blokli_chain_types::{AlloyAddressExt, ContractAddresses};
 use blokli_db::{BlokliDbAllOperations, OpenTransaction};
 use curvy_bindings::curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2::CurvyAggregatorAlphaV2Events;
+use futures::StreamExt;
 use hopr_bindings::{
     exports::alloy::{
         primitives::{Address as AlloyAddress, B256, Log as AlloyLog},
-        sol_types::SolEventInterface,
+        sol_types::{SolEvent, SolEventInterface},
     },
     hopr_announcements::HoprAnnouncements::HoprAnnouncementsEvents,
     hopr_channels::HoprChannels::HoprChannelsEvents,
@@ -27,14 +29,15 @@ use hopr_types::{
     crypto::prelude::Hash,
     primitive::prelude::{Address, SerializableLog},
 };
-use tracing::{debug, error, trace};
+use tracing::{debug, error, trace, warn};
 
 use crate::{
-    IndexerState,
-    custom_abis::safe_contract_events::SafeContract::SafeContractEvents,
+    IndexerState, SafeTxPrefetchConfig,
+    custom_abis::safe_contract_events::SafeContract::{ExecutionFromModuleFailure, SafeContractEvents},
     errors::{CoreEthereumIndexerError, Result},
     numeric::{u64_to_u32, u256_to_u32, u256_to_u64},
     state::IndexerEvent,
+    traits::{PrefetchedLogData, PrefetchedSafeDiscoveryLogs, PrefetchedTransactions},
 };
 
 mod announcements;
@@ -69,6 +72,64 @@ fn increment_indexer_contract_log_count(contract: &str) {
     METRIC_INDEXER_LOG_COUNTERS.increment(&[contract]);
 }
 
+/// Chain data and deferred writes shared by every log of one atomically processed batch.
+///
+/// The pre-fetched data is read-only; the recorded Safe logs are the ones the batch discovered
+/// dynamically while the database transaction was open. They are persisted only once that
+/// transaction has committed, so a rollback leaves no log marked processed for state that was
+/// never applied, and the retry re-discovers them.
+pub(super) struct LogBatchContext {
+    prefetched: PrefetchedLogData,
+    backfilled_logs: Mutex<Vec<SerializableLog>>,
+}
+
+impl LogBatchContext {
+    pub(super) fn new(prefetched: PrefetchedLogData) -> Self {
+        Self {
+            prefetched,
+            backfilled_logs: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// The raw transactions fetched ahead of the batch, keyed by transaction hash.
+    pub(super) fn transactions(&self) -> &PrefetchedTransactions {
+        &self.prefetched.transactions
+    }
+
+    /// The discovery-block logs already read for the given Safe, if any were pre-fetched.
+    pub(super) fn safe_discovery_logs(&self, safe_address: Address, block: u64) -> Option<&[SerializableLog]> {
+        self.prefetched
+            .safe_discovery_logs
+            .get(&(safe_address, block))
+            .map(Vec::as_slice)
+    }
+
+    /// Locks the collector, recovering the queue if a panic elsewhere poisoned it.
+    ///
+    /// Dropping these logs would leave committed state with no counterpart in the logs database,
+    /// so the queue is worth more than the poison flag — the same trade-off the database makes for
+    /// its deferred event queue.
+    fn backfilled_logs_lock(&self) -> MutexGuard<'_, Vec<SerializableLog>> {
+        match self.backfilled_logs.lock() {
+            Ok(logs) => logs,
+            Err(error) => {
+                warn!("backfilled log queue lock poisoned; continuing with recovered queue");
+                error.into_inner()
+            }
+        }
+    }
+
+    /// Defers persisting a dynamically discovered log until after the transaction commits.
+    pub(super) fn record_backfilled_log(&self, slog: SerializableLog) {
+        self.backfilled_logs_lock().push(slog);
+    }
+
+    /// Takes the logs recorded during the batch, leaving the collector empty.
+    fn take_backfilled_logs(&self) -> Vec<SerializableLog> {
+        std::mem::take(&mut *self.backfilled_logs_lock())
+    }
+}
+
 /// Event handling an object for on-chain operations
 ///
 /// Once an on-chain operation is recorded by the [crate::block::Indexer], it is pre-processed
@@ -85,6 +146,14 @@ pub struct ContractEventHandlers<T, Db> {
     pub(super) indexer_state: IndexerState,
     pub(super) enable_safe_indexing: bool,
     pub(super) enable_curvy_indexing: bool,
+    /// Tuning for the concurrent pre-fetch of Safe transactions.
+    pub(super) safe_tx_prefetch: SafeTxPrefetchConfig,
+    /// Caps the pre-fetch requests in flight across every block being pre-fetched at once.
+    ///
+    /// The block pipeline pre-fetches several blocks concurrently, so a limit local to one
+    /// block's pre-fetch would be multiplied by the pipeline depth. Every clone of these handlers
+    /// shares this permit pool, which is what makes the configured maximum a global one.
+    pub(super) prefetch_limiter: Arc<Semaphore>,
 }
 
 impl<T, Db> Debug for ContractEventHandlers<T, Db> {
@@ -97,7 +166,7 @@ impl<T, Db> Debug for ContractEventHandlers<T, Db> {
 
 impl<T, Db> ContractEventHandlers<T, Db>
 where
-    T: HoprIndexerRpcOperations + Clone + Send + 'static,
+    T: HoprIndexerRpcOperations + Clone + Send + Sync + 'static,
     Db: BlokliDbAllOperations + Clone,
 {
     /// Creates a new instance of contract event handlers with RPC operations support.
@@ -113,6 +182,7 @@ where
     /// * `db` - Database connection for persistent storage
     /// * `rpc_operations` - RPC interface for direct blockchain queries
     /// * `indexer_state` - Indexer state for publishing events to subscribers
+    /// * `safe_tx_prefetch` - Tuning for the concurrent pre-fetch of Safe transactions
     ///
     /// # Returns
     /// * `Self` - New instance of `ContractEventHandlers`
@@ -123,6 +193,7 @@ where
         indexer_state: IndexerState,
         enable_safe_indexing: bool,
         enable_curvy_indexing: bool,
+        safe_tx_prefetch: SafeTxPrefetchConfig,
     ) -> Self {
         Self {
             addresses: Arc::new(addresses),
@@ -131,7 +202,254 @@ where
             indexer_state,
             enable_safe_indexing,
             enable_curvy_indexing,
+            prefetch_limiter: Arc::new(Semaphore::new(safe_tx_prefetch.concurrency())),
+            safe_tx_prefetch,
         }
+    }
+
+    /// Replaces the pre-fetch tuning, resizing the shared permit pool to match.
+    ///
+    /// Assigning `safe_tx_prefetch` directly would leave the pool at the size it was built with.
+    #[cfg(test)]
+    pub(super) fn with_safe_tx_prefetch(mut self, safe_tx_prefetch: SafeTxPrefetchConfig) -> Self {
+        self.prefetch_limiter = Arc::new(Semaphore::new(safe_tx_prefetch.concurrency()));
+        self.safe_tx_prefetch = safe_tx_prefetch;
+        self
+    }
+
+    /// Pre-fetches the raw transactions required to decode Safe `ExecutionFromModuleFailure` logs.
+    ///
+    /// Each such log needs one `eth_getTransactionByHash` round-trip to tell a rejected ticket
+    /// redemption from any other failed module call. Issuing them concurrently here, before the
+    /// block's database transaction is opened, keeps a slow remote RPC endpoint from serializing
+    /// one round-trip per failure event while the write transaction is held open.
+    ///
+    /// Transaction hashes are de-duplicated. A lookup that fails is simply omitted from the cache;
+    /// the handler that needs it then retries inline, preserving the previous error semantics.
+    async fn prefetch_safe_transaction_bytes(&self, slogs: &[SerializableLog]) -> PrefetchedTransactions {
+        self.fetch_transaction_bytes(self.safe_transaction_hashes(slogs, &PrefetchedTransactions::new()))
+            .await
+    }
+
+    /// Pre-fetches everything the given logs need over RPC while processing them.
+    ///
+    /// `is_synced` mirrors the condition under which a newly discovered Safe has its
+    /// discovery-block logs backfilled: before the indexer is synced that backfill never runs, so
+    /// reading those logs ahead of time would be wasted work.
+    async fn prefetch_chain_data(&self, slogs: &[SerializableLog], is_synced: bool) -> PrefetchedLogData {
+        let mut prefetched = PrefetchedLogData::from(self.prefetch_safe_transaction_bytes(slogs).await);
+
+        if is_synced {
+            let targets = self.retain_undiscovered_safes(self.safe_discovery_targets(slogs)).await;
+            prefetched.safe_discovery_logs = self.fetch_safe_discovery_logs(targets).await;
+            self.extend_discovery_transaction_bytes(&mut prefetched).await;
+        }
+
+        prefetched
+    }
+
+    /// Collects the `(safe address, block)` pairs whose discovery-block logs may need backfilling.
+    ///
+    /// A Safe becomes known through either a stake-factory deployment or its first node
+    /// registration, and only the logs of the very block carrying that event are backfilled.
+    fn safe_discovery_targets(&self, slogs: &[SerializableLog]) -> Vec<(Address, u64)> {
+        let mut targets = slogs
+            .iter()
+            .filter_map(|slog| {
+                let is_registry = slog.address.eq(&self.addresses.node_safe_registry);
+                if !is_registry && !slog.address.eq(&self.addresses.node_stake_factory) {
+                    return None;
+                }
+
+                let primitive_log = AlloyLog::new(
+                    AlloyAddress::from_hopr_address(slog.address),
+                    slog.topics
+                        .iter()
+                        .map(|topic| B256::from_slice(topic.as_ref()))
+                        .collect(),
+                    slog.data.clone().into(),
+                )?;
+
+                let safe_address = if is_registry {
+                    match HoprNodeSafeRegistryEvents::decode_log(&primitive_log).ok()?.data {
+                        HoprNodeSafeRegistryEvents::RegisteredNodeSafe(registered) => {
+                            registered.safeAddress.to_hopr_address()
+                        }
+                        _ => return None,
+                    }
+                } else {
+                    match HoprNodeStakeFactoryEvents::decode_log(&primitive_log).ok()?.data {
+                        HoprNodeStakeFactoryEvents::NewHoprNodeStakeModuleForSafe(deployed) => {
+                            deployed.safe.to_hopr_address()
+                        }
+                        _ => return None,
+                    }
+                };
+
+                Some((safe_address, slog.block_number))
+            })
+            .collect::<Vec<_>>();
+        targets.sort_unstable();
+        targets.dedup();
+        targets
+    }
+
+    /// Drops the targets whose Safe is already recorded, and which therefore trigger no backfill.
+    ///
+    /// Without this, every repeated registration of an existing Safe would cost a round-trip. The
+    /// check races with nothing that matters: a Safe recorded by a transaction that has not
+    /// committed yet merely yields a pre-fetch whose result stays unused, and a Safe that reads as
+    /// known leaves the backfill to fall back to its own inline read.
+    async fn retain_undiscovered_safes(&self, targets: Vec<(Address, u64)>) -> Vec<(Address, u64)> {
+        let mut undiscovered = Vec::with_capacity(targets.len());
+        for (safe_address, block) in targets {
+            match self.db.get_safe_contract_by_address(None, safe_address).await {
+                Ok(None) => undiscovered.push((safe_address, block)),
+                Ok(Some(_)) => {}
+                Err(error) => {
+                    // Erring towards the pre-fetch: at worst it reads a block that is never used.
+                    warn!(%safe_address, %error, "failed to check whether Safe is already known, pre-fetching anyway");
+                    undiscovered.push((safe_address, block));
+                }
+            }
+        }
+        undiscovered
+    }
+
+    /// Reads the discovery-block logs of the given Safes concurrently.
+    ///
+    /// A failed read is omitted, leaving the backfill to retry it inline: this hook must not
+    /// change indexing outcomes, only when the round-trips happen.
+    async fn fetch_safe_discovery_logs(&self, targets: Vec<(Address, u64)>) -> PrefetchedSafeDiscoveryLogs {
+        if targets.is_empty() {
+            return PrefetchedSafeDiscoveryLogs::new();
+        }
+
+        debug!(count = targets.len(), "pre-fetching Safe discovery-block logs");
+
+        futures::stream::iter(targets.into_iter().map(|(safe_address, block)| {
+            let rpc = self._rpc_operations.clone();
+            let limiter = self.prefetch_limiter.clone();
+            async move {
+                let _permit = limiter.acquire_arc().await;
+                match rpc
+                    .get_logs_for_address(safe_address, crate::constants::topics::safe_contract(), block, block)
+                    .await
+                {
+                    Ok(logs) => Some((
+                        (safe_address, block),
+                        logs.into_iter().map(SerializableLog::from).collect::<Vec<_>>(),
+                    )),
+                    Err(error) => {
+                        warn!(%safe_address, block, %error, "failed to pre-fetch Safe discovery-block logs, will retry inline");
+                        None
+                    }
+                }
+            }
+        }))
+        .buffer_unordered(self.safe_tx_prefetch.concurrency())
+        .filter_map(futures::future::ready)
+        .collect()
+        .await
+    }
+
+    /// Adds the transactions that the pre-fetched discovery-block logs themselves will need.
+    async fn extend_discovery_transaction_bytes(&self, prefetched: &mut PrefetchedLogData) {
+        let discovered = prefetched
+            .safe_discovery_logs
+            .values()
+            .flatten()
+            .cloned()
+            .collect::<Vec<_>>();
+        let missing = self.safe_transaction_hashes(&discovered, &prefetched.transactions);
+        prefetched
+            .transactions
+            .extend(self.fetch_transaction_bytes(missing).await);
+    }
+
+    /// Persists the Safe logs a committed batch discovered dynamically.
+    ///
+    /// Called only after the batch's transaction has committed, so that a rollback cannot leave a
+    /// log marked processed whose effects were discarded.
+    async fn persist_backfilled_logs(&self, slogs: Vec<SerializableLog>) -> Result<()> {
+        if slogs.is_empty() {
+            return Ok(());
+        }
+
+        let store_results = self.db.store_logs(slogs.clone()).await?;
+        if let Some(error) = store_results.into_iter().find_map(|result| result.err()) {
+            return Err(CoreEthereumIndexerError::ProcessError(format!(
+                "failed to store Safe discovery block logs: {error}"
+            )));
+        }
+
+        self.db.set_log_batch_processed(slogs).await.map_err(|error| {
+            CoreEthereumIndexerError::ProcessError(format!(
+                "failed to mark Safe discovery block logs as processed: {error}"
+            ))
+        })
+    }
+
+    /// Collects the de-duplicated transaction hashes the given logs still need looked up.
+    ///
+    /// Hashes already present in `known` are skipped, which is what lets the block pipeline
+    /// pre-fetch ahead of time without the processing path repeating the work.
+    fn safe_transaction_hashes(&self, slogs: &[SerializableLog], known: &PrefetchedTransactions) -> Vec<Hash> {
+        if !self.enable_safe_indexing {
+            return Vec::new();
+        }
+
+        let mut tx_hashes = slogs
+            .iter()
+            .filter(|slog| {
+                slog.topics
+                    .first()
+                    .is_some_and(|topic| topic.as_slice() == ExecutionFromModuleFailure::SIGNATURE_HASH.as_slice())
+            })
+            .map(|slog| Hash::from(slog.tx_hash))
+            .filter(|tx_hash| !known.contains_key(tx_hash))
+            .collect::<Vec<_>>();
+        tx_hashes.sort_unstable();
+        tx_hashes.dedup();
+        tx_hashes
+    }
+
+    /// Fetches the given transaction hashes as concurrent, batched JSON-RPC requests.
+    async fn fetch_transaction_bytes(&self, tx_hashes: Vec<Hash>) -> PrefetchedTransactions {
+        if tx_hashes.is_empty() {
+            return PrefetchedTransactions::new();
+        }
+
+        debug!(count = tx_hashes.len(), "pre-fetching Safe transaction bytes");
+
+        let batches = tx_hashes
+            .chunks(self.safe_tx_prefetch.batch_size())
+            .map(<[Hash]>::to_vec)
+            .collect::<Vec<_>>();
+
+        futures::stream::iter(batches.into_iter().map(|batch| {
+            let rpc = self._rpc_operations.clone();
+            let limiter = self.prefetch_limiter.clone();
+            async move {
+                let _permit = limiter.acquire_arc().await;
+                let results = rpc.get_transaction_bytes_batch(&batch).await;
+                batch
+                    .into_iter()
+                    .zip(results)
+                    .filter_map(|(tx_hash, result)| match result {
+                        Ok(bytes) => Some((tx_hash, bytes)),
+                        Err(error) => {
+                            warn!(%tx_hash, %error, "failed to pre-fetch Safe transaction bytes, will retry inline");
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            }
+        }))
+        .buffer_unordered(self.safe_tx_prefetch.concurrency())
+        .flat_map(futures::stream::iter)
+        .collect()
+        .await
     }
 
     fn is_safe_contract_topic(topic: &[u8; 32]) -> bool {
@@ -151,6 +469,18 @@ where
         increment_indexer_contract_log_count("node_management_module");
         // Don't care at the moment
         Ok(())
+    }
+
+    /// Test-facing convenience wrapper that processes a single log without a pre-fetch cache.
+    #[cfg(test)]
+    async fn process_log_event(
+        &self,
+        tx: &OpenTransaction,
+        slog: SerializableLog,
+        is_synced: bool,
+    ) -> Result<Vec<IndexerEvent>> {
+        self.process_log_event_with_prefetch(tx, slog, is_synced, &LogBatchContext::new(PrefetchedLogData::default()))
+            .await
     }
 
     /// Dispatches a single on-chain log to the appropriate contract event handler after decoding it.
@@ -181,15 +511,19 @@ where
     /// #     let slog = /* SerializableLog */ unimplemented!();
     /// let is_synced = true;
     /// // Awaiting the processing result; errors propagate as `CoreEthereumIndexerError`.
-    /// let _ = handler.process_log_event(&tx, slog, is_synced).await;
+    /// let _ = handler.process_log_event_with_prefetch(&tx, slog, is_synced, &batch_context).await;
     /// # });
     /// ```
-    #[tracing::instrument(level = "debug", skip(self, slog), fields(log=%slog))]
-    async fn process_log_event(
+    ///
+    /// Any transaction bytes already fetched by [`Self::prefetch_safe_transaction_bytes`] for the
+    /// whole batch are reused instead of being looked up again over RPC.
+    #[tracing::instrument(level = "debug", skip(self, slog, batch), fields(log=%slog))]
+    async fn process_log_event_with_prefetch(
         &self,
         tx: &OpenTransaction,
         slog: SerializableLog,
         is_synced: bool,
+        batch: &LogBatchContext,
     ) -> Result<Vec<IndexerEvent>> {
         trace!(log = %slog, "log content");
 
@@ -216,7 +550,7 @@ where
             let block = log.block_number;
             let tx_idx = log.tx_index;
             let log_idx = u256_to_u64(log.log_index, "log_index")?;
-            self.on_stake_factory_event(tx, &slog, event.data, is_synced, block, tx_idx, log_idx)
+            self.on_stake_factory_event(tx, &slog, event.data, is_synced, block, tx_idx, log_idx, batch)
                 .await
         } else if log.address.eq(&self.addresses.channels) {
             let event = HoprChannelsEvents::decode_log(&primitive_log)?;
@@ -240,7 +574,8 @@ where
             self.on_token_event(tx, event.data, is_synced).await
         } else if log.address.eq(&self.addresses.node_safe_registry) {
             let event = HoprNodeSafeRegistryEvents::decode_log(&primitive_log)?;
-            self.on_node_safe_registry_event(tx, &log, event.data, is_synced).await
+            self.on_node_safe_registry_event(tx, &log, event.data, is_synced, batch)
+                .await
         } else if !self.addresses.service_registry.is_zero() && log.address.eq(&self.addresses.service_registry) {
             // Placed ahead of the Safe lookup below so that a registry log costs no database
             // query. The zero-address guard keeps a network without the registry from routing an
@@ -258,8 +593,15 @@ where
                 return Ok(vec![]);
             }
             let event = SafeContractEvents::decode_log(&primitive_log)?;
-            self.on_safe_contract_event(tx, log.address, &log, event.data, is_synced)
-                .await
+            self.on_safe_contract_event_with_prefetch(
+                tx,
+                log.address,
+                &log,
+                event.data,
+                is_synced,
+                batch.transactions(),
+            )
+            .await
         } else if slog.topics.first().is_some_and(Self::is_safe_contract_topic) {
             debug!(
                 address = %log.address,
@@ -383,31 +725,97 @@ where
     }
 
     async fn collect_log_event(&self, slog: SerializableLog, is_synced: bool) -> Result<()> {
+        self.collect_log_events(vec![slog], is_synced, PrefetchedLogData::default())
+            .await
+    }
+
+    async fn prefetch_log_data(&self, logs: &[SerializableLog], is_synced: bool) -> PrefetchedLogData {
+        self.prefetch_chain_data(logs, is_synced).await
+    }
+
+    fn supports_atomic_batches(&self) -> bool {
+        true
+    }
+
+    async fn collect_log_events(
+        &self,
+        slogs: Vec<SerializableLog>,
+        is_synced: bool,
+        mut prefetched: PrefetchedLogData,
+    ) -> Result<()> {
+        // Fetch whatever the block pipeline has not already fetched up-front and concurrently, so
+        // the database transaction below performs no blocking RPC round-trips.
+        let missing = self.safe_transaction_hashes(&slogs, &prefetched.transactions);
+        prefetched
+            .transactions
+            .extend(self.fetch_transaction_bytes(missing).await);
+
+        // Same for the discovery-block logs of a Safe this batch registers for the first time,
+        // which the backfill would otherwise read from inside the open transaction.
+        if is_synced {
+            let missing_targets = self
+                .safe_discovery_targets(&slogs)
+                .into_iter()
+                .filter(|target| !prefetched.safe_discovery_logs.contains_key(target))
+                .collect::<Vec<_>>();
+            if !missing_targets.is_empty() {
+                let missing_targets = self.retain_undiscovered_safes(missing_targets).await;
+                prefetched
+                    .safe_discovery_logs
+                    .extend(self.fetch_safe_discovery_logs(missing_targets).await);
+            }
+            self.extend_discovery_transaction_bytes(&mut prefetched).await;
+        }
+
+        let batch = Arc::new(LogBatchContext::new(prefetched));
+        let batch_in_tx = batch.clone();
+
         let myself = self.clone();
         let events = self
             .db
             .begin_transaction()
             .await?
             .perform(move |tx| {
-                let log = slog.clone();
-                let tx_hash = Hash::from(log.tx_hash);
-                let log_id = log.log_index;
-                let block_id = log.block_number;
-
                 Box::pin(async move {
-                    match myself.process_log_event(tx, log, is_synced).await {
-                        Ok(events) => {
-                            debug!(block_id, %tx_hash, log_id, "processed log successfully");
-                            Ok(events)
-                        }
-                        Err(error) => {
-                            error!(block_id, %tx_hash, log_id, %error, "error processing log in tx");
-                            Err(error)
+                    let mut events = Vec::new();
+
+                    for log in slogs {
+                        let tx_hash = Hash::from(log.tx_hash);
+                        let log_id = log.log_index;
+                        let block_id = log.block_number;
+
+                        match myself
+                            .process_log_event_with_prefetch(tx, log, is_synced, batch_in_tx.as_ref())
+                            .await
+                        {
+                            Ok(log_events) => {
+                                debug!(block_id, %tx_hash, log_id, "processed log successfully");
+                                events.extend(log_events);
+                            }
+                            Err(error) => {
+                                error!(block_id, %tx_hash, log_id, %error, "error processing log in tx");
+                                return Err(error);
+                            }
                         }
                     }
+
+                    Ok(events)
                 })
             })
             .await?;
+
+        // The transaction has committed, so the logs it discovered dynamically can now be stored
+        // and marked processed. Had it rolled back, they would simply be re-discovered by the
+        // retry instead of being left marked processed with their effects gone.
+        //
+        // This failure must not be reported as a batch failure: the batch's state is committed and
+        // its events published, so the caller's per-log retry would apply and publish all of it a
+        // second time. A logs-database write that follows a committed block is unrecoverable here,
+        // exactly as it is for the block's own logs in `Indexer::process_block`.
+        if let Err(error) = self.persist_backfilled_logs(batch.take_backfilled_logs()).await {
+            error!(%error, "failed to persist backfilled Safe logs after commit, panicking to prevent data loss");
+            panic!("failed to persist backfilled Safe logs after commit, panicking to prevent data loss");
+        }
 
         // Publish events after transaction commit
         if is_synced {

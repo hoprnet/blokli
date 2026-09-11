@@ -192,11 +192,11 @@ fn reconstruct_channel_entry_from_view(
 
 /// Helper function to insert a channel state record and emit event
 ///
-/// This creates a new version record in channel_state table and broadcasts the change event.
+/// This creates a new version record in channel_state and queues its change event for publication
+/// once the root transaction commits.
 ///
 /// # Arguments
 ///
-/// * `db` - Database connection
 /// * `tx` - Transaction reference
 /// * `channel_id` - Channel ID
 /// * `channel_entry` - Channel entry containing state information
@@ -208,8 +208,7 @@ fn reconstruct_channel_entry_from_view(
 ///
 /// The inserted channel_state record
 async fn insert_channel_state_and_emit(
-    db: &BlokliDb,
-    tx: &sea_orm::DatabaseTransaction,
+    tx: &crate::OpenTransaction,
     channel_id: i64,
     channel_entry: &ChannelEntry,
     block: i64,
@@ -277,7 +276,7 @@ async fn insert_channel_state_and_emit(
             .do_nothing()
             .to_owned(),
         )
-        .exec(tx)
+        .exec(tx.as_ref())
         .await
     {
         Ok(_insert_result) => {
@@ -289,7 +288,7 @@ async fn insert_channel_state_and_emit(
                 "Successfully inserted channel_state"
             );
             (
-                find_channel_state_by_composite_key(tx, channel_id, block, tx_index, log_index).await?,
+                find_channel_state_by_composite_key(tx.as_ref(), channel_id, block, tx_index, log_index).await?,
                 true,
             )
         }
@@ -303,7 +302,7 @@ async fn insert_channel_state_and_emit(
                 "Channel state already exists, skipping insert"
             );
             (
-                find_channel_state_by_composite_key(tx, channel_id, block, tx_index, log_index).await?,
+                find_channel_state_by_composite_key(tx.as_ref(), channel_id, block, tx_index, log_index).await?,
                 false,
             )
         }
@@ -312,7 +311,7 @@ async fn insert_channel_state_and_emit(
 
     // Only emit events for genuine new inserts to avoid duplicate downstream processing on restart
     if is_new {
-        // Emit state change event (fire and forget - don't block on event delivery)
+        // The root transaction publishes this only after a successful commit.
         let event = StateChange::ChannelState(ChannelStateChange {
             channel_id,
             state_id: inserted.id,
@@ -321,13 +320,7 @@ async fn insert_channel_state_and_emit(
             published_log_index: log_index,
         });
 
-        // Spawn event emission as a background task to avoid blocking
-        let event_bus = db.event_bus.clone();
-        tokio::spawn(async move {
-            if let Err(e) = event_bus.publish(event).await {
-                tracing::warn!("Failed to publish channel state change event: {}", e);
-            }
-        });
+        tx.defer_event(event);
     }
 
     Ok(inserted)
@@ -666,8 +659,6 @@ impl BlokliDbChannelOperations for BlokliDb {
         let channel_id_hex = hex::encode(channel_entry.get_id().as_ref());
         let source_addr = channel_entry.source;
         let dest_addr = channel_entry.destination;
-        let db_clone = self.clone();
-
         let block_i64 = i64::from(block);
         let tx_index_i64 = i64::from(tx_index);
         let log_index_i64 = i64::from(log_index);
@@ -703,8 +694,7 @@ impl BlokliDbChannelOperations for BlokliDb {
                     // Step 3: Insert channel_state record with state information
                     // This creates a new immutable state record (never updates existing records)
                     insert_channel_state_and_emit(
-                        &db_clone,
-                        tx.as_ref(),
+                        tx,
                         channel_id,
                         &channel_entry,
                         block_i64,
@@ -888,8 +878,12 @@ mod tests {
     };
 
     use crate::{
-        BlokliDbGeneralModelOperations, accounts::BlokliDbAccountOperations, channels::BlokliDbChannelOperations,
-        db::BlokliDb, events::StateChange,
+        BlokliDbGeneralModelOperations,
+        accounts::BlokliDbAccountOperations,
+        channels::BlokliDbChannelOperations,
+        db::BlokliDb,
+        errors::DbSqlError,
+        events::{ChannelStateChange, StateChange},
     };
 
     fn build_channel_entry(
@@ -1606,6 +1600,94 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_upsert_channel_does_not_publish_event_when_outer_transaction_rolls_back() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let source = Address::from(random_bytes());
+        let destination = Address::from(random_bytes());
+
+        db.upsert_account(None, 1, source, *OffchainKeypair::random().public(), None, 1, 0, 0)
+            .await?;
+        db.upsert_account(None, 2, destination, *OffchainKeypair::random().public(), None, 1, 0, 0)
+            .await?;
+
+        let channel = build_channel_entry(
+            source,
+            destination,
+            HoprBalance::from(1000u32),
+            0_u64,
+            ChannelStatus::Open,
+            1_u32,
+        );
+        let mut subscriber = db.event_bus().subscribe();
+        let db_clone = db.clone();
+
+        let result = db
+            .begin_transaction()
+            .await?
+            .perform(|tx| {
+                Box::pin(async move {
+                    db_clone.upsert_channel(Some(tx), channel, 100, 5, 3).await?;
+                    Err::<(), DbSqlError>(DbSqlError::LogicalError("force outer rollback".to_string()))
+                })
+            })
+            .await;
+
+        assert!(result.is_err());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), subscriber.recv())
+                .await
+                .is_err(),
+            "a rolled-back channel state must not be published"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_rolled_back_nested_transaction_does_not_leak_deferred_event() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let mut subscriber = db.event_bus().subscribe();
+        let db_clone = db.clone();
+
+        db.begin_transaction()
+            .await?
+            .perform(|outer_tx| {
+                Box::pin(async move {
+                    let nested_result = db_clone
+                        .nest_transaction(Some(outer_tx))
+                        .await?
+                        .perform(|inner_tx| {
+                            Box::pin(async move {
+                                inner_tx.defer_event(StateChange::ChannelState(ChannelStateChange {
+                                    channel_id: 1,
+                                    state_id: 1,
+                                    published_block: 100,
+                                    published_tx_index: 5,
+                                    published_log_index: 3,
+                                }));
+                                Err::<(), DbSqlError>(DbSqlError::LogicalError("force nested rollback".to_string()))
+                            })
+                        })
+                        .await;
+
+                    assert!(nested_result.is_err());
+                    Ok::<(), DbSqlError>(())
+                })
+            })
+            .await?;
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), subscriber.recv())
+                .await
+                .is_err(),
+            "a rolled-back nested transaction must not leak an event to its parent"
+        );
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_channel_entry_builder_rejects_oversized_ticket_index() -> anyhow::Result<()> {
         let addr_1 = Address::from(random_bytes());

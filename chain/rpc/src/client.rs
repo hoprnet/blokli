@@ -17,13 +17,14 @@ use std::{
     io::{BufWriter, Error, ErrorKind, Write},
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
     },
     task::{Context, Poll},
     time::{Duration, Instant},
 };
 
 use futures::{FutureExt, StreamExt};
+use futures_timer::Delay;
 /// as GasOracleMiddleware middleware is migrated to GasFiller
 use hopr_bindings::exports::alloy::eips::eip1559::Eip1559Estimation;
 use hopr_bindings::exports::alloy::{
@@ -300,6 +301,178 @@ impl RetryPolicy for ZeroRetryPolicy {
 
     fn backoff_hint(&self, _error: &TransportError) -> Option<Duration> {
         None
+    }
+}
+
+/// Retry layer that preserves Alloy's retry and compute-budget behavior while recording the
+/// number of retries for each completed JSON-RPC request.
+#[derive(Debug, Clone)]
+pub struct InstrumentedRetryBackoffLayer<P> {
+    max_rate_limit_retries: u32,
+    initial_backoff: u64,
+    compute_units_per_second: u64,
+    policy: P,
+}
+
+impl<P> InstrumentedRetryBackoffLayer<P> {
+    pub const fn new_with_policy(
+        max_rate_limit_retries: u32,
+        initial_backoff: u64,
+        compute_units_per_second: u64,
+        policy: P,
+    ) -> Self {
+        Self {
+            max_rate_limit_retries,
+            initial_backoff,
+            compute_units_per_second,
+            policy,
+        }
+    }
+}
+
+impl<S, P> Layer<S> for InstrumentedRetryBackoffLayer<P>
+where
+    P: RetryPolicy + Clone,
+{
+    type Service = InstrumentedRetryBackoffService<S, P>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        InstrumentedRetryBackoffService {
+            inner,
+            max_rate_limit_retries: self.max_rate_limit_retries,
+            initial_backoff: self.initial_backoff,
+            compute_units_per_second: self.compute_units_per_second,
+            policy: self.policy.clone(),
+            requests_enqueued: Arc::new(AtomicU32::new(0)),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct InstrumentedRetryBackoffService<S, P> {
+    inner: S,
+    max_rate_limit_retries: u32,
+    initial_backoff: u64,
+    compute_units_per_second: u64,
+    policy: P,
+    requests_enqueued: Arc<AtomicU32>,
+}
+
+#[derive(Debug)]
+struct QueuedRetryRequest {
+    requests_enqueued: Arc<AtomicU32>,
+}
+
+impl QueuedRetryRequest {
+    fn new(requests_enqueued: Arc<AtomicU32>) -> (Self, u64) {
+        let ahead_in_queue = requests_enqueued.fetch_add(1, Ordering::SeqCst) as u64;
+        (Self { requests_enqueued }, ahead_in_queue)
+    }
+}
+
+impl Drop for QueuedRetryRequest {
+    fn drop(&mut self) {
+        self.requests_enqueued.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+fn compute_retry_queue_delay_secs(
+    compute_units_per_second: u64,
+    current_queued_requests: u64,
+    ahead_in_queue: u64,
+) -> u64 {
+    const AVERAGE_REQUEST_COST: u64 = 20;
+
+    let request_capacity_per_second = compute_units_per_second.saturating_div(AVERAGE_REQUEST_COST).max(1);
+    if current_queued_requests > request_capacity_per_second {
+        current_queued_requests
+            .min(ahead_in_queue)
+            .saturating_div(request_capacity_per_second)
+    } else {
+        0
+    }
+}
+
+#[cfg(all(feature = "telemetry", not(test)))]
+fn record_rpc_retries(method_names: &[String], retry_count: u32) {
+    for method_name in method_names {
+        METRIC_RETRIES_PER_RPC_CALL.observe(&[method_name], f64::from(retry_count));
+    }
+}
+
+#[cfg(not(all(feature = "telemetry", not(test))))]
+fn record_rpc_retries(_method_names: &[String], _retry_count: u32) {}
+
+impl<S, P> Service<RequestPacket> for InstrumentedRetryBackoffService<S, P>
+where
+    S: Service<RequestPacket, Future = TransportFut<'static>, Error = TransportError> + Send + 'static + Clone,
+    P: RetryPolicy + Clone + 'static,
+{
+    type Error = TransportError;
+    type Future = TransportFut<'static>;
+    type Response = ResponsePacket;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, request: RequestPacket) -> Self::Future {
+        let method_names = match request.clone() {
+            RequestPacket::Single(single_request) => vec![single_request.method().to_owned()],
+            RequestPacket::Batch(requests) => requests.iter().map(|request| request.method().to_owned()).collect(),
+        };
+        let inner = self.inner.clone();
+        let this = self.clone();
+        let mut inner = std::mem::replace(&mut self.inner, inner);
+
+        Box::pin(async move {
+            let (_queued_request, ahead_in_queue) = QueuedRetryRequest::new(this.requests_enqueued.clone());
+            let mut retry_count = 0;
+
+            loop {
+                let error = match inner.call(request.clone()).await {
+                    Ok(response) => match response.as_error() {
+                        Some(error) => TransportError::ErrorResp(error.clone()),
+                        None => {
+                            record_rpc_retries(&method_names, retry_count);
+                            return Ok(response);
+                        }
+                    },
+                    Err(error) => error,
+                };
+
+                if !this.policy.should_retry(&error) {
+                    record_rpc_retries(&method_names, retry_count);
+                    return Err(error);
+                }
+
+                if retry_count >= this.max_rate_limit_retries {
+                    record_rpc_retries(&method_names, retry_count);
+                    return Err(TransportErrorKind::custom_str(&format!("Max retries exceeded {error}")));
+                }
+                retry_count += 1;
+
+                let current_queued_requests = this.requests_enqueued.load(Ordering::SeqCst) as u64;
+                let retry_delay = this
+                    .policy
+                    .backoff_hint(&error)
+                    .unwrap_or_else(|| Duration::from_millis(this.initial_backoff));
+                let queue_delay = Duration::from_secs(compute_retry_queue_delay_secs(
+                    this.compute_units_per_second,
+                    current_queued_requests,
+                    ahead_in_queue,
+                ));
+
+                trace!(
+                    %error,
+                    retry_count,
+                    retry_delay_ms = retry_delay.as_millis(),
+                    queue_delay_ms = queue_delay.as_millis(),
+                    "retrying RPC request"
+                );
+                Delay::new(retry_delay.saturating_add(queue_delay)).await;
+            }
+        })
     }
 }
 
@@ -990,7 +1163,7 @@ mod tests {
     use serde_json::json;
     use tempfile::{NamedTempFile, tempdir};
 
-    use crate::client::{DefaultRetryPolicy, SnapshotRequestor, ZeroRetryPolicy};
+    use crate::client::{DefaultRetryPolicy, InstrumentedRetryBackoffLayer, SnapshotRequestor, ZeroRetryPolicy};
 
     #[tokio::test]
     async fn test_client_should_fail_on_malformed_response() {
@@ -1144,7 +1317,7 @@ mod tests {
             ..DefaultRetryPolicy::default()
         };
         let rpc_client = ClientBuilder::default()
-            .layer(RetryBackoffLayer::new_with_policy(
+            .layer(InstrumentedRetryBackoffLayer::new_with_policy(
                 2,
                 1,
                 1,
