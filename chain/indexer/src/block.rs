@@ -1014,7 +1014,12 @@ where
                         panic!("failed to mark batched logs as processed, panicking to prevent data loss")
                     }
                 }
-                Err(error) => {
+                // Only a failure raised by the batch itself is known to have rolled back. Every
+                // other error can equally come from the commit, where the batch's effects may
+                // already be durable and its events already published: replaying the logs would
+                // then apply and publish them a second time, which accumulating state such as the
+                // Safe rejection aggregates cannot absorb.
+                Err(CoreEthereumIndexerError::ProcessError(error)) => {
                     error!(block_id, %error, "failed to process batched logs, retrying individually");
 
                     for log in logs_to_process {
@@ -1035,6 +1040,17 @@ where
                             }
                         }
                     }
+                }
+                Err(error) => {
+                    error!(
+                        block_id,
+                        %error,
+                        "batched logs failed with an outcome that is not known to have rolled back, \
+                         panicking to prevent duplicate state"
+                    );
+                    panic!(
+                        "batched logs failed with an unknown transaction outcome, panicking to prevent duplicate state"
+                    )
                 }
             }
         } else {
@@ -1459,7 +1475,7 @@ mod tests {
     use blokli_chain_rpc::BlockWithLogs;
     use blokli_chain_types::{ContractAddresses, chain_events::ChainEventType};
     use blokli_db::{
-        TargetDb, accounts::BlokliDbAccountOperations, db::BlokliDb, events::BlockPosition,
+        TargetDb, accounts::BlokliDbAccountOperations, db::BlokliDb, errors::DbSqlError, events::BlockPosition,
         safe_contracts::BlokliDbSafeContractOperations, state_queries::get_channel_state_at,
     };
     use blokli_db_entity::{
@@ -1712,6 +1728,47 @@ mod tests {
         }
     }
 
+    /// Handler whose atomic batch always fails, to exercise the fallback in `process_block`.
+    #[derive(Clone)]
+    struct FailingBatchLogHandler {
+        single_log_calls: Arc<StdAtomicUsize>,
+        /// Produces the error the batch fails with.
+        error: fn() -> CoreEthereumIndexerError,
+    }
+
+    #[async_trait]
+    impl ChainLogHandler for FailingBatchLogHandler {
+        fn contract_addresses(&self) -> Vec<Address> {
+            Vec::new()
+        }
+
+        fn contract_addresses_map(&self) -> Arc<ContractAddresses> {
+            Arc::new(ContractAddresses::default())
+        }
+
+        fn contract_address_topics(&self, _contract: Address) -> Vec<B256> {
+            Vec::new()
+        }
+
+        async fn collect_log_event(&self, _log: SerializableLog, _is_synced: bool) -> crate::errors::Result<()> {
+            self.single_log_calls.fetch_add(1, StdOrdering::SeqCst);
+            Ok(())
+        }
+
+        fn supports_atomic_batches(&self) -> bool {
+            true
+        }
+
+        async fn collect_log_events(
+            &self,
+            _logs: Vec<SerializableLog>,
+            _is_synced: bool,
+            _prefetched: PrefetchedLogData,
+        ) -> crate::errors::Result<()> {
+            Err((self.error)())
+        }
+    }
+
     /// Handler recording, per block, when its pre-fetch started and finished.
     #[derive(Clone, Default)]
     struct PrefetchTrackingLogHandler {
@@ -1893,6 +1950,74 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    /// Stores two logs of one block and runs `process_block` against the given handler.
+    async fn process_block_with(db: &BlokliDb, handler: &FailingBatchLogHandler) -> anyhow::Result<Option<()>> {
+        let first_log = SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: vec![Hash::create(&[b"my topic"]).into()],
+            data: vec![1, 2, 3],
+            tx_hash: Hash::create(&[b"my first tx hash"]).into(),
+            block_hash: Hash::create(&[b"my block hash"]).into(),
+            tx_index: 1,
+            block_number: 100,
+            log_index: 2,
+            ..Default::default()
+        };
+        let second_log = SerializableLog {
+            tx_hash: Hash::create(&[b"my second tx hash"]).into(),
+            tx_index: 2,
+            log_index: 3,
+            ..first_log.clone()
+        };
+        db.store_logs(vec![first_log.clone(), second_log.clone()]).await?;
+
+        Ok(
+            Indexer::<MockHoprIndexerOps, FailingBatchLogHandler, BlokliDb>::process_block(
+                db,
+                handler,
+                BlockWithLogs {
+                    block_id: first_log.block_number,
+                    logs: BTreeSet::from([first_log, second_log]),
+                },
+                false,
+                false,
+                &IndexerState::default(),
+                false,
+                PrefetchedLogData::default(),
+            )
+            .await,
+        )
+    }
+
+    #[tokio::test]
+    async fn test_process_block_retries_individually_when_the_batch_itself_failed() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let handler = FailingBatchLogHandler {
+            single_log_calls: Arc::new(StdAtomicUsize::new(0)),
+            // A failure raised by the batch rolled it back, so replaying its logs is safe.
+            error: || CoreEthereumIndexerError::ProcessError("log cannot be decoded".into()),
+        };
+
+        assert!(process_block_with(&db, &handler).await?.is_some());
+        assert_eq!(handler.single_log_calls.load(StdOrdering::SeqCst), 2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "unknown transaction outcome")]
+    async fn test_process_block_does_not_replay_a_batch_whose_outcome_is_unknown() {
+        let db = BlokliDb::new_in_memory().await.expect("in-memory db");
+        let handler = FailingBatchLogHandler {
+            single_log_calls: Arc::new(StdAtomicUsize::new(0)),
+            // A commit that fails leaves the batch possibly durable and already published, so its
+            // logs must not be replayed.
+            error: || CoreEthereumIndexerError::DbApiError(DbSqlError::Construction("commit failed".into())),
+        };
+
+        let _ = process_block_with(&db, &handler).await;
     }
 
     #[tokio::test]
