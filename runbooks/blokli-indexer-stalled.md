@@ -33,6 +33,7 @@ eventually flip to `unsynched` once the lag exceeds `config.api.health.maxIndexe
 - Check RPC connectivity and error rate — a fully unresponsive RPC provider can stall indexing entirely:
   - Inspect `blokli_rpc_call_count{result="failure"}` and `blokli_retries_per_rpc_call`.
   - Confirm `config.rpcUrl` is reachable from the cluster.
+  - Check [Tenderly's status page](https://tenderly.co/status) for an ongoing incident.
 - Check the database — a stuck write transaction or exhausted connection pool (`database.maxConnections`) can block block processing:
   - Check active PostgreSQL connections/locks against the `bloklid` role.
 - If logs show a panic or repeated identical error, restart the pod to clear transient state:
