@@ -453,7 +453,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
 
     use blokli_chain_rpc::{Log, errors::RpcError};
     use blokli_db::{
@@ -831,6 +837,60 @@ mod tests {
             .await?;
         assert_eq!(stats.rejection_count, 2);
         assert_eq!(stats.rejected_amount, HoprBalance::from(14_u64));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_prefetch_requests_draw_from_a_shared_concurrency_budget() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe_address = address_with_byte(41);
+        let module_address = address_with_byte(42);
+
+        let mut rpc = MockIndexerRpcOperations::new();
+        rpc.expect_get_transaction_bytes_batch()
+            .returning(|tx_hashes| tx_hashes.iter().map(|_| Ok(Vec::new())).collect());
+
+        let handlers = init_handlers_with_prefetch_config(
+            ClonableMockOperations { inner: Arc::new(rpc) },
+            db.clone(),
+            SafeTxPrefetchConfig {
+                batch_size: 1,
+                concurrency: 1,
+            },
+        );
+
+        let mut slog = event_to_log_at_block(
+            SafeContract::ExecutionFromModuleFailure {
+                module: AlloyAddress::from_hopr_address(module_address),
+            },
+            safe_address,
+            120,
+            0,
+            0,
+        );
+        slog.tx_hash = hash_with_byte(41).into();
+
+        // The budget belongs to the handlers, not to one pre-fetch call: holding its only permit
+        // stalls a pre-fetch that another block would otherwise run right away. Without a shared
+        // pool, every concurrently pre-fetched block would get a full budget of its own.
+        let permit = handlers.prefetch_limiter.acquire_arc().await;
+
+        let mut prefetch = tokio::spawn({
+            let handlers = handlers.clone();
+            let slog = slog.clone();
+            async move { handlers.prefetch_log_data(&[slog], true).await }
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), &mut prefetch)
+                .await
+                .is_err(),
+            "the pre-fetch should wait for a permit from the shared budget"
+        );
+
+        drop(permit);
+        let prefetched = tokio::time::timeout(Duration::from_secs(5), prefetch).await??;
+        assert_eq!(prefetched.transactions.len(), 1);
 
         Ok(())
     }

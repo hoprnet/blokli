@@ -218,9 +218,7 @@ pub(super) mod test_helpers {
         db: Db,
         safe_tx_prefetch: SafeTxPrefetchConfig,
     ) -> ContractEventHandlers<T, Db> {
-        let mut handlers = init_handlers(rpc_operations, db);
-        handlers.safe_tx_prefetch = safe_tx_prefetch;
-        handlers
+        init_handlers(rpc_operations, db).with_safe_tx_prefetch(safe_tx_prefetch)
     }
 
     /// Test helper to create handlers without event capture (for tests that don't need it)

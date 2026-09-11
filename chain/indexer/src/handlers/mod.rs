@@ -3,6 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use async_lock::Semaphore;
 use async_trait::async_trait;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, Log};
 use blokli_chain_types::{AlloyAddressExt, ContractAddresses};
@@ -138,6 +139,12 @@ pub struct ContractEventHandlers<T, Db> {
     pub(super) enable_curvy_indexing: bool,
     /// Tuning for the concurrent pre-fetch of Safe transactions.
     pub(super) safe_tx_prefetch: SafeTxPrefetchConfig,
+    /// Caps the pre-fetch requests in flight across every block being pre-fetched at once.
+    ///
+    /// The block pipeline pre-fetches several blocks concurrently, so a limit local to one
+    /// block's pre-fetch would be multiplied by the pipeline depth. Every clone of these handlers
+    /// shares this permit pool, which is what makes the configured maximum a global one.
+    pub(super) prefetch_limiter: Arc<Semaphore>,
 }
 
 impl<T, Db> Debug for ContractEventHandlers<T, Db> {
@@ -186,8 +193,19 @@ where
             indexer_state,
             enable_safe_indexing,
             enable_curvy_indexing,
+            prefetch_limiter: Arc::new(Semaphore::new(safe_tx_prefetch.concurrency())),
             safe_tx_prefetch,
         }
+    }
+
+    /// Replaces the pre-fetch tuning, resizing the shared permit pool to match.
+    ///
+    /// Assigning `safe_tx_prefetch` directly would leave the pool at the size it was built with.
+    #[cfg(test)]
+    pub(super) fn with_safe_tx_prefetch(mut self, safe_tx_prefetch: SafeTxPrefetchConfig) -> Self {
+        self.prefetch_limiter = Arc::new(Semaphore::new(safe_tx_prefetch.concurrency()));
+        self.safe_tx_prefetch = safe_tx_prefetch;
+        self
     }
 
     /// Pre-fetches the raw transactions required to decode Safe `ExecutionFromModuleFailure` logs.
@@ -302,7 +320,9 @@ where
 
         futures::stream::iter(targets.into_iter().map(|(safe_address, block)| {
             let rpc = self._rpc_operations.clone();
+            let limiter = self.prefetch_limiter.clone();
             async move {
+                let _permit = limiter.acquire_arc().await;
                 match rpc
                     .get_logs_for_address(safe_address, crate::constants::topics::safe_contract(), block, block)
                     .await
@@ -400,7 +420,9 @@ where
 
         futures::stream::iter(batches.into_iter().map(|batch| {
             let rpc = self._rpc_operations.clone();
+            let limiter = self.prefetch_limiter.clone();
             async move {
+                let _permit = limiter.acquire_arc().await;
                 let results = rpc.get_transaction_bytes_batch(&batch).await;
                 batch
                     .into_iter()
@@ -776,7 +798,15 @@ where
         // The transaction has committed, so the logs it discovered dynamically can now be stored
         // and marked processed. Had it rolled back, they would simply be re-discovered by the
         // retry instead of being left marked processed with their effects gone.
-        self.persist_backfilled_logs(batch.take_backfilled_logs()).await?;
+        //
+        // This failure must not be reported as a batch failure: the batch's state is committed and
+        // its events published, so the caller's per-log retry would apply and publish all of it a
+        // second time. A logs-database write that follows a committed block is unrecoverable here,
+        // exactly as it is for the block's own logs in `Indexer::process_block`.
+        if let Err(error) = self.persist_backfilled_logs(batch.take_backfilled_logs()).await {
+            error!(%error, "failed to persist backfilled Safe logs after commit, panicking to prevent data loss");
+            panic!("failed to persist backfilled Safe logs after commit, panicking to prevent data loss");
+        }
 
         // Publish events after transaction commit
         if is_synced {

@@ -11,7 +11,7 @@ pub struct SafeTxPrefetchConfig {
     #[default(16)]
     pub batch_size: usize,
 
-    /// Maximum number of batched requests in flight at once.
+    /// Maximum number of batched requests in flight at once, across all blocks being pre-fetched.
     ///
     /// Default is `8`.
     #[default(8)]

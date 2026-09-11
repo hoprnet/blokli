@@ -136,6 +136,8 @@ enable_curvy_indexing = false
 batch_size = 16
 
 # Batched requests in flight at once (default: 8)
+# The limit is global: the indexer pre-fetches several blocks concurrently and
+# they all draw from this budget.
 concurrency = 8
 
 # GraphQL subscription behavior configuration
