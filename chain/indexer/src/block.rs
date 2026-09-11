@@ -44,7 +44,7 @@ use crate::{
     errors::{CoreEthereumIndexerError, Result},
     numeric::{u64_to_i64, u64_to_u32},
     snapshot::{SnapshotInfo, SnapshotManager},
-    traits::{ChainLogHandler, PrefetchedTransactions},
+    traits::{ChainLogHandler, PrefetchedLogData},
 };
 
 /// Number of not-yet-committed blocks whose chain data the indexer fetches ahead of time.
@@ -490,7 +490,7 @@ where
                 let block_stream = rpc
                     .try_stream_logs(stream_start_block, log_filters, true)
                     .expect("block stream should be constructible");
-                let mut event_stream = Box::pin(Self::prefetch_block_data(&logs_handler, block_stream));
+                let mut event_stream = Box::pin(Self::prefetch_block_data(&logs_handler, block_stream, true));
 
                 while let Some((block, prefetched)) = event_stream.next().await {
                     let store_started = Instant::now();
@@ -719,7 +719,8 @@ where
     fn prefetch_block_data<'a, S>(
         logs_handler: &'a U,
         blocks: S,
-    ) -> impl Stream<Item = (BlockWithLogs, PrefetchedTransactions)> + 'a
+        is_synced: bool,
+    ) -> impl Stream<Item = (BlockWithLogs, PrefetchedLogData)> + 'a
     where
         S: Stream<Item = BlockWithLogs> + 'a,
         U: ChainLogHandler,
@@ -727,7 +728,7 @@ where
         blocks
             .map(move |block| async move {
                 let logs = block.logs.iter().cloned().collect::<Vec<_>>();
-                let prefetched = logs_handler.prefetch_log_data(&logs).await;
+                let prefetched = logs_handler.prefetch_log_data(&logs, is_synced).await;
                 (block, prefetched)
             })
             .buffered(BLOCK_PREFETCH_DEPTH)
@@ -789,7 +790,7 @@ where
             is_synced,
             indexer_state,
             true,
-            PrefetchedTransactions::new(),
+            PrefetchedLogData::default(),
         )
         .await;
         record_block_step("process", process_started);
@@ -858,7 +859,7 @@ where
         }
 
         let block_stream = rpc.try_stream_logs(start_block, log_filters, false)?;
-        let mut event_stream = Box::pin(Self::prefetch_block_data(logs_handler, block_stream));
+        let mut event_stream = Box::pin(Self::prefetch_block_data(logs_handler, block_stream, false));
 
         while let Some((block, prefetched)) = event_stream.next().await {
             if block.block_id > end_block {
@@ -933,7 +934,7 @@ where
         is_synced: bool,
         indexer_state: &IndexerState,
         finalize_block: bool,
-        prefetched: PrefetchedTransactions,
+        prefetched: PrefetchedLogData,
     ) -> Option<()>
     where
         U: ChainLogHandler + 'static,
@@ -1483,7 +1484,7 @@ mod tests {
     use multiaddr::Multiaddr;
 
     use super::*;
-    use crate::traits::{ChainLogHandler, MockChainLogHandler};
+    use crate::traits::{ChainLogHandler, MockChainLogHandler, PrefetchedTransactions};
 
     lazy_static::lazy_static! {
         static ref ALICE_OKP: OffchainKeypair = OffchainKeypair::random();
@@ -1704,7 +1705,7 @@ mod tests {
             &self,
             logs: Vec<SerializableLog>,
             _is_synced: bool,
-            _prefetched: PrefetchedTransactions,
+            _prefetched: PrefetchedLogData,
         ) -> crate::errors::Result<()> {
             self.batch_size.store(logs.len(), StdOrdering::SeqCst);
             Ok(())
@@ -1739,7 +1740,7 @@ mod tests {
             Ok(())
         }
 
-        async fn prefetch_log_data(&self, logs: &[SerializableLog]) -> PrefetchedTransactions {
+        async fn prefetch_log_data(&self, logs: &[SerializableLog], _is_synced: bool) -> PrefetchedLogData {
             let block_number = logs.first().map(|log| log.block_number).unwrap_or_default();
             self.prefetch_order
                 .lock()
@@ -1755,6 +1756,7 @@ mod tests {
                 Hash::from(logs.first().map(|log| log.tx_hash).unwrap_or_default()),
                 vec![block_number as u8],
             )])
+            .into()
         }
     }
 
@@ -1777,6 +1779,7 @@ mod tests {
         let stream = Indexer::<MockHoprIndexerOps, PrefetchTrackingLogHandler, BlokliDb>::prefetch_block_data(
             &handler,
             futures::stream::iter(blocks),
+            true,
         );
         let results = stream.collect::<Vec<_>>().await;
 
@@ -1784,7 +1787,10 @@ mod tests {
         let consumed = results.iter().map(|(block, _)| block.block_id).collect::<Vec<_>>();
         assert_eq!(consumed, (1_u64..=8).collect::<Vec<_>>());
         for (block, prefetched) in &results {
-            assert_eq!(prefetched.values().next(), Some(&vec![block.block_id as u8]));
+            assert_eq!(
+                prefetched.transactions.values().next(),
+                Some(&vec![block.block_id as u8])
+            );
         }
 
         // ... while several blocks were fetched at the same time, which is the point of the pipeline.
@@ -1828,7 +1834,7 @@ mod tests {
             false,
             &IndexerState::default(),
             false,
-            PrefetchedTransactions::new(),
+            PrefetchedLogData::default(),
         )
         .await;
 
@@ -1873,7 +1879,7 @@ mod tests {
             false,
             &IndexerState::default(),
             false,
-            PrefetchedTransactions::new(),
+            PrefetchedLogData::default(),
         )
         .await;
 
@@ -1924,7 +1930,7 @@ mod tests {
             false,
             &IndexerState::default(),
             false,
-            PrefetchedTransactions::new(),
+            PrefetchedLogData::default(),
         )
         .await;
 

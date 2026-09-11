@@ -13,6 +13,28 @@ use crate::errors::Result;
 /// need in order to tell a rejected ticket redemption from any other failed call.
 pub type PrefetchedTransactions = HashMap<Hash, Vec<u8>>;
 
+/// Logs read from a Safe contract for the block in which that Safe was discovered, keyed by
+/// `(safe address, block number)`.
+pub type PrefetchedSafeDiscoveryLogs = HashMap<(Address, u64), Vec<SerializableLog>>;
+
+/// All chain data fetched ahead of processing a group of logs.
+#[derive(Clone, Debug, Default)]
+pub struct PrefetchedLogData {
+    /// Raw transactions needed to classify Safe module execution failures.
+    pub transactions: PrefetchedTransactions,
+    /// Discovery-block logs of Safes that the group is about to register for the first time.
+    pub safe_discovery_logs: PrefetchedSafeDiscoveryLogs,
+}
+
+impl From<PrefetchedTransactions> for PrefetchedLogData {
+    fn from(transactions: PrefetchedTransactions) -> Self {
+        Self {
+            transactions,
+            safe_discovery_logs: PrefetchedSafeDiscoveryLogs::new(),
+        }
+    }
+}
+
 #[async_trait]
 pub trait ChainLogHandler {
     fn contract_addresses(&self) -> Vec<Address>;
@@ -68,7 +90,7 @@ pub trait ChainLogHandler {
         &self,
         logs: Vec<SerializableLog>,
         is_synced: bool,
-        _prefetched: PrefetchedTransactions,
+        _prefetched: PrefetchedLogData,
     ) -> Result<()> {
         for log in logs {
             self.collect_log_event(log, is_synced).await?;
@@ -83,8 +105,10 @@ pub trait ChainLogHandler {
     /// overlaps with the commit of earlier blocks. The result is handed straight back to
     /// [`Self::collect_log_events`]. A failed lookup is simply absent from the result: the
     /// processing path then fetches it itself, so this hook never changes indexing outcomes.
-    async fn prefetch_log_data(&self, _logs: &[SerializableLog]) -> PrefetchedTransactions {
-        PrefetchedTransactions::new()
+    ///
+    /// `is_synced` lets an implementation skip lookups that only the synced path needs.
+    async fn prefetch_log_data(&self, _logs: &[SerializableLog], _is_synced: bool) -> PrefetchedLogData {
+        PrefetchedLogData::default()
     }
 
     /// Whether [`Self::collect_log_events`] applies its entire input atomically.

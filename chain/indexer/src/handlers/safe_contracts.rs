@@ -14,7 +14,7 @@ use tracing::{debug, info, warn};
 
 #[cfg(all(feature = "telemetry", not(test)))]
 use super::increment_indexer_contract_log_count;
-use super::{ContractEventHandlers, u64_to_u32, u256_to_u32, u256_to_u64};
+use super::{ContractEventHandlers, LogBatchContext, u64_to_u32, u256_to_u32, u256_to_u64};
 use crate::{
     custom_abis::safe_contract_events::SafeContract::SafeContractEvents, errors::Result, state::IndexerEvent,
     traits::PrefetchedTransactions,
@@ -135,31 +135,40 @@ where
         Ok(())
     }
 
+    /// Processes the Safe's own logs from the block in which the Safe was discovered.
+    ///
+    /// The logs are normally read by [`super::ContractEventHandlers::prefetch_chain_data`] before
+    /// the surrounding transaction is opened; a pre-fetch miss or failure falls back to a direct
+    /// read here, which keeps the outcome identical and only gives up the latency win.
+    ///
+    /// Storing the logs and marking them processed is deferred to
+    /// [`super::ContractEventHandlers::persist_backfilled_logs`], which runs once the surrounding
+    /// transaction has committed: these logs-database writes are not covered by that transaction,
+    /// so performing them here would leave them behind on a rollback.
     pub(super) async fn backfill_safe_logs_in_discovery_block(
         &self,
         tx: &OpenTransaction,
         safe_address: Address,
         block: u64,
+        batch: &LogBatchContext,
     ) -> Result<()> {
-        let safe_logs = self
-            ._rpc_operations
-            .get_logs_for_address(safe_address, crate::constants::topics::safe_contract(), block, block)
-            .await?;
+        let safe_logs = match batch.safe_discovery_logs(safe_address, block) {
+            Some(prefetched) => prefetched.to_vec(),
+            None => self
+                ._rpc_operations
+                .get_logs_for_address(safe_address, crate::constants::topics::safe_contract(), block, block)
+                .await?
+                .into_iter()
+                .map(SerializableLog::from)
+                .collect(),
+        };
 
         if safe_logs.is_empty() {
             return Ok(());
         }
 
-        let serialized_logs = safe_logs.iter().cloned().map(SerializableLog::from).collect::<Vec<_>>();
-
-        let store_results = self.db.store_logs(serialized_logs.clone()).await?;
-        if let Some(error) = store_results.into_iter().find_map(|result| result.err()) {
-            return Err(crate::errors::CoreEthereumIndexerError::ProcessError(format!(
-                "failed to store Safe discovery block logs: {error}"
-            )));
-        }
-
-        for (log, slog) in safe_logs.into_iter().zip(serialized_logs) {
+        for slog in safe_logs {
+            let log = Log::from(slog.clone());
             let primitive_log = AlloyLog::new(
                 AlloyAddress::from_hopr_address(log.address),
                 log.topics.iter().map(|hash| B256::from_slice(hash.as_ref())).collect(),
@@ -179,18 +188,16 @@ where
                 log_index = %log.log_index,
                 "Backfilling Safe discovery-block log"
             );
-            self.on_safe_contract_event(tx, safe_address, &log, event.data, false)
+            self.on_safe_contract_event_with_prefetch(tx, safe_address, &log, event.data, false, batch.transactions())
                 .await?;
-            self.db.set_log_processed(slog).await.map_err(|e| {
-                crate::errors::CoreEthereumIndexerError::ProcessError(format!(
-                    "failed to mark Safe discovery block log as processed: {e}"
-                ))
-            })?;
+            batch.record_backfilled_log(slog);
         }
 
         Ok(())
     }
 
+    /// Test-facing convenience wrapper that processes a Safe log without any pre-fetched data.
+    #[cfg(test)]
     pub(super) async fn on_safe_contract_event(
         &self,
         tx: &OpenTransaction,
@@ -476,7 +483,7 @@ mod tests {
             NODE_SAFE_REGISTRY_ADDR, SELF_CHAIN_KEYPAIR, SERVICE_REGISTRY_ADDR, TICKET_PRICE_ORACLE_ADDR, TOKEN_ADDR,
             WIN_PROB_ORACLE_ADDR, event_to_log_at_block, init_handlers, init_handlers_with_prefetch_config,
         },
-        traits::ChainLogHandler,
+        traits::{ChainLogHandler, PrefetchedLogData},
     };
 
     fn address_with_byte(byte: u8) -> Address {
@@ -816,7 +823,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         handlers
-            .collect_log_events(logs, true, PrefetchedTransactions::new())
+            .collect_log_events(logs, true, PrefetchedLogData::default())
             .await?;
 
         let stats = db
@@ -883,7 +890,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         handlers
-            .collect_log_events(logs, true, PrefetchedTransactions::new())
+            .collect_log_events(logs, true, PrefetchedLogData::default())
             .await?;
 
         let stats = db
@@ -936,7 +943,11 @@ mod tests {
         slog.tx_hash = tx_hash.into();
 
         handlers
-            .collect_log_events(vec![slog], true, PrefetchedTransactions::from([(tx_hash, tx_bytes)]))
+            .collect_log_events(
+                vec![slog],
+                true,
+                PrefetchedTransactions::from([(tx_hash, tx_bytes)]).into(),
+            )
             .await?;
 
         let stats = db
