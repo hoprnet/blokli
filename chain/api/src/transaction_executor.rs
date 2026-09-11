@@ -39,7 +39,7 @@ pub enum TransactionExecutorError {
     #[error("Transaction execution failed: {0}")]
     ExecutionFailed(String),
     #[error("Transaction submission is temporarily overloaded")]
-    Overloaded,
+    OverloadedError,
 }
 
 /// Terminal outcome of waiting for a submitted transaction's confirmation.
@@ -84,9 +84,18 @@ pub struct RawTransactionExecutorConfig {
     pub default_confirmations: u64,
     /// Maximum time to wait for confirmations
     pub confirmation_timeout: Duration,
-    /// Global number of transactions awaiting receipt monitoring.
+    /// Global number of transactions awaiting receipt monitoring. `0` means unbounded.
+    ///
+    /// Only the asynchronous submission mode is bounded by this: it is the only
+    /// mode that leaves transactions in `Submitted` status for the background
+    /// receipt monitor. Sync mode waits inline and stores a terminal record,
+    /// and fire-and-forget mode does not track transactions at all.
     pub max_submitted_transactions: usize,
-    /// Per signed-transaction-target limit for awaiting receipt monitoring.
+    /// Per-signer limit for transactions awaiting receipt monitoring. `0` means unbounded.
+    ///
+    /// The signer is recovered from the transaction signature, so one client
+    /// cannot consume the global capacity by spreading submissions across
+    /// contract targets.
     pub max_submitted_transactions_per_identity: usize,
     /// Enable optional Safe revert-reason tracing in synchronous transaction execution.
     pub enable_revert_reason_tracing: bool,
@@ -225,13 +234,20 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             return Err(e.into());
         }
 
+        // Admission control applies to this mode only: async submissions are the
+        // only ones that occupy receipt-monitoring capacity. The check and the
+        // later insert are not atomic, so the configured limits are advisory and
+        // may be exceeded by the number of concurrent in-flight submissions.
         if !self.transaction_store.can_admit_submission(
             &raw_tx,
             self.config.max_submitted_transactions,
             self.config.max_submitted_transactions_per_identity,
         ) {
-            warn!("Rejecting raw transaction before broadcast because submission capacity is exhausted");
-            return Err(TransactionExecutorError::Overloaded);
+            warn!(
+                submitted = self.transaction_store.submitted_count(),
+                "Rejecting raw transaction before broadcast because submission capacity is exhausted"
+            );
+            return Err(TransactionExecutorError::OverloadedError);
         }
 
         // Submit to RPC first to get transaction hash
@@ -493,19 +509,59 @@ mod tests {
 
     #[tokio::test]
     async fn test_async_overload_is_rejected_before_broadcast() {
-        let rpc_client = MockRpcClient::new();
         let executor = RawTransactionExecutor::new(
-            rpc_client,
+            MockRpcClient::new(),
             TransactionStore::new(),
             TransactionValidator::new(),
             RawTransactionExecutorConfig {
-                max_submitted_transactions: 0,
+                max_submitted_transactions: 1,
                 ..Default::default()
             },
         );
 
-        let result = executor.send_raw_transaction_async(vec![0x01]).await;
-        assert!(matches!(result, Err(TransactionExecutorError::Overloaded)));
+        // The first submission fills the single monitoring slot.
+        assert!(executor.send_raw_transaction_async(vec![0x01]).await.is_ok());
+
+        let result = executor.send_raw_transaction_async(vec![0x02]).await;
+        assert!(matches!(result, Err(TransactionExecutorError::OverloadedError)));
+    }
+
+    #[tokio::test]
+    async fn test_async_zero_limits_mean_unbounded() {
+        let executor = RawTransactionExecutor::new(
+            MockRpcClient::new(),
+            TransactionStore::new(),
+            TransactionValidator::new(),
+            RawTransactionExecutorConfig {
+                max_submitted_transactions: 0,
+                max_submitted_transactions_per_identity: 0,
+                ..Default::default()
+            },
+        );
+
+        for _ in 0..8 {
+            assert!(executor.send_raw_transaction_async(vec![0x01]).await.is_ok());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_async_per_identity_limit_is_rejected_before_broadcast() {
+        let executor = RawTransactionExecutor::new(
+            MockRpcClient::new(),
+            TransactionStore::new(),
+            TransactionValidator::new(),
+            RawTransactionExecutorConfig {
+                max_submitted_transactions: 0,
+                max_submitted_transactions_per_identity: 1,
+                ..Default::default()
+            },
+        );
+
+        // Both envelopes are undecodable, so they share the same identity bucket.
+        assert!(executor.send_raw_transaction_async(vec![0x01]).await.is_ok());
+
+        let result = executor.send_raw_transaction_async(vec![0x02]).await;
+        assert!(matches!(result, Err(TransactionExecutorError::OverloadedError)));
     }
 
     #[tokio::test]
