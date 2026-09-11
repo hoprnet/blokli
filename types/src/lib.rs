@@ -586,6 +586,15 @@ pub struct RpcError {
     pub message: String,
 }
 
+/// Transaction submission capacity exceeded (transient, retryable error)
+#[derive(SimpleObject, Clone, Debug)]
+pub struct OverloadedError {
+    /// Error code
+    pub code: String,
+    /// Human-readable error message
+    pub message: String,
+}
+
 /// Target contract not in allowlist
 #[derive(SimpleObject, Clone, Debug)]
 pub struct ContractNotAllowedError {

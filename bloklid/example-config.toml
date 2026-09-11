@@ -156,13 +156,13 @@ max_query_complexity = 500
 
 # Transaction submission and optional Safe revert-reason tracing controls.
 [api.transactions]
-# Global and per-identity limits for transactions awaiting receipt monitoring.
-# Defaults: 1024 and 64 respectively.
+# Global and per-signer limits for transactions awaiting receipt monitoring.
+# Set either to 0 for unbounded. Defaults: 1024 and 64 respectively.
 max_submitted_transactions              = 1024
 max_submitted_transactions_per_identity = 64
 
 # Bounds optional debug_traceTransaction enrichment for failed Safe executions.
-# Defaults: queue 128 jobs and run 2 concurrently.
+# Set either to 0 for unbounded. Defaults: queue 128 jobs and run 2 concurrently.
 max_concurrent_trace_jobs = 2
 max_queued_trace_jobs     = 128
 

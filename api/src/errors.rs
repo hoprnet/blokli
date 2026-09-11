@@ -8,7 +8,7 @@
 use async_graphql::ErrorExtensions;
 use blokli_api_types::{
     ContractNotAllowedError, FunctionNotAllowedError, InvalidAddressError, InvalidTransactionIdError,
-    MissingFilterError, QueryFailedError, RpcError, TimeoutError,
+    MissingFilterError, OverloadedError, QueryFailedError, RpcError, TimeoutError,
 };
 use thiserror::Error;
 
@@ -90,6 +90,9 @@ pub mod codes {
 
     /// Operation timeout
     pub const TIMEOUT: &str = "TIMEOUT";
+
+    /// Transaction submission capacity is exhausted; the client should retry later
+    pub const SUBMISSION_CAPACITY_EXCEEDED: &str = "SUBMISSION_CAPACITY_EXCEEDED";
 
     /// Invalid transaction ID format
     pub const INVALID_TRANSACTION_ID: &str = "INVALID_TRANSACTION_ID";
@@ -231,6 +234,11 @@ pub mod messages {
             "{} limit exceeded: {} exceeds the maximum of {}; narrow the query with a filter",
             resource, actual, max
         )
+    }
+
+    /// Transaction submission capacity exhausted message
+    pub fn submission_capacity_exceeded() -> String {
+        "Transaction submission capacity is exhausted; retry later".to_string()
     }
 
     /// Ticket parameters missing or incomplete message
@@ -508,6 +516,16 @@ pub fn rpc_error_with_message(message: impl Into<String>) -> RpcError {
     RpcError {
         code: codes::RPC_ERROR.to_string(),
         message: message.into(),
+    }
+}
+
+/// Creates an Overloaded error for an exhausted transaction submission capacity
+/// This is a transient, retryable condition rather than an internal failure, so
+/// it carries its own code instead of `INTERNAL_ERROR`.
+pub fn submission_capacity_exceeded() -> OverloadedError {
+    OverloadedError {
+        code: codes::SUBMISSION_CAPACITY_EXCEEDED.to_string(),
+        message: messages::submission_capacity_exceeded(),
     }
 }
 

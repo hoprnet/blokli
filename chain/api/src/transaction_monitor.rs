@@ -148,12 +148,22 @@ pub struct TransactionMonitorConfig {
     pub revert_reason_timeout: Duration,
     /// Maximum number of transaction checks performed concurrently
     pub max_concurrent_checks: usize,
-    /// Maximum trace jobs waiting for an optional revert-reason lookup.
+    /// Maximum trace jobs waiting for an optional revert-reason lookup. `0` means unbounded.
     pub max_queued_trace_jobs: usize,
     /// Number of trace workers. These workers never consume receipt-monitor capacity.
+    /// `0` means unbounded.
     pub max_concurrent_trace_jobs: usize,
     /// Disable optional debug tracing while retaining Safe failure publication.
     pub enable_revert_reason_tracing: bool,
+}
+
+/// Translate a `0` limit into an effectively unbounded one.
+///
+/// Tokio's channel and semaphore both reject a zero capacity, so unbounded is
+/// expressed as the largest capacity they accept. Neither preallocates, so this
+/// costs nothing until the capacity is actually used.
+fn unbounded_if_zero(limit: usize) -> usize {
+    if limit == 0 { Semaphore::MAX_PERMITS } else { limit }
 }
 
 impl Default for TransactionMonitorConfig {
@@ -205,13 +215,13 @@ impl<R: ReceiptProvider + 'static, S: SafeAddressChecker> TransactionMonitor<R, 
         config: TransactionMonitorConfig,
         safe_checker: Option<Arc<S>>,
     ) -> Self {
-        let (trace_jobs, mut trace_rx) = mpsc::channel::<TraceJob>(config.max_queued_trace_jobs.max(1));
+        let (trace_jobs, mut trace_rx) = mpsc::channel::<TraceJob>(unbounded_if_zero(config.max_queued_trace_jobs));
         if config.enable_revert_reason_tracing {
             let provider = Arc::new(receipt_provider);
             let trace_provider = provider.clone();
             let store = transaction_store.clone();
             let trace_timeout = config.revert_reason_timeout;
-            let permits = Arc::new(Semaphore::new(config.max_concurrent_trace_jobs.max(1)));
+            let permits = Arc::new(Semaphore::new(unbounded_if_zero(config.max_concurrent_trace_jobs)));
             tokio::spawn(async move {
                 while let Some(job) = trace_rx.recv().await {
                     let Ok(permit) = permits.clone().acquire_owned().await else {

@@ -483,22 +483,25 @@ pub struct ApiConfig {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
 #[serde(deny_unknown_fields)]
 pub struct TransactionConfig {
-    /// Global limit for transactions awaiting receipt monitoring.
+    /// Global limit for transactions awaiting receipt monitoring. `0` means unbounded.
+    ///
+    /// Applies to asynchronous submissions only, since they are the only ones
+    /// tracked by the background receipt monitor.
     #[default(1024)]
     #[serde(default = "default_max_submitted_transactions")]
     pub max_submitted_transactions: usize,
 
-    /// Per signed-transaction-target limit for transactions awaiting receipt monitoring.
+    /// Per-signer limit for transactions awaiting receipt monitoring. `0` means unbounded.
     #[default(64)]
     #[serde(default = "default_max_submitted_transactions_per_identity")]
     pub max_submitted_transactions_per_identity: usize,
 
-    /// Maximum number of optional Safe revert-reason trace jobs waiting to run.
+    /// Maximum number of optional Safe revert-reason trace jobs waiting to run. `0` means unbounded.
     #[default(128)]
     #[serde(default = "default_max_queued_trace_jobs")]
     pub max_queued_trace_jobs: usize,
 
-    /// Number of concurrent optional Safe revert-reason trace jobs.
+    /// Number of concurrent optional Safe revert-reason trace jobs. `0` means unbounded.
     #[default(2)]
     #[serde(default = "default_max_concurrent_trace_jobs")]
     pub max_concurrent_trace_jobs: usize,
