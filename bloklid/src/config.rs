@@ -5,7 +5,7 @@ use blokli_chain_types::{ChainConfig, ContractAddresses};
 use blokli_db::utils::redact_database_url;
 use hopr_types::primitive::primitives::Address;
 
-use crate::network::Network;
+use crate::{historical_bindings::ContractsRelease, network::Network};
 
 fn default_rpc_url() -> String {
     "http://localhost:8545".to_string()
@@ -327,6 +327,10 @@ impl Config {
             "  indexer.enable_curvy_indexing: {}\n",
             self.indexer.enable_curvy_indexing
         ));
+        output.push_str(&format!(
+            "  indexer.additional_node_stake_factory_releases: {:?}\n",
+            self.indexer.additional_node_stake_factory_releases
+        ));
 
         if let Some(snapshot_url) = &self.indexer.logs_snapshot_url {
             output.push_str(&format!("  indexer.logs_snapshot_url: {}\n", redact_url(snapshot_url)));
@@ -408,6 +412,15 @@ pub struct IndexerConfig {
 
     #[serde(default)]
     pub logs_snapshot_url: Option<String>,
+
+    /// Contracts releases containing historical StakeFactory deployments to index.
+    #[serde(default)]
+    pub additional_node_stake_factory_releases: Vec<ContractsRelease>,
+
+    /// Historical StakeFactory addresses resolved from the configured releases.
+    #[serde(skip)]
+    #[default(_code = "Vec::new()")]
+    pub resolved_additional_node_stake_factories: Vec<Address>,
 
     #[serde(default)]
     pub subscription: SubscriptionConfig,
@@ -1021,6 +1034,18 @@ mod tests {
         assert_eq!(cfg.indexer.subscription.event_bus_capacity, 500);
         assert_eq!(cfg.indexer.subscription.shutdown_signal_capacity, 10); // Default
         assert_eq!(cfg.indexer.subscription.batch_size, 100); // Default
+    }
+
+    #[test]
+    fn test_historical_stake_factory_release_config() {
+        let config = r#"
+         [indexer]
+         additional_node_stake_factory_releases = ["v1.2.3"]
+     "#;
+        let cfg: Config = toml::from_str(config).expect("historical release should parse");
+
+        assert_eq!(cfg.indexer.additional_node_stake_factory_releases.len(), 1);
+        assert_eq!(cfg.indexer.additional_node_stake_factory_releases[0].as_str(), "v1.2.3");
     }
 
     #[test]

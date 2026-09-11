@@ -266,7 +266,8 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
                     self.indexer_state.clone(),
                     self.indexer_cfg.enable_safe_indexing,
                     self.indexer_cfg.enable_curvy_indexing,
-                ),
+                )
+                .with_additional_node_stake_factories(self.indexer_cfg.additional_node_stake_factories.clone()),
                 self.db.clone(),
                 self.indexer_cfg.clone(),
                 self.indexer_state.clone(),
