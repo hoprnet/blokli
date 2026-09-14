@@ -15,6 +15,8 @@ on:
       - synchronize
       - reopened
       - ready_for_review
+      # So applying `run-integration` starts the opt-in integration job below.
+      - labeled
 permissions:
   contents: read
   id-token: write # zizmor: ignore[excessive-permissions]
@@ -191,3 +193,71 @@ jobs:
       docker_image_format: skopeo
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+  integration-throughput:
+    name: Integration throughput (hopr-integration-tests)
+    # Gates the merge queue; the label is an opt-in pre-queue run. Restricted to `release/0.13`: that is the
+    # Jura/v4 line hopr-integration-tests builds its chain from.
+    if: >-
+      (github.event_name == 'merge_group'
+        && github.event.merge_group.base_ref == 'refs/heads/release/0.13')
+      || (github.event_name == 'pull_request'
+        && contains(github.event.pull_request.labels.*.name, 'run-integration'))
+    runs-on: depot-ubuntu-24.04-2
+    # Must outlast the dispatched run (~45 min, capped there at 150).
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+      - name: Generate GitHub App token
+        id: bot-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.GH_APP_HOPRNET_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_HOPRNET_BOT_PRIVATE_KEY }}
+          owner: hoprnet
+          repositories: hopr-integration-tests
+      # hopr-integration-tests echoes this into its run name; it is how the wait step
+      # finds our run, since `repository_dispatch` returns nothing identifying.
+      - name: Build a run marker
+        id: marker
+        run: echo "value=${GITHUB_REPOSITORY##*/}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_OUTPUT}"
+      # rev: on merge_group `github.sha` is the queue candidate; on pull_request it is
+      # the test-merge commit. Both are "PR merged into base", which is the point.
+      - name: Invoke integration test
+        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
+        with:
+          token: ${{ steps.bot-token.outputs.token }}
+          repository: hoprnet/hopr-integration-tests
+          event-type: integration
+          client-payload: |-
+            {
+              "project": "blokli",
+              "rev": "${{ github.sha }}",
+              "marker": "${{ steps.marker.outputs.value }}"
+            }
+      # `repository_dispatch` is fire-and-forget, so without this the job goes green
+      # as soon as the event is accepted, whatever the test does.
+      - name: Wait for the integration test to conclude
+        env:
+          GH_TOKEN: ${{ steps.bot-token.outputs.token }}
+          MARKER: ${{ steps.marker.outputs.value }}
+        run: |
+          set -euo pipefail
+          REPO=hoprnet/hopr-integration-tests
+          # 5 min window: the run can sit queued behind that repo's concurrency group.
+          id=""
+          for _ in $(seq 1 20); do
+            id=$(gh run list -R "$REPO" --workflow=integration.yaml -L 40 \
+                   --json databaseId,displayTitle \
+                   -q "[.[] | select(.displayTitle | contains(\"$MARKER\")) | .databaseId] | first // empty")
+            [ -n "$id" ] && break
+            sleep 15
+          done
+          if [ -z "$id" ]; then
+            echo "::error::dispatched the integration test but never found a run tagged $MARKER" >&2
+            exit 1
+          fi
+
+          echo "Gating on https://github.com/$REPO/actions/runs/$id"
+          # --interval: `gh run watch` defaults to 3s, ~700 polls over a 40 min run.
+          gh run watch "$id" -R "$REPO" --interval 30 --exit-status
