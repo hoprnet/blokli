@@ -531,6 +531,28 @@ pub async fn setup_transaction_test_environment(
     finality: u32,
     executor_config: Option<RawTransactionExecutorConfig>,
 ) -> anyhow::Result<TransactionTestContext> {
+    setup_transaction_test_environment_with_policy(
+        block_time,
+        poll_interval,
+        finality,
+        executor_config,
+        TransactionPolicy::AllowAll,
+    )
+    .await
+}
+
+/// Same as [`setup_transaction_test_environment`], but with an explicit transaction policy.
+///
+/// Use this to exercise the rejecting paths of the API: a [`TransactionPolicy::Whitelist`] makes
+/// `sendTransaction*` answer with the `ContractNotAllowedError`/`FunctionNotAllowedError` union
+/// arms instead of submitting to the RPC.
+pub async fn setup_transaction_test_environment_with_policy(
+    block_time: Duration,
+    poll_interval: Duration,
+    finality: u32,
+    executor_config: Option<RawTransactionExecutorConfig>,
+    policy: TransactionPolicy,
+) -> anyhow::Result<TransactionTestContext> {
     let _ = env_logger::builder().is_test(true).try_init();
 
     let config = TestEnvironmentConfig {
@@ -565,7 +587,7 @@ pub async fn setup_transaction_test_environment(
     let rpc_adapter = Arc::new(RpcAdapter::new(rpc_operations));
 
     let transaction_store = Arc::new(TransactionStore::new());
-    let transaction_policy = Arc::new(TransactionPolicy::AllowAll);
+    let transaction_policy = Arc::new(policy);
 
     let transaction_executor = Arc::new(RawTransactionExecutor::with_shared_dependencies(
         rpc_adapter.clone(),
