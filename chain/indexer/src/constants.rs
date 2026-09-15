@@ -5,6 +5,9 @@ pub const LOGS_SNAPSHOT_DOWNLOADER_TIMEOUT: Duration = Duration::from_secs(1800)
 pub const LOGS_SNAPSHOT_DOWNLOADER_MAX_RETRIES: u32 = 3;
 
 pub mod topics {
+    use curvy_bindings::curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2::{
+        CommittedNotes, CommittedNullifiers, PendingNotes,
+    };
     use hopr_bindings::{
         exports::alloy::{primitives::B256, sol_types::SolEvent},
         hopr_announcements_events::HoprAnnouncementsEvents::{
@@ -17,6 +20,11 @@ pub mod topics {
         },
         hopr_node_safe_registry_events::HoprNodeSafeRegistryEvents::{DeregisteredNodeSafe, RegisteredNodeSafe},
         hopr_node_stake_factory_events::HoprNodeStakeFactoryEvents::NewHoprNodeStakeModuleForSafe,
+        hopr_service_registry_events::HoprServiceRegistryEvents::{
+            Deregistered, NodeSafeRegistryUpdated, Registered, RequirementUpdated, SelfRegistrationBurnUpdated,
+            SelfUpdateBurnUpdated, ServiceTypeRegistered, TypeOwnershipTransferred, TypeRegistrationFeeUpdated,
+            Updated,
+        },
         hopr_ticket_price_oracle_events::HoprTicketPriceOracleEvents::TicketPriceUpdated,
         hopr_token::HoprToken::{
             Approval, AuthorizedOperator, Burned, Minted, RevokedOperator, RoleAdminChanged, RoleGranted, RoleRevoked,
@@ -58,6 +66,27 @@ pub mod topics {
             RegisteredNodeSafe::SIGNATURE_HASH,
             DeregisteredNodeSafe::SIGNATURE_HASH,
             hopr_bindings::hopr_node_safe_registry_events::HoprNodeSafeRegistryEvents::DomainSeparatorUpdated::SIGNATURE_HASH,
+        ]
+    }
+
+    /// Signature hashes of the `HoprServiceRegistry` events that the indexer stores.
+    ///
+    /// Ten of the contract's twelve events appear here. `RegistryInitialized` and
+    /// `TokensRecovered` are deliberately absent: neither maps to a `ChainEvent`, so filtering
+    /// them out at the RPC saves fetching logs the handler would discard. The handler still
+    /// matches them explicitly, so a future event cannot slip through unnoticed.
+    pub fn service_registry() -> Vec<B256> {
+        vec![
+            Registered::SIGNATURE_HASH,
+            Updated::SIGNATURE_HASH,
+            Deregistered::SIGNATURE_HASH,
+            ServiceTypeRegistered::SIGNATURE_HASH,
+            TypeOwnershipTransferred::SIGNATURE_HASH,
+            RequirementUpdated::SIGNATURE_HASH,
+            SelfRegistrationBurnUpdated::SIGNATURE_HASH,
+            SelfUpdateBurnUpdated::SIGNATURE_HASH,
+            TypeRegistrationFeeUpdated::SIGNATURE_HASH,
+            NodeSafeRegistryUpdated::SIGNATURE_HASH,
         ]
     }
 
@@ -122,6 +151,14 @@ pub mod topics {
             ExecutionSuccess::SIGNATURE_HASH,
             ExecutionFailure::SIGNATURE_HASH,
             ExecutionFromModuleFailure::SIGNATURE_HASH,
+        ]
+    }
+
+    pub fn curvy_aggregator() -> Vec<B256> {
+        vec![
+            PendingNotes::SIGNATURE_HASH,
+            CommittedNotes::SIGNATURE_HASH,
+            CommittedNullifiers::SIGNATURE_HASH,
         ]
     }
 

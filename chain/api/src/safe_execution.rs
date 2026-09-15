@@ -13,7 +13,7 @@ use hopr_bindings::exports::alloy::{
     eips::eip2718::Decodable2718,
 };
 use hopr_types::{crypto::types::Hash, primitive::prelude::Address};
-use tracing::{error, warn};
+use tracing::warn;
 
 use crate::{
     transaction_monitor::{ReceiptLog, SafeAddressChecker},
@@ -142,34 +142,38 @@ impl<T> DbSafeAddressChecker<T> {
 
 #[async_trait]
 impl<T: BlokliDbAllOperations + Send + Sync> SafeAddressChecker for DbSafeAddressChecker<T> {
-    async fn find_safe_for_target(&self, target: &[u8; 20]) -> Option<[u8; 20]> {
-        let addr = Address::try_from(target.as_slice()).ok()?;
+    async fn find_safe_for_target(&self, target: &[u8; 20]) -> Result<Option<[u8; 20]>, String> {
+        let addr = Address::try_from(target.as_slice()).map_err(|error| error.to_string())?;
 
         // Check if the target is a known Safe contract address (returns itself)
         match self.db.get_safe_contract_by_address(None, addr).await {
             Ok(Some(entry)) => {
-                let safe_addr: [u8; 20] = entry.address.as_slice().try_into().ok()?;
-                return Some(safe_addr);
+                let safe_addr: [u8; 20] = entry.address.as_slice().try_into().map_err(|error| {
+                    format!("invalid Safe address returned by get_safe_contract_by_address: {error}")
+                })?;
+                return Ok(Some(safe_addr));
             }
             Ok(None) => {}
             Err(e) => {
-                error!(target = ?target, source = %e, "DB error in get_safe_contract_by_address");
+                return Err(format!("get_safe_contract_by_address failed: {e}"));
             }
         }
 
         // Check if the target is a module address associated with a Safe
         match self.db.get_safe_contract_by_module_address(None, addr).await {
             Ok(Some(entry)) => {
-                let safe_addr: [u8; 20] = entry.address.as_slice().try_into().ok()?;
-                return Some(safe_addr);
+                let safe_addr: [u8; 20] = entry.address.as_slice().try_into().map_err(|error| {
+                    format!("invalid Safe address returned by get_safe_contract_by_module_address: {error}")
+                })?;
+                return Ok(Some(safe_addr));
             }
             Ok(None) => {}
             Err(e) => {
-                error!(target = ?target, source = %e, "DB error in get_safe_contract_by_module_address");
+                return Err(format!("get_safe_contract_by_module_address failed: {e}"));
             }
         }
 
-        None
+        Ok(None)
     }
 }
 

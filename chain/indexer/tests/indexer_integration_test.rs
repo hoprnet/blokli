@@ -210,6 +210,7 @@ mod integration_tests {
                 ticket_price_oracle: Address::default(),
                 winning_probability_oracle: Address::default(),
                 node_stake_factory: Address::default(),
+                service_registry: Address::default(),
             });
 
             let handlers = ContractEventHandlers {

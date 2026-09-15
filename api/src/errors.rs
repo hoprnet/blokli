@@ -64,6 +64,9 @@ pub mod codes {
     /// Invalid address format errors
     pub const INVALID_ADDRESS: &str = "INVALID_ADDRESS";
 
+    /// Invalid service type identifier
+    pub const INVALID_SERVICE_TYPE: &str = "INVALID_SERVICE_TYPE";
+
     /// Type conversion errors (e.g., i64 to i32)
     pub const CONVERSION_ERROR: &str = "CONVERSION_ERROR";
 
@@ -112,11 +115,17 @@ pub mod codes {
     /// Request exceeds an allowed resource limit
     pub const LIMIT_EXCEEDED: &str = "LIMIT_EXCEEDED";
 
+    /// A subscription receiver fell behind its event source.
+    pub const SUBSCRIPTION_LAGGED: &str = "SUBSCRIPTION_LAGGED";
+
     /// Requested schema version is not supported by this server
     pub const UNSUPPORTED_SCHEMA_VERSION: &str = "UNSUPPORTED_SCHEMA_VERSION";
 
     /// The X-Blokli-Schema-Version header value is not a valid non-negative integer
     pub const INVALID_SCHEMA_VERSION_HEADER: &str = "INVALID_SCHEMA_VERSION_HEADER";
+
+    /// A requested optional feature is disabled in the server configuration
+    pub const FEATURE_DISABLED: &str = "FEATURE_DISABLED";
 }
 
 // ============================================================================
@@ -167,6 +176,14 @@ pub mod messages {
         "Invalid address: contains non-hexadecimal characters".to_string()
     }
 
+    /// Service type validation error message
+    pub fn invalid_service_type(service_type: &str, error: impl std::fmt::Display) -> String {
+        format!(
+            "Invalid service type '{}': {}. Give an ASCII name such as gvpn:exit, or the 0x-prefixed 32-byte id",
+            service_type, error
+        )
+    }
+
     /// Type conversion error message
     pub fn conversion_error(from_type: &str, to_type: &str, value: impl std::fmt::Display) -> String {
         format!(
@@ -200,6 +217,11 @@ pub mod messages {
         format!("Internal error in {}: {}", context, error)
     }
 
+    /// Optional feature disabled error message
+    pub fn feature_disabled(feature: &str) -> String {
+        format!("{} is disabled in the server configuration", feature)
+    }
+
     /// Missing filter error message
     pub fn missing_filter(filter_name: &str, context: &str) -> String {
         format!("Missing required filter '{}' for {}", filter_name, context)
@@ -225,6 +247,11 @@ pub mod messages {
         format!("Invalid pagination parameters: {}", reason)
     }
 
+    /// Subscription lag error message.
+    pub fn subscription_lagged(stream: &str, missed: impl std::fmt::Display) -> String {
+        format!("{stream} lagged and missed {missed} events; reconnect to resume from a persisted position")
+    }
+
     /// Resource limit exceeded message
     pub fn limit_exceeded(resource: &str, actual: impl std::fmt::Display, max: impl std::fmt::Display) -> String {
         format!(
@@ -248,11 +275,28 @@ pub mod messages {
 // GraphQL Error Builder Functions
 // ============================================================================
 
-/// Creates a QueryFailedError for context retrieval failures
-pub fn context_error(context_type: &str, error: impl std::fmt::Display) -> QueryFailedError {
+/// Value accepted by the context-error builder.
+pub trait ContextErrorMessage {
+    fn context_error_message(self) -> String;
+}
+
+impl ContextErrorMessage for String {
+    fn context_error_message(self) -> String {
+        self
+    }
+}
+
+impl ContextErrorMessage for async_graphql::Error {
+    fn context_error_message(self) -> String {
+        self.message
+    }
+}
+
+/// Creates a QueryFailedError for context retrieval failures.
+pub fn context_error(context_type: &str, error: impl ContextErrorMessage) -> QueryFailedError {
     QueryFailedError {
         code: codes::CONTEXT_ERROR.to_string(),
-        message: messages::context_error(context_type, error),
+        message: messages::context_error(context_type, error.context_error_message()),
     }
 }
 
@@ -316,6 +360,17 @@ pub fn invalid_address_from_message(address: impl Into<String>, message: String)
 pub fn invalid_address_query_failed(message: String) -> QueryFailedError {
     QueryFailedError {
         code: codes::INVALID_ADDRESS.to_string(),
+        message,
+    }
+}
+
+/// Creates a QueryFailedError for a service type identifier that cannot be parsed
+///
+/// Use this when the result type expects QueryFailedError, which is the case for every service
+/// registry query: the registry has no dedicated invalid-input member in its result unions.
+pub fn invalid_service_type_query_failed(message: String) -> QueryFailedError {
+    QueryFailedError {
+        code: codes::INVALID_SERVICE_TYPE.to_string(),
         message,
     }
 }
@@ -529,4 +584,28 @@ pub fn unsupported_schema_version(version: u32) -> async_graphql::Error {
 pub fn invalid_schema_version_header() -> async_graphql::Error {
     async_graphql::Error::new("Invalid X-Blokli-Schema-Version header: expected a non-negative integer")
         .extend_with(|_, e| e.set("code", codes::INVALID_SCHEMA_VERSION_HEADER))
+}
+
+/// Adapts the shared query-error taxonomy for GraphQL surfaces that cannot return unions.
+pub fn graphql_error(error: QueryFailedError) -> async_graphql::Error {
+    let code = error.code;
+    async_graphql::Error::new(error.message).extend_with(|_, extensions| extensions.set("code", code))
+}
+
+/// Creates a top-level error when a subscription cannot guarantee lossless delivery.
+pub fn graphql_subscription_lagged_error(stream: &str, missed: impl std::fmt::Display) -> async_graphql::Error {
+    async_graphql::Error::new(messages::subscription_lagged(stream, missed))
+        .extend_with(|_, extensions| extensions.set("code", codes::SUBSCRIPTION_LAGGED))
+}
+
+/// Creates an async_graphql::Error when an optional server feature is disabled
+pub fn feature_disabled(feature: &str) -> async_graphql::Error {
+    async_graphql::Error::new(messages::feature_disabled(feature))
+        .extend_with(|_, extensions| extensions.set("code", codes::FEATURE_DISABLED))
+}
+
+/// Creates an async_graphql::Error for a transaction tracking ID that is not present on this server.
+pub fn transaction_not_found(transaction_id: impl std::fmt::Display) -> async_graphql::Error {
+    async_graphql::Error::new(messages::not_found("Transaction", transaction_id))
+        .extend_with(|_, e| e.set("code", codes::NOT_FOUND))
 }

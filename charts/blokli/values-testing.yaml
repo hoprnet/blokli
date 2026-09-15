@@ -15,7 +15,7 @@ resources:
     cpu: 500m
     memory: 1Gi
 persistence:
-  storageClass: standard-rwo
+  storageClass: regional-rwo
   size: 10Gi
 # Database configuration
 database:
@@ -26,7 +26,7 @@ database:
   password: "SomePassword"
   maxConnections: 20
 config:
-  network: "jura"
+  network: "jura-prod"
   rpcUrl: "https://rpc.gnosischain.com"
   maxRpcRequestsPerSec: 0
   # Indexer settings

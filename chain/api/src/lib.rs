@@ -1,6 +1,7 @@
 //! Crate containing the API object for chain operations used by the HOPRd node.
 
 pub mod errors;
+pub mod metrics;
 pub(crate) mod revert_decoder;
 pub mod rpc_adapter;
 pub mod safe_execution;
@@ -14,7 +15,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use blokli_chain_indexer::{IndexerConfig, IndexerState, block::Indexer, handlers::ContractEventHandlers};
 use blokli_chain_rpc::{
     HoprIndexerRpcOperations, HoprRpcOperations,
-    client::DefaultRetryPolicy,
+    client::{DefaultRetryPolicy, MetricsLayer},
     rpc::{RpcOperations, RpcOperationsConfig},
     transport::ReqwestClient,
 };
@@ -36,7 +37,7 @@ use hopr_types::internal::{
     tickets::WinningProbability,
 };
 use hopr_types::primitive::{
-    prelude::{Address, Balance, Currency, HoprBalance, U256, WxHOPR, XDai},
+    prelude::{Address, Balance, Currency, HoprBalance, U256, WxHOPR, XDai, XHOPR},
     traits::IntoEndian,
 };
 use tracing::info;
@@ -86,13 +87,18 @@ pub struct BlokliChain<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt
 }
 
 impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static> BlokliChain<T> {
-    pub fn new(
+    pub async fn new(
         db: T,
         chain_config: ChainConfig,
-        contract_addresses: ContractAddresses,
+        mut contract_addresses: ContractAddresses,
         indexer_cfg: IndexerConfig,
         rpc_url: String,
     ) -> Result<Self> {
+        if indexer_cfg.enable_curvy_indexing && contract_addresses.curvy_aggregator == Address::default() {
+            return Err(BlokliChainError::Configuration(
+                "Curvy indexing is enabled but the Curvy Aggregator address is not configured".to_string(),
+            ));
+        }
         // TODO(#7140): replace this DefaultRetryPolicy with a custom one that computes backoff with the number of
         // retries
         let rpc_http_retry_policy = DefaultRetryPolicy::default();
@@ -126,12 +132,16 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
                 max_requests_per_sec,
                 rpc_http_retry_policy,
             ))
+            .layer(MetricsLayer)
             .transport(transport_client.clone(), transport_client.guess_local());
 
         let requestor = DefaultHttpRequestor::new();
 
         // Build RPC operations
-        let rpc_operations = RpcOperations::new(rpc_client, requestor, rpc_cfg, None)?;
+        let mut rpc_operations = RpcOperations::new(rpc_client, requestor, rpc_cfg, None)?;
+        if indexer_cfg.enable_curvy_indexing {
+            contract_addresses = rpc_operations.resolve_curvy_contract_addresses().await?;
+        }
 
         // Create IndexerState for coordinating block processing with subscriptions
         let indexer_state = IndexerState::new(indexer_cfg.event_bus_capacity, indexer_cfg.shutdown_signal_capacity);
@@ -258,6 +268,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
                     self.rpc_operations.clone(),
                     self.indexer_state.clone(),
                     self.indexer_cfg.enable_safe_indexing,
+                    self.indexer_cfg.enable_curvy_indexing,
                 ),
                 self.db.clone(),
                 self.indexer_cfg.clone(),
@@ -271,6 +282,10 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
 
     pub fn indexer_state(&self) -> IndexerState {
         self.indexer_state.clone()
+    }
+
+    pub const fn contract_addresses(&self) -> ContractAddresses {
+        self.contract_addresses
     }
 
     pub fn db(&self) -> &T {
@@ -329,7 +344,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
     /// Retrieves the balance of the specified address for the given currency.
     ///
     /// This method queries the on-chain balance of the provided address for the specified currency.
-    /// It supports querying balances for XDai and WxHOPR currencies. If the currency is unsupported,
+    /// It supports querying balances for XDai, WxHOPR, and XHOPR currencies. If the currency is unsupported,
     /// an error is returned.
     ///
     /// # Arguments
@@ -343,6 +358,8 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
             self.rpc_operations.get_xdai_balance(safe_address).await?.to_be_bytes()
         } else if C::is::<WxHOPR>() {
             self.rpc_operations.get_hopr_balance(safe_address).await?.to_be_bytes()
+        } else if C::is::<XHOPR>() {
+            self.rpc_operations.get_xhopr_balance(safe_address).await?.to_be_bytes()
         } else {
             return Err(BlokliChainError::Api("unsupported currency".into()));
         };

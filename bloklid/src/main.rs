@@ -14,16 +14,19 @@ use std::{
 
 use args::{Args, Command, generate_config_template, peek_verbosity_from_env_args};
 use async_signal::{Signal, Signals};
+use blokli_api::server::ApiDatabases;
 use blokli_chain_api::BlokliChain;
-use blokli_chain_indexer::{startup, utils::redact_url};
-use blokli_db::db::{BlokliDb, BlokliDbConfig};
+use blokli_chain_indexer::{snapshot::SnapshotManager, startup, utils::redact_url};
+use blokli_db::{
+    db::{BlokliDb, BlokliDbConfig},
+    utils::redact_database_url,
+};
 use clap::Parser;
 use futures::TryStreamExt;
-use sea_orm::Database;
 use tokio::net::TcpListener;
 
 use crate::{
-    config::{Config, redact_database_url},
+    config::{Config, DatabaseConfig},
     errors::BloklidError,
 };
 
@@ -52,7 +55,10 @@ async fn main() -> ExitCode {
         }
     };
 
-    if !matches!(args.command, Some(Command::GenerateConfig { .. })) {
+    if !matches!(
+        args.command,
+        Some(Command::GenerateConfig { .. } | Command::ExportLogsSnapshot { .. })
+    ) {
         let config = match args.load_config(true) {
             Ok(config) => config,
             Err(error) => {
@@ -85,28 +91,62 @@ async fn main() -> ExitCode {
 
 async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
     // Handle subcommands
-    if let Some(command) = args.command {
-        match command {
-            Command::GenerateConfig { output } => {
-                tracing::info!(path = %output.display(), "generating configuration template");
+    match &args.command {
+        Some(Command::GenerateConfig { output }) => {
+            tracing::info!(path = %output.display(), "generating configuration template");
 
-                // Generate the template content
-                let template = generate_config_template();
+            // Generate the template content
+            let template = generate_config_template();
 
-                // Create parent directories if they don't exist
-                if let Some(parent) = output.parent() {
-                    std::fs::create_dir_all(parent).map_err(|e| {
-                        BloklidError::NonSpecific(format!("Failed to create parent directories: {}", e))
-                    })?;
-                }
-
-                // Write the template to the specified file
-                std::fs::write(&output, template)
-                    .map_err(|e| BloklidError::NonSpecific(format!("Failed to write configuration template: {}", e)))?;
-
-                tracing::info!(path = %output.display(), "configuration template written");
-                return Ok(());
+            // Create parent directories if they don't exist
+            if let Some(parent) = output.parent() {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| BloklidError::NonSpecific(format!("Failed to create parent directories: {}", e)))?;
             }
+
+            // Write the template to the specified file
+            tokio::fs::write(output, template)
+                .await
+                .map_err(|e| BloklidError::NonSpecific(format!("Failed to write configuration template: {}", e)))?;
+
+            tracing::info!("Configuration template successfully written to: {}", output.display());
+            return Ok(());
+        }
+        Some(Command::ExportLogsSnapshot { output }) => {
+            let config = match initial_config {
+                Some(config) => config,
+                None => args.load_config(true)?,
+            };
+
+            let database = require_database(&config)?;
+
+            let db_config = BlokliDbConfig {
+                max_connections: database.max_connections(),
+                log_slow_queries: Duration::from_secs(1),
+                network_name: config.network.to_string(),
+            };
+
+            let db = if database.is_in_memory() {
+                BlokliDb::new_in_memory().await?
+            } else {
+                BlokliDb::new(&database.to_url(), database.to_logs_url().as_deref(), db_config).await?
+            };
+
+            let snapshot_manager = SnapshotManager::with_db(db)?;
+            let info = snapshot_manager.export_snapshot(output).await?;
+
+            tracing::info!(
+                path = %output.display(),
+                logs = info.log_count.unwrap_or(0),
+                latest_block = info.latest_block.unwrap_or(0),
+                "Logs snapshot exported successfully"
+            );
+
+            return Ok(());
+        }
+        None => {
+            // No subcommand, continue with normal daemon operation
         }
     }
 
@@ -144,19 +184,14 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 .ok_or_else(|| BloklidError::NonSpecific("Chain network not configured".into()))?
                 .clone();
 
-            let database = cfg.database.as_ref().ok_or_else(|| {
-                BloklidError::DatabaseNotConfigured(
-                    "Database configuration is missing. Ensure either [database] section is present in config file or \
-                     BLOKLI_DATABASE_TYPE and BLOKLI_DATABASE_URL are set"
-                        .to_string(),
-                )
-            })?;
+            let database = require_database(&cfg)?;
 
             let indexer_config = blokli_chain_indexer::IndexerConfig {
                 start_block_number: chain_network.channel_contract_deploy_block as u64,
                 fast_sync: cfg.indexer.fast_sync,
                 enable_logs_snapshot: cfg.indexer.enable_logs_snapshot,
                 enable_safe_indexing: cfg.indexer.enable_safe_indexing,
+                enable_curvy_indexing: cfg.indexer.enable_curvy_indexing,
                 logs_snapshot_url: cfg.indexer.logs_snapshot_url.clone(),
                 data_directory: cfg.data_directory.clone(),
                 event_bus_capacity: cfg.indexer.subscription.event_bus_capacity,
@@ -222,7 +257,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
         let db = if is_in_memory {
             BlokliDb::new_in_memory().await?
         } else {
-            BlokliDb::new(&database_path, logs_database_path.as_deref(), db_config).await?
+            BlokliDb::new(&database_path, logs_database_path.as_deref(), db_config.clone()).await?
         };
 
         // Initialize singleton entries for chain_info and node_info
@@ -243,7 +278,8 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
 
         // Create BlokliChain instance
         let enable_safe_indexing = indexer_config.enable_safe_indexing;
-        let blokli_chain = BlokliChain::new(db, chain_network, contracts, indexer_config, rpc_url)?;
+        let blokli_chain = BlokliChain::new(db, chain_network, contracts, indexer_config, rpc_url).await?;
+        let contracts = blokli_chain.contract_addresses();
 
         // Verify RPC supports required capabilities (debug tracing)
         blokli_chain.verify_rpc_capabilities().await?;
@@ -259,11 +295,6 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
         // This ensures the API is available immediately even if indexer initialization takes time
         let api_handle = if api_config.enabled {
             tracing::info!("Starting blokli-api server on {}", api_config.bind_address);
-
-            // Connect to database for API server
-            let api_db = Database::connect(&database_path)
-                .await
-                .map_err(|e| BloklidError::NonSpecific(format!("Failed to connect API database: {}", e)))?;
 
             // Construct blokli-api ApiConfig from bloklid config
             // We need to get rpc_url and contracts from the original config
@@ -309,7 +340,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
 
             // Build API app with indexer state for subscriptions and transaction components
             let api_app = blokli_api::server::build_app(
-                api_db,
+                ApiDatabases::from_blokli(blokli_chain.db()),
                 network.clone(),
                 blokli_api_config,
                 expected_block_time,
@@ -404,4 +435,14 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
 
     tracing::info!("bloklid stopped gracefully");
     Ok(())
+}
+
+fn require_database(config: &Config) -> errors::Result<&DatabaseConfig> {
+    config.database.as_ref().ok_or_else(|| {
+        BloklidError::DatabaseNotConfigured(
+            "Database configuration is missing. Ensure either [database] section is present in config file or \
+             BLOKLI_DATABASE_TYPE and BLOKLI_DATABASE_URL are set"
+                .to_string(),
+        )
+    })
 }

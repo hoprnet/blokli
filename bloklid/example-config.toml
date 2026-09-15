@@ -5,9 +5,9 @@
 data_directory = "data"
 
 # Network identifier - specifies which HOPR network to connect to
-# Supported networks: rotsee (default, testnet), anvil-localhost (local development)
+# Supported networks: jura-dev (default, development), jura-prod (production), piz-palu-dev (development), piz-palu-staging (staging), anvil-localhost (local development)
 # Case-insensitive: anvil_localhost, anvil-localhost, and localhost are also accepted
-network = "rotsee"
+network = "jura-dev"
 
 # RPC endpoint URL for connecting to the blockchain
 # Overrides the default RPC endpoint for the selected network
@@ -18,10 +18,16 @@ rpc_url = "http://localhost:8545"
 # If omitted, defaults to 100 req/sec. Set to 0 for unlimited, or a positive value to override the default.
 max_rpc_requests_per_sec = 0
 
-# Maximum block range for RPC queries when fetching logs (default: 10000)
-# Must be greater than 0. Lower values may be needed for some RPC providers
-# that impose limits on the number of blocks per query
+# Maximum block range ceiling for adaptive RPC log queries (default: 10000)
+# The effective range is learned from real eth_getLogs requests and reused
+# until the RPC endpoint rejects it. Set to 0 to auto-discover with the
+# default 10000-block ceiling.
 max_block_range = 10000
+
+# Optional Curvy Aggregator proxy. When Curvy indexing is enabled, Blokli
+# resolves the Vault and optional PortalFactory from this contract during startup.
+# This setting does not override any HOPR contract address.
+# curvy_aggregator = "0x0000000000000000000000000000000000000000"
 
 # Optional contract address overrides
 # Defaults are resolved from hopr-bindings for the selected network
@@ -36,6 +42,10 @@ max_block_range = 10000
 # ticket_price_oracle = "0x0000000000000000000000000000000000000000"
 # winning_probability_oracle = "0x0000000000000000000000000000000000000000"
 # node_stake_factory = "0x0000000000000000000000000000000000000000"
+# xhopr_token = "0x0000000000000000000000000000000000000000"
+# The service registry is optional: leave it out, or set it to the zero address, on a network
+# where the contract is not deployed. bloklid then skips it instead of indexing the null address.
+# service_registry = "0x0000000000000000000000000000000000000000"
 
 # Database configuration - supports PostgreSQL or SQLite
 # IMPORTANT: This section is OPTIONAL if using environment variables.
@@ -90,7 +100,7 @@ otlp_endpoint = "http://localhost:4318"
 # otlp_signals = "metrics,traces,logs"
 otlp_signals = "metrics"
 
-# Interval between OTLP metric exports (default: 60s)
+# Interval between OTLP metric exports (default: 15s; this example uses 60s)
 # Must be greater than 0. Supports humantime syntax like "15s", "1m", or "500ms".
 # Runtime use is limited to OTLP metrics export. Current config validation still
 # requires a value greater than 0 whenever otlp_endpoint is set.
@@ -101,15 +111,20 @@ metric_export_interval = "60s"
 # Enable fast sync mode for initial synchronization
 fast_sync = true
 
-# Enable downloading logs snapshot for faster initial sync
+# Enable downloading a `hopr_logs.sql` snapshot archive for faster initial sync
 enable_logs_snapshot = false
+
+# URL to download logs snapshot from (optional)
+logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz"
 
 # Enable indexing of Safe contract events after a Safe has been discovered
 # Safe discovery via registry/stake-factory events remains enabled regardless
 enable_safe_indexing = false
 
-# URL to download logs snapshot from (optional)
-logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz"
+# Enable note/nullifier indexing from the configured Curvy Aggregator.
+# Requires curvy_aggregator and its resolved Vault to be non-zero. A zero
+# PortalFactory is allowed, but Portal-specific GraphQL queries are unavailable.
+enable_curvy_indexing = false
 
 # GraphQL subscription behavior configuration
 [indexer.subscription]
@@ -168,7 +183,7 @@ text = "keep-alive"
 # This limit is compared against finality-adjusted blocks from the RPC:
 #   lag = (rpc_block - finality) - indexed_block
 #
-# For Rotsee (Gnosis), finality=3 blocks. So with max_indexer_lag=10:
+# For jura-dev (Gnosis), finality=3 blocks. So with max_indexer_lag=10:
 # - The indexer can be up to 13 blocks behind the RPC chain head
 # - But must be within 10 blocks of confirmed blocks (with 3 confirmations)
 #

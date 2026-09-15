@@ -160,6 +160,7 @@ RPC Endpoint
      ├── Channels (open/close/balance updates)
      ├── Token (HOPR token transfers/approvals)
      ├── SafeRegistry (Safe address linking)
+     ├── ServiceRegistry (service entries and service type configuration)
      └── Oracles (ticket price, win probability)
      │
      ▼
@@ -177,7 +178,8 @@ RPC Endpoint
 
 **Key Features**:
 
-- **Fast Sync**: Downloads pre-built logs database snapshots for quick initial sync, reducing time-to-ready from hours to minutes
+- **Fast Sync**: Downloads an archive containing `hopr_logs.sql`, imports the raw logs tables, rebuilds derived state locally, and then
+  catches up over RPC from the snapshot watermark for faster initial sync
 - **Finality Awareness**: Only processes blocks after configured confirmation count to avoid reorg complications
 - **Reorg Handling**: Detects blockchain reorganizations by tracking block hashes and marks affected logs as removed
 - **Watermark Tracking**: Maintains precise last processed position using (block, tx_index, log_index) triplet for exact resume capability
@@ -192,6 +194,10 @@ RPC Endpoint
 - **HoprNodeStakeFactory**: Safe contract deployment events with module and owner tracking
 - **HoprTicketPriceOracle**: Network-wide ticket price updates
 - **HoprWinningProbabilityOracle**: Network-wide winning probability updates
+- **Curvy Aggregator**: Pending notes, committed notes, and committed nullifiers, normalized from batched events
+- **HoprServiceRegistry**: Permissionless registry of the services nodes offer, together with the configuration of each service type. The
+  contract is optional: a network that has not deployed it carries the zero address, and the indexer then leaves that address out of the
+  filter set entirely rather than filtering logs on the null address.
 
 ### 4. Database Layer
 
@@ -213,6 +219,11 @@ The database implements an event sourcing pattern with temporal versioning:
 - **hopr_balance**: Current wxHOPR token balances indexed by address
 - **native_balance**: Current native token balances indexed by address
 - **chain_info**: Singleton table tracking indexer metadata (watermark, network parameters)
+- **curvy_pending_note**: Position-keyed pending-note announcements used for local ownership scanning
+- **curvy_committed_note**: Non-padding committed notes with dense notes-tree leaf indices
+- **curvy_committed_nullifier**: Non-padding nullifiers with independent dense indices
+- **curvy_sync_checkpoint**: Versioned notes-tree frontier and synchronization watermark
+- **curvy_shard_root**: Completed notes-tree shard roots for compact wallet bootstrap
 
 **Logs Tables** (for fast sync and reorg handling):
 
@@ -239,8 +250,9 @@ The system supports two database configurations:
 **Single Database (PostgreSQL)**: All tables reside in a single PostgreSQL database. This provides simpler management, better transaction
 support across tables, and MVCC-based concurrency control for high read/write throughput.
 
-**Dual Database (SQLite)**: Splits into Index DB (accounts, channels, balances) and Logs DB (raw blockchain logs). The Logs DB can be
-atomically replaced during fast sync, and separation reduces write lock contention in SQLite's locking model.
+**Dual Database (SQLite)**: Splits into Index DB (accounts, channels, balances) and Logs DB (raw blockchain logs). During fast sync, the
+logs tables are repopulated from the imported `hopr_logs.sql` snapshot before derived state is rebuilt, and separation reduces write lock
+contention in SQLite's locking model.
 
 **Key Design Patterns**:
 
@@ -294,7 +306,8 @@ management, and connection pooling. The trait-based design allows transaction-ag
 
 **GraphQL Schema Structure**:
 
-The target schema reference lives in `design/target-api-schema.graphql` and should remain consistent with the implemented API surface.
+The generated schema reference lives in `design/target-api-schema.graphql`. The `export-target-api-schema` recipe regenerates it directly
+from the implemented API surface.
 
 The schema is organized into three root types following GraphQL best practices:
 
@@ -305,6 +318,8 @@ The schema is organized into three root types following GraphQL best practices:
 - Safe contract queries by address or chain key (owner)
 - Balance queries by address (works for any Ethereum address)
 - Chain information and network parameters
+- Service registry queries: entries with mandatory filtering, an entry count, the service type configuration, and the registry-wide
+  configuration
 - Transaction status queries by UUID
 - Health check and version endpoints
 
@@ -320,7 +335,15 @@ The schema is organized into three root types following GraphQL best practices:
 - Channel updates: Real-time changes to payment channel states
 - Safe deployments: Real-time notifications when new Safe contracts are deployed
 - Network topology: Opened channel graph updates for routing decisions
+- Service registry updates: snapshot-first streams of entries, service types and registry-wide configuration followed by live changes
 - Transaction updates: Status changes for submitted transactions
+- Curvy events: Historical-to-live streams for pending notes, committed notes, and committed nullifiers
+
+Registry entry queries use bounded cursor pages pinned to the first page's indexer watermark, including unfiltered enumeration. Entry
+subscriptions capture that same kind of watermark while registering their event receivers, page through the matching historical snapshot,
+and then stream later changes. Service-type and registry-wide configuration subscriptions likewise emit complete current state before live
+changes. Broadcast overflow ends the server stream; the client reconnects and receives a fresh snapshot, turning possible silent loss into a
+deterministic resynchronization.
 
 **Error Handling**: Uses GraphQL union types to return domain-specific error types (InvalidAddressError, ContractNotAllowedError, etc.)
 alongside success types, providing structured error responses with codes and context.
@@ -353,7 +376,13 @@ transaction signatures are verified by Ethereum consensus—only successfully mi
 recovered from the transaction's ECDSA signature by the blockchain itself.
 
 **Configuration Parameters**: The RPC layer is configured with network-specific parameters including chain ID, contract addresses, expected
-block time for polling intervals, transaction polling configuration, finality depth, and maximum block range for batch fetching.
+block time for polling intervals, transaction polling configuration, finality depth, and a maximum block range ceiling for log fetching.
+
+**Adaptive Log Range Discovery**: The configured log block range is a ceiling, not a fixed request size. The RPC layer treats real
+`eth_getLogs` requests as observations: it starts with the ceiling, records successful ranges, records rejected ranges, and uses binary
+search to converge on the largest working range. Once a stable range is found, it is reused continuously. If the endpoint later rejects that
+stable range, the previous result is discarded and the same request-driven search moves downward again. If even single-block log requests
+are rejected, the RPC layer stays in single-block mode and surfaces the underlying RPC error while warning that this mode is very slow.
 
 **Retry Strategy**: Implements exponential backoff with jitter for transient failures, distinguishes between retryable errors (network, rate
 limit) and non-retryable errors (invalid transaction), and respects rate limits through request throttling.
@@ -384,9 +413,9 @@ submission of malicious or unintended transactions while keeping the filtering l
 **TransactionStore**: In-memory storage using concurrent hash map (DashMap) for thread-safe access. Tracks transaction records with UUID
 identifiers, maintains status lifecycle, and provides query interface for GraphQL resolvers.
 
-**TransactionMonitor**: Background process continuously monitoring pending transactions. Queries blockchain for transaction receipts,
-updates transaction status based on confirmation depth, handles timeouts and reverted transactions, and publishes status updates to event
-bus for subscriptions.
+**TransactionMonitor**: Background process continuously monitoring pending transactions with bounded concurrent receipt checks. For Safe
+transactions, it requires a decoded inner execution outcome before publishing a terminal update; failures or timeouts remain non-terminal
+and are retried. Optional revert-reason tracing is bounded separately. Status updates are published to the subscription event bus.
 
 **Transaction Lifecycle States**:
 
@@ -430,9 +459,9 @@ guaranteeing no events are emitted between reading watermark and subscribing.
 **Guarantee**: No events can be missed between reading the watermark and subscribing to the event bus, ensuring complete event delivery to
 all subscriptions.
 
-**Event Types**: The event bus carries four event types: AccountUpdated (with account keyid), ChannelUpdated (with channel id),
-BalanceUpdated (with address bytes), and SafeDeployed (with Safe contract address). Subscribers filter events based on their query
-parameters.
+**Event Types**: The event bus carries structured variants for account, channel, balance, Safe, ticket, transaction, and Curvy changes.
+Curvy variants contain one normalized non-padding note or nullifier and its complete chain position. Subscribers select the variants
+relevant to their query parameters.
 
 ### 9. Transaction Store Architecture
 
@@ -444,8 +473,9 @@ monitoring via subscriptions.
 **Design Principles**:
 
 1. **Ephemeral State**: Transaction records exist only during server runtime
-2. **Event-Driven**: Status updates broadcast to subscribers immediately
-3. **Zero Polling**: Subscriptions use event bus instead of database polling
+2. **Immediate Notifications**: Status updates broadcast to subscribers immediately
+3. **Event-Driven with Reconciliation**: Subscriptions use the event bus for immediate updates and periodically reconcile against the
+   in-memory store so a dropped notification cannot leave a stream stale
 4. **Thread-Safe**: Lock-free concurrent access using `DashMap`
 
 **Data Flow**:
@@ -472,6 +502,7 @@ GraphQL Subscription Receives Update
 - **Overflow Strategy**: Set to `true` - slow subscribers miss old events
 - **Event Types**: `TransactionEvent::StatusUpdated` with delta fields
 - **Subscriber Pattern**: Fresh receivers avoid backlog
+- **Recovery**: Overflow and periodic reconciliation re-read the authoritative in-memory record
 
 **Transaction Lifecycle**:
 
@@ -495,7 +526,8 @@ GraphQL Subscription Receives Update
 - No persistence across restarts
 - No historical query support beyond current session
 - Requires manual cleanup of old transactions
-- Event overflow may cause subscribers to miss updates
+- Event overflow can delay updates until the subscription reconciles with the store
+- Async transaction IDs are local to one process, so transaction submission and tracking require the same running API instance
 
 **Future Considerations**:
 
@@ -948,6 +980,9 @@ Indexer handlers publish structured events containing complete data to avoid N+1
 | `KeyBindingFeeUpdated`    | Protocol fee parameter changes        | Fee amount (TokenValueString) | `keyBindingFeeUpdated`      |
 | `SafeDeployed`            | New safe contract deployed            | Safe address                  | `safeDeployed`              |
 | `TicketParametersUpdated` | Ticket price/probability changes      | Full TicketParameters object  | `ticketParametersUpdated`   |
+| `CurvyPendingNote`        | Curvy pending-note announcement       | One normalized note item      | `curvyPendingNote`          |
+| `CurvyCommittedNote`      | Curvy note commitment                 | Note and dense leaf index     | `curvyCommittedNote`        |
+| `CurvyCommittedNullifier` | Curvy nullifier commitment            | Nullifier and dense index     | `curvyCommittedNullifier`   |
 
 **Two-Phase Subscription Pattern**:
 
@@ -980,7 +1015,21 @@ The IndexerState uses an RwLock to ensure no events are missed between the snaps
 2. Capture watermark (last indexed block/tx/log)
 3. Subscribe to event channels
 4. Release read lock
-5. Events published during this time are buffered in the channel
+
+Curvy event positions retain the raw block, transaction, log, and array-item coordinates. Zero-padded contract array slots are not emitted,
+but their raw item positions are preserved, so ordering stays identical to chain ordering. Historical queries accept the full position as an
+exclusive cursor. Subscriptions accept a lower block bound; clients that resume within a block compare full positions locally to discard
+already-processed items. Committed non-zero notes also carry a separate dense leaf index, which clients must never derive from the raw item
+position.
+
+While processing each committed-note log, the indexer transactionally appends its non-zero notes to the depth-30 Poseidon frontier and
+stores the leaves, the compact frontier checkpoint and root, and any completed level-14 (16,384-leaf) shard root. This state is global and
+key-independent: ownership detection and witness construction remain local to the node. Reorg handling deletes Curvy leaves, checkpoints,
+and shard roots from the first affected block before subscriptions are terminated and resumed against canonical state.
+
+Historical and live items use the same normalized event representation. Event-bus overflow or a reorganization terminates the stream so a
+client can reconnect from its last processed position instead of accepting silent loss. Events published during watermark capture are
+buffered in the channel.
 
 **Overflow Handling**:
 
@@ -1169,8 +1218,8 @@ Lightweight deployment using SQLite with separated databases:
 **Advantages**:
 
 - No external database server required
-- Logs DB can be atomically replaced from snapshot
-- Fast sync by downloading pre-built logs database
+- Logs tables can be repopulated from an imported logs snapshot
+- Fast sync imports raw logs and rebuilds derived state locally
 - Reduced write lock contention through separation
 - Simple backup and restore (file copy)
 
@@ -1203,7 +1252,8 @@ Lightweight deployment using SQLite with separated databases:
 **Optimization Strategies**:
 
 - **Fast Sync via Snapshots**: Reduces initial sync from hours to minutes by importing pre-indexed logs database
-- **Batch Log Fetching**: Configurable block range size balances memory usage with RPC call overhead
+- **Adaptive Batch Log Fetching**: Configurable block range ceiling bounds RPC load while request-driven discovery learns the endpoint's
+  current usable range
 - **Dual Database Mode**: Separates high-volume log writes from indexed state reads (SQLite)
 - **Async Event Processing**: Pipeline stages run concurrently where possible
 - **Position-based Deduplication**: Prevents reprocessing same events after restart
@@ -1253,7 +1303,7 @@ subscriber count. Database becomes bottleneck at high read volume (consider read
 **SQLite Dual Database Characteristics**:
 
 - Reduces lock contention by separating write-heavy logs from read-heavy index
-- Logs DB can be atomically replaced during fast sync operation
+- Logs tables can be repopulated from an imported `hopr_logs.sql` snapshot during fast sync
 - Suitable for embedded deployments with limited resources
 - Simple backup through file system copy operations
 - No network overhead for database access
@@ -1325,7 +1375,7 @@ The transaction submission system implements defense-in-depth with multiple vali
 - **Reorg Handling**: Detects blockchain reorganizations and marks affected logs
 - **Transaction Safety**: All state changes wrapped in database transactions
 - **Position Constraints**: Unique constraints prevent duplicate event processing
-- **Atomic Snapshot Import**: Logs database replacement is atomic operation
+- **Atomic Snapshot Import**: Logs table import and derived-state rebuild run within a single transaction
 
 **Precision Preservation**: Large integers stored as binary to preserve full precision across language boundaries. GraphQL uses String type
 for UInt64 values to avoid JavaScript Number precision loss.
@@ -1470,6 +1520,50 @@ threshold.
 
 **Configuration Flow**: Finality is defined by the selected network, propagated through runtime configuration into the RPC layer, and reused
 by the readiness checks.
+
+## Local Contract Deployment Variants
+
+The local Anvil image can optionally deploy the Curvy contract suite (controlled by `BLOKLI_DEPLOY_CURVY`). When Curvy is enabled,
+deployment and indexing are inseparable: deploying the suite without indexing its events would surface much later as a consumer-side
+notes-root mismatch. The production binary remains HOPR-only.
+
+The deployment artifact and generated Blokli configuration include the Curvy Aggregator, Vault, and PortalFactory addresses. The local HOPR
+token is registered in the Curvy Vault after the development assets. The configured Aggregator extends the indexer's address/topic filter
+only when Curvy indexing is explicitly enabled. Pending-note, committed-note, and committed-nullifier events are stored as append-only,
+position-keyed records; zero padding is omitted and array-valued events are normalized into one row per array item. PortalFactory is
+optional for direct-shield-only deployments and has no indexed event in the supported surface. When absent, only the Portal-specific GraphQL
+queries are unavailable.
+
+Committed notes and nullifiers receive independent dense, zero-based indices. The note index is the canonical leaf position in Curvy's
+depth-30 Poseidon tree. The indexer advances a constant-space frontier transactionally with each committed-note event and persists completed
+depth-14 shard roots when a 16,384-leaf boundary is crossed. This keeps steady-state indexer memory bounded; Blokli neither retains the full
+tree nor generates user witnesses.
+
+The tree's cryptographic behavior is defined by Curvy's canonical Rust core rather than reimplemented in Blokli. Poseidon hashing, field
+encoding, tree geometry, and the versioned frontier snapshot format all come from that dependency. The tree version recorded on every
+checkpoint detects an incompatible geometry or snapshot change across an upgrade.
+
+Each state-changing Curvy log atomically persists its event rows, completed shard roots, and a checkpoint identified by the containing block
+hash. Multiple state-changing logs in one block replace that block's checkpoint inside their respective transactions, so the latest
+checkpoint describes all durable Curvy rows through the latest committed log. Pending-only blocks do not write redundant frontier snapshots.
+A checkpoint records the tree geometry, dense note/nullifier counts, completed-shard count, tree root, and canonical frontier snapshot; it
+is the sole persisted live frontier state.
+
+GraphQL synchronization pages are pinned to one checkpoint and bounded by its counts, so concurrent indexing cannot change a client's
+dataset. Note pages batch-associate the latest preceding pending-note announcement when available. Shard-root and tail-leaf pages let a
+client bootstrap the compact tree representation without rebuilding every completed shard. Ownership detection and witness construction
+remain local to the client and do not reveal which note it owns to Blokli.
+
+On a reorganization, the Curvy handler removes event rows, shard roots, and checkpoints at or after the first affected block through the
+indexer's derived-state rollback seam. The frontier is restored from the latest earlier checkpoint before canonical replacement logs are
+replayed. Checkpoint counts are cross-checked against retained dense note and nullifier indices; missing or inconsistent state is fatal
+because continuing would silently diverge dense indices and roots. Ordinary restarts restore the latest checkpoint, while the logs snapshot
+remains the source for rebuilding all derived index state on a fresh installation.
+
+GraphQL exposes position-paginated event history, checkpoint-pinned dense synchronization pages, and historical-to-live subscriptions. Curvy
+view functions and non-note protocol state are read directly from the configured contracts through the RPC layer. State-changing calls use
+Blokli's existing pre-signed raw-transaction boundary, keeping signing and proof construction outside the service. A failure in either
+requested deployment prevents final address and configuration artifacts from being published.
 
 ## Design Principles and Patterns
 

@@ -5,6 +5,7 @@
 
 pub mod config;
 pub mod conversions;
+pub mod curvy;
 pub mod errors;
 pub mod logging;
 pub mod metrics;
@@ -28,9 +29,13 @@ use blokli_chain_api::{
     transaction_store::TransactionStore,
 };
 use blokli_chain_rpc::{
-    client::DefaultRetryPolicy,
+    client::{DefaultRetryPolicy, MetricsLayer},
     rpc::{RpcOperations, RpcOperationsConfig},
     transport::ReqwestClient,
+};
+use blokli_db::{
+    db::{BlokliDbConfig, build_connect_options},
+    utils::redact_database_url,
 };
 use config::ApiConfig;
 use errors::{ApiError, ApiResult};
@@ -78,10 +83,10 @@ pub async fn start_server(network: String, finality: u16, config: ApiConfig) -> 
         .map_err(|error| ApiError::ConfigError(format!("Failed to initialize tracing: {error}")))?;
 
     info!("Starting blokli API server on {}", config.bind_address);
-    info!("Connecting to database: {}", redact_url(&config.database_url));
+    info!("Connecting to database: {}", redact_database_url(&config.database_url));
 
     // Connect to database
-    let db = Database::connect(&config.database_url).await?;
+    let db = Database::connect(build_connect_options(&config.database_url, &BlokliDbConfig::default())).await?;
     info!("Database connection established");
 
     // Create a default IndexerState for standalone API server
@@ -114,6 +119,7 @@ pub async fn start_server(network: String, finality: u16, config: ApiConfig) -> 
             100,
             DefaultRetryPolicy::default(),
         ))
+        .layer(MetricsLayer)
         .transport(transport_client.clone(), transport_client.guess_local());
 
     let rpc_operations = RpcOperations::new(
@@ -139,7 +145,7 @@ pub async fn start_server(network: String, finality: u16, config: ApiConfig) -> 
 
     // Build the application
     let app = server::build_app(
-        db,
+        server::ApiDatabases::single(db),
         network,
         config.clone(),
         config.expected_block_time,

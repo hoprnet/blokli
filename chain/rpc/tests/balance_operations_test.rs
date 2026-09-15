@@ -23,7 +23,7 @@ use hopr_bindings::exports::alloy::{
 };
 use hopr_types::{
     crypto::keypairs::{ChainKeypair, Keypair},
-    primitive::prelude::{Address, HoprBalance, XDaiBalance},
+    primitive::prelude::{Address, HoprBalance, XDaiBalance, XHoprBalance},
 };
 use lazy_static::lazy_static;
 
@@ -117,6 +117,69 @@ async fn test_get_balance_token() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Verifies that xHOPR and wxHOPR are two distinct tokens with independent balances.
+///
+/// The testing deployment mints a fixed amount of xHOPR to the deployer while wxHOPR is minted
+/// separately, so the two balances must differ — a regression guard against reintroducing the
+/// old "xHOPR is a clone of wxHOPR" behaviour.
+#[tokio::test]
+async fn test_get_xhopr_balance_is_distinct_from_wxhopr() -> anyhow::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let anvil = blokli_chain_types::utils::create_anvil(Some(TEST_BLOCK_TIME));
+    let chain_key_0 = ChainKeypair::from_secret(anvil.keys()[0].to_bytes().as_ref())?;
+
+    // Deploy contracts (deploy_for_testing mints xHOPR to the deployer).
+    let contract_instances = {
+        let client = create_rpc_client_to_anvil(&anvil, &chain_key_0);
+        ContractInstances::deploy_for_testing(client, &chain_key_0).await?
+    };
+
+    let cfg = RpcOperationsConfig {
+        chain_id: anvil.chain_id(),
+        tx_polling_interval: Duration::from_millis(10),
+        expected_block_time: TEST_BLOCK_TIME,
+        finality: TEST_FINALITY,
+        contract_addrs: ContractAddresses::from(&contract_instances),
+        gas_oracle_url: None,
+        ..RpcOperationsConfig::default()
+    };
+
+    // Mint a wxHOPR amount that differs from the xHOPR amount minted at deployment.
+    let wxhopr_amount = 1024_u64;
+    let _ = blokli_chain_types::utils::mint_tokens(contract_instances.token, U256::from(wxhopr_amount)).await;
+
+    let transport_client = ReqwestTransport::new(anvil.endpoint_url());
+
+    let rpc_client = ClientBuilder::default()
+        .layer(RetryBackoffLayer::new(2, 100, 100))
+        .transport(transport_client.clone(), transport_client.guess_local());
+
+    wait_for_finality(TEST_FINALITY, TEST_BLOCK_TIME).await;
+
+    let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
+
+    let wxhopr_balance: HoprBalance = rpc.get_hopr_balance((&chain_key_0).into()).await?;
+    let xhopr_balance: XHoprBalance = rpc.get_xhopr_balance((&chain_key_0).into()).await?;
+
+    assert_eq!(
+        wxhopr_amount,
+        wxhopr_balance.amount().as_u64(),
+        "invalid wxHOPR balance"
+    );
+    assert!(
+        xhopr_balance.amount().gt(&0.into()),
+        "xHOPR balance should be minted at deployment"
+    );
+    assert_ne!(
+        xhopr_balance.amount(),
+        wxhopr_balance.amount(),
+        "xHOPR and wxHOPR balances must be independent (not a clone)"
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_get_hopr_allowance() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
@@ -151,11 +214,8 @@ async fn test_get_hopr_allowance() -> anyhow::Result<()> {
 
     let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
 
-    let owner: Address = (&chain_key_0).into();
-    let spender = *RANDY;
-
     // Initially, allowance should be zero
-    let allowance = rpc.get_hopr_allowance(owner, spender).await?;
+    let allowance = rpc.get_hopr_allowance((&chain_key_0).into(), *RANDY).await?;
     assert_eq!(allowance.amount().as_u64(), 0, "initial allowance should be zero");
 
     Ok(())

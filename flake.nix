@@ -31,11 +31,11 @@
   inputs = {
     # Core Nix ecosystem dependencies
     flake-parts.url = "github:hercules-ci/flake-parts";
-    nixpkgs.url = "github:NixOS/nixpkgs/release-25.11";
+    nixpkgs.url = "github:NixOS/nixpkgs/release-26.05";
     nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     # HOPR Nix Library (provides flake-utils and reusable build functions)
-    nix-lib.url = "github:hoprnet/nix-lib/v1.1.0";
+    nix-lib.url = "github:hoprnet/nix-lib/v1.3.0";
 
     # Rust build system
     crane.url = "github:ipetkov/crane";
@@ -91,14 +91,28 @@
         let
           # Git revision for version tracking
           rev = toString (self.shortRev or self.dirtyShortRev);
+          buildVersionEnv = builtins.getEnv "BUILD_VERSION";
+          buildVersion = if buildVersionEnv == "" then null else buildVersionEnv;
 
           # Filesystem utilities for source filtering
           fs = lib.fileset;
+
+          # Since the 2026-09-05 nightly, `forge` and `cast` link against
+          # libudev.so.1 (hardware-wallet support). foundry.nix does not declare
+          # that dependency, so autoPatchelfHook fails the build on Linux.
+          # Darwin is unaffected, hence the isLinux guard.
+          foundryUdevOverlay = final: prev: {
+            foundry-bin = prev.foundry-bin.overrideAttrs (old: {
+              buildInputs =
+                (old.buildInputs or [ ]) ++ prev.lib.optional prev.stdenv.hostPlatform.isLinux prev.udev;
+            });
+          };
 
           # Nixpkgs with rust-overlay, foundry overlay, and solc overlay
           overlays = [
             rust-overlay.overlays.default
             foundry.overlay
+            foundryUdevOverlay
             solc.overlay
           ];
           pkgs = import nixpkgs {
@@ -129,18 +143,6 @@
             );
           };
 
-          # blokli-client crate information
-          blokliClientCrateInfoOriginal = craneLib.crateNameFromCargoToml {
-            cargoToml = ./client/Cargo.toml;
-          };
-          blokliClientCrateInfo = {
-            pname = "blokli-client";
-            # Normalize version to major.minor.patch for consistent caching
-            version = pkgs.lib.strings.concatStringsSep "." (
-              pkgs.lib.lists.take 3 (builtins.splitVersion blokliClientCrateInfoOriginal.version)
-            );
-          };
-
           # Create source trees for different build contexts using nix-lib
           sources = {
             main = nixLib.mkSrc {
@@ -157,7 +159,14 @@
               extraExtensions = [
                 "csv"
                 "graphql"
+                "pem"
+                "snap"
               ];
+            };
+            schema = nixLib.mkSrc {
+              inherit fs;
+              root = ./.;
+              extraExtensions = [ "csv" ];
             };
             deps = nixLib.mkDepsSrc {
               inherit fs;
@@ -174,22 +183,13 @@
           bloklidPackages = import ./nix/packages/bloklid.nix {
             inherit
               lib
+              pkgs
               builders
               sources
               bloklidCrateInfo
+              buildVersion
               rev
               buildPlatform
-              nixLib
-              ;
-          };
-
-          blokliClientPackages = import ./nix/packages/blokli-client.nix {
-            inherit
-              lib
-              builders
-              sources
-              blokliClientCrateInfo
-              rev
               nixLib
               ;
           };
@@ -257,7 +257,7 @@
               ];
             };
 
-          # Helper: build the bloklid-anvil Docker image for a target platform.
+          # Build the local Anvil image with HOPR and Curvy contracts deployed.
           mkBloklidAnvilDocker =
             targetPlatform:
             let
@@ -269,11 +269,16 @@
               name = "bloklid-anvil";
               Entrypoint = [ "/bin/blokli-anvil-entrypoint" ];
               pkgsLinux = platformPkgs;
-              env = [ "SSL_CERT_FILE=${platformPkgs.cacert}/etc/ssl/certs/ca-bundle.crt" ];
+              env = [
+                "SSL_CERT_FILE=${platformPkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+                "BLOKLI_DEPLOY_CURVY=true"
+              ];
               extraContents = [
                 binary
                 platformPkgs.curl
-                platformPkgs.foundry
+                # The Nixpkgs Foundry 1.7.1 package embeds vulnerable quinn-proto
+                # 0.11.14. The pinned foundry.nix nightly uses 0.11.16.
+                platformPkgs.foundry-bin
                 (mkStaticEntrypoint {
                   pkgs = platformPkgs;
                   binary = anvilEntrypoint;
@@ -295,7 +300,6 @@
           # Combine all packages
           packages =
             bloklidPackages
-            // blokliClientPackages
             // bloklidDocker
             // {
               # Additional standalone packages
@@ -387,6 +391,7 @@
             '';
             extraPackages = with pkgs; [
               gh
+              bun
               nodejs
               ast-grep
               foundry-bin
@@ -469,6 +474,7 @@
 
               # Generated GraphQL schema (formatted separately)
               "schema.graphql"
+              "design/target-api-schema.graphql"
 
               # locally installed npm packages
               ".npm/"
@@ -559,7 +565,7 @@
               type = "app";
               program = toString (
                 pkgs.writeShellScript "coverage-unit" ''
-                  nix develop .#coverage -c cargo llvm-cov --workspace --lib --lcov --output-path coverage.lcov
+                  nix build -L .#bloklid-coverage -o coverage.lcov
                 ''
               );
             };

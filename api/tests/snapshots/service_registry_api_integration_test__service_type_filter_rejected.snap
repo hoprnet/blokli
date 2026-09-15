@@ -1,0 +1,7 @@
+---
+source: api/tests/service_registry_api_integration_test.rs
+expression: rejected.data.into_json()?
+---
+serviceTypes:
+  __typename: QueryFailedError
+  code: INVALID_SERVICE_TYPE

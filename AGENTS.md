@@ -19,7 +19,7 @@ Blokli is a Rust workspace project: an on-chain indexer of HOPR smart contracts 
 - `README.md` — High-level overview and quickstart
 - `TESTING.md` — Test strategy and commands
 - `design/architecture.md` — System architecture (conceptual, no code snippets)
-- `design/target-api-schema.graphql` — Target GraphQL schema
+- `design/target-api-schema.graphql` — Generated GraphQL API schema
 - `design/target-db-schema.mmd` — Target database schema
 
 ## Build Commands
@@ -99,8 +99,8 @@ Use prelude modules: `hopr_types::primitive::prelude`, `hopr_types::crypto::prel
 
 ### GraphQL API
 
-- Target schema: `design/target-api-schema.graphql`
-- Generate actual schema: `just export-schema-sqlite` → `schema.graphql`
+- Checked-in generated schema: `just export-target-api-schema` → `design/target-api-schema.graphql`
+- Generate a local schema copy: `just export-schema-sqlite` → `schema.graphql`
 - Use DataLoader pattern for N+1 prevention
 - Subscriptions via SSE with keep-alive
 
@@ -173,15 +173,6 @@ in `transaction_policy.rs`.
   assert!(result.is_err());
   ```
 
-### Integration Tests
-
-Full-stack tests against real blockchain (Anvil) + PostgreSQL in Docker.
-
-```bash
-nix build .#docker-bloklid-x86_64-linux-dev   # Build Docker image first
-just test-indexer                # Run integration tests
-```
-
 **When to use:** E2E transaction flows, GraphQL queries against indexed data, Safe/channel operations, bloklid indexing verification.
 
 **When NOT to use:** Unit logic, anything not needing a running blockchain/bloklid.
@@ -198,10 +189,6 @@ async fn test_my_feature(#[future(awt)] fixture: IntegrationFixture) -> Result<(
     Ok(())
 }
 ```
-
-See `tests/integration/` for fixture API (`IntegrationFixture`, `RpcClient`), Docker stack config, and environment variables. Tests are
-organized by client trait in `tests/blokli_query_client.rs`, `tests/blokli_subscription_client.rs`, and
-`tests/blokli_transaction_client.rs`.
 
 For Safe module transactions in tests, use `SafePayloadGenerator` from `hopr-chain-connector`.
 

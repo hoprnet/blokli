@@ -6,10 +6,11 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
 name        = "bloklid"
 repository  = "https://github.com/hoprnet/hoprnet"
-version     = "0.11.1"
+version     = "0.14.1"
 
 [features]
-default = ["runtime-tokio"]
+curvy-test-deployment = ["dep:curvy-bindings"]
+default = ["curvy-test-deployment", "runtime-tokio"]
 runtime-tokio = [
   "blokli-chain-api/runtime-tokio",
   "blokli-chain-indexer/runtime-tokio",
@@ -47,11 +48,12 @@ opentelemetry_sdk = { workspace = true, features = [
   "rt-tokio",
   "trace",
 ] }
-sea-orm = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 serde_with = { workspace = true }
 smart-default = { workspace = true }
 strum = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
@@ -71,6 +73,7 @@ blokli-db            = { workspace = true }
 
 # HOPR dependencies
 config = { workspace = true }
+curvy-bindings = { workspace = true, optional = true }
 hopr-bindings = { workspace = true }
 hopr-types = { workspace = true, features = [
   "chain",
@@ -80,18 +83,13 @@ hopr-types = { workspace = true, features = [
   "telemetry",
 ] }
 
-# Needed for test deployment, because deploy_for_testing from blokli_chain_types is outdated
-# TODO: remove blokli-chain-types completely and only use hopr-chain-types
-hopli = { workspace = true }
-
 [dev-dependencies]
 anyhow      = { workspace = true }
 async-trait = { workspace = true }
 temp-env    = { workspace = true }
-tempfile    = { workspace = true }
 thiserror   = { workspace = true }
 tokio       = { workspace = true, features = ["full"] }
 validator   = { workspace = true }
 
 [package.metadata.cargo-machete]
-ignored = ["hopli", "humantime-serde"]
+ignored = ["humantime-serde"]

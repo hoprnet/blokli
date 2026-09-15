@@ -9,7 +9,7 @@ use tracing::{debug, info, warn};
 
 #[cfg(all(feature = "telemetry", not(test)))]
 use super::increment_indexer_contract_log_count;
-use super::{ContractEventHandlers, helpers::construct_account_update};
+use super::{ContractEventHandlers, helpers::construct_account_update, u256_to_u64};
 use crate::{
     errors::{CoreEthereumIndexerError, Result},
     state::IndexerEvent,
@@ -116,7 +116,7 @@ where
                 let node_addr = registered.nodeAddress.to_hopr_address();
                 let block = log.block_number;
                 let tx_index = log.tx_index;
-                let log_index = log.log_index.as_u64();
+                let log_index = u256_to_u64(log.log_index, "log_index")?;
 
                 info!(
                     node_address = %node_addr.to_hex(),
@@ -222,7 +222,7 @@ where
                 let node_addr = deregistered.nodeAddress.to_hopr_address();
                 let block = log.block_number;
                 let tx_index = log.tx_index;
-                let log_index = log.log_index.as_u64();
+                let log_index = u256_to_u64(log.log_index, "log_index")?;
 
                 info!(
                     node_address = %node_addr.to_hex(),

@@ -47,6 +47,7 @@ blokli-chain-rpc = { workspace = true }
 blokli-chain-types = { workspace = true }
 blokli-db = { workspace = true }
 blokli-db-entity = { workspace = true }
+curvy-bindings = { workspace = true }
 hopr-bindings = { workspace = true }
 hopr-types = { workspace = true, features = [
   "chain",
@@ -59,7 +60,9 @@ hopr-types = { workspace = true, features = [
 [dev-dependencies]
 anyhow          = { workspace = true }
 hex-literal     = { workspace = true }
+insta           = { workspace = true, features = ["yaml"] }
 mockall         = { workspace = true }
+mockito         = { workspace = true }
 primitive-types = { workspace = true }
 test-log        = { workspace = true }
 tokio           = { workspace = true }

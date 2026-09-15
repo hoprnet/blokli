@@ -10,13 +10,14 @@ mod tests;
 pub use async_graphql::ID;
 use async_graphql::{Enum, InputObject, InputValueError, Scalar, ScalarType, SimpleObject, Union, Value};
 use hopr_types::{crypto::types::Hash, primitive::prelude::ToHex};
+use serde::Serialize;
 
 /// Token value represented as a string to maintain precision
 ///
 /// This scalar type represents token amounts as decimal strings to avoid
 /// floating-point precision issues. Values are typically represented in
 /// the token's base unit (e.g., wei for native tokens, smallest unit for HOPR).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TokenValueString(pub String);
 
 #[Scalar]
@@ -83,7 +84,7 @@ impl From<hopr_types::crypto::types::Hash> for Hex32 {
 /// This scalar type represents u64 values as strings in GraphQL to avoid
 /// JavaScript's Number precision loss (JS Number is only safe up to 2^53-1).
 /// The maximum value is 18,446,744,073,709,551,615.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct UInt64(pub u64);
 
 #[Scalar(name = "UInt64")]
@@ -115,7 +116,11 @@ impl ScalarType for UInt64 {
 /// This scalar type represents a mapping from contract identifier strings
 /// (e.g., "token", "channels") to their deployed addresses in hexadecimal format.
 /// Keys: token, channels, announcements, module_implementation, node_safe_migration, node_safe_registry,
-/// ticket_price_oracle, winning_probability_oracle, node_stake_factory
+/// ticket_price_oracle, winning_probability_oracle, node_stake_factory, xhopr_token, service_registry
+///
+/// The keys match the field names of `hopr_types::chain::ContractAddresses`, because consumers
+/// deserialize this map straight into that struct. Dropping a key breaks them at runtime, not at
+/// compile time.
 ///
 /// Serialized as a stringified JSON object. For example:
 /// `{"token":"0x123abc","channels":"0x456def","announcements":"0x789ghi"}`
@@ -190,9 +195,12 @@ impl From<ChannelStatus> for i16 {
 /// Token type for balance queries
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum Token {
-    /// HOPR token
+    /// wxHOPR token
     #[graphql(name = "HOPR")]
-    Hopr,
+    WxHOPR,
+    /// xHOPR token
+    #[graphql(name = "XHOPR")]
+    XHOPR,
     /// Native token
     #[graphql(name = "NATIVE")]
     Native,
@@ -205,7 +213,7 @@ pub struct Balance {
     pub address: String,
     /// Token balance associated with the on-chain address
     pub value: f64,
-    /// Type of token (HOPR or Native)
+    /// Type of token ((w)xHOPR or Native)
     pub token: Token,
 }
 
@@ -218,7 +226,7 @@ pub struct ChainInfo {
     /// Chain ID of the connected blockchain network
     #[graphql(name = "chainId")]
     pub chain_id: i32,
-    /// Network name (e.g., 'rotsee', 'jura')
+    /// Network name (e.g., 'jura-dev', 'jura-prod')
     pub network: String,
     /// Current HOPR token price
     #[graphql(name = "ticketPrice")]
@@ -307,6 +315,183 @@ pub enum AccountsResult {
     Accounts(AccountsList),
     /// Missing required filter parameter
     MissingFilter(MissingFilterError),
+    /// Query failed
+    QueryFailed(QueryFailedError),
+}
+
+/// A single entry in the on-chain service registry: one node offering one service type
+///
+/// The registry treats the metadata as opaque bytes: its schema belongs to the service type, not
+/// to the registry, so it is exposed as hex rather than parsed.
+#[derive(SimpleObject, Clone, Debug, PartialEq, Serialize)]
+pub struct ServiceEntry {
+    /// Service type identifier - ASCII name, or 0x-prefixed hex when the id is not printable ASCII
+    #[graphql(name = "serviceType")]
+    pub service_type: String,
+    /// Chain address of the node offering the service in hexadecimal format
+    pub node: String,
+    /// Safe that performed the last write to this entry, in hexadecimal format
+    pub safe: String,
+    /// Opaque metadata as 0x-prefixed hex
+    pub metadata: String,
+    /// Unix timestamp in seconds at which the entry was registered
+    ///
+    /// A `UInt64` rather than an `Int`: the on-chain source is a `uint48`, which a signed 32-bit
+    /// GraphQL `Int` cannot carry past 2038.
+    #[graphql(name = "registeredAt")]
+    pub registered_at: UInt64,
+    /// Unix timestamp in seconds at which the entry was last updated
+    #[graphql(name = "updatedAt")]
+    pub updated_at: UInt64,
+}
+
+/// Configuration of a single service type
+#[derive(SimpleObject, Clone, Debug, PartialEq, Serialize)]
+pub struct ServiceTypeInfo {
+    /// Service type identifier - ASCII name, or 0x-prefixed hex
+    #[graphql(name = "serviceType")]
+    pub service_type: String,
+    /// Owner of the type; null once the type has been abandoned, which is one-way
+    pub owner: Option<String>,
+    /// Requirement contract gating registration; null for an open type
+    pub requirement: Option<String>,
+    /// wxHOPR burned on self-registration
+    #[graphql(name = "registrationBurn")]
+    pub registration_burn: TokenValueString,
+    /// wxHOPR burned on self-update
+    #[graphql(name = "updateBurn")]
+    pub update_burn: TokenValueString,
+}
+
+/// Registry-wide configuration, shared by every service type
+#[derive(SimpleObject, Clone, Debug, PartialEq, Serialize)]
+pub struct ServiceRegistryConfig {
+    /// wxHOPR burned to register a new service type
+    #[graphql(name = "typeRegistrationFee")]
+    pub type_registration_fee: TokenValueString,
+    /// Node-safe registry the service registry resolves node bindings against, in hexadecimal format
+    #[graphql(name = "nodeSafeRegistry")]
+    pub node_safe_registry: String,
+}
+
+/// Kind of change to a single registry entry
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug, Serialize)]
+pub enum ServiceUpdateKind {
+    /// The entry was created
+    #[graphql(name = "REGISTERED")]
+    Registered,
+    /// An existing entry changed
+    #[graphql(name = "UPDATED")]
+    Updated,
+    /// The entry was removed
+    #[graphql(name = "DEREGISTERED")]
+    Deregistered,
+}
+
+/// Kind of change to service-type or registry-wide configuration
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug, Serialize)]
+pub enum ServiceTypeUpdateKind {
+    /// A new service type was registered
+    #[graphql(name = "REGISTERED")]
+    Registered,
+    /// Type ownership moved, or the type was abandoned
+    #[graphql(name = "OWNER_CHANGED")]
+    OwnerChanged,
+    /// The requirement contract gating the type changed
+    #[graphql(name = "REQUIREMENT_CHANGED")]
+    RequirementChanged,
+    /// The self-registration burn of the type changed
+    #[graphql(name = "REGISTRATION_BURN_CHANGED")]
+    RegistrationBurnChanged,
+    /// The self-update burn of the type changed
+    #[graphql(name = "UPDATE_BURN_CHANGED")]
+    UpdateBurnChanged,
+    /// The registry-wide type registration fee changed
+    #[graphql(name = "REGISTRATION_FEE_CHANGED")]
+    RegistrationFeeChanged,
+    /// The node-safe registry the service registry points at changed
+    #[graphql(name = "REGISTRY_POINTER_CHANGED")]
+    RegistryPointerChanged,
+}
+
+/// A change to one registry entry
+///
+/// The kind is explicit rather than inferred from the timestamps: registration sets `updatedAt`
+/// to `registeredAt`, and so does an update landing in the registration block, so the two are
+/// not distinguishable from the entry alone. Deregistration carries no entry at all.
+#[derive(SimpleObject, Clone, Debug, PartialEq, Serialize)]
+pub struct ServiceUpdate {
+    /// What happened to the entry
+    pub kind: ServiceUpdateKind,
+    /// Service type the entry belongs to
+    #[graphql(name = "serviceType")]
+    pub service_type: String,
+    /// Node the entry belongs to, in hexadecimal format
+    pub node: String,
+    /// Entry state after the change; null for `DEREGISTERED`, where the entry no longer exists
+    pub entry: Option<ServiceEntry>,
+}
+
+/// A change to service-type or registry-wide configuration
+#[derive(SimpleObject, Clone, Debug, PartialEq, Serialize)]
+pub struct ServiceTypeUpdate {
+    /// What changed
+    pub kind: ServiceTypeUpdateKind,
+    /// Service type affected; null for the two registry-wide kinds
+    #[graphql(name = "serviceType")]
+    pub service_type: Option<String>,
+    /// Type configuration after the change; null for the two registry-wide kinds
+    pub config: Option<ServiceTypeInfo>,
+    /// Registry-wide configuration after the change; null for the five per-type kinds
+    #[graphql(name = "registryConfig")]
+    pub registry_config: Option<ServiceRegistryConfig>,
+}
+
+/// Success response for the services query
+#[derive(SimpleObject, Clone, Debug)]
+pub struct ServicesList {
+    /// Matching registry entries
+    pub services: Vec<ServiceEntry>,
+    /// Fully indexed block at which this page is evaluated. Pass it unchanged for later pages.
+    pub watermark: UInt64,
+    /// Immutable service-entry id after which the next page starts, or null at the end.
+    #[graphql(name = "nextCursor")]
+    pub next_cursor: Option<UInt64>,
+}
+
+/// Success response for the serviceTypes query
+#[derive(SimpleObject, Clone, Debug)]
+pub struct ServiceTypesList {
+    /// Matching service types
+    #[graphql(name = "serviceTypes")]
+    pub service_types: Vec<ServiceTypeInfo>,
+}
+
+/// Result type for the services list query
+#[derive(Union, Clone, Debug)]
+pub enum ServicesResult {
+    /// Successful services list
+    Services(ServicesList),
+    /// Missing required filter parameter
+    MissingFilter(MissingFilterError),
+    /// Query failed
+    QueryFailed(QueryFailedError),
+}
+
+/// Result type for the registry-wide configuration query
+#[derive(Union, Clone, Debug)]
+pub enum ServiceRegistryConfigResult {
+    /// The current registry-wide configuration
+    Config(ServiceRegistryConfig),
+    /// Query failed
+    QueryFailed(QueryFailedError),
+}
+
+/// Result type for the service types query
+#[derive(Union, Clone, Debug)]
+pub enum ServiceTypesResult {
+    /// Successful service type list
+    ServiceTypes(ServiceTypesList),
     /// Query failed
     QueryFailed(QueryFailedError),
 }
@@ -719,6 +904,365 @@ pub struct RedeemTicketDetails {
     pub result: RedemptionResult,
 }
 
+/// Unsigned 256-bit integer represented as a decimal string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UInt256(pub String);
+
+#[Scalar(name = "UInt256")]
+impl ScalarType for UInt256 {
+    fn parse(value: Value) -> async_graphql::InputValueResult<Self> {
+        let value = match value {
+            Value::String(value) => value,
+            Value::Number(value) => value.to_string(),
+            _ => return Err("UInt256 must be a decimal string or non-negative integer".into()),
+        };
+        if value.is_empty() {
+            return Err("UInt256 must not be empty".into());
+        }
+        let normalized = value.trim_start_matches('0');
+        let normalized = if normalized.is_empty() { "0" } else { normalized };
+        const MAX_U256: &str = "115792089237316195423570985008687907853269984665640564039457584007913129639935";
+        if !normalized.bytes().all(|byte| byte.is_ascii_digit())
+            || normalized.len() > MAX_U256.len()
+            || (normalized.len() == MAX_U256.len() && normalized > MAX_U256)
+        {
+            return Err("UInt256 must be a decimal integer between 0 and 2^256 - 1".into());
+        }
+        Ok(Self(normalized.to_string()))
+    }
+
+    fn to_value(&self) -> Value {
+        Value::String(self.0.clone())
+    }
+}
+
+/// Exclusive pagination cursor for indexed Curvy events.
+#[derive(InputObject, Clone, Debug, PartialEq, Eq)]
+pub struct CurvyEventCursor {
+    /// Block number containing the event.
+    pub block: UInt64,
+    /// Zero-based transaction index inside the block.
+    #[graphql(name = "transactionIndex")]
+    pub transaction_index: UInt64,
+    /// Zero-based log index inside the transaction receipt.
+    #[graphql(name = "logIndex")]
+    pub log_index: UInt64,
+    /// Zero-based position of the item inside the event array.
+    #[graphql(name = "eventItemIndex")]
+    pub event_item_index: UInt64,
+    /// Hash of the block containing the event, when known.
+    #[graphql(name = "blockHash")]
+    pub block_hash: Option<Hex32>,
+}
+
+/// Position and transaction identity shared by indexed Curvy events.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyEventPosition {
+    /// Hash of the transaction that emitted the event.
+    #[graphql(name = "transactionHash")]
+    pub transaction_hash: Hex32,
+    /// Hash of the block containing the event.
+    #[graphql(name = "blockHash")]
+    pub block_hash: Hex32,
+    /// Block number containing the event.
+    pub block: UInt64,
+    /// Zero-based transaction index inside the block.
+    #[graphql(name = "transactionIndex")]
+    pub transaction_index: UInt64,
+    /// Zero-based log index inside the transaction receipt.
+    #[graphql(name = "logIndex")]
+    pub log_index: UInt64,
+    /// Zero-based position of the item inside the event array.
+    #[graphql(name = "eventItemIndex")]
+    pub event_item_index: UInt64,
+}
+
+/// One note emitted by `PendingNotes`.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyPendingNote {
+    /// Pending note identifier.
+    #[graphql(name = "noteId")]
+    pub note_id: Hex32,
+    /// Baby Jubjub ephemeral public key coordinates.
+    #[graphql(name = "ephemeralKey")]
+    pub ephemeral_key: Vec<UInt256>,
+    /// View tag used for local ownership detection.
+    #[graphql(name = "viewTag")]
+    pub view_tag: i32,
+    /// Vault token identifier.
+    #[graphql(name = "tokenId")]
+    pub token_id: UInt256,
+    /// Raw note amount.
+    pub amount: UInt256,
+    /// Whether the note payload is plaintext.
+    #[graphql(name = "isPlaintext")]
+    pub is_plaintext: bool,
+    /// Chain position of the array item that emitted this note.
+    pub position: CurvyEventPosition,
+}
+
+/// One note emitted by `CommittedNotes`.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyCommittedNote {
+    /// Commitment batch index as a fixed-width 32-byte value.
+    #[graphql(name = "batchIndex")]
+    pub batch_index: Hex32,
+    /// Committed note identifier.
+    #[graphql(name = "noteId")]
+    pub note_id: Hex32,
+    /// Dense zero-based position in the notes tree.
+    #[graphql(name = "leafIndex")]
+    pub leaf_index: UInt64,
+    /// Chain position of the array item that emitted this note.
+    pub position: CurvyEventPosition,
+}
+
+/// One nullifier emitted by `CommittedNullifiers`.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyCommittedNullifier {
+    /// Nullifier batch index as a fixed-width 32-byte value.
+    #[graphql(name = "batchIndex")]
+    pub batch_index: Hex32,
+    /// Committed nullifier value.
+    pub nullifier: Hex32,
+    /// Dense zero-based position in the nullifier sequence.
+    #[graphql(name = "nullifierIndex")]
+    pub nullifier_index: UInt64,
+    /// Chain position of the array item that emitted this nullifier.
+    pub position: CurvyEventPosition,
+}
+
+/// Finalized, immutable Curvy synchronization checkpoint.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvySyncCheckpoint {
+    /// Number of the finalized checkpoint block.
+    #[graphql(name = "blockNumber")]
+    pub block_number: UInt64,
+    /// Hash of the finalized checkpoint block.
+    #[graphql(name = "blockHash")]
+    pub block_hash: Hex32,
+    /// Address of the indexed Curvy Aggregator.
+    #[graphql(name = "aggregatorAddress")]
+    pub aggregator_address: String,
+    /// Version of the persisted notes-tree representation.
+    #[graphql(name = "treeVersion")]
+    pub tree_version: i32,
+    /// Depth of the Curvy notes tree.
+    #[graphql(name = "treeDepth")]
+    pub tree_depth: i32,
+    /// Height of each persisted notes-tree shard.
+    #[graphql(name = "shardHeight")]
+    pub shard_height: i32,
+    /// Number of leaves in each notes-tree shard.
+    #[graphql(name = "shardSize")]
+    pub shard_size: UInt64,
+    /// Number of indexed non-padding notes.
+    #[graphql(name = "noteCount")]
+    pub note_count: UInt64,
+    /// Number of indexed non-padding nullifiers.
+    #[graphql(name = "nullifierCount")]
+    pub nullifier_count: UInt64,
+    /// Number of completed notes-tree shards.
+    #[graphql(name = "shardCount")]
+    pub shard_count: UInt64,
+    /// Notes-tree root at the checkpoint.
+    #[graphql(name = "notesRoot")]
+    pub notes_root: Hex32,
+}
+
+/// Committed note plus its optional announcement metadata for SDK synchronization.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvySyncNote {
+    /// Dense zero-based position in the notes tree.
+    #[graphql(name = "leafIndex")]
+    pub leaf_index: UInt64,
+    /// Committed note identifier.
+    #[graphql(name = "noteId")]
+    pub note_id: Hex32,
+    /// Commitment batch index.
+    #[graphql(name = "batchIndex")]
+    pub batch_index: Hex32,
+    /// Matching pending-note announcement, when indexed.
+    pub announcement: Option<CurvyPendingNote>,
+    /// Chain position at which the note was committed.
+    #[graphql(name = "commitPosition")]
+    pub commit_position: CurvyEventPosition,
+}
+
+/// One completed Curvy notes-tree shard.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyShardRoot {
+    /// Dense zero-based shard index.
+    #[graphql(name = "shardIndex")]
+    pub shard_index: UInt64,
+    /// Root of the completed shard.
+    pub root: Hex32,
+    /// Chain position at which the shard became complete.
+    #[graphql(name = "completionPosition")]
+    pub completion_position: CurvyEventPosition,
+}
+
+/// Checkpoint-pinned page of dense Curvy committed notes.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvySyncNotePage {
+    /// Block hash identifying the synchronization checkpoint.
+    pub checkpoint: Hex32,
+    /// Committed notes in this page.
+    pub notes: Vec<CurvySyncNote>,
+    /// Dense index from which the next page starts.
+    #[graphql(name = "nextIndex")]
+    pub next_index: UInt64,
+    /// Total number of notes at the checkpoint.
+    pub total: UInt64,
+}
+
+/// Checkpoint-pinned page of dense Curvy nullifiers.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvySyncNullifierPage {
+    /// Block hash identifying the synchronization checkpoint.
+    pub checkpoint: Hex32,
+    /// Committed nullifiers in this page.
+    pub nullifiers: Vec<CurvyCommittedNullifier>,
+    /// Dense index from which the next page starts.
+    #[graphql(name = "nextIndex")]
+    pub next_index: UInt64,
+    /// Total number of nullifiers at the checkpoint.
+    pub total: UInt64,
+}
+
+/// Checkpoint-pinned page of completed Curvy shard roots.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyShardRootPage {
+    /// Block hash identifying the synchronization checkpoint.
+    pub checkpoint: Hex32,
+    /// Completed shard roots in this page.
+    #[graphql(name = "shardRoots")]
+    pub shard_roots: Vec<CurvyShardRoot>,
+    /// Dense index from which the next page starts.
+    #[graphql(name = "nextIndex")]
+    pub next_index: UInt64,
+    /// Total number of completed shards at the checkpoint.
+    pub total: UInt64,
+}
+
+/// Current per-token gas fees read from the Curvy Vault.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyGasFees {
+    /// Identifier of the configured vault token.
+    #[graphql(name = "tokenId")]
+    pub token_id: UInt256,
+    /// Gas fee charged when deploying a portal.
+    #[graphql(name = "portalDeployment")]
+    pub portal_deployment: UInt256,
+    /// Gas fee charged when committing a pending note.
+    #[graphql(name = "pendingNoteCommitment")]
+    pub pending_note_commitment: UInt256,
+    /// Gas fee charged when withdrawing a note.
+    pub withdrawal: UInt256,
+}
+
+/// Current Curvy Aggregator indices and notes-tree root.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyAggregatorState {
+    /// Current notes-tree root.
+    #[graphql(name = "notesTreeRoot")]
+    pub notes_tree_root: Hex32,
+    /// Current committed-notes batch index.
+    #[graphql(name = "notesBatchIndex")]
+    pub notes_batch_index: UInt256,
+    /// Current committed-nullifiers batch index.
+    #[graphql(name = "nullifiersBatchIndex")]
+    pub nullifiers_batch_index: UInt256,
+    /// Number of non-padding notes committed to the notes tree.
+    #[graphql(name = "noteIndex")]
+    pub note_index: UInt256,
+}
+
+/// Current Curvy Vault protocol-level fees.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyVaultFees {
+    /// Protocol fee charged on deposits.
+    #[graphql(name = "depositFee")]
+    pub deposit_fee: UInt256,
+    /// Protocol fee charged on withdrawals.
+    #[graphql(name = "withdrawalFee")]
+    pub withdrawal_fee: UInt256,
+}
+
+/// Curvy Aggregator fee configuration needed to build a valid aggregation proof.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyAggregatorFees {
+    /// Protocol fee charged per thousand units.
+    #[graphql(name = "protocolFeePerThousand")]
+    pub protocol_fee_per_thousand: UInt256,
+    /// Root of the commitment gas-fee tree.
+    #[graphql(name = "commitmentFeeRoot")]
+    pub commitment_fee_root: Hex32,
+    /// Baby Jubjub public key that owns protocol fee notes.
+    #[graphql(name = "feeNotePublicKey")]
+    pub fee_note_public_key: Vec<UInt256>,
+}
+
+/// The number of tokens registered in the Curvy Vault.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyVaultTokenCount {
+    /// Number of registered vault tokens.
+    pub count: UInt256,
+}
+
+/// A Curvy Vault token and its configured gas fees.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyVaultToken {
+    /// ERC-20 token contract address.
+    #[graphql(name = "tokenAddress")]
+    pub token_address: String,
+    /// Gas fees configured for the token.
+    #[graphql(name = "gasFees")]
+    pub gas_fees: CurvyGasFees,
+}
+
+/// Collection of indexed Curvy pending notes.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyPendingNotes {
+    /// Pending notes ordered by chain position.
+    pub notes: Vec<CurvyPendingNote>,
+}
+
+/// Collection of indexed Curvy committed notes.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyCommittedNotes {
+    /// Committed notes ordered by chain position.
+    pub notes: Vec<CurvyCommittedNote>,
+}
+
+/// Collection of indexed Curvy committed nullifiers.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyCommittedNullifiers {
+    /// Committed nullifiers ordered by chain position.
+    pub nullifiers: Vec<CurvyCommittedNullifier>,
+}
+
+/// Boolean value returned by Curvy contract checks.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyBooleanValue {
+    /// Result of the contract check.
+    pub value: bool,
+}
+
+/// Raw status of a Curvy note.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyNoteStatus {
+    /// Numeric `NoteStatus` value returned by the Aggregator.
+    pub status: i32,
+}
+
+/// Address returned by a Curvy portal lookup.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyAddress {
+    /// Curvy portal address in hexadecimal format.
+    pub address: String,
+}
+
 /// Selector for safe lookup queries.
 ///
 /// This enum is used together with a single `address` argument when querying
@@ -821,7 +1365,7 @@ pub struct TicketParameters {
 
 impl From<&blokli_chain_types::ContractAddresses> for ContractAddressMap {
     fn from(addresses: &blokli_chain_types::ContractAddresses) -> Self {
-        let map = [
+        let map: HashMap<String, String> = [
             ("token", &addresses.token),
             ("channels", &addresses.channels),
             ("announcements", &addresses.announcements),
@@ -832,6 +1376,10 @@ impl From<&blokli_chain_types::ContractAddresses> for ContractAddressMap {
             ("winning_probability_oracle", &addresses.winning_probability_oracle),
             ("node_stake_factory", &addresses.node_stake_factory),
             ("xhopr_token", &addresses.xhopr_token),
+            ("curvy_aggregator", &addresses.curvy_aggregator),
+            ("curvy_portal_factory", &addresses.curvy_portal_factory),
+            ("curvy_vault", &addresses.curvy_vault),
+            ("service_registry", &addresses.service_registry),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))

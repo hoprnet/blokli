@@ -2,21 +2,33 @@
 //!
 //! The purpose of this module is to give implementation of the [HoprRpcOperations] trait:
 //! [RpcOperations] type, which is the main API exposed by this crate.
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use blokli_chain_types::{AlloyAddressExt, ContractAddresses, ContractInstances};
-use hopr_bindings::exports::alloy::{
-    primitives::{Address as AlloyAddress, FixedBytes, U256},
-    providers::{
-        Identity, PendingTransaction, Provider, ProviderBuilder, RootProvider,
-        fillers::{BlobGasFiller, CachedNonceManager, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller},
+use curvy_bindings::{
+    curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2, curvy_vault_v2::CurvyVaultV2, portal_factory::PortalFactory,
+};
+use hopr_bindings::{
+    exports::alloy::{
+        contract::Error as AlloyContractError,
+        primitives::{Address as AlloyAddress, FixedBytes, U256},
+        providers::{
+            Identity, PendingTransaction, Provider, ProviderBuilder, RootProvider,
+            fillers::{
+                BlobGasFiller, CachedNonceManager, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller,
+            },
+        },
+        rpc::{
+            client::RpcClient,
+            types::{Block, TransactionRequest},
+        },
+        sol,
     },
-    rpc::{
-        client::RpcClient,
-        types::{Block, TransactionRequest},
-    },
-    sol,
+    hopr_node_safe_registry::HoprNodeSafeRegistry,
 };
 use hopr_types::{
     crypto::prelude::Hash,
@@ -24,17 +36,28 @@ use hopr_types::{
     primitive::prelude::*,
 };
 use serde::{Deserialize, Serialize};
-use tracing::debug;
+use tracing::{debug, warn};
 use url::Url;
 use validator::Validate;
 
 // use crate::middleware::GnosisScan;
 use crate::{
-    Eip1559FeeEstimation, HoprRpcOperations,
+    CurvyAggregatorFees, CurvyAggregatorState, CurvyGasFees, CurvyVaultToken, Eip1559FeeEstimation, HoprRpcOperations,
     client::GasOracleFiller,
     errors::{Result, RpcError},
     transport::HttpRequestor,
 };
+
+fn configured_contract(address: Address, name: &str) -> Result<AlloyAddress> {
+    if address == Address::default() {
+        return Err(RpcError::Other(format!("{name} contract address is not configured")));
+    }
+    Ok(AlloyAddress::from_hopr_address(address))
+}
+
+fn is_curvy_token_not_registered(error: &AlloyContractError) -> bool {
+    error.as_decoded_error::<CurvyVaultV2::TokenNotRegistered>().is_some()
+}
 
 // define basic safe abi
 sol!(
@@ -60,6 +83,9 @@ sol!(
 /// Default gas oracle URL for Gnosis chain.
 pub const DEFAULT_GAS_ORACLE_URL: &str = "https://ggnosis.blockscan.com/gasapi.ashx?apikey=key&method=gasoracle";
 
+/// Default upper bound for adaptive `eth_getLogs` block range discovery.
+pub const DEFAULT_AUTO_LOG_BLOCK_RANGE_CAP: u64 = 10_000;
+
 /// Configuration of the RPC related parameters.
 #[derive(Clone, Debug, PartialEq, Eq, smart_default::SmartDefault, Serialize, Deserialize, Validate)]
 pub struct RpcOperationsConfig {
@@ -77,12 +103,13 @@ pub struct RpcOperationsConfig {
     /// Defaults to 5 seconds
     #[default(Duration::from_secs(5))]
     pub expected_block_time: Duration,
-    /// The largest amount of blocks to fetch at once when fetching a range of blocks.
+    /// The upper bound for adaptive log block range fetching.
     ///
-    /// If the requested block range size is N, then the client will always fetch `min(N, max_block_range_fetch_size)`
+    /// The RPC layer learns the effective value from real `eth_getLogs` requests and never requests more than this
+    /// configured ceiling. A value of `0` uses [`DEFAULT_AUTO_LOG_BLOCK_RANGE_CAP`] as the ceiling.
     ///
     /// Defaults to 2000 blocks
-    #[validate(range(min = 1))]
+    #[validate(range(min = 0))]
     #[default = 2000]
     pub max_block_range_fetch_size: u64,
     /// Interval for polling on TX submission
@@ -150,12 +177,176 @@ pub(crate) type HoprProvider<R> = FillProvider<
     RootProvider,
 >;
 
+#[derive(Debug)]
+pub(crate) struct LogBlockRangeLimit {
+    cap: u64,
+    candidate: u64,
+    last_working: u64,
+    first_failing: Option<u64>,
+    stable: Option<u64>,
+    warned_single_block: bool,
+}
+
+impl LogBlockRangeLimit {
+    fn new(configured_cap: u64) -> Self {
+        let cap = sanitize_log_block_range_cap(configured_cap);
+
+        Self {
+            cap,
+            candidate: cap,
+            last_working: 0,
+            first_failing: None,
+            stable: None,
+            warned_single_block: false,
+        }
+    }
+
+    fn current(&self) -> u64 {
+        self.stable.unwrap_or(self.candidate).clamp(1, self.cap)
+    }
+
+    fn record_success(&mut self, requested_span: u64, attempted_limit: u64) -> Option<u64> {
+        let previous_stable = self.stable;
+
+        if requested_span == 0 {
+            return None;
+        }
+
+        match self.first_failing {
+            Some(first_failing) if requested_span < first_failing => {
+                self.last_working = self.last_working.max(requested_span);
+
+                if self.last_working + 1 >= first_failing {
+                    let stable = self.last_working.max(1);
+                    self.stable = Some(stable);
+                    self.candidate = stable;
+                } else if requested_span == attempted_limit {
+                    self.candidate = next_probe(self.last_working, first_failing);
+                }
+            }
+            Some(_) => {}
+            None if requested_span == attempted_limit && attempted_limit >= self.cap => {
+                self.last_working = self.cap;
+                self.stable = Some(self.cap);
+                self.candidate = self.cap;
+            }
+            None => {
+                self.last_working = self.last_working.max(requested_span);
+            }
+        }
+
+        if self.stable != previous_stable {
+            self.stable
+        } else {
+            None
+        }
+    }
+
+    fn record_failure(&mut self, requested_span: u64) -> LogBlockRangeFailureUpdate {
+        let failed_span = requested_span.max(1).min(self.cap);
+
+        if failed_span <= 1 {
+            self.first_failing = Some(1);
+            self.stable = Some(1);
+            self.candidate = 1;
+            self.last_working = 0;
+
+            let warn_single_block = !self.warned_single_block;
+            self.warned_single_block = true;
+
+            return LogBlockRangeFailureUpdate {
+                next_limit: 1,
+                retry: false,
+                warn_single_block,
+            };
+        }
+
+        if self.stable.is_some() || self.last_working >= failed_span {
+            self.last_working = 0;
+        }
+
+        self.stable = None;
+        self.first_failing = Some(
+            self.first_failing
+                .map_or(failed_span, |first_failing| first_failing.min(failed_span)),
+        );
+
+        if let Some(first_failing) = self.first_failing {
+            self.candidate = next_probe(self.last_working, first_failing);
+        }
+
+        LogBlockRangeFailureUpdate {
+            next_limit: self.current(),
+            retry: self.current() < failed_span,
+            warn_single_block: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LogBlockRangeFailureUpdate {
+    pub next_limit: u64,
+    pub retry: bool,
+    pub warn_single_block: bool,
+}
+
+fn sanitize_log_block_range_cap(configured_cap: u64) -> u64 {
+    if configured_cap == 0 {
+        DEFAULT_AUTO_LOG_BLOCK_RANGE_CAP
+    } else {
+        configured_cap
+    }
+}
+
+fn next_probe(last_working: u64, first_failing: u64) -> u64 {
+    if last_working + 1 >= first_failing {
+        last_working.max(1)
+    } else {
+        (last_working + ((first_failing - last_working) / 2)).max(1)
+    }
+}
+
+fn message_indicates_known_log_range_limit(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+
+    message.contains("exceed maximum block range")
+        || message.contains("block range limit exceeded")
+        || message.contains("query exceeds max block range")
+        || message.contains("query block range exceeds server limit")
+        || (message.contains("block range")
+            && message.contains("exceeds the maximum of")
+            && message.contains("blocks per logs request"))
+        || message.contains("too many logs requested. max logs per response is")
+        || (message.contains("query exceeds max results") && message.contains("retry with the range"))
+        || message.contains("query returns too many logs, narrow your filter")
+        || message.contains("query returned more than 10000 results")
+        || message.contains("log response size exceeded")
+}
+
+fn is_known_log_range_limit_code(code: i64) -> bool {
+    matches!(code, -32602 | -32005)
+}
+
+pub(crate) fn is_log_block_range_limit_error(error: &RpcError) -> bool {
+    let RpcError::AlloyRpcError(error) = error else {
+        return false;
+    };
+
+    if let Some(error_payload) = error.as_error_resp() {
+        return is_known_log_range_limit_code(error_payload.code)
+            && message_indicates_known_log_range_limit(&error_payload.message);
+    }
+
+    message_indicates_known_log_range_limit(&error.to_string())
+}
+
 /// Implementation of `HoprRpcOperations` and `HoprIndexerRpcOperations` trait via `alloy`
 #[derive(Debug, Clone)]
 pub struct RpcOperations<R: HttpRequestor + 'static + Clone> {
     pub provider: Arc<HoprProvider<R>>,
     pub(crate) cfg: RpcOperationsConfig,
     contract_instances: Arc<ContractInstances<HoprProvider<R>>>,
+    log_block_range_limit: Arc<Mutex<LogBlockRangeLimit>>,
 }
 
 #[cfg_attr(test, mockall::automock)]
@@ -193,9 +384,45 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
                 provider.clone(),
                 use_dummy_nr.unwrap_or(cfg!(test)),
             )),
+            log_block_range_limit: Arc::new(Mutex::new(LogBlockRangeLimit::new(cfg.max_block_range_fetch_size))),
             cfg,
             provider: Arc::new(provider),
         })
+    }
+
+    /// Resolves the Curvy Vault and optional PortalFactory from the configured Aggregator proxy.
+    ///
+    /// The Aggregator is the sole Curvy bootstrap address. Resolution happens once
+    /// during daemon startup so the indexer and GraphQL API share one validated
+    /// runtime address set.
+    pub async fn resolve_curvy_contract_addresses(&mut self) -> Result<ContractAddresses> {
+        let aggregator_address = configured_contract(self.cfg.contract_addrs.curvy_aggregator, "Curvy Aggregator")?;
+        let aggregator = CurvyAggregatorAlphaV2::new(aggregator_address, self.provider.clone());
+        let (vault_address, portal_factory_address) =
+            futures::try_join!(async { aggregator.curvyVault().call().await }, async {
+                aggregator.portalFactory().call().await
+            },)?;
+
+        if vault_address == AlloyAddress::ZERO {
+            return Err(RpcError::Other(
+                "Curvy Aggregator returned the zero address for Curvy Vault".to_string(),
+            ));
+        }
+        if portal_factory_address == AlloyAddress::ZERO {
+            warn!("Curvy Aggregator returned the zero address for Curvy PortalFactory");
+        }
+
+        self.cfg.contract_addrs.curvy_vault = vault_address.to_hopr_address();
+        self.cfg.contract_addrs.curvy_portal_factory = portal_factory_address.to_hopr_address();
+
+        debug!(
+            aggregator = %aggregator_address,
+            vault = %vault_address,
+            portal_factory = %portal_factory_address,
+            "resolved Curvy contract addresses from Aggregator"
+        );
+
+        Ok(self.cfg.contract_addrs)
     }
 
     /// Get the current block number from the RPC endpoint, adjusted for finality
@@ -247,6 +474,17 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         Ok(HoprBalance::from_be_bytes(
             self.contract_instances
                 .token
+                .balanceOf(AlloyAddress::from_hopr_address(address))
+                .call()
+                .await?
+                .to_be_bytes::<32>(),
+        ))
+    }
+
+    pub(crate) async fn get_xhopr_balance(&self, address: Address) -> Result<XHoprBalance> {
+        Ok(XHoprBalance::from_be_bytes(
+            self.contract_instances
+                .xhopr_token
                 .balanceOf(AlloyAddress::from_hopr_address(address))
                 .call()
                 .await?
@@ -381,6 +619,63 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
     }
 }
 
+impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
+    pub(crate) fn log_block_range_limit(&self) -> u64 {
+        self.with_log_block_range_limit(|range_limit| range_limit.current())
+    }
+
+    pub(crate) fn record_log_block_range_success(&self, requested_span: u64, attempted_limit: u64) {
+        let stable =
+            self.with_log_block_range_limit(|range_limit| range_limit.record_success(requested_span, attempted_limit));
+
+        if let Some(stable) = stable {
+            debug!(
+                stable_block_range = stable,
+                configured_cap = sanitize_log_block_range_cap(self.cfg.max_block_range_fetch_size),
+                "using stable RPC log block range limit"
+            );
+        }
+    }
+
+    pub(crate) fn record_log_block_range_failure(
+        &self,
+        requested_span: u64,
+        error: &RpcError,
+    ) -> LogBlockRangeFailureUpdate {
+        let update = self.with_log_block_range_limit(|range_limit| range_limit.record_failure(requested_span));
+
+        if update.warn_single_block {
+            warn!(
+                error = %error,
+                "RPC rejected a single-block eth_getLogs request; continuing in single-block mode, but this mode of \
+                 operation is very slow"
+            );
+        } else {
+            warn!(
+                failed_block_range = requested_span,
+                next_block_range = update.next_limit,
+                error = %error,
+                "RPC rejected eth_getLogs block range; adapting block range limit"
+            );
+        }
+
+        update
+    }
+
+    fn with_log_block_range_limit<T, F>(&self, action: F) -> T
+    where
+        F: FnOnce(&mut LogBlockRangeLimit) -> T,
+    {
+        match self.log_block_range_limit.lock() {
+            Ok(mut guard) => action(&mut guard),
+            Err(poisoned) => {
+                let mut guard = poisoned.into_inner();
+                action(&mut guard)
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> {
     async fn get_timestamp(&self, block_number: u64) -> Result<Option<u64>> {
@@ -432,6 +727,16 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
         }
     }
 
+    async fn get_safe_from_node_safe_registry_at(&self, registry: Address, node_address: Address) -> Result<Address> {
+        Ok(
+            HoprNodeSafeRegistry::new(AlloyAddress::from_hopr_address(registry), self.provider.clone())
+                .nodeToSafe(AlloyAddress::from_hopr_address(node_address))
+                .call()
+                .await?
+                .to_hopr_address(),
+        )
+    }
+
     async fn get_gas_price(&self) -> Result<u128> {
         Ok(self.provider.get_gas_price().await?)
     }
@@ -442,6 +747,176 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
             max_fee_per_gas: estimate.max_fee_per_gas,
             max_priority_fee_per_gas: estimate.max_priority_fee_per_gas,
         })
+    }
+
+    async fn get_curvy_aggregator_state(&self) -> Result<CurvyAggregatorState> {
+        let contract = CurvyAggregatorAlphaV2::new(
+            configured_contract(self.cfg.contract_addrs.curvy_aggregator, "Curvy Aggregator")?,
+            self.provider.clone(),
+        );
+        let (notes_tree_root, notes_batch_index, nullifiers_batch_index, note_index) = futures::try_join!(
+            async { contract.getCurrentNotesTreeRoot().call().await },
+            async { contract.getCurrentNotesBatchIndex().call().await },
+            async { contract.getCurrentNullifiersBatchIndex().call().await },
+            async { contract.getCurrentNoteIndex().call().await },
+        )?;
+        Ok(CurvyAggregatorState {
+            notes_tree_root: notes_tree_root.to_be_bytes(),
+            notes_batch_index: notes_batch_index.to_be_bytes(),
+            nullifiers_batch_index: nullifiers_batch_index.to_be_bytes(),
+            note_index: note_index.to_be_bytes(),
+        })
+    }
+
+    async fn get_curvy_note_status(&self, note_id: [u8; 32]) -> Result<u8> {
+        CurvyAggregatorAlphaV2::new(
+            configured_contract(self.cfg.contract_addrs.curvy_aggregator, "Curvy Aggregator")?,
+            self.provider.clone(),
+        )
+        .noteStatus(U256::from_be_bytes(note_id))
+        .call()
+        .await
+        .map_err(Into::into)
+    }
+
+    async fn is_curvy_notes_root_valid(&self, root: [u8; 32]) -> Result<bool> {
+        CurvyAggregatorAlphaV2::new(
+            configured_contract(self.cfg.contract_addrs.curvy_aggregator, "Curvy Aggregator")?,
+            self.provider.clone(),
+        )
+        .validNotesRoot(U256::from_be_bytes(root))
+        .call()
+        .await
+        .map_err(Into::into)
+    }
+
+    async fn is_curvy_nullifier_spent(&self, nullifier: [u8; 32]) -> Result<bool> {
+        CurvyAggregatorAlphaV2::new(
+            configured_contract(self.cfg.contract_addrs.curvy_aggregator, "Curvy Aggregator")?,
+            self.provider.clone(),
+        )
+        .nullifiers(U256::from_be_bytes(nullifier))
+        .call()
+        .await
+        .map_err(Into::into)
+    }
+
+    async fn get_curvy_vault_fees(&self) -> Result<([u8; 32], [u8; 32])> {
+        let contract = CurvyVaultV2::new(
+            configured_contract(self.cfg.contract_addrs.curvy_vault, "Curvy Vault")?,
+            self.provider.clone(),
+        );
+        let (deposit_fee, withdrawal_fee) = futures::try_join!(async { contract.depositFee().call().await }, async {
+            contract.withdrawalFee().call().await
+        },)?;
+        Ok((
+            U256::from(deposit_fee).to_be_bytes(),
+            U256::from(withdrawal_fee).to_be_bytes(),
+        ))
+    }
+
+    async fn get_curvy_aggregator_fees(&self) -> Result<CurvyAggregatorFees> {
+        let contract = CurvyAggregatorAlphaV2::new(
+            configured_contract(self.cfg.contract_addrs.curvy_aggregator, "Curvy Aggregator")?,
+            self.provider.clone(),
+        );
+        let (protocol_fee_per_thousand, commitment_fee_root, fee_note_public_key_x, fee_note_public_key_y) = futures::try_join!(
+            async { contract.protocolFeePerThousand().call().await },
+            async { contract.commitmentFeeRoot().call().await },
+            async { contract.feeNotePublicKey(U256::ZERO).call().await },
+            async { contract.feeNotePublicKey(U256::ONE).call().await },
+        )?;
+        Ok(CurvyAggregatorFees {
+            protocol_fee_per_thousand: U256::from(protocol_fee_per_thousand).to_be_bytes(),
+            commitment_fee_root: U256::from(commitment_fee_root).to_be_bytes(),
+            fee_note_public_key: [
+                U256::from(fee_note_public_key_x).to_be_bytes(),
+                U256::from(fee_note_public_key_y).to_be_bytes(),
+            ],
+        })
+    }
+
+    async fn get_curvy_vault_token_count(&self) -> Result<[u8; 32]> {
+        let count = CurvyVaultV2::new(
+            configured_contract(self.cfg.contract_addrs.curvy_vault, "Curvy Vault")?,
+            self.provider.clone(),
+        )
+        .getNumberOfTokens()
+        .call()
+        .await?;
+        Ok(U256::from(count).to_be_bytes())
+    }
+
+    async fn get_curvy_vault_token(&self, token_id: [u8; 32]) -> Result<Option<CurvyVaultToken>> {
+        let contract = CurvyVaultV2::new(
+            configured_contract(self.cfg.contract_addrs.curvy_vault, "Curvy Vault")?,
+            self.provider.clone(),
+        );
+        let token_id = U256::from_be_bytes(token_id);
+        let token_address = match contract.getTokenAddress(token_id).call().await {
+            Ok(token_address) => token_address,
+            Err(error) if is_curvy_token_not_registered(&error) => {
+                return Ok(None);
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let fees = contract.perTokenGasFees(token_id).call().await?;
+        Ok(Some(CurvyVaultToken {
+            token_address: token_address.to_hopr_address(),
+            gas_fees: CurvyGasFees {
+                token_id: fees.tokenId.to_be_bytes(),
+                portal_deployment: fees.portalDeployment.to_be_bytes(),
+                pending_note_commitment: fees.pendingNoteCommitment.to_be_bytes(),
+                withdrawal: fees.withdrawal.to_be_bytes(),
+            },
+        }))
+    }
+
+    async fn derive_curvy_entry_portal_address(&self, owner_hash: [u8; 32], recovery: Address) -> Result<Address> {
+        PortalFactory::new(
+            configured_contract(self.cfg.contract_addrs.curvy_portal_factory, "Curvy PortalFactory")?,
+            self.provider.clone(),
+        )
+        .getEntryPortalAddress(
+            U256::from_be_bytes(owner_hash),
+            AlloyAddress::from_hopr_address(recovery),
+        )
+        .call()
+        .await
+        .map(AlloyAddressExt::to_hopr_address)
+        .map_err(Into::into)
+    }
+
+    async fn derive_curvy_exit_portal_address(
+        &self,
+        exit_address: Address,
+        exit_chain_id: [u8; 32],
+        recovery: Address,
+    ) -> Result<Address> {
+        PortalFactory::new(
+            configured_contract(self.cfg.contract_addrs.curvy_portal_factory, "Curvy PortalFactory")?,
+            self.provider.clone(),
+        )
+        .getExitPortalAddress(
+            AlloyAddress::from_hopr_address(exit_address),
+            U256::from_be_bytes(exit_chain_id),
+            AlloyAddress::from_hopr_address(recovery),
+        )
+        .call()
+        .await
+        .map(AlloyAddressExt::to_hopr_address)
+        .map_err(Into::into)
+    }
+
+    async fn is_curvy_portal_registered(&self, portal_address: Address) -> Result<bool> {
+        PortalFactory::new(
+            configured_contract(self.cfg.contract_addrs.curvy_portal_factory, "Curvy PortalFactory")?,
+            self.provider.clone(),
+        )
+        .portalIsRegistered(AlloyAddress::from_hopr_address(portal_address))
+        .call()
+        .await
+        .map_err(Into::into)
     }
 
     //     // Check on-chain status of, node, safe, and module
@@ -511,6 +986,210 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
+    use hopr_bindings::exports::alloy::{
+        contract::Error as AlloyContractError,
+        rpc::json_rpc::ErrorPayload,
+        transports::{RpcError as AlloyRpcError, TransportErrorKind},
+    };
+    use serde_json::value::RawValue;
+
+    use super::{
+        DEFAULT_AUTO_LOG_BLOCK_RANGE_CAP, LogBlockRangeLimit, is_curvy_token_not_registered,
+        is_log_block_range_limit_error,
+    };
+    use crate::errors::RpcError;
+
+    fn rpc_error_response(code: i64, message: &'static str) -> RpcError {
+        RpcError::AlloyRpcError(AlloyRpcError::<TransportErrorKind>::ErrorResp(ErrorPayload {
+            code,
+            message: Cow::Borrowed(message),
+            data: None,
+        }))
+    }
+
+    #[test]
+    fn test_curvy_token_not_registered_decodes_only_its_custom_error() {
+        let revert_data = RawValue::from_string("\"0x259ba1ad\"".to_string()).expect("valid raw JSON");
+        let error = AlloyContractError::TransportError(AlloyRpcError::<TransportErrorKind>::ErrorResp(ErrorPayload {
+            code: 3,
+            message: Cow::Borrowed("execution reverted"),
+            data: Some(revert_data),
+        }));
+
+        assert!(is_curvy_token_not_registered(&error));
+    }
+
+    fn converge_limit(cap: u64, allowed_limit: u64) -> LogBlockRangeLimit {
+        let mut range_limit = LogBlockRangeLimit::new(cap);
+
+        for _ in 0..64 {
+            let candidate = range_limit.current();
+
+            if candidate <= allowed_limit {
+                range_limit.record_success(candidate, candidate);
+            } else {
+                range_limit.record_failure(candidate);
+            }
+
+            if range_limit.stable == Some(allowed_limit) {
+                return range_limit;
+            }
+        }
+
+        panic!("range limit did not converge to {allowed_limit}");
+    }
+
+    #[test]
+    fn test_log_block_range_limit_uses_default_cap_for_zero_config() {
+        let range_limit = LogBlockRangeLimit::new(0);
+
+        assert_eq!(range_limit.current(), DEFAULT_AUTO_LOG_BLOCK_RANGE_CAP);
+    }
+
+    #[test]
+    fn test_log_block_range_limit_converges_to_allowed_limits() {
+        for allowed_limit in [10_000, 5_000, 1_024, 100, 1] {
+            let range_limit = converge_limit(10_000, allowed_limit);
+
+            assert_eq!(range_limit.current(), allowed_limit);
+            assert_eq!(range_limit.stable, Some(allowed_limit));
+        }
+    }
+
+    #[test]
+    fn test_log_block_range_limit_reports_stable_limit_once() {
+        let mut range_limit = LogBlockRangeLimit::new(10_000);
+
+        assert_eq!(range_limit.record_success(10_000, 10_000), Some(10_000));
+        assert_eq!(range_limit.record_success(10_000, 10_000), None);
+    }
+
+    #[test]
+    fn test_log_block_range_limit_downshifts_after_stable_failure() {
+        let mut range_limit = converge_limit(10_000, 100);
+
+        assert_eq!(range_limit.current(), 100);
+
+        let update = range_limit.record_failure(100);
+        assert!(update.retry);
+        assert!(update.next_limit < 100);
+
+        for _ in 0..64 {
+            let candidate = range_limit.current();
+
+            if candidate <= 50 {
+                range_limit.record_success(candidate, candidate);
+            } else {
+                range_limit.record_failure(candidate);
+            }
+
+            if range_limit.stable == Some(50) {
+                break;
+            }
+        }
+
+        assert_eq!(range_limit.current(), 50);
+        assert_eq!(range_limit.stable, Some(50));
+    }
+
+    #[test]
+    fn test_log_block_range_limit_single_block_failure_keeps_single_block_mode() {
+        let mut range_limit = LogBlockRangeLimit::new(10_000);
+        let update = range_limit.record_failure(1);
+
+        assert!(!update.retry);
+        assert!(update.warn_single_block);
+        assert_eq!(range_limit.current(), 1);
+    }
+
+    #[test]
+    fn test_log_block_range_limit_error_matches_geth_response() {
+        // Message source:
+        // https://github.com/ethereum/go-ethereum/blob/7e625dd54822499d7fece76de9850377d65957c4/eth/filters/filter.go#L148-L149
+        // Error code source:
+        // https://github.com/ethereum/go-ethereum/blob/7e625dd54822499d7fece76de9850377d65957c4/eth/filters/api.go#L54-L55
+        let error = rpc_error_response(-32602, "exceed maximum block range 5000");
+
+        assert!(is_log_block_range_limit_error(&error));
+    }
+
+    #[test]
+    fn test_log_block_range_limit_error_matches_nethermind_response() {
+        // Message source:
+        // https://github.com/NethermindEth/nethermind/blob/5de23f52669f8ef08a67e2ff4a2c87bf75b5a66c/src/Nethermind/Nethermind.JsonRpc/Modules/Eth/EthRpcModule.cs#L1193-L1206
+        // Error code source:
+        // https://github.com/NethermindEth/nethermind/blob/5de23f52669f8ef08a67e2ff4a2c87bf75b5a66c/src/Nethermind/Nethermind.JsonRpc/ErrorCodes.cs#L30-L33
+        let error = rpc_error_response(
+            -32602,
+            "Block range 1001 exceeds the maximum of 1000 blocks per logs request. Use a narrower fromBlock/toBlock \
+             range or increase Receipt.MaxBlockDepth.",
+        );
+
+        assert!(is_log_block_range_limit_error(&error));
+    }
+
+    #[test]
+    fn test_log_block_range_limit_error_matches_reth_response() {
+        // Limit check source:
+        // https://github.com/paradigmxyz/reth/blob/3d76b93c243f8896f13a39ee865f87241fcd649b/crates/rpc/rpc/src/eth/filter.rs#L638-L642
+        // Message and error code source:
+        // https://github.com/paradigmxyz/reth/blob/3d76b93c243f8896f13a39ee865f87241fcd649b/crates/rpc/rpc/src/eth/filter.rs#L958-L995
+        let error = rpc_error_response(-32602, "query exceeds max block range 1000");
+
+        assert!(is_log_block_range_limit_error(&error));
+    }
+
+    #[test]
+    fn test_log_block_range_limit_error_matches_erigon_response() {
+        // Message source:
+        // https://github.com/erigontech/erigon/blob/f1d79d699ed4b809abc0d177dcb539d8605edc41/rpc/jsonrpc/eth_receipts.go#L298-L305
+        // Error code source:
+        // https://github.com/erigontech/erigon/blob/f1d79d699ed4b809abc0d177dcb539d8605edc41/rpc/errors.go#L51-L103
+        let error = rpc_error_response(
+            -32602,
+            "query block range exceeds server limit, narrow your filter: 1000",
+        );
+
+        assert!(is_log_block_range_limit_error(&error));
+    }
+
+    #[test]
+    fn test_log_block_range_limit_error_matches_infura_response() {
+        let error = rpc_error_response(-32005, "query returned more than 10000 results");
+
+        assert!(is_log_block_range_limit_error(&error));
+    }
+
+    #[test]
+    fn test_log_block_range_limit_error_matches_alchemy_response() {
+        let error = rpc_error_response(-32602, "Log response size exceeded");
+
+        assert!(is_log_block_range_limit_error(&error));
+    }
+
+    #[test]
+    fn test_log_block_range_limit_error_rejects_unrelated_limit_errors() {
+        for error in [
+            rpc_error_response(-32602, "Block gas limit exceeded"),
+            rpc_error_response(-32005, "Too many requests"),
+            rpc_error_response(-32602, "block range extends beyond current head block"),
+        ] {
+            assert!(!is_log_block_range_limit_error(&error));
+        }
+    }
+
+    #[test]
+    fn test_log_block_range_limit_error_rejects_unexpected_error_codes() {
+        for error in [
+            rpc_error_response(-32000, "query exceeds max block range 1000"),
+            rpc_error_response(429, "query exceeds max block range 1000"),
+        ] {
+            assert!(!is_log_block_range_limit_error(&error));
+        }
+    }
+
     // NOTE: This test is commented out because check_node_safe_module_status() method is commented out
     // and the helper functions deploy_one_safe_one_module_and_setup_for_testing and include_node_to_module_by_safe
     // are no longer available in blokli_chain_types

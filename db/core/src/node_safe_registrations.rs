@@ -7,7 +7,7 @@ use hopr_types::primitive::prelude::Address;
 use sea_orm::{ColumnTrait, DbErr, EntityTrait, ModelTrait, QueryFilter, Set};
 use sea_query::OnConflict;
 
-use crate::{BlokliDb, BlokliDbGeneralModelOperations, DbSqlError, OptTx, Result};
+use crate::{BlokliDb, BlokliDbGeneralModelOperations, DbSqlError, OptTx, Result, numeric::log_position_to_i64};
 
 #[async_trait]
 pub trait BlokliDbNodeSafeRegistrationOperations: BlokliDbGeneralModelOperations {
@@ -104,7 +104,6 @@ impl BlokliDbNodeSafeRegistrationOperations for BlokliDb {
     /// # Ok(()) }
     /// ```
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::cast_possible_wrap)]
     async fn register_node_to_safe<'a>(
         &'a self,
         tx: OptTx<'a>,
@@ -115,13 +114,15 @@ impl BlokliDbNodeSafeRegistrationOperations for BlokliDb {
         log_index: u64,
     ) -> Result<i64> {
         let tx = self.nest_transaction(tx).await?;
+        let (registered_block, registered_tx_index, registered_log_index) =
+            log_position_to_i64(block, tx_index, log_index)?;
 
         let registration_model = hopr_node_safe_registration::ActiveModel {
             safe_address: Set(safe_address.as_ref().to_vec()),
             node_address: Set(node_address.as_ref().to_vec()),
-            registered_block: Set(block as i64),
-            registered_tx_index: Set(tx_index as i64),
-            registered_log_index: Set(log_index as i64),
+            registered_block: Set(registered_block),
+            registered_tx_index: Set(registered_tx_index),
+            registered_log_index: Set(registered_log_index),
             ..Default::default()
         };
 
@@ -146,9 +147,9 @@ impl BlokliDbNodeSafeRegistrationOperations for BlokliDb {
 
         // Retrieve the ID (whether newly inserted or existing)
         let registration = HoprNodeSafeRegistration::find()
-            .filter(hopr_node_safe_registration::Column::RegisteredBlock.eq(block as i64))
-            .filter(hopr_node_safe_registration::Column::RegisteredTxIndex.eq(tx_index as i64))
-            .filter(hopr_node_safe_registration::Column::RegisteredLogIndex.eq(log_index as i64))
+            .filter(hopr_node_safe_registration::Column::RegisteredBlock.eq(registered_block))
+            .filter(hopr_node_safe_registration::Column::RegisteredTxIndex.eq(registered_tx_index))
+            .filter(hopr_node_safe_registration::Column::RegisteredLogIndex.eq(registered_log_index))
             .one(tx.as_ref())
             .await?
             .ok_or_else(|| {

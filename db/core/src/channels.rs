@@ -1,8 +1,3 @@
-// Allow casts for Solidity uint24/uint48 that fit safely in i64
-#![allow(clippy::cast_possible_wrap)]
-// Allow casts from i64 back to u64 for values that originated from Solidity uints
-#![allow(clippy::cast_sign_loss)]
-
 use std::{collections::HashMap, time::SystemTime};
 
 use async_trait::async_trait;
@@ -30,6 +25,7 @@ use crate::{
     db::BlokliDb,
     errors::{DbSqlError, Result},
     events::{ChannelStateChange, StateChange},
+    numeric::u64_to_i64,
 };
 
 /// Database status code for an open channel
@@ -255,9 +251,9 @@ async fn insert_channel_state_and_emit(
     let state_model = channel_state::ActiveModel {
         channel_id: Set(channel_id),
         balance: Set(balance_bytes_12.to_vec()),
-        status: Set(i8::from(channel_entry.status) as i16),
-        epoch: Set(channel_entry.channel_epoch as i64),
-        ticket_index: Set(channel_entry.ticket_index as i64),
+        status: Set(i16::from(i8::from(channel_entry.status))),
+        epoch: Set(i64::from(channel_entry.channel_epoch)),
+        ticket_index: Set(u64_to_i64(channel_entry.ticket_index, "channel ticket_index")?),
         closure_time: Set(match &channel_entry.status {
             ChannelStatus::PendingToClose(time) => Some(system_time_to_datetime(time).into()),
             _ => None,
@@ -672,10 +668,9 @@ impl BlokliDbChannelOperations for BlokliDb {
         let dest_addr = channel_entry.destination;
         let db_clone = self.clone();
 
-        // Convert u32 to i64 for database storage
-        let block_i64 = block as i64;
-        let tx_index_i64 = tx_index as i64;
-        let log_index_i64 = log_index as i64;
+        let block_i64 = i64::from(block);
+        let tx_index_i64 = i64::from(tx_index);
+        let log_index_i64 = i64::from(log_index);
 
         self.nest_transaction(tx)
             .await?
@@ -733,7 +728,7 @@ impl BlokliDbChannelOperations for BlokliDb {
         block: u32,
     ) -> Result<Option<ChannelEntry>> {
         let id_hex = hex::encode(id.as_ref());
-        let block_i64 = block as i64;
+        let block_i64 = i64::from(block);
 
         self.nest_transaction(tx)
             .await?
@@ -832,9 +827,9 @@ impl BlokliDbChannelOperations for BlokliDb {
         let id_hex = hex::encode(id.as_ref());
         let id_hex_clone = id_hex.clone();
         let id_hex_clone2 = id_hex.clone();
-        let block_i64 = block as i64;
-        let tx_index_i64 = tx_index as i64;
-        let log_index_i64 = log_index as i64;
+        let block_i64 = i64::from(block);
+        let tx_index_i64 = i64::from(tx_index);
+        let log_index_i64 = i64::from(log_index);
 
         self.nest_transaction(tx)
             .await?
@@ -1398,9 +1393,9 @@ mod tests {
         );
         let channel_id = base_channel.get_id();
 
-        for i in 0..5 {
+        for i in 0_u32..5 {
             let balance = HoprBalance::from((i + 1) * 1000);
-            let ce = build_channel_entry(addr_1, addr_2, balance, i as u64, ChannelStatus::Open, 1u32);
+            let ce = build_channel_entry(addr_1, addr_2, balance, u64::from(i), ChannelStatus::Open, 1u32);
             db.upsert_channel(None, ce, (i + 1) * 100, 0, 0).await?;
         }
 
@@ -1418,7 +1413,8 @@ mod tests {
                 i
             );
             assert_eq!(
-                i as u64, state.ticket_index,
+                u64::try_from(i)?,
+                state.ticket_index,
                 "state {} should have correct ticket_index",
                 i
             );
@@ -1607,6 +1603,65 @@ mod tests {
             second_recv.is_err(),
             "duplicate upsert at same position should not emit a second channel state event"
         );
+
+        Ok(())
+    }
+    #[tokio::test]
+    async fn test_channel_entry_builder_rejects_oversized_ticket_index() -> anyhow::Result<()> {
+        let addr_1 = Address::from(random_bytes());
+        let addr_2 = Address::from(random_bytes());
+
+        // ticket_index above the protocol's MAX_TICKET_INDEX (2^48 - 1) must be
+        // rejected at the builder. The DB layer enforces i64::MAX as defense in
+        // depth, but the builder is the first line of defense and the only one
+        // reachable through the public API.
+        let err = ChannelEntry::builder()
+            .between(addr_1, addr_2)
+            .balance(HoprBalance::from(1000u32))
+            .ticket_index(u64::MAX)
+            .status(ChannelStatus::Open)
+            .epoch(1u32)
+            .build()
+            .expect_err("ticket_index above MAX_TICKET_INDEX should be rejected");
+
+        assert!(
+            err.to_string().contains("ticket index"),
+            "unexpected error message: {err}"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_upsert_channel_round_trip_within_builder_limits() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let addr_1 = Address::from(random_bytes());
+        let addr_2 = Address::from(random_bytes());
+
+        let packet_key_addr_1 = *OffchainKeypair::random().public();
+        db.upsert_account(None, 1, addr_1, packet_key_addr_1, None, 1, 0, 0)
+            .await?;
+        let packet_key_addr_2 = *OffchainKeypair::random().public();
+        db.upsert_account(None, 2, addr_2, packet_key_addr_2, None, 1, 0, 0)
+            .await?;
+
+        // A normal, in-range ticket_index must still round-trip through upsert_channel
+        // and come back as the same value. This guards against a regression where the
+        // checked i64 conversion at the DB boundary silently truncates large values.
+        let ce = build_channel_entry(
+            addr_1,
+            addr_2,
+            HoprBalance::from(1000u32),
+            42u64,
+            ChannelStatus::Open,
+            1u32,
+        );
+        db.upsert_channel(None, ce, 100, 0, 0).await?;
+
+        let history = db.get_channel_history(None, ce.get_id()).await?;
+        assert_eq!(1, history.len(), "should have one state record");
+        assert_eq!(42u64, history[0].ticket_index, "ticket_index must round-trip unchanged");
 
         Ok(())
     }

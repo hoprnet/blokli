@@ -1,3 +1,6 @@
+use std::num::TryFromIntError;
+
+use blokli_chain_types::curvy_tree::TreeError;
 use hopr_bindings::exports::alloy::{dyn_abi::Error as AbiError, sol_types::Error as SolTypeError};
 use hopr_types::primitive::{errors::GeneralError, primitives::Address};
 use thiserror::Error;
@@ -27,6 +30,15 @@ pub enum CoreEthereumIndexerError {
 
     #[error("{0}")]
     ValidationError(String),
+
+    #[error(transparent)]
+    CurvyTreeError(#[from] TreeError),
+
+    #[error("Curvy derived-state invariant failed: {0}")]
+    CurvyStateInvariant(String),
+
+    #[error("Curvy index conversion failed: {0}")]
+    CurvyIndexConversion(#[from] TryFromIntError),
 
     #[error("Address announcement without a preceding key binding.")]
     AnnounceBeforeKeyBinding,

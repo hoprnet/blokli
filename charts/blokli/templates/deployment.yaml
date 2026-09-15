@@ -4,8 +4,14 @@ metadata:
   name: {{ include "blokli.fullname" . }}
   annotations:
     argocd.argoproj.io/sync-wave: "3"
+    {{- with .Values.deploymentAnnotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
   labels:
     {{- include "blokli.labels" . | nindent 4 }}
+    {{- if and .Values.networkPolicy.enabled .Values.networkPolicy.ingressPrometheus.enabled }}
+    network-policy.hoprnet.org/prometheus-scrape-port: {{ .Values.service.port | quote }}
+    {{- end }}
 spec:
   replicas: 1
   selector:

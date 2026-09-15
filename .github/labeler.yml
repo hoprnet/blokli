@@ -21,9 +21,6 @@ crate:bloklid:
 crate:blokli-api:
   - changed-files:
       - any-glob-to-any-file: api/**
-crate:blokli-client:
-  - changed-files:
-      - any-glob-to-any-file: client/**
 crate:blokli-db:
   - changed-files:
       - any-glob-to-any-file: db/**

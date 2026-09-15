@@ -1,29 +1,17 @@
-# Integration test binaries run in parallel (each gets its own Docker stack),
-# but tests within each binary run serially (they share a fixture).
-[test-groups.integration-query]
-max-threads = 1
+# Terminate any test that runs longer than 3×60s = 180s. This turns a single
+# hung/slow test into a fast, attributable failure instead of a silent 30-min
+# CI job timeout.
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 3 }
 
-[test-groups.integration-subscription]
-max-threads = 1
-
-[test-groups.integration-transaction]
-max-threads = 1
-
-[test-groups.integration-load]
-max-threads = 1
-
-[[profile.default.overrides]]
-filter     = "binary(blokli_query_client)"
-test-group = "integration-query"
+# Every integration test (anything under a crate's `tests/` directory) spins up
+# its own Anvil node and, in some cases, a full GraphQL stack — each is heavy on
+# CPU, memory, and ephemeral ports. Cap how many run at once so a large CI runner
+# doesn't try to launch a dozen Anvils simultaneously and thrash. Unit tests
+# (kind = lib/bin) are unaffected and keep running at full parallelism.
+[test-groups.integration]
+max-threads = 4
 
 [[profile.default.overrides]]
-filter     = "binary(blokli_subscription_client)"
-test-group = "integration-subscription"
-
-[[profile.default.overrides]]
-filter     = "binary(blokli_transaction_client)"
-test-group = "integration-transaction"
-
-[[profile.default.overrides]]
-filter     = "binary(blokli_load)"
-test-group = "integration-load"
+filter     = "kind(=test)"
+test-group = "integration"

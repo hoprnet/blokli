@@ -1,0 +1,8 @@
+---
+source: chain/indexer/src/handlers/service_registry.rs
+expression: entry_update(events)
+---
+kind: Deregistered
+service_type: "gvpn:exit"
+node: "0x1111111111111111111111111111111111111111"
+entry: ~

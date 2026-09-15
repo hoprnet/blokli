@@ -9,12 +9,10 @@
       <sourceFolder url="file://$MODULE_DIR$/chain/indexer/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/chain/rpc/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/chain/types/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/client/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/db/api/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/db/entity/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/db/migration/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/db/sql/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/client/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/api/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/types/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/api/tests" isTestSource="true" />
@@ -23,9 +21,6 @@
       <sourceFolder url="file://$MODULE_DIR$/chain/rpc/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/db/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/db/core/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/inspector/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/tests/integration/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/tests/integration/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/helper/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>

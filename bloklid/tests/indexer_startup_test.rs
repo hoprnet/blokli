@@ -16,6 +16,7 @@ use tokio::sync::Mutex;
 struct MockRpcOperations {
     block_number: u64,
     hopr_balance: HoprBalance,
+    xhopr_balance: XHoprBalance,
     xdai_balance: XDaiBalance,
     channel_closure_notice_period: Duration,
 }
@@ -25,6 +26,7 @@ impl MockRpcOperations {
         Self {
             block_number: 2, // Set close to the blocks we'll provide (0, 1, 2)
             hopr_balance: HoprBalance::from(1000u64),
+            xhopr_balance: XHoprBalance::from(1000u64),
             xdai_balance: XDaiBalance::from(1000u64),
             channel_closure_notice_period: Duration::from_secs(300), // 5 minutes
         }
@@ -96,6 +98,10 @@ impl HoprIndexerRpcOperations for MockRpcOperations {
         Ok(self.hopr_balance)
     }
 
+    async fn get_xhopr_balance(&self, _address: Address) -> blokli_chain_rpc::errors::Result<XHoprBalance> {
+        Ok(self.xhopr_balance.clone())
+    }
+
     async fn get_hopr_allowance(
         &self,
         _owner: Address,
@@ -144,6 +150,10 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
         winning_probability_oracle: Address::from([6; 20]),
         node_stake_factory: Address::from([7; 20]),
         xhopr_token: Address::from([10; 20]),
+        curvy_aggregator: Address::default(),
+        curvy_vault: Address::default(),
+        curvy_portal_factory: Address::default(),
+        service_registry: Address::from([11; 20]),
     };
 
     // Create indexer state for subscriptions (must be created before handlers)
@@ -155,6 +165,7 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
         db.clone(),
         mock_rpc.clone(),
         indexer_state.clone(),
+        false,
         false,
     );
 
@@ -176,6 +187,7 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
         fast_sync: false, // Disable fast sync for testing
         enable_logs_snapshot: false,
         enable_safe_indexing: false,
+        enable_curvy_indexing: false,
         logs_snapshot_url: None,
         data_directory: db_path.to_string_lossy().to_string(),
         event_bus_capacity: 1000,
@@ -227,6 +239,10 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
         winning_probability_oracle: Address::from([6; 20]),
         node_stake_factory: Address::from([7; 20]),
         xhopr_token: Address::from([10; 20]),
+        curvy_aggregator: Address::default(),
+        curvy_vault: Address::default(),
+        curvy_portal_factory: Address::default(),
+        service_registry: Address::from([11; 20]),
     };
 
     // Create indexer state for subscriptions (must be created before handlers)
@@ -238,6 +254,7 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
         db.clone(),
         mock_rpc.clone(),
         indexer_state.clone(),
+        false,
         false,
     );
 
@@ -259,6 +276,7 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
         fast_sync: true,
         enable_logs_snapshot: false, // Don't try to download snapshots
         enable_safe_indexing: false,
+        enable_curvy_indexing: false,
         logs_snapshot_url: None,
         data_directory: db_path.to_string_lossy().to_string(),
         event_bus_capacity: 1000,
@@ -368,6 +386,10 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
             self.inner.get_hopr_balance(address).await
         }
 
+        async fn get_xhopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XHoprBalance> {
+            self.inner.get_xhopr_balance(address).await
+        }
+
         async fn get_hopr_allowance(
             &self,
             owner: Address,
@@ -410,6 +432,10 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         winning_probability_oracle: Address::from([6; 20]),
         node_stake_factory: Address::from([7; 20]),
         xhopr_token: Address::from([10; 20]),
+        curvy_aggregator: Address::default(),
+        curvy_vault: Address::default(),
+        curvy_portal_factory: Address::default(),
+        service_registry: Address::from([11; 20]),
     };
 
     // Create indexer state for subscriptions (must be created before handlers)
@@ -421,6 +447,7 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         db.clone(),
         tracking_rpc.clone(),
         indexer_state.clone(),
+        false,
         false,
     );
 
@@ -443,6 +470,7 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         fast_sync: false,
         enable_logs_snapshot: false,
         enable_safe_indexing: false,
+        enable_curvy_indexing: false,
         logs_snapshot_url: None,
         data_directory: db_path.to_string_lossy().to_string(),
         event_bus_capacity: 1000,
@@ -499,6 +527,7 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
     let mock_rpc = MockRpcOperations {
         block_number: 2,
         hopr_balance: HoprBalance::from(1000u64),
+        xhopr_balance: XHoprBalance::from(1000u64),
         xdai_balance: XDaiBalance::from(1000u64),
         channel_closure_notice_period: expected_grace_period,
     };
@@ -515,6 +544,10 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
         winning_probability_oracle: Address::from([6; 20]),
         node_stake_factory: Address::from([7; 20]),
         xhopr_token: Address::from([10; 20]),
+        curvy_aggregator: Address::default(),
+        curvy_vault: Address::default(),
+        curvy_portal_factory: Address::default(),
+        service_registry: Address::from([11; 20]),
     };
 
     // Create indexer state for subscriptions
@@ -526,6 +559,7 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
         db.clone(),
         mock_rpc.clone(),
         indexer_state.clone(),
+        false,
         false,
     );
 
@@ -547,6 +581,7 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
         fast_sync: false,
         enable_logs_snapshot: false,
         enable_safe_indexing: false,
+        enable_curvy_indexing: false,
         logs_snapshot_url: None,
         data_directory: db_path.to_string_lossy().to_string(),
         event_bus_capacity: 1000,
@@ -566,6 +601,82 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
         Some(expected_grace_period.as_secs()),
         "Grace period should be initialized from contract during pre_start"
     );
+
+    Ok(())
+}
+
+/// The service registry must reach the RPC filter set: its address is monitored and it maps to the
+/// ten registry topics the indexer stores.
+#[tokio::test]
+async fn test_service_registry_is_in_the_handler_filter_set() -> anyhow::Result<()> {
+    let db = BlokliDb::new_in_memory().await?;
+    let service_registry = Address::from([11; 20]);
+
+    let handlers = ContractEventHandlers::new(
+        ContractAddresses {
+            token: Address::from([1; 20]),
+            channels: Address::from([2; 20]),
+            announcements: Address::from([3; 20]),
+            module_implementation: Address::from([8; 20]),
+            node_safe_migration: Address::from([9; 20]),
+            node_safe_registry: Address::from([4; 20]),
+            ticket_price_oracle: Address::from([5; 20]),
+            winning_probability_oracle: Address::from([6; 20]),
+            node_stake_factory: Address::from([7; 20]),
+            xhopr_token: Address::from([10; 20]),
+            service_registry,
+            curvy_aggregator: Address::from([11; 20]),
+            curvy_vault: Address::from([12; 20]),
+            curvy_portal_factory: Address::from([13; 20]),
+        },
+        db,
+        MockRpcOperations::new(),
+        blokli_chain_indexer::IndexerState::new(1000, 10),
+        false,
+        false,
+    );
+
+    let addresses = handlers.contract_addresses();
+    assert_eq!(addresses.len(), 8);
+    assert!(addresses.contains(&service_registry));
+    assert_eq!(handlers.contract_address_topics(service_registry).len(), 10);
+
+    Ok(())
+}
+
+/// A network without the registry carries the zero address for it. Filtering `eth_getLogs` on the
+/// null address is meaningless and expensive, so the address is left out of the set entirely.
+#[tokio::test]
+async fn test_zero_service_registry_is_not_monitored() -> anyhow::Result<()> {
+    let db = BlokliDb::new_in_memory().await?;
+
+    let handlers = ContractEventHandlers::new(
+        ContractAddresses {
+            token: Address::from([1; 20]),
+            channels: Address::from([2; 20]),
+            announcements: Address::from([3; 20]),
+            module_implementation: Address::from([8; 20]),
+            node_safe_migration: Address::from([9; 20]),
+            node_safe_registry: Address::from([4; 20]),
+            ticket_price_oracle: Address::from([5; 20]),
+            winning_probability_oracle: Address::from([6; 20]),
+            node_stake_factory: Address::from([7; 20]),
+            xhopr_token: Address::from([10; 20]),
+            service_registry: Address::default(),
+            curvy_aggregator: Address::from([11; 20]),
+            curvy_vault: Address::from([12; 20]),
+            curvy_portal_factory: Address::from([13; 20]),
+        },
+        db,
+        MockRpcOperations::new(),
+        blokli_chain_indexer::IndexerState::new(1000, 10),
+        false,
+        false,
+    );
+
+    let addresses = handlers.contract_addresses();
+    assert_eq!(addresses.len(), 7);
+    assert!(!addresses.contains(&Address::default()));
 
     Ok(())
 }

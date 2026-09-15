@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, Log};
 use blokli_chain_types::{AlloyAddressExt, ContractAddresses};
 use blokli_db::{BlokliDbAllOperations, OpenTransaction};
+use curvy_bindings::curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2::CurvyAggregatorAlphaV2Events;
 use hopr_bindings::{
     exports::alloy::{
         primitives::{Address as AlloyAddress, B256, Log as AlloyLog},
@@ -17,6 +18,7 @@ use hopr_bindings::{
     hopr_node_management_module::HoprNodeManagementModule::HoprNodeManagementModuleEvents,
     hopr_node_safe_registry::HoprNodeSafeRegistry::HoprNodeSafeRegistryEvents,
     hopr_node_stake_factory::HoprNodeStakeFactory::HoprNodeStakeFactoryEvents,
+    hopr_service_registry::HoprServiceRegistry::HoprServiceRegistryEvents,
     hopr_ticket_price_oracle::HoprTicketPriceOracle::HoprTicketPriceOracleEvents,
     hopr_token::HoprToken::HoprTokenEvents,
     hopr_winning_probability_oracle::HoprWinningProbabilityOracle::HoprWinningProbabilityOracleEvents,
@@ -31,16 +33,19 @@ use crate::{
     IndexerState,
     custom_abis::safe_contract_events::SafeContract::SafeContractEvents,
     errors::{CoreEthereumIndexerError, Result},
+    numeric::{u64_to_u32, u256_to_u32, u256_to_u64},
     state::IndexerEvent,
 };
 
 mod announcements;
 mod channel_utils;
 mod channels;
+mod curvy;
 mod helpers;
 mod node_safe_registry;
 mod oracles;
 mod safe_contracts;
+mod service_registry;
 mod stake_factory;
 #[cfg(test)]
 mod test_utils;
@@ -70,8 +75,7 @@ fn increment_indexer_contract_log_count(contract: &str) {
 /// and passed on to this object that handles event-specific actions for each on-chain operation.
 #[derive(Clone)]
 pub struct ContractEventHandlers<T, Db> {
-    /// channels, announcements, token: contract addresses
-    /// whose event we process
+    /// Contract addresses whose events are processed, including the optional Curvy Aggregator.
     pub(super) addresses: Arc<ContractAddresses>,
     /// callbacks to inform other modules
     pub(super) db: Db,
@@ -80,6 +84,7 @@ pub struct ContractEventHandlers<T, Db> {
     /// indexer state for publishing events to subscribers
     pub(super) indexer_state: IndexerState,
     pub(super) enable_safe_indexing: bool,
+    pub(super) enable_curvy_indexing: bool,
 }
 
 impl<T, Db> Debug for ContractEventHandlers<T, Db> {
@@ -117,6 +122,7 @@ where
         rpc_operations: T,
         indexer_state: IndexerState,
         enable_safe_indexing: bool,
+        enable_curvy_indexing: bool,
     ) -> Self {
         Self {
             addresses: Arc::new(addresses),
@@ -124,6 +130,7 @@ where
             _rpc_operations: rpc_operations,
             indexer_state,
             enable_safe_indexing,
+            enable_curvy_indexing,
         }
     }
 
@@ -198,9 +205,9 @@ where
         })?;
 
         if log.address.eq(&self.addresses.announcements) {
-            let bn = log.block_number as u32;
-            let tx_idx = log.tx_index as u32;
-            let log_idx = log.log_index.as_u32();
+            let bn = u64_to_u32(log.block_number, "block_number")?;
+            let tx_idx = u64_to_u32(log.tx_index, "tx_index")?;
+            let log_idx = u256_to_u32(log.log_index, "log_index")?;
             let event = HoprAnnouncementsEvents::decode_log(&primitive_log)?;
             self.on_announcement_event(tx, event.data, bn, tx_idx, log_idx, is_synced)
                 .await
@@ -208,14 +215,14 @@ where
             let event = HoprNodeStakeFactoryEvents::decode_log(&primitive_log)?;
             let block = log.block_number;
             let tx_idx = log.tx_index;
-            let log_idx = log.log_index.as_u64();
+            let log_idx = u256_to_u64(log.log_index, "log_index")?;
             self.on_stake_factory_event(tx, &slog, event.data, is_synced, block, tx_idx, log_idx)
                 .await
         } else if log.address.eq(&self.addresses.channels) {
             let event = HoprChannelsEvents::decode_log(&primitive_log)?;
-            let block = log.block_number as u32;
-            let tx_idx = log.tx_index as u32;
-            let log_idx = log.log_index.as_u32();
+            let block = u64_to_u32(log.block_number, "block_number")?;
+            let tx_idx = u64_to_u32(log.tx_index, "tx_index")?;
+            let log_idx = u256_to_u32(log.log_index, "log_index")?;
             match self
                 .on_channel_event(tx, event.data, block, tx_idx, log_idx, is_synced)
                 .await
@@ -234,6 +241,12 @@ where
         } else if log.address.eq(&self.addresses.node_safe_registry) {
             let event = HoprNodeSafeRegistryEvents::decode_log(&primitive_log)?;
             self.on_node_safe_registry_event(tx, &log, event.data, is_synced).await
+        } else if !self.addresses.service_registry.is_zero() && log.address.eq(&self.addresses.service_registry) {
+            // Placed ahead of the Safe lookup below so that a registry log costs no database
+            // query. The zero-address guard keeps a network without the registry from routing an
+            // unrelated zero-address log here.
+            let event = HoprServiceRegistryEvents::decode_log(&primitive_log)?;
+            self.on_service_registry_event(tx, &log, event.data, is_synced).await
         } else if self
             .db
             .get_safe_contract_by_address(Some(tx), log.address)
@@ -260,6 +273,9 @@ where
             let event = HoprWinningProbabilityOracleEvents::decode_log(&primitive_log)?;
             self.on_ticket_winning_probability_oracle_event(tx, event.data, is_synced)
                 .await
+        } else if self.enable_curvy_indexing && log.address.eq(&self.addresses.curvy_aggregator) {
+            let event = CurvyAggregatorAlphaV2Events::decode_log(&primitive_log)?;
+            self.on_curvy_aggregator_event(tx, &log, event.data).await
         } else {
             #[cfg(all(feature = "telemetry", not(test)))]
             increment_indexer_contract_log_count("unknown");
@@ -285,18 +301,23 @@ where
     ///
     /// `Vec<Address>` containing the monitored contract addresses in the following order:
     /// announcements, channels, ticket_price_oracle, winning_probability_oracle,
-    /// node_safe_registry, node_stake_factory, token.
+    /// node_safe_registry, node_stake_factory, token, and - only where it is deployed -
+    /// service_registry, followed by the configured Curvy Aggregator address when indexing is enabled.
+    ///
+    /// The service registry is the one optional entry. Networks without a deployed registry
+    /// carry the zero address for it, and filtering `eth_getLogs` on the null address is both
+    /// meaningless and expensive, so it is skipped there.
     ///
     /// # Examples
     ///
     /// ```ignore
     /// let addrs = handlers.contract_addresses();
-    /// assert_eq!(addrs.len(), 7);
+    /// assert_eq!(addrs.len(), 8); // 7 where the service registry is not deployed
     /// // order: announcements, channels, ticket_price_oracle, winning_probability_oracle,
-    /// // node_safe_registry, node_stake_factory, token
+    /// // node_safe_registry, node_stake_factory, token, optional service_registry, optional Curvy Aggregator
     /// ```
     fn contract_addresses(&self) -> Vec<Address> {
-        vec![
+        let mut addresses = vec![
             self.addresses.announcements,
             self.addresses.channels,
             self.addresses.ticket_price_oracle,
@@ -304,7 +325,15 @@ where
             self.addresses.node_safe_registry,
             self.addresses.node_stake_factory,
             self.addresses.token,
-        ]
+        ];
+        if !self.addresses.service_registry.is_zero() {
+            addresses.push(self.addresses.service_registry);
+        }
+
+        if self.enable_curvy_indexing {
+            addresses.push(self.addresses.curvy_aggregator);
+        }
+        addresses
     }
 
     fn contract_addresses_map(&self) -> Arc<ContractAddresses> {
@@ -342,6 +371,12 @@ where
             crate::constants::topics::stake_factory()
         } else if contract.eq(&self.addresses.token) {
             crate::constants::topics::token()
+        } else if !self.addresses.service_registry.is_zero() && contract.eq(&self.addresses.service_registry) {
+            // The zero-address guard keeps a network without the registry from matching here on
+            // an unrelated call with a zero address, which would silently return registry topics.
+            crate::constants::topics::service_registry()
+        } else if self.enable_curvy_indexing && contract.eq(&self.addresses.curvy_aggregator) {
+            crate::constants::topics::curvy_aggregator()
         } else {
             panic!("use of unsupported contract address: {contract}");
         }
@@ -382,6 +417,10 @@ where
         }
 
         Ok(())
+    }
+
+    async fn revert_block_derived_state(&self, from_block: u64) -> Result<()> {
+        self.revert_curvy_state(from_block).await
     }
 }
 

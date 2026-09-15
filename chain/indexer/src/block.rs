@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::error::Error as StdError;
 use std::{
     collections::HashSet,
     path::Path,
@@ -39,6 +41,7 @@ use tracing::{debug, error, info, trace, warn};
 use crate::{
     IndexerConfig, IndexerState,
     errors::{CoreEthereumIndexerError, Result},
+    numeric::{u64_to_i64, u64_to_u32},
     snapshot::{SnapshotInfo, SnapshotManager},
     traits::ChainLogHandler,
 };
@@ -195,7 +198,7 @@ where
 
         // Check that the contract addresses and topics are consistent with what is in the logs DB,
         // or if the DB is empty, prime it with the given addresses and topics.
-        db.ensure_logs_origin(address_topics).await?;
+        db.ensure_logs_origin(address_topics.clone()).await?;
 
         let is_synced = Arc::new(AtomicBool::new(false));
         let chain_head = Arc::new(AtomicU64::new(0));
@@ -217,6 +220,17 @@ where
 
         // Pre-start operations to ensure the indexer is ready, including snapshot fetching
         self.pre_start().await?;
+
+        // Re-check the origin after pre-start. Importing a logs snapshot replaces the log and
+        // topic tables wholesale, discarding whatever was primed above, and indexing then resumes
+        // from the snapshot's watermark. A snapshot that does not cover every configured contract
+        // would therefore skip that contract's entire pre-watermark history with no other symptom.
+        // For Curvy that is unrecoverable rather than merely incomplete: dense leaf indices are a
+        // function of every preceding note, so missing history yields a tree whose roots disagree
+        // with the aggregator's, surfacing only when a wallet's witness fails to verify. The
+        // address/topic set is derived from the enabled contracts, so this is inert unless a
+        // configured contract is genuinely absent from the snapshot.
+        db.ensure_logs_origin(address_topics).await?;
 
         #[derive(PartialEq, Eq)]
         enum FastSyncMode {
@@ -333,7 +347,7 @@ where
                     start_block = last_indexed,
                     "Resuming from last indexed block (no checksummed logs found)",
                 );
-                (last_indexed + 1) as u64
+                u64::from(last_indexed) + 1
             } else {
                 self.cfg.start_block_number
             }
@@ -359,6 +373,18 @@ where
             let mut stream_start_block = next_block_to_process;
 
             if stream_start_block <= historical_sync_head {
+                let historical_sync_head_u32 = match u64_to_u32(historical_sync_head, "block_number") {
+                    Ok(block_number) => block_number,
+                    Err(error) => {
+                        error!(
+                            historical_sync_head,
+                            %error,
+                            "historical sync head does not fit into u32, terminating indexer task"
+                        );
+                        return;
+                    }
+                };
+
                 info!(
                     start_block = stream_start_block,
                     end_block = historical_sync_head,
@@ -401,7 +427,7 @@ where
                     .update_logs_checksums()
                     .await
                     .expect("historical sync checksum finalization should succeed");
-                db.set_indexer_state_info(None, historical_sync_head as u32)
+                db.set_indexer_state_info(None, historical_sync_head_u32)
                     .await
                     .expect("historical sync state finalization should succeed");
 
@@ -486,14 +512,9 @@ where
         if fast_sync_configured && index_empty && !logs_db_has_data && self.cfg.enable_logs_snapshot {
             info!("Logs database is empty, attempting to download logs snapshot...");
 
-            match self.download_snapshot().await {
-                Ok(snapshot_info) => {
-                    info!(snapshot_info = ?snapshot_info, "logs snapshot downloaded successfully");
-                }
-                Err(e) => {
-                    error!(error = %e, "failed to download logs snapshot, continuing with regular sync");
-                }
-            }
+            self.download_snapshot().await.map(|snapshot_info| {
+                info!(snapshot_info = ?snapshot_info, "logs snapshot downloaded successfully");
+            })?;
         }
 
         // Initialize channel closure grace period from contract
@@ -816,6 +837,13 @@ where
     {
         let _lock = indexer_state.acquire_processing_lock().await;
         let block_id = block.block_id;
+        let block_id_u32 = match u64_to_u32(block_id, "block_number") {
+            Ok(block_number) => block_number,
+            Err(error) => {
+                error!(block_id, %error, "failed to convert block id to u32, skipping block");
+                return None;
+            }
+        };
         let log_count = block.logs.len();
         debug!(block_id, "processing events");
 
@@ -830,7 +858,7 @@ where
 
             // Handle the reorg by inserting corrective channel states
             // Use the current block as the canonical block for corrective states
-            match Self::handle_reorg(db, &reorg_info, block_id, indexer_state).await {
+            match Self::handle_reorg(logs_handler, db, &reorg_info, block_id, indexer_state).await {
                 Ok(corrected_count) => {
                     info!(
                         block_id,
@@ -853,6 +881,20 @@ where
         // transaction. This is difficult since currently this would be across databases.
         // Process all logs - events are published internally via IndexerState
         for log in block.logs.clone() {
+            if log.removed || !logs_handler.should_process_log(&log) {
+                debug!(
+                    block_id = log.block_number,
+                    tx_index = log.tx_index,
+                    log_index = %log.log_index,
+                    removed = log.removed,
+                    "skipping log excluded by the indexer or its contract handler"
+                );
+                if let Err(error) = db.set_log_processed(log).await {
+                    error!(block_id, %error, "failed to mark skipped log as processed");
+                    panic!("failed to mark skipped log as processed")
+                }
+                continue;
+            }
             match logs_handler.collect_log_event(log.clone(), is_synced).await {
                 Ok(()) => match db.set_log_processed(log).await {
                     Ok(_) => {}
@@ -909,9 +951,7 @@ where
                         }
                     }
                 }
-
-                // finally update the block number in the database to the last processed block
-                match db.set_indexer_state_info(None, block_id as u32).await {
+                match db.set_indexer_state_info(None, block_id_u32).await {
                     Ok(_) => {
                         #[cfg(all(feature = "telemetry", not(test)))]
                         METRIC_INDEXER_CURRENT_BLOCK.set(block_id as f64);
@@ -1063,6 +1103,7 @@ where
     ///   corrective states
     /// - Design document section 6.5 - Detailed reorg handling specification
     async fn handle_reorg(
+        logs_handler: &U,
         db: &Db,
         reorg_info: &ReorgInfo,
         canonical_block: u64,
@@ -1084,6 +1125,15 @@ where
             min_block,
             max_block, canonical_block, "Processing reorg: identifying affected channels"
         );
+
+        // Subscribers must stop before canonical history and cursor anchors are changed.
+        if !indexer_state.signal_shutdown() {
+            error!("Failed to signal shutdown to subscriptions after reorg - channel may be closed");
+        } else {
+            info!("Signaled shutdown to active subscriptions after reorg");
+        }
+
+        logs_handler.revert_block_derived_state(min_block).await?;
 
         // Step 1: Query channel_state table for all states in the affected block range
         // This tells us which channels were affected by the reorg
@@ -1133,6 +1183,7 @@ where
 
             // Step 3: Insert corrective state at synthetic position (canonical_block, 0, 0)
             // This state represents the canonical state after reorg recovery
+            let canonical_block = u64_to_i64(canonical_block, "canonical_block")?;
             let corrective_state = channel_state::ActiveModel {
                 id: Default::default(), // Auto-increment
                 channel_id: Set(channel_id),
@@ -1142,7 +1193,7 @@ where
                 ticket_index: Set(valid_state.ticket_index),
                 closure_time: Set(valid_state.closure_time),
                 corrupted_state: Set(valid_state.corrupted_state),
-                published_block: Set(canonical_block as i64),
+                published_block: Set(canonical_block),
                 published_tx_index: Set(0),  // Synthetic position
                 published_log_index: Set(0), // Synthetic position
                 reorg_correction: Set(true), // Mark as reorg correction
@@ -1158,15 +1209,6 @@ where
             corrected_count += 1;
 
             debug!(channel_id, canonical_block, "Inserted corrective state");
-        }
-
-        // Signal shutdown to active subscriptions
-        // Subscriptions will detect shutdown signal and close client connections,
-        // forcing clients to reconnect and get fresh watermarks
-        if !indexer_state.signal_shutdown() {
-            error!("Failed to signal shutdown to subscriptions after reorg - channel may be closed");
-        } else {
-            info!("Signaled shutdown to active subscriptions after reorg");
         }
 
         info!(corrected_count, "Reorg handling complete");
@@ -1293,7 +1335,7 @@ mod tests {
         internal::account::{AccountEntry, AccountType},
         primitive::prelude::*,
     };
-    use mockall::mock;
+    use mockall::{mock, predicate};
     use multiaddr::Multiaddr;
 
     use super::*;
@@ -1333,7 +1375,7 @@ mod tests {
 
         for i in 0..size {
             let test_multiaddr: Multiaddr = format!("/ip4/1.2.3.4/tcp/{}", 1000 + i).parse()?;
-            let tx_index: u64 = i as u64;
+            let tx_index = u64::try_from(i)?;
             let log_index: u64 = starting_log_index + tx_index;
 
             logs.push(SerializableLog {
@@ -1382,6 +1424,7 @@ mod tests {
 
             async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance>;
             async fn get_hopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
+            async fn get_xhopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XHoprBalance>;
             async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
             async fn get_transaction_count(&self, address: Address) -> blokli_chain_rpc::errors::Result<u64>;
             async fn get_channel_closure_notice_period(&self) -> blokli_chain_rpc::errors::Result<std::time::Duration>;
@@ -1428,6 +1471,147 @@ mod tests {
 
             Ok(())
         }
+    }
+
+    #[derive(Clone, Default)]
+    struct RejectingLogHandler {
+        collect_called: Arc<StdAtomicBool>,
+    }
+
+    #[async_trait]
+    impl ChainLogHandler for RejectingLogHandler {
+        fn contract_addresses(&self) -> Vec<Address> {
+            Vec::new()
+        }
+
+        fn contract_addresses_map(&self) -> Arc<ContractAddresses> {
+            Arc::new(ContractAddresses::default())
+        }
+
+        fn contract_address_topics(&self, _contract: Address) -> Vec<B256> {
+            Vec::new()
+        }
+
+        async fn collect_log_event(&self, _log: SerializableLog, _is_synced: bool) -> crate::errors::Result<()> {
+            self.collect_called.store(true, StdOrdering::SeqCst);
+            Ok(())
+        }
+
+        fn should_process_log(&self, _log: &SerializableLog) -> bool {
+            false
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct DispatchTrackingLogHandler {
+        collect_called: Arc<StdAtomicBool>,
+    }
+
+    #[async_trait]
+    impl ChainLogHandler for DispatchTrackingLogHandler {
+        fn contract_addresses(&self) -> Vec<Address> {
+            Vec::new()
+        }
+
+        fn contract_addresses_map(&self) -> Arc<ContractAddresses> {
+            Arc::new(ContractAddresses::default())
+        }
+
+        fn contract_address_topics(&self, _contract: Address) -> Vec<B256> {
+            Vec::new()
+        }
+
+        async fn collect_log_event(&self, _log: SerializableLog, _is_synced: bool) -> crate::errors::Result<()> {
+            self.collect_called.store(true, StdOrdering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_process_block_marks_rejected_log_processed_without_dispatching() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let handler = RejectingLogHandler::default();
+        let log = SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: vec![Hash::create(&[b"my topic"]).into()],
+            data: vec![1, 2, 3],
+            tx_hash: Hash::create(&[b"my tx hash"]).into(),
+            block_hash: Hash::create(&[b"my block hash"]).into(),
+            tx_index: 1,
+            block_number: 100,
+            log_index: 2,
+            ..Default::default()
+        };
+        db.store_log(log.clone()).await?;
+
+        let result = Indexer::<MockHoprIndexerOps, RejectingLogHandler, BlokliDb>::process_block(
+            &db,
+            &handler,
+            BlockWithLogs {
+                block_id: log.block_number,
+                logs: BTreeSet::from([log.clone()]),
+            },
+            false,
+            false,
+            &IndexerState::default(),
+            false,
+        )
+        .await;
+
+        assert!(result.is_some());
+        assert!(!handler.collect_called.load(StdOrdering::SeqCst));
+        assert_eq!(
+            db.get_log(log.block_number, log.tx_index, log.log_index)
+                .await?
+                .processed,
+            Some(true)
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_block_marks_removed_log_processed_without_dispatching() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let handler = DispatchTrackingLogHandler::default();
+        let log = SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: vec![Hash::create(&[b"my topic"]).into()],
+            data: vec![1, 2, 3],
+            tx_hash: Hash::create(&[b"my tx hash"]).into(),
+            block_hash: Hash::create(&[b"my block hash"]).into(),
+            tx_index: 1,
+            block_number: 100,
+            log_index: 2,
+            removed: true,
+            ..Default::default()
+        };
+        db.store_log(log.clone()).await?;
+
+        let result = Indexer::<MockHoprIndexerOps, DispatchTrackingLogHandler, BlokliDb>::process_block(
+            &db,
+            &handler,
+            BlockWithLogs {
+                block_id: log.block_number,
+                logs: BTreeSet::from([log.clone()]),
+            },
+            false,
+            false,
+            &IndexerState::default(),
+            false,
+        )
+        .await;
+
+        assert!(result.is_some());
+        assert!(!handler.collect_called.load(StdOrdering::SeqCst));
+        assert_eq!(
+            db.get_log(log.block_number, log.tx_index, log.log_index)
+                .await?
+                .processed,
+            Some(true)
+        );
+
+        Ok(())
     }
 
     #[tokio::test]
@@ -1678,6 +1862,10 @@ mod tests {
             .return_once(move |_, _, _| Ok(Box::pin(rx)));
 
         let head_block = 1000;
+        rpc.expect_try_stream_logs()
+            .times(1)
+            .withf(move |x: &u64, _y: &FilterSet, is_synced: &bool| *x == head_block + 1 && *is_synced)
+            .return_once(move |_, _, _| Ok(Box::pin(futures::stream::empty())));
         rpc.expect_block_number().returning(move || Ok(head_block));
 
         rpc.expect_get_hopr_balance()
@@ -1776,7 +1964,17 @@ mod tests {
                 .expect_contract_addresses_map()
                 .return_const(ContractAddresses::default());
 
-            let indexer_cfg = IndexerConfig::new(0, true, false, false, None, "/tmp/test_data".to_string(), 1000, 10);
+            let indexer_cfg = IndexerConfig::new(
+                0,
+                true,
+                false,
+                false,
+                false,
+                None,
+                "/tmp/test_data".to_string(),
+                1000,
+                10,
+            );
             let indexer = Indexer::new(rpc, handlers, db.clone(), indexer_cfg, IndexerState::default())
                 .without_panic_on_completion();
             let (indexing, _) = join!(indexer.start(), async move {
@@ -1867,7 +2065,17 @@ mod tests {
                 .expect_contract_addresses_map()
                 .return_const(ContractAddresses::default());
 
-            let indexer_cfg = IndexerConfig::new(0, true, false, false, None, "/tmp/test_data".to_string(), 1000, 10);
+            let indexer_cfg = IndexerConfig::new(
+                0,
+                true,
+                false,
+                false,
+                false,
+                None,
+                "/tmp/test_data".to_string(),
+                1000,
+                10,
+            );
             let indexer = Indexer::new(rpc, handlers, db.clone(), indexer_cfg, IndexerState::default())
                 .without_panic_on_completion();
             let (indexing, _) = join!(indexer.start(), async move {
@@ -1879,6 +2087,52 @@ mod tests {
             assert_eq!(db.get_logs_block_numbers(None, None, Some(true)).await?.len(), 4);
             assert_eq!(db.get_logs_block_numbers(None, None, Some(false)).await?.len(), 0);
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_pre_start_fails_when_configured_snapshot_restore_fails() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let rpc = MockHoprIndexerOps::new();
+        let handlers = MockChainLogHandler::new();
+        let temp_dir = tempfile::tempdir()?;
+
+        let indexer = Indexer::new(
+            rpc,
+            handlers,
+            db,
+            IndexerConfig::new(
+                0,
+                true,
+                true,
+                false,
+                false,
+                Some("file:///definitely/missing/snapshot.tar.xz".to_string()),
+                temp_dir.path().display().to_string(),
+                1000,
+                10,
+            ),
+            IndexerState::default(),
+        );
+
+        let error = indexer
+            .pre_start()
+            .await
+            .expect_err("configured snapshot bootstrap failures must abort startup");
+        let mut contains_missing_file = error.to_string().contains("Local file not found")
+            || error.to_string().contains("No such file or directory");
+        let mut source = StdError::source(&error);
+        while let Some(cause) = source {
+            if cause.to_string().contains("Local file not found")
+                || cause.to_string().contains("No such file or directory")
+            {
+                contains_missing_file = true;
+                break;
+            }
+            source = cause.source();
+        }
+        assert!(contains_missing_file, "unexpected snapshot bootstrap error: {error:#}");
 
         Ok(())
     }
@@ -1915,15 +2169,8 @@ mod tests {
             .return_once(move |_, _, _| Ok(Box::pin(rx)));
         rpc.expect_try_stream_logs()
             .times(1)
-            .withf(move |x: &u64, _y: &FilterSet, is_synced: &bool| *x == head_block + 2 && *is_synced)
+            .withf(move |x: &u64, _y: &FilterSet, is_synced: &bool| *x == head_block + 1 && *is_synced)
             .return_once(move |_, _, _| Ok(Box::pin(futures::stream::empty())));
-        rpc.expect_get_hopr_balance()
-            .once()
-            .return_once(move |_| Ok(HoprBalance::zero()));
-        rpc.expect_get_hopr_allowance()
-            .once()
-            .return_once(move |_, _| Ok(HoprBalance::zero()));
-
         let block_numbers = [head_block - 1, head_block, head_block + 1];
 
         let blocks: Vec<BlockWithLogs> = block_numbers
@@ -1934,7 +2181,8 @@ mod tests {
             })
             .collect();
 
-        for _ in 0..(blocks.len() as u64) {
+        let block_count = u64::try_from(blocks.len())?;
+        for _ in 0..block_count {
             rpc.expect_block_number().returning(move || Ok(head_block));
         }
 
@@ -2000,16 +2248,8 @@ mod tests {
             .return_once(move |_, _, _| Ok(Box::pin(futures::stream::empty())));
 
         rpc.expect_block_number()
-            .times(3)
+            .times(2)
             .returning(move || Ok(last_processed_block + 1));
-
-        rpc.expect_get_hopr_balance()
-            .once()
-            .return_once(move |_| Ok(HoprBalance::zero()));
-
-        rpc.expect_get_hopr_allowance()
-            .once()
-            .return_once(move |_, _| Ok(HoprBalance::zero()));
 
         let block = BlockWithLogs {
             block_id: last_processed_block + 1,
@@ -2037,7 +2277,17 @@ mod tests {
             .withf(move |l, _| l.block_number == last_processed_block + 1)
             .returning(|_, _| Ok(()));
 
-        let indexer_cfg = IndexerConfig::new(0, false, false, false, None, "/tmp/test_data".to_string(), 1000, 10);
+        let indexer_cfg = IndexerConfig::new(
+            0,
+            false,
+            false,
+            false,
+            false,
+            None,
+            "/tmp/test_data".to_string(),
+            1000,
+            10,
+        );
 
         let indexer =
             Indexer::new(rpc, handlers, db.clone(), indexer_cfg, IndexerState::default()).without_panic_on_completion();
@@ -2333,6 +2583,16 @@ mod tests {
 
     // ==================== Reorg Handling Tests ====================
 
+    fn create_reorg_log_handler(from_block: u64) -> MockChainLogHandler {
+        let mut logs_handler = MockChainLogHandler::new();
+        logs_handler
+            .expect_revert_block_derived_state()
+            .with(predicate::eq(from_block))
+            .times(1)
+            .returning(|_| Ok(()));
+        logs_handler
+    }
+
     // Helper function to create a test channel
     async fn create_test_channel(db: &BlokliDb, channel_id: i64) -> anyhow::Result<()> {
         let conn = db.conn(TargetDb::Index);
@@ -2405,9 +2665,9 @@ mod tests {
             ticket_index: Set(0),
             closure_time: Set(None),
             corrupted_state: Set(false),
-            published_block: Set(block as i64),
-            published_tx_index: Set(tx_index as i64),
-            published_log_index: Set(log_index as i64),
+            published_block: Set(i64::try_from(block)?),
+            published_tx_index: Set(i64::try_from(tx_index)?),
+            published_log_index: Set(i64::try_from(log_index)?),
             reorg_correction: Set(reorg_correction),
         };
         state.insert(conn).await?;
@@ -2451,6 +2711,7 @@ mod tests {
 
         // Handle the reorg
         let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &create_reorg_log_handler(100),
             &db,
             &reorg_info,
             200,
@@ -2528,6 +2789,7 @@ mod tests {
 
         // Handle the reorg
         let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &create_reorg_log_handler(90),
             &db,
             &reorg_info,
             150,
@@ -2601,6 +2863,7 @@ mod tests {
 
         // Handle the reorg
         let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &create_reorg_log_handler(90),
             &db,
             &reorg_info,
             150,
@@ -2646,6 +2909,7 @@ mod tests {
 
         // Handle the reorg
         let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &create_reorg_log_handler(100),
             &db,
             &reorg_info,
             150,
@@ -2683,6 +2947,7 @@ mod tests {
         };
 
         let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &create_reorg_log_handler(100),
             &db,
             &reorg_info,
             200,
@@ -2739,6 +3004,7 @@ mod tests {
         };
 
         Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &create_reorg_log_handler(100),
             &db,
             &reorg_info,
             200,
@@ -2804,6 +3070,7 @@ mod tests {
         };
 
         let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &create_reorg_log_handler(100),
             &db,
             &reorg_info,
             250,
@@ -2846,6 +3113,7 @@ mod tests {
         };
 
         let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &create_reorg_log_handler(95),
             &db,
             &reorg_info,
             150,
@@ -2889,6 +3157,7 @@ mod tests {
         };
 
         Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &create_reorg_log_handler(100),
             &db,
             &reorg_info,
             200,
@@ -2938,6 +3207,7 @@ mod tests {
         };
 
         Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &create_reorg_log_handler(100),
             &db,
             &reorg_info,
             200,
@@ -2976,6 +3246,7 @@ mod tests {
 
         // First correction
         let count1 = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &create_reorg_log_handler(100),
             &db,
             &reorg_info,
             200,
@@ -2989,6 +3260,7 @@ mod tests {
 
         // Second correction attempt at different canonical block
         let count2 = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &create_reorg_log_handler(100),
             &db,
             &reorg_info,
             201,
@@ -3030,6 +3302,7 @@ mod tests {
         };
 
         let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &create_reorg_log_handler(100),
             &db,
             &reorg_info,
             200,
@@ -3038,7 +3311,8 @@ mod tests {
         .await?;
 
         assert_eq!(
-            corrected_count as i64, channel_count,
+            i64::try_from(corrected_count)?,
+            channel_count,
             "Should correct all affected channels"
         );
 
@@ -3076,6 +3350,7 @@ mod tests {
         };
 
         Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &create_reorg_log_handler(200),
             &db,
             &reorg_info,
             250,
@@ -3122,6 +3397,7 @@ mod tests {
         };
 
         Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &create_reorg_log_handler(100),
             &db,
             &reorg_info,
             200,

@@ -4,7 +4,6 @@ use std::{env, path::Path, process};
 
 use anyhow::Context;
 use clap::Parser;
-use migration::SafeDataOrigin;
 use sea_orm::{ConnectOptions, Database};
 use sea_orm_cli::{Cli, Commands, run_generate_command};
 use tokio::runtime::Runtime;
@@ -32,14 +31,9 @@ where
                 .to_owned();
             let db = &Database::connect(connect_options).await?;
 
-            sea_orm_migration::cli::run_migrate(
-                migration::Migrator::<{ SafeDataOrigin::NoData as u8 }> {},
-                db,
-                command,
-                cli.verbose,
-            )
-            .await
-            .map_err(|e| anyhow::anyhow!(e.to_string()))
+            sea_orm_migration::cli::run_migrate(migration::Migrator {}, db, command, cli.verbose)
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))
         }
     }
 }

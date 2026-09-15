@@ -12,7 +12,7 @@ use hopr_types::{
 };
 use tracing::{debug, info, warn};
 
-use super::ContractEventHandlers;
+use super::{ContractEventHandlers, u64_to_u32, u256_to_u32, u256_to_u64};
 use crate::{custom_abis::safe_contract_events::SafeContract::SafeContractEvents, errors::Result, state::IndexerEvent};
 
 fn to_hopr_contract_addresses(addresses: &BlokliContractAddresses) -> HoprContractAddresses {
@@ -27,6 +27,7 @@ fn to_hopr_contract_addresses(addresses: &BlokliContractAddresses) -> HoprContra
         winning_probability_oracle: AlloyAddress::from_hopr_address(addresses.winning_probability_oracle),
         node_stake_factory: AlloyAddress::from_hopr_address(addresses.node_stake_factory),
         xhopr_token: AlloyAddress::from_hopr_address(addresses.xhopr_token),
+        service_registry: AlloyAddress::from_hopr_address(addresses.service_registry),
     }
 }
 
@@ -72,24 +73,9 @@ where
                         safe_address,
                         signer,
                         ticket_amount,
-                        u32::try_from(log.block_number).map_err(|_| {
-                            crate::errors::CoreEthereumIndexerError::ProcessError(format!(
-                                "block number {} does not fit into u32",
-                                log.block_number
-                            ))
-                        })?,
-                        u32::try_from(log.tx_index).map_err(|_| {
-                            crate::errors::CoreEthereumIndexerError::ProcessError(format!(
-                                "tx index {} does not fit into u32",
-                                log.tx_index
-                            ))
-                        })?,
-                        u32::try_from(log.log_index.as_u64()).map_err(|_| {
-                            crate::errors::CoreEthereumIndexerError::ProcessError(format!(
-                                "log index {} does not fit into u32",
-                                log.log_index
-                            ))
-                        })?,
+                        u64_to_u32(log.block_number, "block_number")?,
+                        u64_to_u32(log.tx_index, "tx_index")?,
+                        u256_to_u32(log.log_index, "log_index")?,
                     )
                     .await?;
 
@@ -189,6 +175,7 @@ where
         _is_synced: bool,
     ) -> Result<Vec<IndexerEvent>> {
         let chain_tx_hash = Hash::from(log.tx_hash);
+        let log_index = u256_to_u64(log.log_index, "log_index")?;
 
         match event {
             SafeContractEvents::SafeSetup(safe_setup) => {
@@ -208,7 +195,7 @@ where
                         Some(safe_setup.initiator.to_hopr_address()),
                         log.block_number,
                         log.tx_index,
-                        log.log_index.as_u64(),
+                        log_index,
                     )
                     .await?;
 
@@ -221,7 +208,7 @@ where
                             true,
                             log.block_number,
                             log.tx_index,
-                            log.log_index.as_u64(),
+                            log_index,
                         )
                         .await?;
                 }
@@ -251,7 +238,7 @@ where
                         None,
                         log.block_number,
                         log.tx_index,
-                        log.log_index.as_u64(),
+                        log_index,
                     )
                     .await?;
                 self.db
@@ -262,7 +249,7 @@ where
                         true,
                         log.block_number,
                         log.tx_index,
-                        log.log_index.as_u64(),
+                        log_index,
                     )
                     .await?;
                 info!(
@@ -289,7 +276,7 @@ where
                         None,
                         log.block_number,
                         log.tx_index,
-                        log.log_index.as_u64(),
+                        log_index,
                     )
                     .await?;
                 self.db
@@ -300,7 +287,7 @@ where
                         false,
                         log.block_number,
                         log.tx_index,
-                        log.log_index.as_u64(),
+                        log_index,
                     )
                     .await?;
                 info!(
@@ -326,7 +313,7 @@ where
                         None,
                         log.block_number,
                         log.tx_index,
-                        log.log_index.as_u64(),
+                        log_index,
                     )
                     .await?;
                 info!(
@@ -352,7 +339,7 @@ where
                         None,
                         log.block_number,
                         log.tx_index,
-                        log.log_index.as_u64(),
+                        log_index,
                     )
                     .await?;
                 info!(
@@ -379,7 +366,7 @@ where
                         None,
                         log.block_number,
                         log.tx_index,
-                        log.log_index.as_u64(),
+                        log_index,
                     )
                     .await?;
                 warn!(
@@ -431,8 +418,8 @@ mod tests {
         custom_abis::safe_contract_events::SafeContract,
         handlers::test_utils::test_helpers::{
             ANNOUNCEMENTS_ADDR, CHANNELS_ADDR, ClonableMockOperations, MockIndexerRpcOperations,
-            NODE_SAFE_REGISTRY_ADDR, SELF_CHAIN_KEYPAIR, TICKET_PRICE_ORACLE_ADDR, TOKEN_ADDR, WIN_PROB_ORACLE_ADDR,
-            init_handlers,
+            NODE_SAFE_REGISTRY_ADDR, SELF_CHAIN_KEYPAIR, SERVICE_REGISTRY_ADDR, TICKET_PRICE_ORACLE_ADDR, TOKEN_ADDR,
+            WIN_PROB_ORACLE_ADDR, init_handlers,
         },
     };
 
@@ -460,6 +447,7 @@ mod tests {
             winning_probability_oracle: AlloyAddress::from_hopr_address(*WIN_PROB_ORACLE_ADDR),
             node_stake_factory: alloy_address_with_byte(0),
             xhopr_token: alloy_address_with_byte(0),
+            service_registry: AlloyAddress::from_hopr_address(*SERVICE_REGISTRY_ADDR),
         }
     }
 

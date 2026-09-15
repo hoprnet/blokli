@@ -1,0 +1,6 @@
+---
+source: chain/indexer/src/handlers/service_registry.rs
+expression: to_api_registry_config(&db.get_service_registry_config(None).await?)
+---
+type_registration_fee: 0 wxHOPR
+node_safe_registry: "0x0000000000000000000000000000000000000000"

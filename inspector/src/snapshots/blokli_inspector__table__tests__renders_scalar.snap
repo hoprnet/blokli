@@ -1,5 +1,0 @@
----
-source: inspector/src/table.rs
-expression: "render(&json!(\"healthy\"))"
----
-healthy

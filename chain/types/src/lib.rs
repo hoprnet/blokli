@@ -1,6 +1,8 @@
 //! This crate contains various on-chain related modules and types.
 use constants::{ERC_1820_DEPLOYER, ERC_1820_REGISTRY_DEPLOY_CODE, ETH_VALUE_FOR_ERC1820_DEPLOYER};
 use hopr_bindings::{
+    constants::{INIT_ADMIN_DELAY, INIT_TYPE_REGISTRATION_FEE},
+    erc677_mock::ERC677Mock::{self, ERC677MockInstance},
     exports::alloy::{
         contract::Result as ContractResult,
         network::TransactionBuilder,
@@ -14,20 +16,24 @@ use hopr_bindings::{
     hopr_node_safe_migration::HoprNodeSafeMigration::HoprNodeSafeMigrationInstance,
     hopr_node_safe_registry::HoprNodeSafeRegistry::{self, HoprNodeSafeRegistryInstance},
     hopr_node_stake_factory::HoprNodeStakeFactory::{self, HoprNodeStakeFactoryInstance},
+    hopr_service_registry::HoprServiceRegistry::{self, HoprServiceRegistryInstance},
     hopr_ticket_price_oracle::HoprTicketPriceOracle::{self, HoprTicketPriceOracleInstance},
     hopr_token::HoprToken::{self, HoprTokenInstance},
     hopr_winning_probability_oracle::HoprWinningProbabilityOracle::{self, HoprWinningProbabilityOracleInstance},
 };
 use hopr_types::{
+    chain::ContractAddresses as HoprContractAddresses,
     crypto::keypairs::{ChainKeypair, Keypair},
     primitive::primitives::Address,
 };
 use serde::{Deserialize, Serialize};
+use serde_with::{DisplayFromStr, serde_as};
 
 pub mod actions;
 pub mod chain_events;
 pub mod channel;
 pub mod constants;
+pub mod curvy_tree;
 pub mod errors;
 // Various (mostly testing related) utility functions
 pub mod utils;
@@ -81,7 +87,7 @@ pub struct ChainConfig {
     pub tx_polling_interval: u64,
     /// Number of confirmations required (finality)
     pub confirmations: u16,
-    /// Maximum block range for RPC queries
+    /// Maximum block range ceiling for adaptive RPC log queries
     pub max_block_range: u32,
     /// Starting block number for channel contract (where indexing should begin)
     pub channel_contract_deploy_block: u32,
@@ -92,35 +98,94 @@ pub struct ChainConfig {
 }
 
 /// Holds addresses of all smart contracts.
+#[serde_as]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ContractAddresses {
     /// wxHOPR token contract
+    #[serde_as(as = "DisplayFromStr")]
     pub token: Address,
     /// Channels contract
+    #[serde_as(as = "DisplayFromStr")]
     pub channels: Address,
     /// Announcements contract
+    #[serde_as(as = "DisplayFromStr")]
     pub announcements: Address,
     /// Node management module contract
+    #[serde_as(as = "DisplayFromStr")]
     pub module_implementation: Address,
     /// Node safe migration contract
+    #[serde_as(as = "DisplayFromStr")]
     pub node_safe_migration: Address,
     /// Safe registry contract
+    #[serde_as(as = "DisplayFromStr")]
     pub node_safe_registry: Address,
     /// Price oracle contract
+    #[serde_as(as = "DisplayFromStr")]
     pub ticket_price_oracle: Address,
     /// Minimum ticket winning probability contract
+    #[serde_as(as = "DisplayFromStr")]
     pub winning_probability_oracle: Address,
     /// Stake factory contract
+    #[serde_as(as = "DisplayFromStr")]
     pub node_stake_factory: Address,
     /// xHOPR token contract
+    #[serde_as(as = "DisplayFromStr")]
     #[serde(default)]
     pub xhopr_token: Address,
+    /// Curvy aggregator proxy whose raw note events should be indexed. The zero address disables Curvy indexing.
+    #[serde_as(as = "DisplayFromStr")]
+    #[serde(default)]
+    pub curvy_aggregator: Address,
+    /// Curvy Vault proxy used by typed contract-read queries.
+    #[serde_as(as = "DisplayFromStr")]
+    #[serde(default)]
+    pub curvy_vault: Address,
+    /// Curvy PortalFactory used by typed portal queries.
+    #[serde_as(as = "DisplayFromStr")]
+    #[serde(default)]
+    pub curvy_portal_factory: Address,
+    /// Service registry contract.
+    ///
+    /// The zero address means the registry is not deployed on this network and consumers must skip the contract
+    /// rather than filter logs on the null address.
+    #[serde_as(as = "DisplayFromStr")]
+    #[serde(default)]
+    pub service_registry: Address,
+}
+
+impl ContractAddresses {
+    /// Combines HOPR and Curvy deployment outputs into the runtime address set.
+    pub fn new(
+        hopr: &HoprContractAddresses,
+        curvy_aggregator: Address,
+        curvy_vault: Address,
+        curvy_portal_factory: Address,
+    ) -> Self {
+        Self {
+            token: hopr.token.to_hopr_address(),
+            channels: hopr.channels.to_hopr_address(),
+            announcements: hopr.announcements.to_hopr_address(),
+            module_implementation: hopr.module_implementation.to_hopr_address(),
+            node_safe_migration: hopr.node_safe_migration.to_hopr_address(),
+            node_safe_registry: hopr.node_safe_registry.to_hopr_address(),
+            ticket_price_oracle: hopr.ticket_price_oracle.to_hopr_address(),
+            winning_probability_oracle: hopr.winning_probability_oracle.to_hopr_address(),
+            node_stake_factory: hopr.node_stake_factory.to_hopr_address(),
+            xhopr_token: hopr.xhopr_token.to_hopr_address(),
+            curvy_aggregator,
+            curvy_vault,
+            curvy_portal_factory,
+            service_registry: hopr.service_registry.to_hopr_address(),
+        }
+    }
 }
 
 /// Holds instances to contracts.
 #[derive(Debug)]
 pub struct ContractInstances<P> {
     pub token: HoprTokenInstance<P>,
+    /// xHOPR token — a distinct ERC677 token, not the wxHOPR (`token`) contract.
+    pub xhopr_token: ERC677MockInstance<P>,
     pub channels: HoprChannelsInstance<P>,
     pub announcements: HoprAnnouncementsInstance<P>,
     pub module_implementation: HoprNodeManagementModuleInstance<P>,
@@ -129,7 +194,13 @@ pub struct ContractInstances<P> {
     pub ticket_price_oracle: HoprTicketPriceOracleInstance<P>,
     pub winning_probability_oracle: HoprWinningProbabilityOracleInstance<P>,
     pub node_stake_factory: HoprNodeStakeFactoryInstance<P>,
+    pub service_registry: HoprServiceRegistryInstance<P>,
 }
+
+/// Amount of xHOPR (18 decimals) minted to the deployer in the testing deployment.
+///
+/// Deliberately distinct from any wxHOPR amount so tests can assert xHOPR ≠ wxHOPR balances.
+const XHOPR_MINT_AMOUNT: u128 = 777_000_000_000_000_000_000;
 
 impl<P> ContractInstances<P>
 where
@@ -139,6 +210,10 @@ where
         Self {
             token: HoprTokenInstance::new(
                 AlloyAddress::from_hopr_address(contract_addresses.token),
+                provider.clone(),
+            ),
+            xhopr_token: ERC677MockInstance::new(
+                AlloyAddress::from_hopr_address(contract_addresses.xhopr_token),
                 provider.clone(),
             ),
             channels: HoprChannelsInstance::new(
@@ -173,6 +248,10 @@ where
                 AlloyAddress::from_hopr_address(contract_addresses.node_stake_factory),
                 provider.clone(),
             ),
+            service_registry: HoprServiceRegistryInstance::new(
+                AlloyAddress::from_hopr_address(contract_addresses.service_registry),
+                provider.clone(),
+            ),
         }
     }
 
@@ -201,10 +280,27 @@ where
 
         let safe_registry = HoprNodeSafeRegistry::deploy(provider.clone()).await?;
         let announcements = HoprAnnouncements::deploy(provider.clone()).await?;
+        let token = HoprToken::deploy(provider.clone()).await?;
+
+        // NOTE: `HoprNodeStakeFactory::deploy` now requires the service registry address as a
+        // constructor argument, so the registry must be deployed before the stake factory. This
+        // matches the order used by `DeployAll.s.sol` and `hopr-bindings`' own testing deploy.
+        let service_registry = HoprServiceRegistry::deploy(
+            provider.clone(),
+            *token.address(),
+            *safe_registry.address(),
+            INIT_ADMIN_DELAY,
+            self_address,
+            self_address,
+            INIT_TYPE_REGISTRATION_FEE,
+        )
+        .await?;
+
         let stake_factory = HoprNodeStakeFactory::deploy(
             provider.clone(),
             AlloyAddress::ZERO, // _moduleSingletonAddress - use zero for testing
             AlloyAddress::from(announcements.address().as_ref()),
+            AlloyAddress::from(service_registry.address().as_ref()),
             self_address,
         )
         .await?;
@@ -221,7 +317,15 @@ where
                                               * decimal values */
         )
         .await?;
-        let token = HoprToken::deploy(provider.clone()).await?;
+        // Deploy a distinct xHOPR token (ERC677) so its balance is independent of wxHOPR, and
+        // seed the deployer with a recognisably different amount for balance assertions in tests.
+        let xhopr_token = ERC677Mock::deploy(provider.clone()).await?;
+        xhopr_token
+            .batchMintInternal(vec![self_address], primitives::U256::from(XHOPR_MINT_AMOUNT))
+            .send()
+            .await?
+            .watch()
+            .await?;
         let channels = HoprChannels::deploy(
             provider.clone(),
             AlloyAddress::from(token.address().as_ref()),
@@ -237,6 +341,7 @@ where
 
         Ok(Self {
             token,
+            xhopr_token,
             channels,
             announcements,
             module_implementation,
@@ -245,6 +350,7 @@ where
             ticket_price_oracle: price_oracle,
             winning_probability_oracle: win_prob_oracle,
             node_stake_factory: stake_factory,
+            service_registry,
         })
     }
 
@@ -278,7 +384,11 @@ where
             ticket_price_oracle: instances.ticket_price_oracle.address().to_hopr_address(),
             winning_probability_oracle: instances.winning_probability_oracle.address().to_hopr_address(),
             node_stake_factory: instances.node_stake_factory.address().to_hopr_address(),
-            xhopr_token: Address::default(),
+            xhopr_token: instances.xhopr_token.address().to_hopr_address(),
+            curvy_aggregator: Address::default(),
+            curvy_vault: Address::default(),
+            curvy_portal_factory: Address::default(),
+            service_registry: instances.service_registry.address().to_hopr_address(),
         }
     }
 }

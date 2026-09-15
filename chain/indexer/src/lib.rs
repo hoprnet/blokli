@@ -12,10 +12,11 @@
 //!
 //! # Fast Synchronization
 //!
-//! The indexer supports fast synchronization through pre-built logs database snapshots.
-//! The [`snapshot`] module provides secure download, extraction, and installation
-//! of compressed database snapshots, allowing nodes to quickly catch up with the
-//! blockchain state instead of fetching all historical logs from genesis from an RPC endpoint.
+//! The indexer supports fast synchronization through downloadable `hopr_logs.sql`
+//! snapshot archives. The [`snapshot`] module provides secure download, extraction,
+//! validation, and installation of those compressed snapshots, allowing nodes to
+//! quickly catch up with the blockchain state instead of fetching all historical
+//! logs from genesis from an RPC endpoint.
 
 pub mod block;
 pub mod config;
@@ -23,6 +24,7 @@ pub mod constants;
 pub mod custom_abis;
 pub mod errors;
 pub mod handlers;
+pub(crate) mod numeric;
 pub mod snapshot;
 pub mod startup;
 pub mod state;

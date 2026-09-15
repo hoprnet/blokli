@@ -5,9 +5,11 @@
 
 {
   lib,
+  pkgs,
   builders,
   sources,
   bloklidCrateInfo,
+  buildVersion,
   rev,
   buildPlatform,
   nixLib,
@@ -17,12 +19,17 @@ let
   mkbloklidBuildArgs =
     { src, depsSrc }:
     {
-      inherit src depsSrc rev;
+      inherit
+        src
+        depsSrc
+        rev
+        buildVersion
+        ;
       cargoExtraArgs = "--bins"; # Build all binary targets
       cargoToml = ./../../bloklid/Cargo.toml;
     };
 
-  # Production builds include blokli-inspector alongside bloklid in each platform derivation.
+  # Production builds includes bloklid in each platform derivation.
   # prependPackageName = false lets us specify both packages explicitly via cargoExtraArgs.
   mkBloklidPlatformPackages =
     platform:
@@ -34,7 +41,7 @@ let
         })
         // {
           prependPackageName = false;
-          cargoExtraArgs = "-p bloklid -p blokli-inspector --bins";
+          cargoExtraArgs = "-p bloklid --bins --locked";
         };
       name = "binary-bloklid-${platform}";
     in
@@ -55,6 +62,26 @@ let
       "aarch64-darwin"
     ]
   );
+
+  blokliSchema = builders.local.callPackage nixLib.mkRustPackage {
+    src = sources.schema;
+    depsSrc = sources.deps;
+    rev = "schema";
+    cargoToml = ./../../api/Cargo.toml;
+    CARGO_PROFILE = "dev";
+    prependPackageName = false;
+    cargoExtraArgs = "-p blokli-api --bin blokli-api -p blokli-db-migration --bin migration";
+    postInstall = ''
+      mkdir -p "$out/share/blokli"
+      "$out/bin/migration" up \
+        -u "sqlite://$TMPDIR/blokli-schema.db?mode=rwc"
+      "$out/bin/blokli-api" export-schema \
+        --database-url "sqlite://$TMPDIR/blokli-schema.db" \
+        --output "$out/share/blokli/schema.graphql"
+      # Keep the output schema-only so Crane does not scan the large dev binaries for source references.
+      rm -rf "$out/bin"
+    '';
+  };
 in
 {
   # Development builds - for local testing and debugging
@@ -62,15 +89,6 @@ in
     src = sources.main;
     depsSrc = sources.deps;
   });
-
-  blokli-inspector = builders.local.callPackage nixLib.mkRustPackage {
-    src = sources.main;
-    depsSrc = sources.deps;
-    inherit rev;
-    prependPackageName = false;
-    cargoExtraArgs = "-p blokli-inspector --bins";
-    cargoToml = ./../../inspector/Cargo.toml;
-  };
 
   bloklid-dev = builders.local.callPackage nixLib.mkRustPackage (
     (mkbloklidBuildArgs {
@@ -95,6 +113,20 @@ in
     }
   );
 
+  bloklid-nextest = builders.local.callPackage nixLib.mkRustPackage (
+    (mkbloklidBuildArgs {
+      src = sources.test;
+      depsSrc = sources.deps;
+    })
+    // {
+      runNextest = true;
+      testCargoProfile = "ci-test";
+      prependPackageName = false;
+      cargoExtraArgs = "--workspace";
+      extraNativeBuildInputs = [ pkgs.foundry-bin ];
+    }
+  );
+
   bloklid-test-nightly = builders.localNightly.callPackage nixLib.mkRustPackage (
     (mkbloklidBuildArgs {
       src = sources.test;
@@ -102,7 +134,7 @@ in
     })
     // {
       runTests = true;
-      cargoExtraArgs = "-Z panic-abort-tests"; # Nightly feature for test optimization
+      cargoExtraArgs = "--locked -Z panic-abort-tests"; # Nightly feature for test optimization
     }
   );
 
@@ -113,6 +145,29 @@ in
     })
     // {
       runClippy = true; # Run Clippy linter
+      prependPackageName = false;
+      # --all-features ensures optional, cfg-gated code such as the Curvy test
+      # deployment is linted by CI too.
+      cargoExtraArgs = "--workspace --all-features";
+    }
+  );
+
+  # Coverage runs the unit-test suite through nextest and emits the LCOV report.
+  bloklid-coverage = builders.localCoverage.callPackage nixLib.mkRustPackage (
+    (mkbloklidBuildArgs {
+      src = sources.test;
+      depsSrc = sources.deps;
+    })
+    // {
+      runCoverage = true;
+      cargoLlvmCovCommand = "nextest";
+      testCargoProfile = "ci-test";
+      # Nix renders nextest's in-place progress bar as repeated, truncated log lines.
+      cargoExtraArgs = "--show-progress=none";
+      extraNativeBuildInputs = [
+        pkgs.cargo-nextest
+        pkgs.foundry-bin
+      ];
     }
   );
 
@@ -125,6 +180,25 @@ in
       runBench = true; # Run benchmarks
     }
   );
+
+  blokli-schema = blokliSchema;
+
+  schema-validation =
+    pkgs.runCommand "schema-validation"
+      {
+        nativeBuildInputs = [
+          (pkgs.python3.withPackages (pythonPackages: [ pythonPackages.graphql-core ]))
+        ];
+      }
+      ''
+        mkdir -p work/design "$out"
+        cp ${./../../design/target-api-schema.graphql} work/design/target-api-schema.graphql
+        cp ${blokliSchema}/share/blokli/schema.graphql work/schema.graphql
+
+        cd work
+        python ${./../../scripts/check_schema.py}
+        cp schema.graphql "$out/schema.graphql"
+      '';
 
   # Candidate build - used for smoke testing before release
   # Builds as static binary on Linux x86_64 for better test coverage

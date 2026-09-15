@@ -1,44 +1,11 @@
-use std::time::Duration;
+use std::{fmt, time::Duration};
 
 use blokli_chain_indexer::utils::redact_url;
 use blokli_chain_types::{ChainConfig, ContractAddresses};
+use blokli_db::utils::redact_database_url;
+use hopr_types::primitive::primitives::Address;
 
 use crate::network::Network;
-
-/// Redacts username and password from database URLs while keeping host, port, and database visible
-///
-/// # Examples
-/// ```
-/// # use bloklid::config::redact_database_url;
-/// assert_eq!(
-///     redact_database_url("postgres://user:pass@localhost:5432/mydb"),
-///     "postgres://REDACTED:REDACTED@localhost:5432/mydb"
-/// );
-/// assert_eq!(
-///     redact_database_url("postgresql://localhost:5432/mydb"),
-///     "postgresql://localhost:5432/mydb"
-/// );
-/// ```
-pub fn redact_database_url(url: &str) -> String {
-    // Parse the URL to extract components
-    if let Some(scheme_end) = url.find("://") {
-        let scheme = &url[..scheme_end + 3];
-        let rest = &url[scheme_end + 3..];
-
-        // Check if there's an @ sign indicating credentials
-        if let Some(at_pos) = rest.find('@') {
-            let after_at = &rest[at_pos..];
-            // Redact credentials but keep everything else
-            format!("{}REDACTED:REDACTED{}", scheme, after_at)
-        } else {
-            // No credentials, return as-is
-            url.to_string()
-        }
-    } else {
-        // Not a URL format, return as-is
-        url.to_string()
-    }
-}
 
 fn default_rpc_url() -> String {
     "http://localhost:8545".to_string()
@@ -61,7 +28,7 @@ fn default_max_block_range() -> u32 {
 /// Supports two formats:
 /// 1. Simple URL: `url = "postgresql://user:pass@host:port/database"`
 /// 2. Detailed components with individual fields (host, port, username, password, database)
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PostgreSqlConfig {
     /// Connection URL (Option 1: simple URL format)
@@ -85,6 +52,24 @@ pub struct PostgreSqlConfig {
     /// Maximum number of connections
     #[serde(default = "default_max_connections")]
     pub max_connections: u32,
+}
+
+impl fmt::Debug for PostgreSqlConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let url = self.url.as_deref().map(redact_database_url);
+        let password = self.password.as_ref().map(|_| "REDACTED");
+
+        formatter
+            .debug_struct("PostgreSqlConfig")
+            .field("url", &url)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("password", &password)
+            .field("database", &self.database)
+            .field("max_connections", &self.max_connections)
+            .finish()
+    }
 }
 
 /// SQLite database configuration
@@ -277,7 +262,6 @@ pub struct Config {
     #[serde(default)]
     pub max_rpc_requests_per_sec: Option<u32>,
 
-    #[validate(range(min = 1))]
     #[default(10000)]
     #[serde(default = "default_max_block_range")]
     pub max_block_range: u32,
@@ -293,6 +277,13 @@ pub struct Config {
 
     #[serde(default, rename = "contracts")]
     pub contracts_override: Option<ContractAddresses>,
+
+    /// Optional Curvy Aggregator proxy address. The Vault and optional
+    /// PortalFactory addresses are resolved from this contract during startup.
+    /// This overrides the value in `[contracts]` when both are configured.
+    #[serde_as(as = "Option<serde_with::DisplayFromStr>")]
+    #[serde(default)]
+    pub curvy_aggregator: Option<Address>,
 
     #[serde(skip)]
     #[default(None)]
@@ -331,6 +322,10 @@ impl Config {
         output.push_str(&format!(
             "  indexer.enable_safe_indexing: {}\n",
             self.indexer.enable_safe_indexing
+        ));
+        output.push_str(&format!(
+            "  indexer.enable_curvy_indexing: {}\n",
+            self.indexer.enable_curvy_indexing
         ));
 
         if let Some(snapshot_url) = &self.indexer.logs_snapshot_url {
@@ -406,6 +401,10 @@ pub struct IndexerConfig {
     #[default(false)]
     #[serde(default = "default_false")]
     pub enable_safe_indexing: bool,
+
+    #[default(false)]
+    #[serde(default = "default_false")]
+    pub enable_curvy_indexing: bool,
 
     #[serde(default)]
     pub logs_snapshot_url: Option<String>,
@@ -581,7 +580,118 @@ fn default_otlp_signals() -> String {
 mod tests {
     use std::{fs, path::PathBuf};
 
+    use hopr_types::primitive::primitives::Address;
+
     use super::*;
+
+    #[test]
+    fn test_contract_overrides_from_hex_strings() {
+        let config = r#"
+            [contracts]
+            token = "0x0101010101010101010101010101010101010101"
+            channels = "0x0202020202020202020202020202020202020202"
+            announcements = "0x0303030303030303030303030303030303030303"
+            module_implementation = "0x0404040404040404040404040404040404040404"
+            node_safe_migration = "0x0505050505050505050505050505050505050505"
+            node_safe_registry = "0x0606060606060606060606060606060606060606"
+            ticket_price_oracle = "0x0707070707070707070707070707070707070707"
+            winning_probability_oracle = "0x0808080808080808080808080808080808080808"
+            node_stake_factory = "0x0909090909090909090909090909090909090909"
+            xhopr_token = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            service_registry = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        "#;
+
+        let config: Config = toml::from_str(config).expect("contracts should accept hex strings");
+
+        assert_eq!(
+            config.contracts_override,
+            Some(ContractAddresses {
+                token: Address::from([1; 20]),
+                channels: Address::from([2; 20]),
+                announcements: Address::from([3; 20]),
+                module_implementation: Address::from([4; 20]),
+                node_safe_migration: Address::from([5; 20]),
+                node_safe_registry: Address::from([6; 20]),
+                ticket_price_oracle: Address::from([7; 20]),
+                winning_probability_oracle: Address::from([8; 20]),
+                node_stake_factory: Address::from([9; 20]),
+                xhopr_token: Address::from([0xaa; 20]),
+                curvy_aggregator: Address::default(),
+                curvy_vault: Address::default(),
+                curvy_portal_factory: Address::default(),
+                service_registry: Address::from([0xee; 20]),
+            })
+        );
+    }
+
+    /// `service_registry` carries `#[serde(default)]`, so a `[contracts]` block written before
+    /// the registry existed must keep parsing. Without the default every deployed override -
+    /// including `blokli-client/tests/integration/config-integration-anvil.toml` - would break
+    /// on upgrade.
+    #[test]
+    fn test_contract_overrides_default_the_service_registry_when_absent() {
+        let config = r#"
+            [contracts]
+            token = "0x0101010101010101010101010101010101010101"
+            channels = "0x0202020202020202020202020202020202020202"
+            announcements = "0x0303030303030303030303030303030303030303"
+            module_implementation = "0x0404040404040404040404040404040404040404"
+            node_safe_migration = "0x0505050505050505050505050505050505050505"
+            node_safe_registry = "0x0606060606060606060606060606060606060606"
+            ticket_price_oracle = "0x0707070707070707070707070707070707070707"
+            winning_probability_oracle = "0x0808080808080808080808080808080808080808"
+            node_stake_factory = "0x0909090909090909090909090909090909090909"
+        "#;
+
+        let config: Config = toml::from_str(config).expect("a block without the registry should parse");
+
+        let contracts = config
+            .contracts_override
+            .expect("the block should still produce an override");
+
+        // The zero address is the "not deployed" sentinel every consumer must skip.
+        assert_eq!(contracts.service_registry, Address::default());
+        assert_eq!(contracts.xhopr_token, Address::default());
+    }
+
+    #[test]
+    fn test_contract_overrides_default_to_disabled_curvy_indexing() {
+        let config = r#"
+            [contracts]
+            token = "0x0101010101010101010101010101010101010101"
+            channels = "0x0202020202020202020202020202020202020202"
+            announcements = "0x0303030303030303030303030303030303030303"
+            module_implementation = "0x0404040404040404040404040404040404040404"
+            node_safe_migration = "0x0505050505050505050505050505050505050505"
+            node_safe_registry = "0x0606060606060606060606060606060606060606"
+            ticket_price_oracle = "0x0707070707070707070707070707070707070707"
+            winning_probability_oracle = "0x0808080808080808080808080808080808080808"
+            node_stake_factory = "0x0909090909090909090909090909090909090909"
+            xhopr_token = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "#;
+
+        let config: Config = toml::from_str(config).expect("legacy contract overrides should remain valid");
+
+        assert_eq!(
+            config
+                .contracts_override
+                .expect("contract overrides should be present")
+                .curvy_aggregator,
+            Address::default()
+        );
+    }
+
+    #[test]
+    fn test_curvy_aggregator_can_be_configured_independently() {
+        let config = r#"
+            curvy_aggregator = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        "#;
+
+        let config: Config = toml::from_str(config).expect("Curvy aggregator should accept a hex string");
+
+        assert_eq!(config.curvy_aggregator, Some(Address::from([0xbb; 20])));
+        assert!(config.contracts_override.is_none());
+    }
 
     #[test]
     fn test_strict_parsing() {
@@ -750,7 +860,7 @@ mod tests {
     #[test]
     fn test_config_without_database_section() {
         let config = r#"
-         network = "rotsee"
+         network = "jura-dev"
          rpc_url = "http://localhost:8545"
      "#;
         let res: Result<Config, _> = toml::from_str(config);
@@ -774,7 +884,7 @@ mod tests {
         let config: Config = toml::from_str(&config_content).expect("Failed to parse example-config.toml");
 
         // Basic verification that values are loaded correctly
-        assert_eq!(config.network, Network::Rotsee);
+        assert_eq!(config.network, Network::JuraDev);
 
         // Check database config (should be present in example-config.toml)
         match &config.database {
@@ -788,6 +898,7 @@ mod tests {
         // Check indexer config
         assert!(config.indexer.fast_sync);
         assert!(!config.indexer.enable_safe_indexing);
+        assert!(!config.indexer.enable_curvy_indexing);
         assert_eq!(config.indexer.subscription.event_bus_capacity, 1000);
 
         // Check API config
@@ -820,6 +931,7 @@ mod tests {
         assert!(!cfg.indexer.fast_sync);
         assert!(!cfg.indexer.enable_logs_snapshot); // Default
         assert!(!cfg.indexer.enable_safe_indexing); // Default
+        assert!(!cfg.indexer.enable_curvy_indexing); // Default
         assert_eq!(cfg.indexer.subscription.event_bus_capacity, 1000); // Default
         assert_eq!(cfg.indexer.subscription.batch_size, 100); // Default
     }
@@ -912,33 +1024,56 @@ mod tests {
     }
 
     #[test]
-    fn test_redact_database_url_with_credentials() {
-        // URL with username and password should redact only credentials
-        let url = "postgres://user:password@localhost:5432/mydb";
-        let redacted = redact_database_url(url);
-        assert_eq!(redacted, "postgres://REDACTED:REDACTED@localhost:5432/mydb");
+    fn test_postgres_config_debug_redacts_password_field() {
+        let config = PostgreSqlConfig {
+            url: None,
+            host: Some("localhost".to_string()),
+            port: Some(5432),
+            username: Some("blokli".to_string()),
+            password: Some("do-not-log-this-password".to_string()),
+            database: Some("blokli".to_string()),
+            max_connections: 10,
+        };
+
+        let debug_output = format!("{config:?}");
+
+        assert!(!debug_output.contains("do-not-log-this-password"));
+        assert!(debug_output.contains("REDACTED"));
     }
 
     #[test]
-    fn test_redact_database_url_without_credentials() {
-        // URL without credentials should remain unchanged
-        let url = "postgresql://localhost:5432/mydb";
-        let redacted = redact_database_url(url);
-        assert_eq!(redacted, "postgresql://localhost:5432/mydb");
+    fn test_postgres_config_debug_redacts_password_in_url() {
+        let config = PostgreSqlConfig {
+            url: Some("postgresql://blokli:do-not-log-this-password@localhost:5432/blokli".to_string()),
+            host: None,
+            port: None,
+            username: None,
+            password: None,
+            database: None,
+            max_connections: 10,
+        };
+
+        let debug_output = format!("{config:?}");
+
+        assert!(!debug_output.contains("do-not-log-this-password"));
+        assert!(debug_output.contains("postgresql://REDACTED:REDACTED@localhost:5432/blokli"));
     }
 
     #[test]
-    fn test_redact_database_url_with_port() {
-        // URL with custom port
-        let url = "postgres://admin:secret@db.example.com:9876/production";
-        let redacted = redact_database_url(url);
-        assert_eq!(redacted, "postgres://REDACTED:REDACTED@db.example.com:9876/production");
-    }
+    fn test_postgres_config_debug_redacts_password_in_url_query() {
+        let config = PostgreSqlConfig {
+            url: Some("postgresql://localhost:5432/blokli?password=do-not-log-this-password".to_string()),
+            host: None,
+            port: None,
+            username: None,
+            password: None,
+            database: None,
+            max_connections: 10,
+        };
 
-    #[test]
-    fn test_redact_non_url_string() {
-        // Non-URL string should remain unchanged for database URLs
-        let not_url = "just-a-string";
-        assert_eq!(redact_database_url(not_url), not_url);
+        let debug_output = format!("{config:?}");
+
+        assert!(!debug_output.contains("do-not-log-this-password"));
+        assert!(debug_output.contains("?REDACTED"));
     }
 }

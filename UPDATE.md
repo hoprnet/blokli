@@ -144,6 +144,38 @@ Removing a query is a breaking change — existing clients that call it will rec
 
 ---
 
+## 6. Database schema version changes
+
+The GraphQL schema version above is unrelated to the **database** schema version, `SCHEMA_VERSION` in `db/core/src/version.rs`. That
+constant is SemVer `MAJOR.MINOR.PATCH` and controls what happens to the stored data when bloklid starts against a database written by an
+older build:
+
+| Component | When to bump                                                        | Effect on startup                                                                                                        |
+| --------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| MAJOR     | The migration stack is rewritten and old data is incompatible       | Full wipe, including `seaql_migrations`; all migrations re-run from scratch. Runs before migrations.                     |
+| MINOR     | Existing data must be discarded and re-indexed in the current epoch | All application data is cleared; `seaql_migrations` is kept and new migrations run incrementally. Runs after migrations. |
+| PATCH     | Reserved                                                            | None; always `0`.                                                                                                        |
+
+### Operational consequence of a MINOR bump
+
+**Upgrading bloklid re-indexes the chain from the deploy block.** A minor bump clears the index tables _and_ the `log`, `log_status` and
+`log_topic_info` tables, so the indexer starts again from the first block of the contract deployment. Plan for the sync time, and use a logs
+snapshot where one is available.
+
+`1.4.0` is such a bump. It adds the service registry contract to the indexed set. `ensure_logs_origin` refuses to widen the
+`(address, topic)` set of a non-empty logs database — a new contract against stored logs is reported as `InconsistentLogs`, because those
+logs cannot contain the events of a contract that was never subscribed to. Clearing the logs is what makes the new topic set legal: the
+indexer primes an empty `log_topic_info` table with the widened set and refetches every log.
+
+### Steps
+
+1. Bump `SCHEMA_VERSION` and add a one-line entry to the version history in its doc comment.
+2. For a MINOR bump, add any new tables to `clear_index_data` in `db/core/src/version.rs`, children before parents.
+3. Add any new singleton rows to `BlokliDb::ensure_singletons`; `clear_index_data` deletes them and startup recreates them.
+4. Note the re-index in the release notes, so operators know the upgrade is not a restart.
+
+---
+
 ## Quick reference
 
 | Scenario                          | New version? | `LATEST_SCHEMA_VERSION` bump? | Client `SCHEMA_VERSION` bump? |

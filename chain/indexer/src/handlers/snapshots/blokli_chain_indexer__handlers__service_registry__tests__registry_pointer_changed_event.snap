@@ -1,0 +1,10 @@
+---
+source: chain/indexer/src/handlers/service_registry.rs
+expression: type_update(events)
+---
+kind: RegistryPointerChanged
+service_type: ~
+config: ~
+registry_config:
+  type_registration_fee: 0 wxHOPR
+  node_safe_registry: "0x6666666666666666666666666666666666666666"

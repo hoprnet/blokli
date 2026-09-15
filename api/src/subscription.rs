@@ -1,13 +1,14 @@
 //! GraphQL subscription root and resolver implementations
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use async_broadcast::Receiver;
 use async_graphql::{Context, ID, Result, Subscription};
-use async_stream::stream;
+use async_stream::{stream, try_stream};
 use blokli_api_types::{
-    Account, Channel, ChannelUpdate, Hex32, OpenedChannelsGraphEntry, RedeemTicketDetails, Safe, TicketParameters,
-    TokenValueString, Transaction, UInt64,
+    Account, Channel, ChannelUpdate, CurvyCommittedNote, CurvyCommittedNullifier, CurvyEventPosition, CurvyPendingNote,
+    OpenedChannelsGraphEntry, RedeemTicketDetails, Safe, ServiceRegistryConfig, ServiceTypeUpdate,
+    ServiceTypeUpdateKind, ServiceUpdate, ServiceUpdateKind, TicketParameters, TokenValueString, Transaction, UInt64,
 };
 use blokli_chain_api::transaction_store::{
     TransactionEvent, TransactionStatus as StoreTransactionStatus, TransactionStore,
@@ -23,28 +24,125 @@ use blokli_db_entity::{
     conversions::{
         account_aggregation::{fetch_accounts_by_keyids, fetch_accounts_with_filters},
         safe_aggregation::{CurrentSafe, fetch_safe_by_address, fetch_safe_threshold_by_address},
+        service_aggregation::{fetch_service_entries_page_at, fetch_service_types, fetch_service_types_by_id},
     },
-    hopr_node_safe_registration,
+    curvy_committed_note, curvy_committed_nullifier, curvy_pending_note, hopr_node_safe_registration,
+    prelude::ServiceRegistryConfig as ServiceRegistryConfigEntity,
 };
 use chrono::Utc;
-use futures::Stream;
+use futures::{Stream, StreamExt, pin_mut};
 use hopr_bindings::exports::alloy::hex;
-use hopr_types::primitive::{
-    prelude::HoprBalance as PrimitiveHoprBalance,
-    primitives::Address,
-    traits::{IntoEndian, ToHex},
+use hopr_types::{
+    internal::prelude::ServiceType,
+    primitive::{
+        prelude::HoprBalance as PrimitiveHoprBalance,
+        primitives::Address,
+        traits::{IntoEndian, ToHex},
+    },
 };
 use rand::seq::SliceRandom;
-use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Select};
+use tokio::time::{MissedTickBehavior, interval};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::{
-    conversions::{convert_safe_execution, convert_transaction_status},
-    errors,
+    conversions::{
+        service_entry_from_aggregate, service_registry_config_from_model, service_type_from_aggregate,
+        transaction_from_record,
+    },
+    curvy, errors,
     query::owners_for_safe,
     readiness::{ReadinessChecker, ReadinessState},
+    validation::{parse_service_type, validate_eth_address},
 };
+
+/// Captures the current registry-wide configuration and subscribes to later changes atomically.
+///
+/// The indexer takes the corresponding write lock while committing a block and publishing its
+/// events. Reading the singleton row and registering both receivers while holding this read lock
+/// therefore gives the stream a stable initial value followed by every later update.
+async fn capture_service_registry_config_synchronized(
+    indexer_state: &IndexerState,
+    db: &DatabaseConnection,
+) -> Result<(ServiceRegistryConfig, Receiver<IndexerEvent>, Receiver<()>)> {
+    let _lock = indexer_state.acquire_watermark_lock().await;
+
+    let model = ServiceRegistryConfigEntity::find()
+        .one(db)
+        .await
+        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("service registry config query", e)))?
+        .ok_or_else(|| {
+            async_graphql::Error::new(errors::messages::not_found(
+                "service_registry_config",
+                "not initialized",
+            ))
+        })?;
+    let config = service_registry_config_from_model(model).map_err(|e| async_graphql::Error::new(e.message))?;
+
+    let event_receiver = indexer_state.subscribe_to_events();
+    let shutdown_receiver = indexer_state.subscribe_to_shutdown();
+
+    Ok((config, event_receiver, shutdown_receiver))
+}
+
+async fn query_service_entries_at_watermark(
+    db: &DatabaseConnection,
+    watermark: &Watermark,
+    service_type: Option<&[u8]>,
+    node: Option<&[u8]>,
+) -> Result<Vec<ServiceUpdate>> {
+    let mut cursor = None;
+    let mut updates = Vec::new();
+    loop {
+        let page = fetch_service_entries_page_at(db, service_type, node, watermark.block, cursor, 1000)
+            .await
+            .map_err(|e| async_graphql::Error::new(errors::messages::query_error("service snapshot", e)))?;
+        for entry in page.entries {
+            let entry = service_entry_from_aggregate(entry).map_err(|e| async_graphql::Error::new(e.message))?;
+            updates.push(ServiceUpdate {
+                kind: ServiceUpdateKind::Registered,
+                service_type: entry.service_type.clone(),
+                node: entry.node.clone(),
+                entry: Some(entry),
+            });
+        }
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            return Ok(updates);
+        }
+    }
+}
+
+async fn capture_service_types_synchronized(
+    indexer_state: &IndexerState,
+    db: &DatabaseConnection,
+    service_type: Option<&ServiceType>,
+) -> Result<(Vec<ServiceTypeUpdate>, Receiver<IndexerEvent>, Receiver<()>)> {
+    let _lock = indexer_state.acquire_watermark_lock().await;
+    let aggregates = match service_type {
+        Some(service_type) => fetch_service_types_by_id(db, &[service_type.as_ref().to_vec()]).await,
+        None => fetch_service_types(db).await,
+    }
+    .map_err(|e| async_graphql::Error::new(errors::messages::query_error("service type snapshot", e)))?;
+
+    let mut initial = Vec::with_capacity(aggregates.len());
+    for aggregate in aggregates {
+        let config = service_type_from_aggregate(aggregate).map_err(|e| async_graphql::Error::new(e.message))?;
+        initial.push(ServiceTypeUpdate {
+            kind: ServiceTypeUpdateKind::Registered,
+            service_type: Some(config.service_type.clone()),
+            config: Some(config),
+            registry_config: None,
+        });
+    }
+
+    Ok((
+        initial,
+        indexer_state.subscribe_to_events(),
+        indexer_state.subscribe_to_shutdown(),
+    ))
+}
 
 /// Watermark representing the last fully processed blockchain position
 ///
@@ -112,11 +210,11 @@ async fn capture_watermark_synchronized(
     Ok((watermark, event_receiver, shutdown_receiver))
 }
 
-/// Queries all open channels at a specific watermark
+/// Queries all non-closed channels at a specific watermark
 ///
 /// This implements the Phase 1 historical snapshot by querying all channels
-/// that were open at the watermark position. Uses temporal queries to get
-/// the state as it existed at that exact point in time.
+/// that were open or pending-to-close at the watermark position. Uses temporal
+/// queries to get the state as it existed at that exact point in time.
 ///
 /// Channels are returned in batches for efficient processing.
 ///
@@ -166,18 +264,18 @@ async fn query_channels_at_watermark(
         state_map.entry(state.channel_id).or_insert(state);
     }
 
-    // Filter to only OPEN channels (status = 1)
-    let open_channels: Vec<_> = channels
+    // Filter out CLOSED channels (status != 0)
+    let non_closed_channels: Vec<_> = channels
         .into_iter()
-        .filter(|c| state_map.get(&c.id).map(|s| s.status == 1).unwrap_or(false))
+        .filter(|c| state_map.get(&c.id).map(|s| s.status != 0).unwrap_or(false))
         .collect();
 
-    if open_channels.is_empty() {
+    if non_closed_channels.is_empty() {
         return Ok(Vec::new());
     }
 
     // Collect all unique account IDs we need to fetch
-    let mut account_ids: Vec<i64> = open_channels
+    let mut account_ids: Vec<i64> = non_closed_channels
         .iter()
         .flat_map(|c| vec![c.source, c.destination])
         .collect();
@@ -194,7 +292,7 @@ async fn query_channels_at_watermark(
 
     // Build ChannelUpdate objects
     let mut results = Vec::new();
-    for channel in open_channels {
+    for channel in non_closed_channels {
         let state = match state_map.get(&channel.id) {
             Some(s) => s,
             None => {
@@ -398,12 +496,279 @@ fn watermark_condition(watermark: &Watermark) -> Condition {
     Condition::all().add(channel_state::Column::PublishedBlock.lte(watermark.block))
 }
 
+trait CurvyPositioned {
+    fn position(&self) -> &CurvyEventPosition;
+}
+
+impl CurvyPositioned for CurvyPendingNote {
+    fn position(&self) -> &CurvyEventPosition {
+        &self.position
+    }
+}
+
+impl CurvyPositioned for CurvyCommittedNote {
+    fn position(&self) -> &CurvyEventPosition {
+        &self.position
+    }
+}
+
+impl CurvyPositioned for CurvyCommittedNullifier {
+    fn position(&self) -> &CurvyEventPosition {
+        &self.position
+    }
+}
+
+fn curvy_history_stream<E, T, F>(
+    db: DatabaseConnection,
+    query: Select<E>,
+    operation: &'static str,
+    convert: F,
+) -> impl Stream<Item = Result<T>>
+where
+    E: EntityTrait + 'static,
+    E::Model: Send + 'static,
+    T: Send + 'static,
+    F: Fn(E::Model) -> std::result::Result<T, blokli_api_types::QueryFailedError> + Send + Sync + 'static,
+{
+    try_stream! {
+        let mut rows = query
+            .stream(&db)
+            .await
+            .map_err(|error| errors::graphql_error(errors::query_failed(operation, error)))?;
+        while let Some(row) = rows.next().await {
+            let model = row.map_err(|error| errors::graphql_error(errors::query_failed(operation, error)))?;
+            yield convert(model).map_err(errors::graphql_error)?;
+        }
+    }
+}
+
+fn curvy_event_stream<T, H, F>(
+    historical: H,
+    mut event_receiver: Receiver<IndexerEvent>,
+    mut shutdown_receiver: Receiver<()>,
+    start_block: Option<u64>,
+    select: F,
+) -> impl Stream<Item = Result<T>>
+where
+    T: CurvyPositioned + Send + 'static,
+    H: Stream<Item = Result<T>> + Send + 'static,
+    F: Fn(IndexerEvent) -> Option<T> + Send + Sync + 'static,
+{
+    try_stream! {
+        pin_mut!(historical);
+        loop {
+            let historical_event: Option<Result<T>> = tokio::select! {
+                biased;
+                shutdown_result = shutdown_receiver.recv() => {
+                    match shutdown_result {
+                        Ok(_) | Err(async_broadcast::RecvError::Closed) => return,
+                        Err(async_broadcast::RecvError::Overflowed(count)) => {
+                            Err(errors::graphql_subscription_lagged_error(
+                                "Curvy subscription shutdown signal",
+                                count,
+                            ))
+                        }
+                    }
+                }
+                historical_event = historical.next() => Ok(historical_event),
+            }?;
+            match historical_event {
+                Some(event) => yield event?,
+                None => break,
+            }
+        }
+        loop {
+            let event = tokio::select! {
+                biased;
+                shutdown_result = shutdown_receiver.recv() => {
+                    match shutdown_result {
+                        Ok(_) | Err(async_broadcast::RecvError::Closed) => return,
+                        Err(async_broadcast::RecvError::Overflowed(count)) => {
+                            Err(errors::graphql_subscription_lagged_error(
+                                "Curvy subscription shutdown signal",
+                                count,
+                            ))
+                        }
+                    }
+                }
+                event_result = event_receiver.recv() => {
+                    match event_result {
+                        Ok(event) => Ok(event),
+                        Err(async_broadcast::RecvError::Closed) => return,
+                        Err(async_broadcast::RecvError::Overflowed(count)) => {
+                            Err(errors::graphql_subscription_lagged_error(
+                                "Curvy subscription event bus",
+                                count,
+                            ))
+                        }
+                    }
+                }
+            }?;
+            if let Some(event) = select(event)
+                && start_block.is_none_or(|start_block| event.position().block.0 >= start_block)
+            {
+                yield event;
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct CurvyStartBlock {
+    api: u64,
+    database: i64,
+}
+
+fn curvy_start_block(from_block: Option<UInt64>) -> Result<Option<CurvyStartBlock>> {
+    from_block
+        .map(|block| {
+            Ok(CurvyStartBlock {
+                api: block.0,
+                database: i64::try_from(block.0).map_err(|_| {
+                    errors::graphql_error(errors::invalid_pagination(
+                        "fromBlock exceeds the supported database range",
+                    ))
+                })?,
+            })
+        })
+        .transpose()
+}
+
 /// fetch_channel_update is no longer needed - events now contain complete data
 /// Root subscription type providing real-time updates via Server-Sent Events (SSE)
 pub struct SubscriptionRoot;
 
 #[Subscription]
 impl SubscriptionRoot {
+    /// Stream indexed Curvy `PendingNotes` entries with an optional historical phase.
+    #[graphql(name = "curvyPendingNote")]
+    async fn curvy_pending_note(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            name = "fromBlock",
+            desc = "Earliest block number to replay before live streaming starts"
+        )]
+        from_block: Option<UInt64>,
+    ) -> Result<impl Stream<Item = Result<CurvyPendingNote>>> {
+        let db = ctx.data::<DatabaseConnection>()?.clone();
+        let indexer_state = ctx.data::<IndexerState>()?.clone();
+        let (watermark, event_receiver, shutdown_receiver) =
+            capture_watermark_synchronized(&indexer_state, &db).await?;
+        let start_block = curvy_start_block(from_block)?;
+        let mut query =
+            curvy_pending_note::Entity::find().filter(curvy_pending_note::Column::PublishedBlock.lte(watermark.block));
+        if let Some(start_block) = start_block {
+            query = query.filter(curvy_pending_note::Column::PublishedBlock.gte(start_block.database));
+        }
+        let historical = curvy_history_stream(
+            db,
+            query
+                .order_by_asc(curvy_pending_note::Column::PublishedBlock)
+                .order_by_asc(curvy_pending_note::Column::PublishedTxIndex)
+                .order_by_asc(curvy_pending_note::Column::PublishedLogIndex)
+                .order_by_asc(curvy_pending_note::Column::EventItemIndex),
+            "fetch Curvy pending-note history",
+            curvy::pending_note,
+        );
+        Ok(curvy_event_stream(
+            historical,
+            event_receiver,
+            shutdown_receiver,
+            start_block.map(|start_block| start_block.api),
+            |event| match event {
+                IndexerEvent::CurvyPendingNote(event) => Some(event),
+                _ => None,
+            },
+        ))
+    }
+
+    /// Stream indexed Curvy `CommittedNotes` entries with an optional historical phase.
+    #[graphql(name = "curvyCommittedNote")]
+    async fn curvy_committed_note(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            name = "fromBlock",
+            desc = "Earliest block number to replay before live streaming starts"
+        )]
+        from_block: Option<UInt64>,
+    ) -> Result<impl Stream<Item = Result<CurvyCommittedNote>>> {
+        let db = ctx.data::<DatabaseConnection>()?.clone();
+        let indexer_state = ctx.data::<IndexerState>()?.clone();
+        let (watermark, event_receiver, shutdown_receiver) =
+            capture_watermark_synchronized(&indexer_state, &db).await?;
+        let start_block = curvy_start_block(from_block)?;
+        let mut query = curvy_committed_note::Entity::find()
+            .filter(curvy_committed_note::Column::PublishedBlock.lte(watermark.block));
+        if let Some(start_block) = start_block {
+            query = query.filter(curvy_committed_note::Column::PublishedBlock.gte(start_block.database));
+        }
+        let historical = curvy_history_stream(
+            db,
+            query
+                .order_by_asc(curvy_committed_note::Column::PublishedBlock)
+                .order_by_asc(curvy_committed_note::Column::PublishedTxIndex)
+                .order_by_asc(curvy_committed_note::Column::PublishedLogIndex)
+                .order_by_asc(curvy_committed_note::Column::EventItemIndex),
+            "fetch Curvy committed-note history",
+            curvy::committed_note,
+        );
+        Ok(curvy_event_stream(
+            historical,
+            event_receiver,
+            shutdown_receiver,
+            start_block.map(|start_block| start_block.api),
+            |event| match event {
+                IndexerEvent::CurvyCommittedNote(event) => Some(event),
+                _ => None,
+            },
+        ))
+    }
+
+    /// Stream indexed Curvy `CommittedNullifiers` entries with an optional historical phase.
+    #[graphql(name = "curvyCommittedNullifier")]
+    async fn curvy_committed_nullifier(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            name = "fromBlock",
+            desc = "Earliest block number to replay before live streaming starts"
+        )]
+        from_block: Option<UInt64>,
+    ) -> Result<impl Stream<Item = Result<CurvyCommittedNullifier>>> {
+        let db = ctx.data::<DatabaseConnection>()?.clone();
+        let indexer_state = ctx.data::<IndexerState>()?.clone();
+        let (watermark, event_receiver, shutdown_receiver) =
+            capture_watermark_synchronized(&indexer_state, &db).await?;
+        let start_block = curvy_start_block(from_block)?;
+        let mut query = curvy_committed_nullifier::Entity::find()
+            .filter(curvy_committed_nullifier::Column::PublishedBlock.lte(watermark.block));
+        if let Some(start_block) = start_block {
+            query = query.filter(curvy_committed_nullifier::Column::PublishedBlock.gte(start_block.database));
+        }
+        let historical = curvy_history_stream(
+            db,
+            query
+                .order_by_asc(curvy_committed_nullifier::Column::PublishedBlock)
+                .order_by_asc(curvy_committed_nullifier::Column::PublishedTxIndex)
+                .order_by_asc(curvy_committed_nullifier::Column::PublishedLogIndex)
+                .order_by_asc(curvy_committed_nullifier::Column::EventItemIndex),
+            "fetch Curvy committed-nullifier history",
+            curvy::committed_nullifier,
+        );
+        Ok(curvy_event_stream(
+            historical,
+            event_receiver,
+            shutdown_receiver,
+            start_block.map(|start_block| start_block.api),
+            |event| match event {
+                IndexerEvent::CurvyCommittedNullifier(event) => Some(event),
+                _ => None,
+            },
+        ))
+    }
+
     /// Subscribe to health status updates of the API
     ///
     /// Provides updates whenever the server state changes.
@@ -573,6 +938,9 @@ impl SubscriptionRoot {
                             Ok(IndexerEvent::TicketRedeemed(_)) => {
                                 // Ticket redeemed don't affect this subscription
                             }
+                            Ok(_) => {
+                                // Other indexer events don't affect this subscription
+                            }
                             Err(async_broadcast::RecvError::Closed) => {
                                 info!("Event bus closed, ending channelUpdated subscription");
                                 return;
@@ -591,9 +959,9 @@ impl SubscriptionRoot {
     /// Subscribe to the opened payment channels graph with real-time updates
     ///
     /// **Streaming Behavior:**
-    /// - Emits one OpenedChannelsGraphEntry per open channel
+    /// - Emits one OpenedChannelsGraphEntry per non-closed channel
     /// - Each entry contains a single channel with its source and destination accounts
-    /// - On subscription start, emits all existing open channels as separate entries
+    /// - On subscription start, emits all existing open and pending-to-close channels as separate entries
     /// - Subsequently, emits updates when any channel changes, including non-open states
     ///
     /// **Phase 1 Ordering:**
@@ -641,7 +1009,7 @@ impl SubscriptionRoot {
         const BATCH_SIZE: usize = 100;
 
         Ok(stream! {
-            // Phase 1: Stream historical snapshot of all open channels at watermark
+            // Phase 1: Stream historical snapshot of all non-closed channels at watermark
             match query_channels_at_watermark(&db, &watermark, BATCH_SIZE).await {
                 Ok(mut historical_channels) => {
                     historical_channels.shuffle(&mut rand::rng());
@@ -701,6 +1069,9 @@ impl SubscriptionRoot {
                             }
                             Ok(IndexerEvent::TicketRedeemed(_)) => {
                                 // Ticket redeemed don't affect this subscription
+                            }
+                            Ok(_) => {
+                                // Other indexer events don't affect this subscription
                             }
                             Err(async_broadcast::RecvError::Closed) => {
                                 info!("Event bus closed, ending subscription");
@@ -809,6 +1180,246 @@ impl SubscriptionRoot {
         })
     }
 
+    /// Subscribe to real-time changes of service registry entries
+    ///
+    /// Emits on registration, update and deregistration. Optional filters restrict the stream to
+    /// a single service type, a single node, or both.
+    ///
+    /// Uses the IndexerState event bus for real-time notifications:
+    /// - Streams changes when `IndexerEvent::ServiceEntryUpdated` events are received
+    /// - Automatically shuts down on blockchain reorganization
+    ///
+    /// Before live changes, every subscription emits each matching entry present at its captured
+    /// watermark as `REGISTERED`. The snapshot is page-walked, so an unfiltered subscription does
+    /// not require one unbounded database response.
+    #[graphql(name = "serviceUpdated")]
+    async fn service_updated(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Filter by service type - ASCII name such as gvpn:exit, or 0x-prefixed hex")]
+        service_type: Option<String>,
+        #[graphql(desc = "Filter by node chain address (hexadecimal format)")] node: Option<String>,
+    ) -> Result<impl Stream<Item = ServiceUpdate>> {
+        let db = ctx.data::<DatabaseConnection>()?.clone();
+        let indexer_state = ctx
+            .data::<IndexerState>()
+            .map_err(|e| async_graphql::Error::new(errors::messages::context_error("IndexerState", e.message)))?
+            .clone();
+
+        // Both filters are normalized once, so that the comparison against every event is a plain
+        // string equality and a hex filter matches an entry the schema renders by its ASCII name.
+        let parsed_service_type = service_type.as_deref().map(parse_service_type).transpose()?;
+        let service_type_filter = parsed_service_type.as_ref().map(ToString::to_string);
+        let node_filter = normalize_node_filter(node.as_deref())?;
+        let node_address = node_filter
+            .as_deref()
+            .map(Address::from_hex)
+            .transpose()
+            .map_err(|e| async_graphql::Error::new(format!("invalid node filter: {e}")))?;
+
+        // Subscribe under the coordination lock rather than mid-block, so that the stream starts
+        // at a block boundary and cannot observe half of a block's events.
+        let (watermark, mut event_receiver, mut shutdown_receiver) =
+            capture_watermark_synchronized(&indexer_state, &db).await?;
+        let initial = query_service_entries_at_watermark(
+            &db,
+            &watermark,
+            parsed_service_type.as_ref().map(AsRef::as_ref),
+            node_address.as_ref().map(AsRef::as_ref),
+        )
+        .await?;
+
+        Ok(stream! {
+            for update in initial {
+                yield update;
+            }
+            loop {
+                tokio::select! {
+                    biased;
+
+                    shutdown_result = shutdown_receiver.recv() => {
+                        match shutdown_result {
+                            Ok(_) => {
+                                info!("serviceUpdated subscription shutting down due to reorg");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Closed) => {
+                                warn!("Shutdown channel closed for serviceUpdated");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Overflowed(n)) => {
+                                warn!("Shutdown signal overflowed ({}), terminating serviceUpdated for resync", n);
+                                return;
+                            }
+                        }
+                    }
+                    event_result = event_receiver.recv() => {
+                        match event_result {
+                            Ok(IndexerEvent::ServiceEntryUpdated(update)) => {
+                                if matches_service_filters(&update, service_type_filter.as_deref(), node_filter.as_deref()) {
+                                    yield update;
+                                }
+                            }
+                            Ok(_) => {
+                                // Other events (AccountUpdated, ChannelUpdated, etc.) - ignore
+                            }
+                            Err(async_broadcast::RecvError::Closed) => {
+                                info!("Event bus closed, ending serviceUpdated subscription");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Overflowed(n)) => {
+                                warn!("Event bus overflowed ({}); terminating serviceUpdated for resync", n);
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    /// Subscribe to real-time changes of service type and registry-wide configuration
+    ///
+    /// Uses the IndexerState event bus for real-time notifications:
+    /// - Streams changes when `IndexerEvent::ServiceTypeUpdated` events are received
+    /// - Automatically shuts down on blockchain reorganization
+    ///
+    /// Emits current complete type configurations before switching to live changes. Use
+    /// `serviceRegistryConfigUpdated` for the separate registry-wide configuration.
+    ///
+    /// The two registry-wide kinds carry no service type, so a `serviceType` filter excludes them.
+    #[graphql(name = "serviceTypeUpdated")]
+    async fn service_type_updated(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Filter by service type - ASCII name such as gvpn:exit, or 0x-prefixed hex")]
+        service_type: Option<String>,
+    ) -> Result<impl Stream<Item = ServiceTypeUpdate>> {
+        let db = ctx.data::<DatabaseConnection>()?.clone();
+        let indexer_state = ctx
+            .data::<IndexerState>()
+            .map_err(|e| async_graphql::Error::new(errors::messages::context_error("IndexerState", e.message)))?
+            .clone();
+
+        let parsed_service_type = service_type.as_deref().map(parse_service_type).transpose()?;
+        let service_type_filter = parsed_service_type.as_ref().map(ToString::to_string);
+
+        let (initial, mut event_receiver, mut shutdown_receiver) =
+            capture_service_types_synchronized(&indexer_state, &db, parsed_service_type.as_ref()).await?;
+
+        Ok(stream! {
+            for update in initial {
+                yield update;
+            }
+            loop {
+                tokio::select! {
+                    biased;
+
+                    shutdown_result = shutdown_receiver.recv() => {
+                        match shutdown_result {
+                            Ok(_) => {
+                                info!("serviceTypeUpdated subscription shutting down due to reorg");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Closed) => {
+                                warn!("Shutdown channel closed for serviceTypeUpdated");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Overflowed(n)) => {
+                                warn!("Shutdown signal overflowed ({}), terminating serviceTypeUpdated for resync", n);
+                                return;
+                            }
+                        }
+                    }
+                    event_result = event_receiver.recv() => {
+                        match event_result {
+                            Ok(IndexerEvent::ServiceTypeUpdated(update)) => {
+                                if matches_service_type_filter(&update, service_type_filter.as_deref()) {
+                                    yield update;
+                                }
+                            }
+                            Ok(_) => {
+                                // Other events (AccountUpdated, ChannelUpdated, etc.) - ignore
+                            }
+                            Err(async_broadcast::RecvError::Closed) => {
+                                info!("Event bus closed, ending serviceTypeUpdated subscription");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Overflowed(n)) => {
+                                warn!("Event bus overflowed ({}); terminating serviceTypeUpdated for resync", n);
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    /// Subscribe to the complete registry-wide configuration.
+    ///
+    /// The first item is an atomic snapshot of the current type registration fee and node-safe
+    /// registry pointer. Later items contain the complete configuration after either value changes.
+    #[graphql(name = "serviceRegistryConfigUpdated")]
+    async fn service_registry_config_updated(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<impl Stream<Item = ServiceRegistryConfig>> {
+        let db = ctx.data::<DatabaseConnection>()?.clone();
+        let indexer_state = ctx
+            .data::<IndexerState>()
+            .map_err(|e| async_graphql::Error::new(errors::messages::context_error("IndexerState", e.message)))?
+            .clone();
+
+        let (initial, mut event_receiver, mut shutdown_receiver) =
+            capture_service_registry_config_synchronized(&indexer_state, &db).await?;
+
+        Ok(stream! {
+            yield initial;
+
+            loop {
+                tokio::select! {
+                    biased;
+
+                    shutdown_result = shutdown_receiver.recv() => {
+                        match shutdown_result {
+                            Ok(_) => {
+                                info!("serviceRegistryConfigUpdated subscription shutting down due to reorg");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Closed) => {
+                                warn!("Shutdown channel closed for serviceRegistryConfigUpdated");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Overflowed(n)) => {
+                                warn!("Shutdown signal overflowed ({}), terminating serviceRegistryConfigUpdated for resync", n);
+                                return;
+                            }
+                        }
+                    }
+                    event_result = event_receiver.recv() => {
+                        match event_result {
+                            Ok(IndexerEvent::ServiceTypeUpdated(update)) => {
+                                if let Some(config) = update.registry_config {
+                                    yield config;
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(async_broadcast::RecvError::Closed) => {
+                                info!("Event bus closed, ending serviceRegistryConfigUpdated subscription");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Overflowed(n)) => {
+                                warn!("Event bus overflowed ({}); terminating serviceRegistryConfigUpdated for resync", n);
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    }
+
     /// Subscribe to real-time updates of ticket price and winning probability
     ///
     /// Provides updates whenever there is a change in the ticket price or minimum
@@ -892,6 +1503,9 @@ impl SubscriptionRoot {
                             }
                             Ok(IndexerEvent::TicketRedeemed(_)) => {
                                 // Ticket redeemed don't affect this subscription
+                            }
+                            Ok(_) => {
+                                // Other indexer events don't affect this subscription
                             }
                             Err(async_broadcast::RecvError::Closed) => {
                                 info!("Event bus closed, ending ticketParametersUpdated subscription");
@@ -1000,6 +1614,9 @@ impl SubscriptionRoot {
                             }
                             Ok(IndexerEvent::TicketRedeemed(_)) => {
                                 // Ticket redeemed don't affect this subscription
+                            }
+                            Ok(_) => {
+                                // Other indexer events don't affect this subscription
                             }
                             Err(async_broadcast::RecvError::Closed) => {
                                 info!("Event bus closed, ending keyBindingFeeUpdated subscription");
@@ -1167,10 +1784,10 @@ impl SubscriptionRoot {
     /// Provides updates whenever the status of the specified transaction changes,
     /// including validation, submission, confirmation, revert, and failure events.
     ///
-    /// Uses event-driven architecture to receive updates immediately when transaction
-    /// status changes, with zero polling overhead. Follows a 2-phase approach:
+    /// Uses event-driven delivery for immediate updates plus periodic store reconciliation
+    /// to recover from dropped notifications. Follows a 2-phase approach:
     /// - Phase 1: Emit current transaction state if it exists
-    /// - Phase 2: Listen for future status update events
+    /// - Phase 2: Listen for status update events and reconcile with current state
     #[graphql(name = "transactionUpdated")]
     async fn transaction_updated(
         &self,
@@ -1186,6 +1803,9 @@ impl SubscriptionRoot {
         // Subscribe to transaction events before checking current state
         // to avoid race condition where we miss an update
         let mut event_receiver = transaction_store.subscribe();
+        let initial_record = transaction_store
+            .get(transaction_id)
+            .map_err(|_| errors::transaction_not_found(transaction_id))?;
 
         Ok(stream! {
             let is_terminal_status = |s: &StoreTransactionStatus| {
@@ -1199,59 +1819,60 @@ impl SubscriptionRoot {
                 )
             };
 
-            // Phase 1: Emit current state if transaction exists
-            if let Ok(record) = transaction_store.get(transaction_id) {
-                let is_terminal = is_terminal_status(&record.status);
+            // Phase 1: Emit the state captured after subscribing to the event bus.
+            let mut last_record = initial_record;
+            last_record.raw_transaction.clear();
+            let is_terminal = is_terminal_status(&last_record.status);
 
-                yield Transaction {
-                    id: ID::from(record.id.to_string()),
-                    status: convert_transaction_status(record.status),
-                    submitted_at: record.submitted_at,
-                    transaction_hash: Hex32(record.transaction_hash.to_hex()),
-                    safe_execution: convert_safe_execution(record.safe_execution),
-                };
+            yield transaction_from_record(last_record.clone());
 
-                if is_terminal {
-                    return;
-                }
+            if is_terminal {
+                return;
             }
 
-            // Phase 2: Listen for future status update events
+            // Phase 2: Listen for events and periodically reconcile with the store. The
+            // reconciliation makes a dropped notification recoverable.
+            let mut reconciliation = interval(Duration::from_secs(5));
+            reconciliation.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            reconciliation.tick().await;
+
             loop {
-                match event_receiver.recv().await {
-                    // Use pattern matching guard to filter for matching transaction ID
-                    Ok(TransactionEvent::StatusUpdated { id, .. })
-                        if id == transaction_id =>
-                    {
-                        // Fetch full record to get consistent status + safe_execution
-                        if let Ok(record) = transaction_store.get(transaction_id) {
-                            let is_terminal = is_terminal_status(&record.status);
-
-                            yield Transaction {
-                                id: ID::from(id.to_string()),
-                                status: convert_transaction_status(record.status),
-                                submitted_at: record.submitted_at,
-                                transaction_hash: Hex32(record.transaction_hash.to_hex()),
-                                safe_execution: convert_safe_execution(record.safe_execution),
-                            };
-
-                            if is_terminal {
-                                break;
+                let should_reconcile = tokio::select! {
+                    event = event_receiver.recv() => {
+                        match event {
+                            Ok(TransactionEvent::StatusUpdated { id, .. }) => id == transaction_id,
+                            Err(async_broadcast::RecvError::Closed) => break,
+                            Err(async_broadcast::RecvError::Overflowed(missed)) => {
+                                warn!(
+                                    %transaction_id,
+                                    missed,
+                                    "Transaction subscription missed events; reconciling from the store"
+                                );
+                                true
                             }
                         }
                     }
-                    Ok(_) => {
-                        // Ignore events for other transactions
-                    }
-                    Err(async_broadcast::RecvError::Closed) => {
-                        // Event bus closed, terminate subscription
-                        break;
-                    }
-                    Err(async_broadcast::RecvError::Overflowed(_)) => {
-                        // Missed some events due to slow consumer, continue listening
-                        // This is acceptable since we only care about the latest status
-                        warn!("Transaction subscription for {} missed some events due to overflow", transaction_id);
+                    _ = reconciliation.tick() => true,
+                };
+
+                if !should_reconcile {
+                    continue;
+                }
+
+                if let Ok(mut record) = transaction_store.get(transaction_id) {
+                    record.raw_transaction.clear();
+
+                    if record == last_record {
                         continue;
+                    }
+
+                    last_record = record.clone();
+                    let is_terminal = is_terminal_status(&last_record.status);
+
+                    yield transaction_from_record(record);
+
+                    if is_terminal {
+                        break;
                     }
                 }
             }
@@ -1403,6 +2024,40 @@ impl SubscriptionRoot {
             .collect();
 
         Ok(result)
+    }
+}
+
+/// Normalizes an optional node chain address filter into lowercase `0x` hex.
+///
+/// Normalizing once at subscription start makes every later comparison a plain string equality,
+/// and rejects a malformed address before the stream is handed to the client rather than silently
+/// matching nothing.
+fn normalize_node_filter(node: Option<&str>) -> Result<Option<String>> {
+    node.map(|value| {
+        validate_eth_address(value)?;
+        Address::from_hex(value)
+            .map(|address| address.to_hex())
+            .map_err(|e| async_graphql::Error::new(errors::messages::invalid_address(value, e)))
+    })
+    .transpose()
+}
+
+/// Check whether a registry entry change matches the subscription filters.
+///
+/// Filters are ANDed and both are compared against the already normalized form the payload
+/// carries, so an absent filter matches everything.
+fn matches_service_filters(update: &ServiceUpdate, service_type: Option<&str>, node: Option<&str>) -> bool {
+    service_type.is_none_or(|filter| update.service_type == filter) && node.is_none_or(|filter| update.node == filter)
+}
+
+/// Check whether a service type or registry-wide change matches the subscription filter.
+///
+/// The two registry-wide kinds carry no service type, so a filter excludes them: a client asking
+/// for one type is not asking for registry-wide configuration.
+fn matches_service_type_filter(update: &ServiceTypeUpdate, service_type: Option<&str>) -> bool {
+    match service_type {
+        None => true,
+        Some(filter) => update.service_type.as_deref() == Some(filter),
     }
 }
 
@@ -1571,12 +2226,14 @@ fn matches_channel_filters(
 mod tests {
     use std::time::Duration;
 
+    use async_broadcast::broadcast;
     use async_graphql::{EmptyMutation, Object, Schema};
-    use blokli_api_types::RedemptionResult;
+    use blokli_api_types::{CurvyCommittedNote, CurvyEventPosition, Hex32, RedemptionResult, UInt64};
     use blokli_chain_indexer::state::{IndexerEvent, RedeemTicketDetailsInfo};
     use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb};
-    use blokli_db_entity::{hopr_safe_contract, hopr_safe_contract_state};
-    use futures::StreamExt;
+    use blokli_db_entity::{hopr_safe_contract, hopr_safe_contract_state, service_registry_config};
+    use futures::{StreamExt, pin_mut, stream};
+    use hopr_types::primitive::traits::BytesRepresentable;
     use sea_orm::{ActiveModelTrait, Set};
 
     use super::*;
@@ -1590,6 +2247,80 @@ mod tests {
         async fn dummy(&self) -> bool {
             true
         }
+    }
+
+    fn curvy_committed_note(block: u64) -> CurvyCommittedNote {
+        CurvyCommittedNote {
+            batch_index: Hex32(format!("0x{:064x}", 1)),
+            note_id: Hex32(format!("0x{block:064x}")),
+            leaf_index: UInt64(block),
+            position: CurvyEventPosition {
+                transaction_hash: Hex32(format!("0x{:064x}", block)),
+                block_hash: Hex32(format!("0x{:064x}", block)),
+                block: UInt64(block),
+                transaction_index: UInt64(0),
+                log_index: UInt64(0),
+                event_item_index: UInt64(0),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn test_curvy_event_stream_reports_event_bus_lag() -> anyhow::Result<()> {
+        let (mut event_sender, event_receiver) = broadcast(1);
+        event_sender.set_overflow(true);
+        let (_shutdown_sender, shutdown_receiver) = broadcast(1);
+        event_sender
+            .try_broadcast(IndexerEvent::CurvyCommittedNote(curvy_committed_note(1)))
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        event_sender
+            .try_broadcast(IndexerEvent::CurvyCommittedNote(curvy_committed_note(2)))
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+
+        let events = curvy_event_stream(
+            stream::empty(),
+            event_receiver,
+            shutdown_receiver,
+            None,
+            |event| match event {
+                IndexerEvent::CurvyCommittedNote(event) => Some(event),
+                _ => None,
+            },
+        );
+        pin_mut!(events);
+        let error = events
+            .next()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Curvy event stream ended without reporting lag"))?
+            .expect_err("overflow must terminate the Curvy subscription with an error");
+
+        assert!(error.message.contains("missed 1 events"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_curvy_event_stream_observes_shutdown_during_history() -> anyhow::Result<()> {
+        let (_event_sender, event_receiver) = broadcast(1);
+        let (shutdown_sender, shutdown_receiver) = broadcast(1);
+        shutdown_sender
+            .try_broadcast(())
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let historical = stream::iter([Ok::<_, async_graphql::Error>(curvy_committed_note(1))]);
+
+        let events = curvy_event_stream(
+            historical,
+            event_receiver,
+            shutdown_receiver,
+            None,
+            |event| match event {
+                IndexerEvent::CurvyCommittedNote(event) => Some(event),
+                _ => None,
+            },
+        );
+        pin_mut!(events);
+
+        assert!(events.next().await.is_none());
+        Ok(())
     }
 
     // Helper: Create test channel in database
@@ -1834,6 +2565,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_query_channels_at_watermark_includes_pending_to_close_channels() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+
+        // Create accounts
+        let source_id = create_test_account(db.conn(blokli_db::TargetDb::Index), vec![1; 20], "peer1")
+            .await
+            .unwrap();
+        let dest_id = create_test_account(db.conn(blokli_db::TargetDb::Index), vec![2; 20], "peer2")
+            .await
+            .unwrap();
+
+        // Create channel
+        let channel_id = create_test_channel(db.conn(blokli_db::TargetDb::Index), source_id, dest_id, "0xabc123")
+            .await
+            .unwrap();
+
+        // Insert PENDING_TO_CLOSE channel state (status = 2) at block 50
+        insert_channel_state(
+            db.conn(blokli_db::TargetDb::Index),
+            channel_id,
+            50,
+            0,
+            0,
+            vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            2, // PENDING_TO_CLOSE status
+        )
+        .await
+        .unwrap();
+
+        let watermark = Watermark {
+            block: 100,
+            tx_index: 0,
+            log_index: 0,
+        };
+
+        let result = query_channels_at_watermark(db.conn(blokli_db::TargetDb::Index), &watermark, 100)
+            .await
+            .unwrap();
+
+        // Pending-to-close channel should be returned in the initial snapshot
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].channel.concrete_channel_id, "0xabc123");
+        assert_eq!(
+            result[0].channel.status,
+            blokli_api_types::ChannelStatus::PendingToClose
+        );
+    }
+
+    #[tokio::test]
     async fn test_query_channels_at_watermark_excludes_closed_channels() {
         let db = BlokliDb::new_in_memory().await.unwrap();
 
@@ -1850,7 +2630,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Insert CLOSED channel state (status = 2)
+        // Insert CLOSED channel state (status = 0)
         insert_channel_state(
             db.conn(blokli_db::TargetDb::Index),
             channel_id,
@@ -1858,7 +2638,7 @@ mod tests {
             0,
             0,
             vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-            2, // CLOSED status
+            0, // CLOSED status
         )
         .await
         .unwrap();
@@ -2621,6 +3401,71 @@ mod tests {
 
         // Should timeout because non-SafeDeployed events are ignored
         assert!(timeout_result.is_err(), "Stream should ignore non-SafeDeployed events");
+    }
+
+    #[tokio::test]
+    async fn service_registry_config_subscription_emits_snapshot_then_updates() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+        let conn = db.conn(blokli_db::TargetDb::Index);
+        service_registry_config::ActiveModel {
+            id: Set(1),
+            type_registration_fee: Set(vec![0; 32]),
+            node_safe_registry: Set(Some(vec![0x11; Address::SIZE])),
+            last_changed_block: Set(0),
+            last_changed_tx_index: Set(0),
+            last_changed_log_index: Set(0),
+        }
+        .update(conn)
+        .await
+        .unwrap();
+
+        let indexer_state = IndexerState::new(10, 100);
+        let schema = Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)
+            .data(conn.clone())
+            .data(indexer_state.clone())
+            .data(GasMultiplier(1.0))
+            .finish();
+        let mut stream = schema
+            .execute_stream("subscription { serviceRegistryConfigUpdated { typeRegistrationFee nodeSafeRegistry } }")
+            .boxed();
+
+        let initial = tokio::time::timeout(Duration::from_secs(2), stream.next())
+            .await
+            .expect("timeout waiting for initial configuration")
+            .expect("subscription ended before initial configuration")
+            .into_result()
+            .expect("initial configuration response failed")
+            .data
+            .into_json()
+            .expect("initial configuration must be JSON");
+        assert_eq!(
+            initial["serviceRegistryConfigUpdated"]["nodeSafeRegistry"],
+            Address::from([0x11; Address::SIZE]).to_hex()
+        );
+
+        indexer_state.publish_event(IndexerEvent::ServiceTypeUpdated(ServiceTypeUpdate {
+            kind: blokli_api_types::ServiceTypeUpdateKind::RegistryPointerChanged,
+            service_type: None,
+            config: None,
+            registry_config: Some(ServiceRegistryConfig {
+                type_registration_fee: TokenValueString("1 wxHOPR".to_string()),
+                node_safe_registry: Address::from([0x22; Address::SIZE]).to_hex(),
+            }),
+        }));
+
+        let updated = tokio::time::timeout(Duration::from_secs(2), stream.next())
+            .await
+            .expect("timeout waiting for updated configuration")
+            .expect("subscription ended before updated configuration")
+            .into_result()
+            .expect("updated configuration response failed")
+            .data
+            .into_json()
+            .expect("updated configuration must be JSON");
+        assert_eq!(
+            updated["serviceRegistryConfigUpdated"]["nodeSafeRegistry"],
+            Address::from([0x22; Address::SIZE]).to_hex()
+        );
     }
 
     /// Helper to collect Phase 1 items from a subscription stream.

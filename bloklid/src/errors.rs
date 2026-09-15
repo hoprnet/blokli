@@ -23,6 +23,9 @@ pub enum BloklidError {
     #[error("indexer error: {0}")]
     Indexer(#[from] blokli_chain_indexer::errors::CoreEthereumIndexerError),
 
+    #[error("snapshot error: {0}")]
+    Snapshot(#[from] blokli_chain_indexer::snapshot::SnapshotError),
+
     #[error("database not configured: {0}")]
     DatabaseNotConfigured(String),
 }

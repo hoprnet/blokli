@@ -1,0 +1,13 @@
+---
+source: chain/indexer/src/handlers/service_registry.rs
+expression: type_update(events)
+---
+kind: RegistrationBurnChanged
+service_type: "gvpn:exit"
+config:
+  service_type: "gvpn:exit"
+  owner: "0x3333333333333333333333333333333333333333"
+  requirement: ~
+  registration_burn: 1.5 wxHOPR
+  update_burn: 0 wxHOPR
+registry_config: ~
