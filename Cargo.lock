@@ -2222,7 +2222,7 @@ dependencies = [
  "hopr-bindings",
  "hopr-types",
  "insta",
- "thiserror 2.0.18",
+ "thiserror",
 ]
 
 [[package]]
