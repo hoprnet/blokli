@@ -165,7 +165,7 @@ fn build_subscription_test_schema(
 /// 4. Waits for contract deployment finality
 /// 5. Creates RPC operations instance
 /// 6. Sets up in-memory SQLite database
-/// 7. Creates transaction components (executor, store, validator)
+/// 7. Creates transaction components (executor, store, policy)
 /// 8. Builds GraphQL schema with all dependencies
 ///
 /// # Arguments
