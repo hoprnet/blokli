@@ -18,6 +18,9 @@ use hopr_bindings::{
         redeemTicketSafeCall,
     },
     hopr_node_safe_registry::HoprNodeSafeRegistry::{deregisterNodeBySafeCall, registerSafeByNodeCall},
+    hopr_service_registry::HoprServiceRegistry::{
+        registerServiceTypeCall, selfDeregisterCall, selfRegisterCall, selfUpdateCall,
+    },
     hopr_token::HoprToken::{approveCall, sendCall, transferCall},
 };
 
@@ -26,12 +29,13 @@ use hopr_bindings::{
 /// Maps each HOPR contract to the function selectors bloklid relays for it. Channel operations are
 /// included in both their direct and Safe-module (`*Safe`) variants, since the filter unwraps
 /// `execTransactionFromModule` and matches the inner call. Token `approve`/`transfer`/`send` and the
-/// safe-registry register/deregister operations cover the remaining relayable calls. When Curvy
+/// safe-registry and service-registry operations cover the remaining relayable calls. When Curvy
 /// is configured, its aggregator's withdrawal submission entrypoint is included as well.
 pub fn network_transaction_filter(contracts: &ContractAddresses) -> TransactionFilter {
     let token = contracts.token;
     let channels = contracts.channels;
     let registry = contracts.node_safe_registry;
+    let service_registry = contracts.service_registry;
 
     let mut allowed = vec![
         (token, approveCall::SELECTOR),
@@ -49,6 +53,10 @@ pub fn network_transaction_filter(contracts: &ContractAddresses) -> TransactionF
         (channels, redeemTicketSafeCall::SELECTOR),
         (registry, registerSafeByNodeCall::SELECTOR),
         (registry, deregisterNodeBySafeCall::SELECTOR),
+        (service_registry, registerServiceTypeCall::SELECTOR),
+        (service_registry, selfRegisterCall::SELECTOR),
+        (service_registry, selfUpdateCall::SELECTOR),
+        (service_registry, selfDeregisterCall::SELECTOR),
     ];
 
     if contracts.curvy_aggregator != Default::default() {
@@ -103,6 +111,9 @@ mod tests {
             sol_types::SolCall,
         },
         hopr_channels::HoprChannels::fundChannelSafeCall,
+        hopr_service_registry::HoprServiceRegistry::{
+            registerServiceTypeCall, selfDeregisterCall, selfRegisterCall, selfUpdateCall,
+        },
         hopr_token::HoprToken::approveCall,
     };
     use hopr_types::primitive::prelude::Address;
@@ -114,6 +125,7 @@ mod tests {
     const CHANNELS: [u8; 20] = [0x22; 20];
     const REGISTRY: [u8; 20] = [0x33; 20];
     const CURVY_AGGREGATOR: [u8; 20] = [0x44; 20];
+    const SERVICE_REGISTRY: [u8; 20] = [0x55; 20];
 
     fn signed_tx(to: [u8; 20], selector: [u8; 4]) -> Vec<u8> {
         let signer: PrivateKeySigner = KEY.parse().unwrap();
@@ -142,6 +154,7 @@ mod tests {
             channels: Address::from(CHANNELS),
             node_safe_registry: Address::from(REGISTRY),
             curvy_aggregator: Address::from(CURVY_AGGREGATOR),
+            service_registry: Address::from(SERVICE_REGISTRY),
             ..Default::default()
         }
     }
@@ -177,6 +190,19 @@ mod tests {
     fn network_filter_allows_curvy_withdrawal_submission() {
         let raw = signed_tx(CURVY_AGGREGATOR, submitWithdrawalRequestCall::SELECTOR);
         assert!(network_policy().check(&raw).is_ok());
+    }
+
+    #[test]
+    fn network_filter_allows_service_registry_operations() {
+        for selector in [
+            registerServiceTypeCall::SELECTOR,
+            selfRegisterCall::SELECTOR,
+            selfUpdateCall::SELECTOR,
+            selfDeregisterCall::SELECTOR,
+        ] {
+            let raw = signed_tx(SERVICE_REGISTRY, selector);
+            assert!(network_policy().check(&raw).is_ok());
+        }
     }
 
     #[test]
