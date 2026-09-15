@@ -237,6 +237,12 @@ mod tests {
         let jura_dev = Network::JuraDev.resolve();
         assert!(jura_dev.is_some(), "JuraDev network should be defined in hopr-bindings");
 
+        let jura_staging = Network::JuraStaging.resolve();
+        assert!(
+            jura_staging.is_some(),
+            "JuraStaging network should be defined in hopr-bindings"
+        );
+
         let jura_prod = Network::JuraProd.resolve();
         assert!(
             jura_prod.is_some(),
