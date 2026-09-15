@@ -84,6 +84,11 @@ jobs:
   # ── Shared checks (lint, pre-commit, audit) ─────────────────────────────────
   checks:
     name: Check
+    # Skip in the merge queue: a conditionally-skipped job still reports (as
+    # skipped = passing), so the required check stays green without re-running the
+    # suite in the queue. The queue's only real work is the Integration throughput
+    # test (see merge-queue.yaml).
+    if: github.event_name == 'pull_request'
     uses: hoprnet/hopr-workflows/.github/workflows/checks.yaml@3ee95c480962bb3c1fc0061887da9ba735f537c7 # workflow-checks-v2.1.1
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
@@ -98,6 +103,7 @@ jobs:
   # ── Shared tests (unit) ─────────────────────────────────────────────────────
   tests:
     name: Test
+    if: github.event_name == 'pull_request' # skip in the merge queue (see `checks`)
     uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@2f28adfb7c34a9f18087d8646e190b6aafcd4b52 # workflow-tests-v6.1.2
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
@@ -131,6 +137,7 @@ jobs:
   # ── Build: binaries ─────────────────────────────────────────────────────────
   build-binaries:
     name: Binary ${{ matrix.architecture }}
+    if: github.event_name == 'pull_request' # skip in the merge queue (see `checks`)
     strategy:
       fail-fast: false
       matrix:
@@ -167,6 +174,7 @@ jobs:
   # ── Build: Docker ───────────────────────────────────────────────────────────
   build-docker:
     name: Docker
+    if: github.event_name == 'pull_request' # skip in the merge queue (see `checks`)
     uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@25898d13dab1b3fbf4c33c394e7c581578a2b0d7 # build-docker-v3.2.0
     needs: build-binaries
     permissions:
@@ -193,6 +201,7 @@ jobs:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
   build-docker-with-anvil:
     name: Docker anvil
+    if: github.event_name == 'pull_request' # skip in the merge queue (see `checks`)
     uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@25898d13dab1b3fbf4c33c394e7c581578a2b0d7 # build-docker-v3.2.0
     needs: build-binaries
     permissions:

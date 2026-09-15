@@ -1,0 +1,24 @@
+---
+name: Merge queue
+# The merge queue's only real work. `pr.yaml` still runs on `merge_group` but all
+# its heavy jobs skip there (reporting skipped = passing required checks), so this
+# is the single gate that actually executes in the queue.
+#
+# Placeholder for now: a no-op that always passes, so the required `Integration
+# throughput` check has a producer and the queue is not stuck waiting on a status
+# that never arrives. It will become a dispatch to hoprnet/hopr-integration-tests
+# (`integration.yaml`) once the cross-repo trigger is wired up.
+#
+# `merge_group` only — never `pull_request`: this must not run on PRs.
+on:
+  merge_group:
+    types: [checks_requested]
+permissions:
+  contents: read
+jobs:
+  integration-throughput:
+    name: Integration throughput # must match the required-check context exactly
+    runs-on: depot-ubuntu-24.04-2
+    steps:
+      - name: Placeholder
+        run: echo "Integration throughput placeholder — always passes for now."
