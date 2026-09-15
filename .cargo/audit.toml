@@ -38,4 +38,11 @@ ignore = [
   # Status: smartstring is unmaintained
   # Review by: 2026-06-30
   "RUSTSEC-2026-0249",
+
+  # RUSTSEC-2026-0253
+  # Crate: lru 0.16.4
+  # Transitive: hopr-bindings -> alloy
+  # Status: unsound: Potential use-after-free due to lack of panic safety in `LruCache::pop()`
+  # Review by: 2026-06-30
+  "RUSTSEC-2026-0253",
 ]
