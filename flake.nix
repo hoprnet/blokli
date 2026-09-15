@@ -97,10 +97,22 @@
           # Filesystem utilities for source filtering
           fs = lib.fileset;
 
+          # Since the 2026-09-05 nightly, `forge` and `cast` link against
+          # libudev.so.1 (hardware-wallet support). foundry.nix does not declare
+          # that dependency, so autoPatchelfHook fails the build on Linux.
+          # Darwin is unaffected, hence the isLinux guard.
+          foundryUdevOverlay = final: prev: {
+            foundry-bin = prev.foundry-bin.overrideAttrs (old: {
+              buildInputs =
+                (old.buildInputs or [ ]) ++ prev.lib.optional prev.stdenv.hostPlatform.isLinux prev.udev;
+            });
+          };
+
           # Nixpkgs with rust-overlay, foundry overlay, and solc overlay
           overlays = [
             rust-overlay.overlays.default
             foundry.overlay
+            foundryUdevOverlay
             solc.overlay
           ];
           pkgs = import nixpkgs {
