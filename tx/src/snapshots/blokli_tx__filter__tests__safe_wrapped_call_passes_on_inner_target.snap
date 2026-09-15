@@ -1,0 +1,20 @@
+---
+source: tx/src/filter.rs
+assertion_line: 498
+expression: result
+---
+FilteredTransaction {
+    sender: 0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266,
+    calls: [
+        AuthorizedCall {
+            to: 0x1111111111111111111111111111111111111111,
+            selector: [
+                9,
+                94,
+                167,
+                179,
+            ],
+        },
+    ],
+    via_module: true,
+}
