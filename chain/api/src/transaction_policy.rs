@@ -21,7 +21,9 @@ use hopr_bindings::{
     hopr_service_registry::HoprServiceRegistry::{
         registerServiceTypeCall, selfDeregisterCall, selfRegisterCall, selfUpdateCall,
     },
+    hopr_ticket_price_oracle::HoprTicketPriceOracle::setTicketPriceCall,
     hopr_token::HoprToken::{approveCall, sendCall, transferCall},
+    hopr_winning_probability_oracle::HoprWinningProbabilityOracle::setWinProbCall,
 };
 
 /// Build the network transaction allow-set from its contract addresses.
@@ -30,17 +32,24 @@ use hopr_bindings::{
 /// included in both their direct and Safe-module (`*Safe`) variants, since the filter unwraps
 /// `execTransactionFromModule` and matches the inner call. Token `approve`/`transfer`/`send` and the
 /// safe-registry and service-registry operations cover the remaining relayable calls. When Curvy
-/// is configured, its aggregator's withdrawal submission entrypoint is included as well.
+/// is configured, its aggregator's withdrawal submission entrypoint is included as well. The
+/// network winning-probability and ticket-price update entrypoints are also relayed for ticket
+/// parameter updates.
+/// The integration network's xHOPR ERC-677 token accepts standard `transfer` calls.
 pub fn network_transaction_filter(contracts: &ContractAddresses) -> TransactionFilter {
     let token = contracts.token;
+    let xhopr_token = contracts.xhopr_token;
     let channels = contracts.channels;
     let registry = contracts.node_safe_registry;
     let service_registry = contracts.service_registry;
+    let winning_probability_oracle = contracts.winning_probability_oracle;
+    let ticket_price_oracle = contracts.ticket_price_oracle;
 
     let mut allowed = vec![
         (token, approveCall::SELECTOR),
         (token, transferCall::SELECTOR),
         (token, sendCall::SELECTOR),
+        (xhopr_token, transferCall::SELECTOR),
         (channels, fundChannelCall::SELECTOR),
         (channels, fundChannelSafeCall::SELECTOR),
         (channels, closeIncomingChannelCall::SELECTOR),
@@ -57,6 +66,8 @@ pub fn network_transaction_filter(contracts: &ContractAddresses) -> TransactionF
         (service_registry, selfRegisterCall::SELECTOR),
         (service_registry, selfUpdateCall::SELECTOR),
         (service_registry, selfDeregisterCall::SELECTOR),
+        (winning_probability_oracle, setWinProbCall::SELECTOR),
+        (ticket_price_oracle, setTicketPriceCall::SELECTOR),
     ];
 
     if contracts.curvy_aggregator != Default::default() {
@@ -114,7 +125,9 @@ mod tests {
         hopr_service_registry::HoprServiceRegistry::{
             registerServiceTypeCall, selfDeregisterCall, selfRegisterCall, selfUpdateCall,
         },
+        hopr_ticket_price_oracle::HoprTicketPriceOracle::setTicketPriceCall,
         hopr_token::HoprToken::approveCall,
+        hopr_winning_probability_oracle::HoprWinningProbabilityOracle::setWinProbCall,
     };
     use hopr_types::primitive::prelude::Address;
 
@@ -122,10 +135,13 @@ mod tests {
 
     const KEY: &str = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
     const TOKEN: [u8; 20] = [0x11; 20];
+    const XHOPR_TOKEN: [u8; 20] = [0x77; 20];
     const CHANNELS: [u8; 20] = [0x22; 20];
     const REGISTRY: [u8; 20] = [0x33; 20];
     const CURVY_AGGREGATOR: [u8; 20] = [0x44; 20];
     const SERVICE_REGISTRY: [u8; 20] = [0x55; 20];
+    const WINNING_PROBABILITY_ORACLE: [u8; 20] = [0x66; 20];
+    const TICKET_PRICE_ORACLE: [u8; 20] = [0x88; 20];
 
     fn signed_tx(to: [u8; 20], selector: [u8; 4]) -> Vec<u8> {
         let signer: PrivateKeySigner = KEY.parse().unwrap();
@@ -151,10 +167,13 @@ mod tests {
     fn test_contracts() -> ContractAddresses {
         ContractAddresses {
             token: Address::from(TOKEN),
+            xhopr_token: Address::from(XHOPR_TOKEN),
             channels: Address::from(CHANNELS),
             node_safe_registry: Address::from(REGISTRY),
             curvy_aggregator: Address::from(CURVY_AGGREGATOR),
             service_registry: Address::from(SERVICE_REGISTRY),
+            winning_probability_oracle: Address::from(WINNING_PROBABILITY_ORACLE),
+            ticket_price_oracle: Address::from(TICKET_PRICE_ORACLE),
             ..Default::default()
         }
     }
@@ -176,6 +195,12 @@ mod tests {
     #[test]
     fn network_filter_allows_token_approve() {
         let raw = signed_tx(TOKEN, approveCall::SELECTOR);
+        assert!(network_policy().check(&raw).is_ok());
+    }
+
+    #[test]
+    fn network_filter_allows_xhopr_transfer() {
+        let raw = signed_tx(XHOPR_TOKEN, transferCall::SELECTOR);
         assert!(network_policy().check(&raw).is_ok());
     }
 
@@ -203,6 +228,18 @@ mod tests {
             let raw = signed_tx(SERVICE_REGISTRY, selector);
             assert!(network_policy().check(&raw).is_ok());
         }
+    }
+
+    #[test]
+    fn network_filter_allows_winning_probability_update() {
+        let raw = signed_tx(WINNING_PROBABILITY_ORACLE, setWinProbCall::SELECTOR);
+        assert!(network_policy().check(&raw).is_ok());
+    }
+
+    #[test]
+    fn network_filter_allows_ticket_price_update() {
+        let raw = signed_tx(TICKET_PRICE_ORACLE, setTicketPriceCall::SELECTOR);
+        assert!(network_policy().check(&raw).is_ok());
     }
 
     #[test]
