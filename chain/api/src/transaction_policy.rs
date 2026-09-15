@@ -8,6 +8,7 @@
 
 use blokli_chain_types::ContractAddresses;
 use blokli_tx::{FilterError, TransactionFilter};
+use curvy_bindings::curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2::submitWithdrawalRequestCall;
 use hopr_bindings::{
     exports::alloy::sol_types::SolCall,
     hopr_channels::HoprChannels::{
@@ -25,13 +26,14 @@ use hopr_bindings::{
 /// Maps each HOPR contract to the function selectors bloklid relays for it. Channel operations are
 /// included in both their direct and Safe-module (`*Safe`) variants, since the filter unwraps
 /// `execTransactionFromModule` and matches the inner call. Token `approve`/`transfer`/`send` and the
-/// safe-registry register/deregister operations cover the remaining relayable calls.
+/// safe-registry register/deregister operations cover the remaining relayable calls. When Curvy
+/// is configured, its aggregator's withdrawal submission entrypoint is included as well.
 pub fn network_transaction_filter(contracts: &ContractAddresses) -> TransactionFilter {
     let token = contracts.token;
     let channels = contracts.channels;
     let registry = contracts.node_safe_registry;
 
-    TransactionFilter::from_pairs([
+    let mut allowed = vec![
         (token, approveCall::SELECTOR),
         (token, transferCall::SELECTOR),
         (token, sendCall::SELECTOR),
@@ -47,7 +49,13 @@ pub fn network_transaction_filter(contracts: &ContractAddresses) -> TransactionF
         (channels, redeemTicketSafeCall::SELECTOR),
         (registry, registerSafeByNodeCall::SELECTOR),
         (registry, deregisterNodeBySafeCall::SELECTOR),
-    ])
+    ];
+
+    if contracts.curvy_aggregator != Default::default() {
+        allowed.push((contracts.curvy_aggregator, submitWithdrawalRequestCall::SELECTOR));
+    }
+
+    TransactionFilter::from_pairs(allowed)
 }
 
 /// Decides whether a raw signed transaction may be submitted to the chain.
@@ -85,6 +93,7 @@ impl TransactionPolicy {
 #[cfg(test)]
 mod tests {
     use blokli_chain_types::ContractAddresses;
+    use curvy_bindings::curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2::submitWithdrawalRequestCall;
     use hopr_bindings::{
         exports::alloy::{
             consensus::{SignableTransaction, TxEip1559},
@@ -104,6 +113,7 @@ mod tests {
     const TOKEN: [u8; 20] = [0x11; 20];
     const CHANNELS: [u8; 20] = [0x22; 20];
     const REGISTRY: [u8; 20] = [0x33; 20];
+    const CURVY_AGGREGATOR: [u8; 20] = [0x44; 20];
 
     fn signed_tx(to: [u8; 20], selector: [u8; 4]) -> Vec<u8> {
         let signer: PrivateKeySigner = KEY.parse().unwrap();
@@ -131,6 +141,7 @@ mod tests {
             token: Address::from(TOKEN),
             channels: Address::from(CHANNELS),
             node_safe_registry: Address::from(REGISTRY),
+            curvy_aggregator: Address::from(CURVY_AGGREGATOR),
             ..Default::default()
         }
     }
@@ -160,6 +171,22 @@ mod tests {
         // The Safe-variant selector must be in the allow-set so unwrapped module calls match.
         let raw = signed_tx(CHANNELS, fundChannelSafeCall::SELECTOR);
         assert!(network_policy().check(&raw).is_ok());
+    }
+
+    #[test]
+    fn network_filter_allows_curvy_withdrawal_submission() {
+        let raw = signed_tx(CURVY_AGGREGATOR, submitWithdrawalRequestCall::SELECTOR);
+        assert!(network_policy().check(&raw).is_ok());
+    }
+
+    #[test]
+    fn network_filter_rejects_curvy_withdrawal_when_curvy_is_not_configured() {
+        let mut contracts = test_contracts();
+        contracts.curvy_aggregator = Address::default();
+        let policy = TransactionPolicy::Whitelist(network_transaction_filter(&contracts));
+        let raw = signed_tx(CURVY_AGGREGATOR, submitWithdrawalRequestCall::SELECTOR);
+
+        assert!(matches!(policy.check(&raw), Err(FilterError::Unauthorized { .. })));
     }
 
     #[test]

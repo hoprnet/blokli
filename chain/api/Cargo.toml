@@ -27,6 +27,7 @@ alloy-sol-types = { workspace = true }
 async-broadcast = { workspace = true }
 async-trait     = { workspace = true }
 chrono          = { workspace = true }
+curvy-bindings  = { workspace = true }
 dashmap         = { workspace = true }
 futures         = { workspace = true }
 hex             = { workspace = true }
