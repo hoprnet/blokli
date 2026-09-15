@@ -165,7 +165,7 @@ fn build_subscription_test_schema(
 /// 4. Waits for contract deployment finality
 /// 5. Creates RPC operations instance
 /// 6. Sets up in-memory SQLite database
-/// 7. Creates transaction components (executor, store, validator)
+/// 7. Creates transaction components (executor, store, policy)
 /// 8. Builds GraphQL schema with all dependencies
 ///
 /// # Arguments
@@ -419,12 +419,12 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
     Migrator::up(&db, None).await?;
 
     let transaction_store = Arc::new(TransactionStore::new());
-    let transaction_validator = Arc::new(TransactionValidator::new());
+    let transaction_policy = Arc::new(TransactionPolicy::AllowAll);
     let rpc_adapter = Arc::new(RpcAdapter::new((*rpc_operations).clone()));
     let transaction_executor = Arc::new(RawTransactionExecutor::with_shared_dependencies(
         rpc_adapter,
         transaction_store.clone(),
-        transaction_validator,
+        transaction_policy,
         RawTransactionExecutorConfig::default(),
     ));
 

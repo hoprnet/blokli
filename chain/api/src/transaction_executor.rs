@@ -181,7 +181,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
     /// - Does NOT wait for confirmation
     pub async fn send_raw_transaction(&self, raw_tx: Vec<u8>) -> Result<Hash, TransactionExecutorError> {
         // Validate transaction
-        if let Err(e) = self.validator.validate_raw_transaction(&raw_tx) {
+        if let Err(e) = self.policy.check(&raw_tx) {
             warn!(error = %e, "Transaction validation failed");
             record_transaction_status(STATUS_VALIDATION_FAILED);
             return Err(e.into());
@@ -209,7 +209,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
     /// - Background monitor handles confirmation tracking
     pub async fn send_raw_transaction_async(&self, raw_tx: Vec<u8>) -> Result<Uuid, TransactionExecutorError> {
         // Validate transaction
-        if let Err(e) = self.validator.validate_raw_transaction(&raw_tx) {
+        if let Err(e) = self.policy.check(&raw_tx) {
             warn!(error = %e, "Transaction validation failed");
             record_transaction_status(STATUS_VALIDATION_FAILED);
             return Err(e.into());
@@ -257,7 +257,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         confirmations: Option<u64>,
     ) -> Result<TransactionRecord, TransactionExecutorError> {
         // Validate transaction
-        if let Err(e) = self.validator.validate_raw_transaction(&raw_tx) {
+        if let Err(e) = self.policy.check(&raw_tx) {
             warn!(error = %e, "Transaction validation failed");
             record_transaction_status(STATUS_VALIDATION_FAILED);
             return Err(e.into());
