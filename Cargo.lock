@@ -2103,6 +2103,7 @@ dependencies = [
  "blokli-db",
  "blokli-tx",
  "chrono",
+ "curvy-bindings",
  "dashmap",
  "env_logger",
  "futures",
