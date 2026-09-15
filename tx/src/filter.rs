@@ -309,8 +309,9 @@ fn decode_multi_send(input: &[u8]) -> Result<Vec<AuthorizedCall>> {
     let mut calls = Vec::new();
     let mut offset = 0usize;
     while offset < packed.len() {
-        let header = packed
-            .get(offset..offset + MULTI_SEND_HEADER_LEN)
+        let header = offset
+            .checked_add(MULTI_SEND_HEADER_LEN)
+            .and_then(|end| packed.get(offset..end))
             .ok_or_else(|| FilterError::MultiSendDecode("truncated batch entry header".into()))?;
 
         if header[0] != OPERATION_CALL {
@@ -337,10 +338,15 @@ fn decode_multi_send(input: &[u8]) -> Result<Vec<AuthorizedCall>> {
             .map_err(|_| FilterError::MultiSendDecode("batch entry data length out of range".into()))?;
 
         offset += MULTI_SEND_HEADER_LEN;
+        // `data_len` is attacker-controlled up to `u64::MAX`, so the end of the slice must be
+        // computed with a checked add: a wrapping one would panic or silently yield a bogus range.
+        let end = offset
+            .checked_add(data_len)
+            .ok_or_else(|| FilterError::MultiSendDecode("batch entry data length out of range".into()))?;
         let data = packed
-            .get(offset..offset + data_len)
+            .get(offset..end)
             .ok_or_else(|| FilterError::MultiSendDecode("truncated batch entry data".into()))?;
-        offset += data_len;
+        offset = end;
 
         calls.push(AuthorizedCall {
             to: Address::from(to),
@@ -537,6 +543,19 @@ mod tests {
     fn truncated_multi_send_batch_is_rejected() {
         let mut entries = multi_send_entry(OPERATION_CALL, CONTRACT, &calldata(SELECTOR_APPROVE));
         entries.truncate(entries.len() - 4);
+        let raw = signed_tx(TxKind::Call(AlloyAddress::from(MODULE)), multi_send_calldata(entries));
+
+        assert!(matches!(
+            filter().filter_transaction(&raw),
+            Err(FilterError::MultiSendDecode(_))
+        ));
+    }
+
+    #[test]
+    fn multi_send_entry_with_an_oversized_data_length_is_rejected() {
+        // A header claiming `u64::MAX` bytes of data must be rejected, not overflow the slice range.
+        let mut entries = multi_send_entry(OPERATION_CALL, CONTRACT, &calldata(SELECTOR_APPROVE));
+        entries[53..85].copy_from_slice(&U256::from(u64::MAX).to_be_bytes::<32>());
         let raw = signed_tx(TxKind::Call(AlloyAddress::from(MODULE)), multi_send_calldata(entries));
 
         assert!(matches!(
