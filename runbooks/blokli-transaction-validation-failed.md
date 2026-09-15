@@ -9,7 +9,8 @@ through the Blokli raw transaction API failed local validation (`validation_fail
 `monitoring.prometheusRule.rules.transactionValidationFailed.windowMinutes` (default 15m), sustained for over
 `monitoring.prometheusRule.rules.transactionValidationFailed.for` (default 5m).
 
-Validation happens in `chain/api/src/transaction_validator.rs` before the transaction is ever submitted to the RPC provider — e.g. the
+Validation happens in `chain/api/src/transaction_policy.rs` (backed by the `blokli-tx` crate) before the transaction is ever submitted to
+the RPC provider — e.g. the
 transaction targets a contract or function not on the allowlist. Because this rejection happens client-side and before broadcast, it almost
 always indicates a caller/integration issue (wrong contract address, outdated allowlist, a bug in the transaction-building code) rather than
 an on-chain or RPC problem.

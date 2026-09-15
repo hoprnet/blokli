@@ -324,6 +324,14 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
 mod tests {
     use std::sync::Mutex;
 
+    use blokli_tx::TransactionFilter;
+    use hopr_bindings::exports::alloy::{
+        consensus::{SignableTransaction, TxEip1559},
+        eips::eip2718::Encodable2718,
+        primitives::{Address as AlloyAddress, Bytes, TxKind, U256},
+        signers::{SignerSync, local::PrivateKeySigner},
+    };
+
     use super::*;
 
     fn test_tx_hash() -> Hash {
@@ -441,19 +449,52 @@ mod tests {
         assert!(matches!(result, Err(TransactionExecutorError::ValidationFailed(_))));
     }
 
+    /// A valid, signed EIP-1559 transaction calling `selector` on `to`.
+    fn signed_tx(to: [u8; 20], selector: [u8; 4]) -> Vec<u8> {
+        let signer: PrivateKeySigner = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+            .parse()
+            .expect("valid private key");
+        let mut input = selector.to_vec();
+        input.extend_from_slice(&[0u8; 32]);
+
+        let tx = TxEip1559 {
+            chain_id: 1,
+            nonce: 0,
+            gas_limit: 21_000,
+            max_fee_per_gas: 1_000_000_000,
+            max_priority_fee_per_gas: 1_000_000_000,
+            to: TxKind::Call(AlloyAddress::from(to)),
+            value: U256::ZERO,
+            access_list: Default::default(),
+            input: Bytes::from(input),
+        };
+        let signature = signer.sign_hash_sync(&tx.signature_hash()).expect("sign tx");
+        let mut raw = Vec::new();
+        tx.into_signed(signature).encode_2718(&mut raw);
+        raw
+    }
+
     #[tokio::test]
     async fn test_whitelist_policy_rejects_unauthorized() {
-        // An empty whitelist authorizes nothing, so a non-whitelisted transaction is rejected
-        // before it ever reaches the RPC client.
+        // An empty whitelist authorizes nothing, so a perfectly well-formed transaction is still
+        // rejected — on authorization, not on decoding — before it ever reaches the RPC client.
         let executor = RawTransactionExecutor::new(
             MockRpcClient::new(),
             TransactionStore::new(),
-            TransactionPolicy::Whitelist(blokli_tx::TransactionFilter::default()),
+            TransactionPolicy::Whitelist(TransactionFilter::default()),
             RawTransactionExecutorConfig::default(),
         );
 
-        let result = executor.send_raw_transaction(vec![0x02, 0xde, 0xad, 0xbe, 0xef]).await;
-        assert!(matches!(result, Err(TransactionExecutorError::ValidationFailed(_))));
+        let result = executor
+            .send_raw_transaction(signed_tx([0x11; 20], [0xa9, 0x05, 0x9c, 0xbb]))
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(TransactionExecutorError::ValidationFailed(
+                FilterError::ContractNotAllowed { .. }
+            ))
+        ));
         assert_eq!(executor.transaction_store().count(), 0);
     }
 

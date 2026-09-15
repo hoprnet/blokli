@@ -396,7 +396,9 @@ limit) and non-retryable errors (invalid transaction), and respects rate limits 
 `blokli-tx` filtering crate, which recovers the sender via ECDSA, extracts the 4-byte function selector, and unwraps Safe-module
 `execTransactionFromModule` calls so the inner call is validated. A transaction is authorized only if its effective `(contract, selector)`
 pair belongs to the network's curated set of relayable HOPR operations (channel funding/closure/redemption, token approve/transfer/send,
-safe registration). Contract-creation transactions, delegate calls, and unsupported transaction types are always rejected. This prevents
+safe registry operations in both directions, service registry operations). Batched operations arriving as a module delegate call into the
+canonical Gnosis Safe `MultiSend` singleton are unpacked and every batched call is validated individually. Contract-creation transactions,
+any other delegate call, and unsupported transaction types are always rejected. This prevents
 submission of malicious or unintended transactions while keeping the filtering logic decoupled from the daemon internals.
 
 **TransactionExecutor**: Provides three submission modes with different guarantees:
@@ -621,10 +623,11 @@ Client sends mutation with raw signed transaction (hex encoded)
     ↓
 API decodes hex transaction to bytes
     ↓
-TransactionValidator validates transaction:
+TransactionPolicy validates transaction:
     - Decode transaction structure
     - Verify transaction format
-    - Check target contract against allowlist
+    - Unwrap Safe-module and MultiSend calls
+    - Check target contract against allow-set
     - Validate function selector against permitted operations
     ↓
 TransactionExecutor async submission:
@@ -815,9 +818,10 @@ Client
   │
   ▼
 ┌──────────────────────┐
-│ TransactionValidator │
+│ TransactionPolicy    │
 │ - Decode transaction │  Parses RLP-encoded transaction structure
-│ - Verify allowlist   │  Checks target contract against whitelist
+│ - Unwrap module call │  Resolves the effective call(s) behind a Safe module payload
+│ - Verify allow-set   │  Checks target contract against the network allow-set
 │ - Check selector     │  Validates function call is permitted
 └──────────────────────┘
   │

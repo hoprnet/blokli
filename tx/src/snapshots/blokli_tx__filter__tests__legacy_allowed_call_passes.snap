@@ -1,6 +1,6 @@
 ---
 source: tx/src/filter.rs
-assertion_line: 498
+assertion_line: 479
 expression: result
 ---
 FilteredTransaction {
@@ -9,12 +9,12 @@ FilteredTransaction {
         AuthorizedCall {
             to: 0x1111111111111111111111111111111111111111,
             selector: [
-                9,
-                94,
-                167,
-                179,
+                169,
+                5,
+                156,
+                187,
             ],
         },
     ],
-    via_module: true,
+    via_module: false,
 }
