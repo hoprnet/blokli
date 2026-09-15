@@ -9,9 +9,13 @@ use blokli_integration_tests::{
     constants::parsed_safe_balance,
     fixtures::{IntegrationFixture, integration_fixture as fixture, poll_until},
 };
-use hex::{FromHex, ToHex};
-use hopr_bindings::exports::alloy::primitives::{Address, U256};
+use hex::ToHex;
+use hopr_bindings::exports::alloy::primitives::Address;
 use hopr_types::{
+    chain::{
+        payload::{BasicPayloadGenerator, PayloadGenerator},
+        prelude::SignableTransaction,
+    },
     crypto::keypairs::Keypair,
     internal::channels::generate_channel_id,
     primitive::prelude::{HoprBalance, XDaiBalance},
@@ -373,19 +377,15 @@ async fn query_safe_redeemed_stats_after_failed_ticket_redeem(
 #[rstest]
 #[test_log::test(tokio::test)]
 #[serial]
-/// verifies that the transaction count of a given account increases by one after submitting a transaction.
+/// Verifies that the transaction count of a given account increases by one after submitting an allowed transaction.
 async fn query_transaction_count(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [sender, recipient] = fixture.sample_accounts::<2>();
-    let tx_value = U256::from(1_000_000u64);
     let nonce = fixture.rpc().transaction_count(&sender.address).await?;
-
-    let signed_bytes = Vec::from_hex(
-        fixture
-            .build_raw_tx(tx_value, sender, recipient, nonce)
-            .await?
-            .trim_start_matches("0x"),
-    )
-    .expect("failed to decode raw tx");
+    let payload_generator = BasicPayloadGenerator::new(sender.address, *fixture.contract_addresses());
+    let payload = payload_generator.approve(recipient.address, "0 wei wxHOPR".parse::<HoprBalance>()?)?;
+    let signed_bytes = payload
+        .sign_and_encode_to_eip2718(nonce, fixture.rpc().chain_id().await?, None, &sender.keypair)
+        .await?;
 
     let before_count = fixture
         .client()
