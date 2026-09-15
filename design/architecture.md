@@ -398,8 +398,8 @@ limit) and non-retryable errors (invalid transaction), and respects rate limits 
 pair belongs to the network's curated set of relayable HOPR operations (channel funding/closure/redemption, token approve/transfer/send,
 safe registry operations in both directions, service registry operations). Batched operations arriving as a module delegate call into the
 canonical Gnosis Safe `MultiSend` singleton are unpacked and every batched call is validated individually. Contract-creation transactions,
-any other delegate call, and unsupported transaction types are always rejected. This prevents
-submission of malicious or unintended transactions while keeping the filtering logic decoupled from the daemon internals.
+any other delegate call, and unsupported transaction types are always rejected. This prevents submission of malicious or unintended
+transactions while keeping the filtering logic decoupled from the daemon internals.
 
 **TransactionExecutor**: Provides three submission modes with different guarantees:
 
