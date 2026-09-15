@@ -10,10 +10,9 @@ through the Blokli raw transaction API failed local validation (`validation_fail
 `monitoring.prometheusRule.rules.transactionValidationFailed.for` (default 5m).
 
 Validation happens in `chain/api/src/transaction_policy.rs` (backed by the `blokli-tx` crate) before the transaction is ever submitted to
-the RPC provider — e.g. the
-transaction targets a contract or function not on the allowlist. Because this rejection happens client-side and before broadcast, it almost
-always indicates a caller/integration issue (wrong contract address, outdated allowlist, a bug in the transaction-building code) rather than
-an on-chain or RPC problem.
+the RPC provider — e.g. the transaction targets a contract or function not on the allowlist. Because this rejection happens client-side and
+before broadcast, it almost always indicates a caller/integration issue (wrong contract address, outdated allowlist, a bug in the
+transaction-building code) rather than an on-chain or RPC problem.
 
 `minFailures` is a plain floor, not a failure-ratio threshold like [Blokli Transaction Failed](blokli-transaction-failed.md) uses:
 `validation_failed` is deterministic (a request either matches the allowlist or it doesn't), not RPC-driven, so there's no legitimate
