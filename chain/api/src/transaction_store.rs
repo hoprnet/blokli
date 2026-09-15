@@ -4,7 +4,10 @@
 //! submitted through the GraphQL API. Transactions are stored with their submission
 //! status and can be queried by UUID.
 
-use std::sync::Arc;
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+};
 
 use async_broadcast::{InactiveReceiver, Receiver, Sender, TrySendError, broadcast};
 use chrono::{DateTime, Utc};
@@ -14,9 +17,12 @@ use thiserror::Error;
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
-use crate::metrics::{
-    STATUS_CONFIRMED, STATUS_REVERTED, STATUS_SUBMISSION_FAILED, STATUS_TIMEOUT, STATUS_VALIDATION_FAILED,
-    record_transaction_status,
+use crate::{
+    metrics::{
+        STATUS_CONFIRMED, STATUS_REVERTED, STATUS_SUBMISSION_FAILED, STATUS_TIMEOUT, STATUS_VALIDATION_FAILED,
+        record_transaction_status,
+    },
+    safe_execution::decode_transaction_signer,
 };
 
 /// Errors that can occur when working with the transaction store
@@ -128,10 +134,24 @@ pub struct TransactionRecord {
     pub safe_execution: Option<SafeExecutionResult>,
 }
 
+/// Identity used for per-client submission fairness.
+///
+/// This is the recovered signer of the raw transaction. `None` groups all
+/// transactions whose signer could not be recovered into a single bucket, so a
+/// stream of undecodable envelopes cannot spread across unlimited buckets.
+type SubmissionIdentity = Option<[u8; 20]>;
+
 /// Thread-safe in-memory store for transaction records
 #[derive(Clone)]
 pub struct TransactionStore {
     transactions: Arc<DashMap<Uuid, TransactionRecord>>,
+    /// Identity of every transaction currently in `Submitted` status.
+    ///
+    /// Maintained alongside `transactions` so admission control never has to
+    /// scan the store or re-recover a signer.
+    submitted_identities: Arc<DashMap<Uuid, SubmissionIdentity>>,
+    /// Number of `Submitted` transactions per identity, for O(1) admission checks.
+    submitted_per_identity: Arc<DashMap<SubmissionIdentity, usize>>,
     /// Event bus sender for broadcasting transaction status updates
     event_bus: Sender<TransactionEvent>,
     /// Inactive receiver kept alive to maintain channel state
@@ -145,6 +165,7 @@ impl std::fmt::Debug for TransactionStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TransactionStore")
             .field("transactions", &self.transactions)
+            .field("submitted", &self.submitted_identities.len())
             .field("event_bus", &"Sender<TransactionEvent>")
             .field("_inactive_event_bus_rx", &"Arc<InactiveReceiver<TransactionEvent>>")
             .finish()
@@ -179,6 +200,8 @@ impl TransactionStore {
 
         Self {
             transactions: Arc::new(DashMap::new()),
+            submitted_identities: Arc::new(DashMap::new()),
+            submitted_per_identity: Arc::new(DashMap::new()),
             event_bus,
             _inactive_event_bus_rx: Arc::new(inactive_event_bus_rx),
         }
@@ -191,10 +214,55 @@ impl TransactionStore {
     pub fn insert(&self, record: TransactionRecord) -> Result<(), TransactionStoreError> {
         match self.transactions.entry(record.id) {
             Entry::Vacant(entry) => {
+                let submitted = record.status == TransactionStatus::Submitted;
+                let id = record.id;
+                let identity = submitted.then(|| transaction_identity(&record.raw_transaction));
                 entry.insert(record);
+                if let Some(identity) = identity {
+                    self.track_submitted(id, identity);
+                }
                 Ok(())
             }
             Entry::Occupied(entry) => Err(TransactionStoreError::AlreadyExists(*entry.key())),
+        }
+    }
+
+    /// Record a transaction as occupying receipt-monitoring capacity.
+    fn track_submitted(&self, id: Uuid, identity: SubmissionIdentity) {
+        if self.submitted_identities.insert(id, identity).is_none() {
+            *self.submitted_per_identity.entry(identity).or_insert(0) += 1;
+        }
+    }
+
+    /// Release the receipt-monitoring capacity held by a transaction.
+    fn untrack_submitted(&self, id: Uuid) {
+        if let Some((_, identity)) = self.submitted_identities.remove(&id) {
+            if let Entry::Occupied(mut entry) = self.submitted_per_identity.entry(identity) {
+                let remaining = entry.get().saturating_sub(1);
+                if remaining == 0 {
+                    entry.remove();
+                } else {
+                    *entry.get_mut() = remaining;
+                }
+            }
+        }
+    }
+
+    /// Keep the submitted index in step with a status transition.
+    ///
+    /// The signer is only recovered when a transaction enters `Submitted`
+    /// without already being indexed, so terminal transitions stay cheap.
+    fn sync_submitted_status(&self, id: Uuid, status: TransactionStatus) {
+        if status != TransactionStatus::Submitted {
+            self.untrack_submitted(id);
+            return;
+        }
+        if self.submitted_identities.contains_key(&id) {
+            return;
+        }
+        if let Some(entry) = self.transactions.get(&id) {
+            let identity = transaction_identity(&entry.value().raw_transaction);
+            self.track_submitted(id, identity);
         }
     }
 
@@ -216,7 +284,10 @@ impl TransactionStore {
     pub fn update(&self, record: TransactionRecord) -> Result<(), TransactionStoreError> {
         match self.transactions.entry(record.id) {
             Entry::Occupied(mut entry) => {
+                let id = record.id;
+                let status = record.status;
                 entry.insert(record);
+                self.sync_submitted_status(id, status);
                 Ok(())
             }
             Entry::Vacant(_) => Err(TransactionStoreError::NotFound(record.id)),
@@ -254,6 +325,8 @@ impl TransactionStore {
                 (record.confirmed_at, record.error_message.clone())
             })
             .ok_or(TransactionStoreError::NotFound(id))?;
+
+        self.sync_submitted_status(id, status);
 
         if let Some(label) = status.metric_label() {
             record_transaction_status(label);
@@ -297,6 +370,8 @@ impl TransactionStore {
             })
             .ok_or(TransactionStoreError::NotFound(id))?;
 
+        self.untrack_submitted(id);
+
         record_transaction_status(STATUS_CONFIRMED);
 
         // Broadcast event so subscribers are notified of the confirmation
@@ -310,6 +385,22 @@ impl TransactionStore {
         Ok(())
     }
 
+    /// Add an optional revert reason after a Safe failure was already published.
+    /// This deliberately does not emit a status transition: clients have already
+    /// received the authoritative Safe failure outcome.
+    pub fn update_safe_revert_reason(&self, id: Uuid, revert_reason: String) -> Result<(), TransactionStoreError> {
+        self.transactions
+            .get_mut(&id)
+            .map(|mut entry| {
+                if let Some(safe_execution) = entry.value_mut().safe_execution.as_mut() {
+                    if !safe_execution.success {
+                        safe_execution.revert_reason = Some(revert_reason);
+                    }
+                }
+            })
+            .ok_or(TransactionStoreError::NotFound(id))
+    }
+
     /// List all transactions with a specific status
     pub fn list_by_status(&self, status: TransactionStatus) -> Vec<TransactionRecord> {
         self.transactions
@@ -317,6 +408,69 @@ impl TransactionStore {
             .filter(|entry| entry.value().status == status)
             .map(|entry| entry.value().clone())
             .collect()
+    }
+
+    /// Return submitted work in round-robin signer order. The signer is
+    /// recovered from the signed envelope, so it is not supplied by a client
+    /// header or IP.
+    pub fn list_submitted_fair(&self) -> Vec<TransactionRecord> {
+        let mut by_identity: HashMap<SubmissionIdentity, VecDeque<TransactionRecord>> = HashMap::new();
+        for entry in self.submitted_identities.iter() {
+            let Some(record) = self.transactions.get(entry.key()).map(|record| record.value().clone()) else {
+                continue;
+            };
+            if record.status != TransactionStatus::Submitted {
+                continue;
+            }
+            by_identity.entry(*entry.value()).or_default().push_back(record);
+        }
+        let mut queues: Vec<VecDeque<TransactionRecord>> = by_identity.into_values().collect();
+        let mut fair = Vec::new();
+        loop {
+            let mut progressed = false;
+            for queue in &mut queues {
+                if let Some(record) = queue.pop_front() {
+                    fair.push(record);
+                    progressed = true;
+                }
+            }
+            if !progressed {
+                break;
+            }
+        }
+        fair
+    }
+
+    /// Check capacity before a raw transaction is broadcast.
+    ///
+    /// The identity is the recovered transaction signer, so it is bound to the
+    /// signature rather than chosen by the caller, and deliberately never a
+    /// client IP address. Both counts are read from the submitted index, so the
+    /// cost is independent of how many transactions the store holds.
+    ///
+    /// A limit of `0` means unbounded. Note that the limits are advisory rather
+    /// than hard: this check and the subsequent insert are not a single atomic
+    /// operation, so concurrent submissions can transiently exceed a limit by
+    /// the number of requests in flight.
+    pub fn can_admit_submission(&self, raw_transaction: &[u8], max_submitted: usize, max_per_identity: usize) -> bool {
+        if max_submitted > 0 && self.submitted_identities.len() >= max_submitted {
+            return false;
+        }
+        if max_per_identity == 0 {
+            return true;
+        }
+        let identity = transaction_identity(raw_transaction);
+        let submitted_for_identity = self
+            .submitted_per_identity
+            .get(&identity)
+            .map(|count| *count.value())
+            .unwrap_or(0);
+        submitted_for_identity < max_per_identity
+    }
+
+    /// Number of transactions currently awaiting receipt monitoring.
+    pub fn submitted_count(&self) -> usize {
+        self.submitted_identities.len()
     }
 
     /// Get the total count of transactions in the store
@@ -370,6 +524,13 @@ impl TransactionStore {
     }
 }
 
+/// Identity used to account for submission capacity: the recovered signer of
+/// the transaction. All envelopes whose signer cannot be recovered share the
+/// `None` bucket.
+fn transaction_identity(raw_transaction: &[u8]) -> SubmissionIdentity {
+    decode_transaction_signer(raw_transaction)
+}
+
 impl Default for TransactionStore {
     fn default() -> Self {
         Self::new()
@@ -379,6 +540,13 @@ impl Default for TransactionStore {
 #[cfg(test)]
 mod tests {
     use std::thread;
+
+    use hopr_bindings::exports::alloy::{
+        consensus::{SignableTransaction, TxLegacy},
+        eips::eip2718::Encodable2718,
+        primitives::{Address as AlloyAddress, TxKind, U256},
+        signers::{Signer, local::PrivateKeySigner},
+    };
 
     use super::*;
 
@@ -806,5 +974,158 @@ mod tests {
 
         let result = store.confirm_with_safe_execution(id, None);
         assert!(matches!(result, Err(TransactionStoreError::NotFound(_))));
+    }
+
+    /// Build a raw signed legacy transaction from `signer` to `target`.
+    async fn signed_raw_tx(signer: &PrivateKeySigner, target: [u8; 20], nonce: u64) -> Vec<u8> {
+        let tx = TxLegacy {
+            chain_id: Some(1),
+            nonce,
+            gas_price: 1_000_000_000,
+            gas_limit: 21_000,
+            to: TxKind::Call(AlloyAddress::from_slice(&target)),
+            value: U256::ZERO,
+            input: Default::default(),
+        };
+        let signature = signer.sign_hash(&tx.signature_hash()).await.expect("signing failed");
+        let mut encoded = Vec::new();
+        tx.into_signed(signature).encode_2718(&mut encoded);
+        encoded
+    }
+
+    fn submitted_record(id: Uuid, raw_transaction: Vec<u8>) -> TransactionRecord {
+        TransactionRecord {
+            id,
+            raw_transaction,
+            transaction_hash: test_tx_hash(),
+            status: TransactionStatus::Submitted,
+            submitted_at: test_timestamp(),
+            confirmed_at: None,
+            error_message: None,
+            safe_execution: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_identity_is_the_signer_not_the_target() {
+        let signer = PrivateKeySigner::random();
+
+        // Same signer, two different contract targets.
+        let first = signed_raw_tx(&signer, [0x11; 20], 0).await;
+        let second = signed_raw_tx(&signer, [0x22; 20], 1).await;
+        assert_eq!(transaction_identity(&first), transaction_identity(&second));
+
+        // Different signers, same contract target.
+        let other = signed_raw_tx(&PrivateKeySigner::random(), [0x11; 20], 0).await;
+        assert_ne!(transaction_identity(&first), transaction_identity(&other));
+    }
+
+    #[tokio::test]
+    async fn test_per_identity_limit_counts_signers_not_targets() {
+        let store = TransactionStore::new();
+        let signer = PrivateKeySigner::random();
+
+        let first = signed_raw_tx(&signer, [0x11; 20], 0).await;
+        store.insert(submitted_record(Uuid::new_v4(), first)).unwrap();
+
+        // A second transaction from the same signer to a different contract
+        // still counts against that signer's quota.
+        let second = signed_raw_tx(&signer, [0x22; 20], 1).await;
+        assert!(!store.can_admit_submission(&second, 0, 1));
+
+        // A different signer is unaffected by the first signer's usage.
+        let other = signed_raw_tx(&PrivateKeySigner::random(), [0x11; 20], 0).await;
+        assert!(store.can_admit_submission(&other, 0, 1));
+    }
+
+    #[tokio::test]
+    async fn test_zero_limits_are_unbounded() {
+        let store = TransactionStore::new();
+        let signer = PrivateKeySigner::random();
+
+        for nonce in 0..4 {
+            let raw = signed_raw_tx(&signer, [0x11; 20], nonce).await;
+            store.insert(submitted_record(Uuid::new_v4(), raw)).unwrap();
+        }
+
+        let next = signed_raw_tx(&signer, [0x11; 20], 4).await;
+        assert!(store.can_admit_submission(&next, 0, 0));
+    }
+
+    #[tokio::test]
+    async fn test_terminal_status_releases_capacity() {
+        let store = TransactionStore::new();
+        let signer = PrivateKeySigner::random();
+        let raw = signed_raw_tx(&signer, [0x11; 20], 0).await;
+        let id = Uuid::new_v4();
+
+        store.insert(submitted_record(id, raw.clone())).unwrap();
+        assert_eq!(store.submitted_count(), 1);
+        assert!(!store.can_admit_submission(&raw, 1, 1));
+
+        store.update_status(id, TransactionStatus::Confirmed, None).unwrap();
+        assert_eq!(store.submitted_count(), 0);
+        assert!(store.can_admit_submission(&raw, 1, 1));
+
+        // The per-identity bucket is dropped once it reaches zero.
+        assert!(store.submitted_per_identity.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_confirm_with_safe_execution_releases_capacity() {
+        let store = TransactionStore::new();
+        let raw = signed_raw_tx(&PrivateKeySigner::random(), [0x11; 20], 0).await;
+        let id = Uuid::new_v4();
+
+        store.insert(submitted_record(id, raw)).unwrap();
+        store.confirm_with_safe_execution(id, None).unwrap();
+
+        assert_eq!(store.submitted_count(), 0);
+        assert!(store.submitted_per_identity.is_empty());
+    }
+
+    #[test]
+    fn test_non_submitted_insert_holds_no_capacity() {
+        let store = TransactionStore::new();
+        let mut record = submitted_record(TEST_UUID, vec![0x01]);
+        record.status = TransactionStatus::Confirmed;
+
+        store.insert(record).unwrap();
+        assert_eq!(store.submitted_count(), 0);
+    }
+
+    #[test]
+    fn test_undecodable_transactions_share_one_bucket() {
+        let store = TransactionStore::new();
+
+        store.insert(submitted_record(Uuid::new_v4(), vec![0xff])).unwrap();
+
+        // A second undecodable envelope lands in the same `None` bucket rather
+        // than creating an unbounded number of identities.
+        assert!(!store.can_admit_submission(&[0xfe], 0, 1));
+        assert_eq!(store.submitted_per_identity.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_fair_listing_round_robins_signers() {
+        let store = TransactionStore::new();
+        let busy = PrivateKeySigner::random();
+        let quiet = PrivateKeySigner::random();
+
+        for nonce in 0..3 {
+            let raw = signed_raw_tx(&busy, [0x11; 20], nonce).await;
+            store.insert(submitted_record(Uuid::new_v4(), raw)).unwrap();
+        }
+        let quiet_raw = signed_raw_tx(&quiet, [0x11; 20], 0).await;
+        let quiet_id = Uuid::new_v4();
+        store.insert(submitted_record(quiet_id, quiet_raw)).unwrap();
+
+        let fair = store.list_submitted_fair();
+        assert_eq!(fair.len(), 4);
+
+        // The single transaction of the quiet signer is served in the first
+        // round, ahead of the busy signer's backlog.
+        let quiet_position = fair.iter().position(|record| record.id == quiet_id).unwrap();
+        assert!(quiet_position < 2);
     }
 }
