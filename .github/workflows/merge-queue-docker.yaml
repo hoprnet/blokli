@@ -1,0 +1,33 @@
+---
+name: Merge queue (docker)
+# The required `Docker / *` contexts come from build-docker.yaml, whose matrix
+# jobs live INSIDE the reusable workflow. A job-level skip there reports an
+# UNEXPANDED name (`Docker / Build (${{ matrix.architecture }})`) that never
+# matches the required context, and build-docker.yaml exposes no enable input to
+# gate at the step level. So build-docker is skipped in the queue (see pr.yaml)
+# and these passthrough jobs report the exact required Docker contexts (green)
+# instead — the same contexts the real jobs report on a pull request.
+#
+# `merge_group` ONLY — never pull_request: on a PR the real build-docker already
+# reports these contexts, so running here too would collide on identical names.
+on:
+  merge_group:
+    types: [checks_requested]
+permissions:
+  contents: read
+jobs:
+  docker:
+    # The job name IS the required-check context; the matrix expands because the
+    # job runs (a skipped matrix job would report the name unexpanded).
+    name: ${{ matrix.context }}
+    strategy:
+      fail-fast: false
+      matrix:
+        context:
+          - Docker / Build (x86_64-linux)
+          - Docker / Scan (x86_64-linux)
+          - Docker / Smoke Test (x86_64-linux)
+    runs-on: depot-ubuntu-24.04-2
+    steps:
+      - name: Passthrough
+        run: echo "merge-queue passthrough for '${{ matrix.context }}' — the real check ran on the PR."
