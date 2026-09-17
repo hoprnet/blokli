@@ -113,6 +113,7 @@ lazy_static::lazy_static! {
         "Number of Ethereum RPC calls over HTTP and their result",
         &["call", "result"]
     )
+    .inspect_err(|error| error!(%error, metric = "blokli_rpc_call_count", "failed to register telemetry metric"))
     .ok();
     static ref METRIC_RPC_CALLS_TIMING: Option<MultiHistogram> = MultiHistogram::new(
         "blokli_rpc_call_time_sec",
@@ -120,6 +121,7 @@ lazy_static::lazy_static! {
         vec![0.1, 0.5, 1.0, 2.0, 5.0, 7.0, 10.0],
         &["call"]
     )
+    .inspect_err(|error| error!(%error, metric = "blokli_rpc_call_time_sec", "failed to register telemetry metric"))
     .ok();
     static ref METRIC_RETRIES_PER_RPC_CALL: Option<MultiHistogram> = MultiHistogram::new(
         "blokli_retries_per_rpc_call",
@@ -127,6 +129,7 @@ lazy_static::lazy_static! {
         vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0],
         &["call"]
     )
+    .inspect_err(|error| error!(%error, metric = "blokli_retries_per_rpc_call", "failed to register telemetry metric"))
     .ok();
 }
 
@@ -371,6 +374,16 @@ where
     /// * `url` - Optional gas oracle URL (defaults to Gnosis chain oracle)
     /// * `fallback_max_fee_per_gas` - Fallback max fee per gas for EIP-1559 transactions (in wei)
     /// * `fallback_max_priority_fee_per_gas` - Fallback max priority fee per gas for EIP-1559 transactions (in wei)
+    ///
+    /// # Errors
+    ///
+    /// Returns [`url::ParseError`] if `url` is `None` and the built-in [`DEFAULT_GAS_ORACLE_URL`]
+    /// cannot be parsed.
+    ///
+    /// # Migration
+    ///
+    /// This used to return `Self` and parse [`DEFAULT_GAS_ORACLE_URL`] with an `expect`. Callers
+    /// must now handle the returned [`Result`].
     pub fn new(
         client: C,
         url: Option<Url>,

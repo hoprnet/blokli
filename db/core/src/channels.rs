@@ -244,6 +244,12 @@ async fn insert_channel_state_and_emit(
     // HoprBalance.to_be_bytes() returns 32 bytes (U256), but we only need the last 12 bytes
     // for database storage (balances fit in 96 bits)
     let balance_bytes_32 = channel_entry.balance.to_be_bytes();
+    if balance_bytes_32[..20].iter().any(|byte| *byte != 0) {
+        return Err(DbSqlError::Construction(format!(
+            "channel balance {} does not fit into 96 bits",
+            channel_entry.balance
+        )));
+    }
     let balance_bytes_12: [u8; 12] = balance_bytes_32[20..32]
         .try_into()
         .map_err(|_| DbSqlError::Construction("channel balance does not fit into 12 bytes".into()))?;

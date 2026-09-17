@@ -59,24 +59,24 @@ lazy_static::lazy_static! {
         SimpleGauge::new(
             "blokli_indexer_block_number",
             "Current last processed block number by the indexer",
-    ).ok();
+    ).inspect_err(|error| error!(%error, metric = "blokli_indexer_block_number", "failed to register telemetry metric")).ok();
     static ref METRIC_INDEXER_CHECKSUM: Option<SimpleGauge> =
         SimpleGauge::new(
             "blokli_indexer_checksum",
             "Contains an unsigned integer that represents the low 32-bits of the Indexer checksum"
-    ).ok();
+    ).inspect_err(|error| error!(%error, metric = "blokli_indexer_checksum", "failed to register telemetry metric")).ok();
     static ref METRIC_INDEXER_SYNC_PROGRESS: Option<MultiGauge> =
         MultiGauge::new(
             "blokli_indexer_sync_progress",
             "Sync progress of the indexer",
             &["phase"],
-    ).ok();
+    ).inspect_err(|error| error!(%error, metric = "blokli_indexer_sync_progress", "failed to register telemetry metric")).ok();
     static ref METRIC_INDEXER_SYNC_SOURCE: Option<MultiGauge> =
         MultiGauge::new(
             "blokli_indexer_data_source",
             "Current data source of the Indexer",
             &["source"],
-    ).ok();
+    ).inspect_err(|error| error!(%error, metric = "blokli_indexer_data_source", "failed to register telemetry metric")).ok();
 
 }
 
@@ -477,7 +477,10 @@ where
             }
             let mut safe_filter_epoch = indexer_state.safe_filter_epoch();
 
-            'stream_refresh: loop {
+            // Reason why the continuous phase stopped, if it stopped because of a failure.
+            // A failure here must not leave the process running without an indexer, so it is
+            // funnelled into the same termination handling as an exhausted event stream.
+            let termination_reason: Option<String> = 'stream_refresh: loop {
                 let log_filters = match Self::generate_log_filters(
                     &db,
                     &logs_handler,
@@ -488,22 +491,22 @@ where
                 {
                     Ok(log_filters) => log_filters,
                     Err(error) => {
-                        error!(%error, "failed to construct continuous log filters");
-                        return;
+                        break 'stream_refresh Some(format!("failed to construct continuous log filters: {error}"));
                     }
                 };
                 let mut event_stream = match rpc.try_stream_logs(stream_start_block, log_filters, true) {
                     Ok(event_stream) => event_stream,
                     Err(error) => {
-                        error!(%error, "failed to construct continuous block stream");
-                        return;
+                        break 'stream_refresh Some(format!("failed to construct continuous block stream: {error}"));
                     }
                 };
 
                 while let Some(block) = event_stream.next().await {
                     if let Err(error) = Self::store_block_logs(&db, &logs_handler, &block).await {
-                        error!(block_id = block.block_id, %error, "failed to store live block logs");
-                        return;
+                        break 'stream_refresh Some(format!(
+                            "failed to store logs of live block {}: {error}",
+                            block.block_id
+                        ));
                     }
 
                     Self::process_block(&db, &logs_handler, block.clone(), false, true, &indexer_state, true).await;
@@ -521,14 +524,24 @@ where
                     }
                 }
 
-                if panic_on_completion {
-                    panic!(
-                        "Indexer event stream has been terminated. This error may be caused by a failed RPC \
-                         connection."
-                    );
-                }
+                break 'stream_refresh None;
+            };
 
-                break;
+            match termination_reason {
+                Some(reason) => {
+                    error!(reason, "Indexer has terminated due to an unrecoverable failure");
+                    if panic_on_completion {
+                        panic!("Indexer has terminated due to an unrecoverable failure: {reason}");
+                    }
+                }
+                None => {
+                    if panic_on_completion {
+                        panic!(
+                            "Indexer event stream has been terminated. This error may be caused by a failed RPC \
+                             connection."
+                        );
+                    }
+                }
             }
         });
         let _indexing_task = tokio::spawn(indexing_process);

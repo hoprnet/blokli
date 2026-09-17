@@ -61,7 +61,7 @@ lazy_static::lazy_static! {
             "blokli_indexer_contract_log_count",
             "Counts of different HOPR contract logs processed by the Indexer",
             &["contract"]
-    ).ok();
+    ).inspect_err(|error| error!(%error, metric = "blokli_indexer_contract_log_count", "failed to register telemetry metric")).ok();
 }
 
 #[cfg(all(feature = "telemetry", not(test)))]

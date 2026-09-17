@@ -38,7 +38,7 @@ lazy_static::lazy_static! {
         SimpleGauge::new(
             "blokli_chain_head_block_number",
             "Current block number of chain head",
-    ).ok();
+    ).inspect_err(|error| error!(%error, metric = "blokli_chain_head_block_number", "failed to register telemetry metric")).ok();
 }
 
 /// Splits a block range into smaller chunks and applies filters to each chunk.

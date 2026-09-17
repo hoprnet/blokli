@@ -129,7 +129,8 @@ pub struct RpcOperationsConfig {
     pub finality: u32,
     /// URL to the gas price oracle.
     ///
-    /// Defaults to [`DEFAULT_GAS_ORACLE_URL`].
+    /// Defaults to `None`, in which case [`RpcOperations::new`] falls back to
+    /// [`DEFAULT_GAS_ORACLE_URL`].
     #[default(None)]
     pub gas_oracle_url: Option<Url>,
     /// Fallback max fee per gas for EIP-1559 transactions (in wei).
