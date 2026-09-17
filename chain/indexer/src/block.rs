@@ -14,7 +14,7 @@ use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{
     BlokliDbGeneralModelOperations, TargetDb,
     api::logs::BlokliDbLogOperations,
-    info::{BlokliDbInfoOperations, HistoricalSyncProgress},
+    info::{BlokliDbInfoOperations, HistoricalSyncPhase, HistoricalSyncProgress},
     safe_contracts::BlokliDbSafeContractOperations,
 };
 use blokli_db_entity::{channel_state, prelude::ChannelState};
@@ -817,21 +817,21 @@ where
                 )));
             }
 
-            let mut sync_progress = db
-                .get_historical_sync_progress()
-                .await
-                .map_err(|error| CoreEthereumIndexerError::ProcessError(error.to_string()))?
-                .ok_or_else(|| CoreEthereumIndexerError::ProcessError("historical sync progress is missing".into()))?;
             match filter_phase {
-                LogFilterPhase::HistoricalDiscovery => sync_progress.discovery_next = block.block_id.saturating_add(1),
+                LogFilterPhase::HistoricalDiscovery => {
+                    db.advance_historical_sync_cursor(HistoricalSyncPhase::Discovery, block.block_id.saturating_add(1))
+                        .await
+                }
                 LogFilterPhase::HistoricalSafeBackfill => {
-                    sync_progress.backfill_next = block.block_id.saturating_add(1)
+                    db.advance_historical_sync_cursor(
+                        HistoricalSyncPhase::SafeBackfill,
+                        block.block_id.saturating_add(1),
+                    )
+                    .await
                 }
                 LogFilterPhase::Continuous => unreachable!("continuous sync does not use historical progress"),
             }
-            db.set_historical_sync_progress(sync_progress)
-                .await
-                .map_err(|error| CoreEthereumIndexerError::ProcessError(error.to_string()))?;
+            .map_err(|error| CoreEthereumIndexerError::ProcessError(error.to_string()))?;
 
             let progress = if end_block == start_block {
                 100_f64

@@ -14,7 +14,10 @@ use hopr_types::{
     internal::prelude::WinningProbability,
     primitive::prelude::{HoprBalance, IntoEndian},
 };
-use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, Set, sea_query::OnConflict};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, Set,
+    sea_query::{Expr, OnConflict},
+};
 use tracing::trace;
 
 use crate::{
@@ -40,6 +43,15 @@ pub struct HistoricalSyncProgress {
     pub range_end: u64,
     pub discovery_next: u64,
     pub backfill_next: u64,
+}
+
+/// A pass in the two-phase historical synchronisation session.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum HistoricalSyncPhase {
+    /// Discovery without Safe log filters.
+    Discovery,
+    /// Backfill using the Safes discovered during the first pass.
+    SafeBackfill,
 }
 
 /// Defines DB access API for various node information.
@@ -112,10 +124,18 @@ pub trait BlokliDbInfoOperations {
     /// Updates the indexer state info.
     async fn set_indexer_state_info<'a>(&'a self, tx: OptTx<'a>, block_num: u32) -> Result<()>;
 
+    /// Gets the persisted cursors of the active historical sync session, or `None` when no session is in progress.
     async fn get_historical_sync_progress(&self) -> Result<Option<HistoricalSyncProgress>>;
 
+    /// Creates or replaces the active historical sync session singleton row.
     async fn set_historical_sync_progress(&self, progress: HistoricalSyncProgress) -> Result<()>;
 
+    /// Advances one active historical sync phase cursor.
+    ///
+    /// Returns an error when no sync session singleton row exists.
+    async fn advance_historical_sync_cursor(&self, phase: HistoricalSyncPhase, next_block: u64) -> Result<()>;
+
+    /// Removes the persisted cursors after the historical sync session completes.
     async fn clear_historical_sync_progress(&self) -> Result<()>;
 }
 
@@ -480,6 +500,24 @@ impl BlokliDbInfoOperations for BlokliDb {
         Ok(())
     }
 
+    async fn advance_historical_sync_cursor(&self, phase: HistoricalSyncPhase, next_block: u64) -> Result<()> {
+        let next_block = i64::try_from(next_block)
+            .map_err(|_| DbSqlError::Construction("historical sync cursor exceeds i64".into()))?;
+        let column = match phase {
+            HistoricalSyncPhase::Discovery => historical_sync_progress::Column::DiscoveryNext,
+            HistoricalSyncPhase::SafeBackfill => historical_sync_progress::Column::BackfillNext,
+        };
+        let result = HistoricalSyncProgressEntity::update_many()
+            .col_expr(column, Expr::value(next_block))
+            .filter(historical_sync_progress::Column::Id.eq(SINGULAR_TABLE_FIXED_ID))
+            .exec(self.conn(TargetDb::Index))
+            .await?;
+        if result.rows_affected != 1 {
+            return Err(DbSqlError::MissingFixedTableEntry("historical_sync_progress".into()));
+        }
+        Ok(())
+    }
+
     async fn clear_historical_sync_progress(&self) -> Result<()> {
         HistoricalSyncProgressEntity::delete_by_id(SINGULAR_TABLE_FIXED_ID)
             .exec(self.conn(TargetDb::Index))
@@ -493,7 +531,10 @@ mod tests {
     use hex_literal::hex;
     use hopr_types::primitive::{balance::HoprBalance, prelude::Address};
 
-    use crate::{db::BlokliDb, info::BlokliDbInfoOperations};
+    use crate::{
+        db::BlokliDb,
+        info::{BlokliDbInfoOperations, HistoricalSyncPhase, HistoricalSyncProgress},
+    };
 
     lazy_static::lazy_static! {
         static ref ADDR_1: Address = Address::from(hex!("86fa27add61fafc955e2da17329bba9f31692fe7"));
@@ -585,6 +626,48 @@ mod tests {
         assert_eq!(
             data.ticket_price, None,
             "ticket price must be reset to None after third clear"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_advance_historical_sync_cursor_updates_only_the_selected_phase() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let progress = HistoricalSyncProgress {
+            range_start: 10,
+            range_end: 100,
+            discovery_next: 10,
+            backfill_next: 10,
+        };
+        db.set_historical_sync_progress(progress).await?;
+
+        db.advance_historical_sync_cursor(HistoricalSyncPhase::Discovery, 42)
+            .await?;
+        assert_eq!(
+            db.get_historical_sync_progress().await?,
+            Some(HistoricalSyncProgress {
+                discovery_next: 42,
+                ..progress
+            })
+        );
+
+        db.advance_historical_sync_cursor(HistoricalSyncPhase::SafeBackfill, 73)
+            .await?;
+        assert_eq!(
+            db.get_historical_sync_progress().await?,
+            Some(HistoricalSyncProgress {
+                discovery_next: 42,
+                backfill_next: 73,
+                ..progress
+            })
+        );
+
+        db.clear_historical_sync_progress().await?;
+        assert!(
+            db.advance_historical_sync_cursor(HistoricalSyncPhase::Discovery, 99)
+                .await
+                .is_err()
         );
 
         Ok(())
