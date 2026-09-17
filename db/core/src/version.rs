@@ -1,8 +1,9 @@
 use blokli_db_entity::prelude::{
     Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, CurvyCommittedNote, CurvyCommittedNullifier,
-    CurvyPendingNote, CurvyShardRoot, CurvySyncCheckpoint, HoprBalance, HoprNodeSafeRegistration, HoprSafeContract,
-    HoprSafeContractState, HoprSafeRedeemedStats, Log, LogStatus, LogTopicInfo, NativeBalance, ServiceEntry,
-    ServiceEntryState, ServiceRegistryConfig, ServiceType as ServiceTypeEntity, ServiceTypeState,
+    CurvyPendingNote, CurvyShardRoot, CurvySyncCheckpoint, HistoricalSyncProgress, HoprBalance,
+    HoprNodeSafeRegistration, HoprSafeContract, HoprSafeContractState, HoprSafeRedeemedStats, Log, LogStatus,
+    LogTopicInfo, NativeBalance, ServiceEntry, ServiceEntryState, ServiceRegistryConfig,
+    ServiceType as ServiceTypeEntity, ServiceTypeState,
 };
 use migration::{Migrator, MigratorChainLogs, MigratorIndex, MigratorTrait};
 use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait, Statement};
@@ -244,6 +245,7 @@ async fn clear_all_data(db: &DatabaseConnection, logs_db: Option<&DatabaseConnec
 ///
 /// Returns an error if any database operations fail.
 async fn clear_index_data(db: &DatabaseConnection) -> Result<()> {
+    HistoricalSyncProgress::delete_many().exec(db).await?;
     CurvySyncCheckpoint::delete_many().exec(db).await?;
     CurvyShardRoot::delete_many().exec(db).await?;
     CurvyPendingNote::delete_many().exec(db).await?;

@@ -375,19 +375,22 @@ where
             let mut stream_start_block = next_block_to_process;
 
             if stream_start_block <= historical_sync_head {
-                let mut sync_progress = db
-                    .get_historical_sync_progress()
-                    .await
-                    .expect("historical sync progress should be readable")
-                    .unwrap_or(HistoricalSyncProgress {
+                let mut sync_progress = match db.get_historical_sync_progress().await {
+                    Ok(progress) => progress.unwrap_or(HistoricalSyncProgress {
                         range_start: stream_start_block,
                         range_end: historical_sync_head,
                         discovery_next: stream_start_block,
                         backfill_next: stream_start_block,
-                    });
-                db.set_historical_sync_progress(sync_progress)
-                    .await
-                    .expect("historical sync progress should be writable");
+                    }),
+                    Err(error) => {
+                        error!(%error, "failed to read historical sync progress");
+                        return;
+                    }
+                };
+                if let Err(error) = db.set_historical_sync_progress(sync_progress).await {
+                    error!(%error, "failed to persist historical sync progress");
+                    return;
+                }
                 let historical_sync_head = sync_progress.range_end;
                 let historical_sync_head_u32 = match u64_to_u32(historical_sync_head, "block_number") {
                     Ok(block_number) => block_number,
@@ -406,7 +409,7 @@ where
                     end_block = historical_sync_head,
                     "Starting historical discovery phase without Safe log filters"
                 );
-                Self::run_historical_phase(
+                if let Err(error) = Self::run_historical_phase(
                     &rpc,
                     &db,
                     &logs_handler,
@@ -418,8 +421,14 @@ where
                     self.cfg.enable_safe_indexing,
                 )
                 .await
-                .expect("historical discovery phase should complete");
+                {
+                    error!(%error, "historical discovery phase failed");
+                    return;
+                }
                 sync_progress.discovery_next = historical_sync_head.saturating_add(1);
+                db.set_historical_sync_progress(sync_progress)
+                    .await
+                    .expect("completed historical discovery progress should be writable");
 
                 info!(
                     start_block = sync_progress.backfill_next,
@@ -799,6 +808,14 @@ where
 
             Self::store_block_logs(db, logs_handler, &block).await?;
             Self::process_block(db, logs_handler, block.clone(), false, false, indexer_state, false).await;
+
+            let stored_logs = db.get_logs(Some(block.block_id), Some(0)).await?;
+            if stored_logs.iter().any(|log| log.processed != Some(true)) {
+                return Err(CoreEthereumIndexerError::ProcessError(format!(
+                    "historical {phase_name} did not finish every log in block {}",
+                    block.block_id
+                )));
+            }
 
             let mut sync_progress = db
                 .get_historical_sync_progress()

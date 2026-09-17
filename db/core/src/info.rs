@@ -14,7 +14,7 @@ use hopr_types::{
     internal::prelude::WinningProbability,
     primitive::prelude::{HoprBalance, IntoEndian},
 };
-use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, Set};
+use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, Set, sea_query::OnConflict};
 use tracing::trace;
 
 use crate::{
@@ -165,6 +165,10 @@ impl BlokliDbInfoOperations for BlokliDb {
             || CurvyShardRoot::find().one(c).await?.is_some()
             || CurvySyncCheckpoint::find().one(c).await?.is_some()
         {
+            return Ok(false);
+        }
+
+        if HistoricalSyncProgressEntity::find().one(c).await?.is_some() {
             return Ok(false);
         }
 
@@ -450,7 +454,7 @@ impl BlokliDbInfoOperations for BlokliDb {
     }
 
     async fn set_historical_sync_progress(&self, progress: HistoricalSyncProgress) -> Result<()> {
-        historical_sync_progress::ActiveModel {
+        HistoricalSyncProgressEntity::insert(historical_sync_progress::ActiveModel {
             id: Set(SINGULAR_TABLE_FIXED_ID),
             range_start: Set(i64::try_from(progress.range_start)
                 .map_err(|_| DbSqlError::Construction("historical sync range start exceeds i64".into()))?),
@@ -460,8 +464,18 @@ impl BlokliDbInfoOperations for BlokliDb {
                 .map_err(|_| DbSqlError::Construction("historical discovery cursor exceeds i64".into()))?),
             backfill_next: Set(i64::try_from(progress.backfill_next)
                 .map_err(|_| DbSqlError::Construction("historical backfill cursor exceeds i64".into()))?),
-        }
-        .save(self.conn(TargetDb::Index))
+        })
+        .on_conflict(
+            OnConflict::column(historical_sync_progress::Column::Id)
+                .update_columns([
+                    historical_sync_progress::Column::RangeStart,
+                    historical_sync_progress::Column::RangeEnd,
+                    historical_sync_progress::Column::DiscoveryNext,
+                    historical_sync_progress::Column::BackfillNext,
+                ])
+                .to_owned(),
+        )
+        .exec(self.conn(TargetDb::Index))
         .await?;
         Ok(())
     }
