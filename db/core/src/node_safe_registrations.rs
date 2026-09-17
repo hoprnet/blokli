@@ -4,7 +4,9 @@ use blokli_db_entity::{
     prelude::HoprNodeSafeRegistration,
 };
 use hopr_types::primitive::prelude::Address;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, ModelTrait, QueryFilter, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DbErr, EntityTrait, IntoActiveModel, ModelTrait, QueryFilter, Set,
+};
 use sea_query::OnConflict;
 use tracing::trace;
 
@@ -130,36 +132,12 @@ impl BlokliDbNodeSafeRegistrationOperations for BlokliDb {
             .one(tx.as_ref())
             .await?;
 
+        let incoming_position = (registered_block, registered_tx_index, registered_log_index);
+
         let registration_id = match existing {
             Some(existing) => {
-                let stored_position = (
-                    existing.registered_block,
-                    existing.registered_tx_index,
-                    existing.registered_log_index,
-                );
-                let incoming_position = (registered_block, registered_tx_index, registered_log_index);
-
-                if incoming_position <= stored_position {
-                    // A replay of the stored registration, or of one it has already superseded.
-                    trace!(
-                        node_address = %node_address,
-                        stored_safe_address = %hex::encode(&existing.safe_address),
-                        block,
-                        tx_index,
-                        log_index,
-                        "ignoring node-safe registration that does not supersede the stored one"
-                    );
-                    existing.id
-                } else {
-                    let registration_id = existing.id;
-                    let mut registration = existing.into_active_model();
-                    registration.safe_address = Set(safe_address.as_ref().to_vec());
-                    registration.registered_block = Set(registered_block);
-                    registration.registered_tx_index = Set(registered_tx_index);
-                    registration.registered_log_index = Set(registered_log_index);
-                    registration.update(tx.as_ref()).await?;
-                    registration_id
-                }
+                apply_to_existing_registration(tx.as_ref(), existing, safe_address, node_address, incoming_position)
+                    .await?
             }
             None => {
                 let registration_model = hopr_node_safe_registration::ActiveModel {
@@ -181,9 +159,11 @@ impl BlokliDbNodeSafeRegistrationOperations for BlokliDb {
                     .await
                 {
                     Ok(insert_result) => insert_result.last_insert_id,
-                    // Inserted concurrently between the lookup and the insert.
+                    // A registration for this node was inserted between the lookup and the insert.
+                    // The coordinates still decide the outcome, so run the same comparison against
+                    // the row that won the race rather than letting timing pick the safe.
                     Err(DbErr::RecordNotInserted) => {
-                        HoprNodeSafeRegistration::find()
+                        let existing = HoprNodeSafeRegistration::find()
                             .filter(hopr_node_safe_registration::Column::NodeAddress.eq(node_address.as_ref().to_vec()))
                             .one(tx.as_ref())
                             .await?
@@ -192,8 +172,16 @@ impl BlokliDbNodeSafeRegistrationOperations for BlokliDb {
                                     "Node safe registration not found after insert at block {} tx {} log {}",
                                     block, tx_index, log_index
                                 ))
-                            })?
-                            .id
+                            })?;
+
+                        apply_to_existing_registration(
+                            tx.as_ref(),
+                            existing,
+                            safe_address,
+                            node_address,
+                            incoming_position,
+                        )
+                        .await?
                     }
                     Err(e) => return Err(e.into()),
                 }
@@ -317,6 +305,45 @@ impl BlokliDbNodeSafeRegistrationOperations for BlokliDb {
 
         Ok(registration.and_then(|reg| Address::try_from(reg.safe_address.as_slice()).ok()))
     }
+}
+
+/// Moves an existing node-safe registration to `safe_address` when the incoming event supersedes
+/// the one the row carries, and leaves it untouched otherwise.
+///
+/// Returns the row's id either way.
+async fn apply_to_existing_registration<C: ConnectionTrait>(
+    conn: &C,
+    existing: hopr_node_safe_registration::Model,
+    safe_address: Address,
+    node_address: Address,
+    incoming_position: (i64, i64, i64),
+) -> Result<i64> {
+    let stored_position = (
+        existing.registered_block,
+        existing.registered_tx_index,
+        existing.registered_log_index,
+    );
+
+    if incoming_position <= stored_position {
+        // A replay of the stored registration, or of one it has already superseded.
+        trace!(
+            node_address = %node_address,
+            stored_safe_address = %hex::encode(&existing.safe_address),
+            position = ?incoming_position,
+            "ignoring node-safe registration that does not supersede the stored one"
+        );
+        return Ok(existing.id);
+    }
+
+    let registration_id = existing.id;
+    let mut registration = existing.into_active_model();
+    registration.safe_address = Set(safe_address.as_ref().to_vec());
+    registration.registered_block = Set(incoming_position.0);
+    registration.registered_tx_index = Set(incoming_position.1);
+    registration.registered_log_index = Set(incoming_position.2);
+    registration.update(conn).await?;
+
+    Ok(registration_id)
 }
 
 #[cfg(test)]
