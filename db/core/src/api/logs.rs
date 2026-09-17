@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use async_trait::async_trait;
 use hopr_types::{
     crypto::prelude::Hash,
@@ -101,6 +103,22 @@ pub trait BlokliDbLogOperations {
         block_offset: Option<u64>,
         processed: Option<bool>,
     ) -> Result<Vec<u64>>;
+
+    /// Retrieves the positions of logs in the given block that are already marked as processed.
+    ///
+    /// Used to gate log dispatch: a log that has already been applied to the index must not be
+    /// applied a second time when its block is streamed or read again.
+    ///
+    /// # Arguments
+    ///
+    /// * `block_number` - The block whose processed logs should be returned.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the set of `(tx_index, log_index)` pairs of the processed logs in that
+    /// block. Logs that were never stored are absent from the set and must therefore be treated as
+    /// unprocessed.
+    async fn get_processed_log_positions(&self, block_number: u64) -> Result<HashSet<(u64, u64)>>;
 
     /// Marks a specific log entry as processed.
     ///

@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use async_trait::async_trait;
 use blokli_db_entity::{
     errors::DbEntityError,
@@ -26,12 +28,18 @@ use crate::{
     },
     db::BlokliDb,
     errors::DbSqlError,
-    numeric::{block_range_to_i64, i64_to_u64, log_position_to_i64},
+    numeric::{block_range_to_i64, i64_to_u64, log_position_to_i64, u64_to_i64},
 };
 
 #[derive(FromQueryResult)]
 struct BlockNumber {
     block_number: i64,
+}
+
+#[derive(FromQueryResult)]
+struct LogPosition {
+    tx_index: i64,
+    log_index: i64,
 }
 
 #[async_trait]
@@ -272,6 +280,32 @@ impl BlokliDbLogOperations for BlokliDb {
             })?
             .into_iter()
             .map(|b| i64_to_u64(b.block_number, "block_number").map_err(DbError::from))
+            .collect()
+    }
+
+    async fn get_processed_log_positions(&self, block_number: u64) -> Result<HashSet<(u64, u64)>> {
+        let block_number = u64_to_i64(block_number, "block_number").map_err(DbError::from)?;
+
+        LogStatus::find()
+            .select_only()
+            .column(log_status::Column::TxIndex)
+            .column(log_status::Column::LogIndex)
+            .filter(log_status::Column::BlockNumber.eq(block_number))
+            .filter(log_status::Column::Processed.eq(true))
+            .into_model::<LogPosition>()
+            .all(self.conn(TargetDb::Logs))
+            .await
+            .map_err(|e| {
+                error!(error = ?e, "failed to get processed log positions from db");
+                DbError::from(DbSqlError::from(e))
+            })?
+            .into_iter()
+            .map(|position| {
+                Ok((
+                    i64_to_u64(position.tx_index, "tx_index").map_err(DbError::from)?,
+                    i64_to_u64(position.log_index, "log_index").map_err(DbError::from)?,
+                ))
+            })
             .collect()
     }
 
