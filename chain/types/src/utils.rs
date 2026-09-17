@@ -9,7 +9,7 @@ use std::time::Duration;
 use SafeContract::SafeContractInstance;
 use hopr_bindings::{
     exports::alloy::{
-        contract::{Result as ContractResult, private::Provider},
+        contract::{Error as ContractError, Result as ContractResult, private::Provider},
         network::{ReceiptResponse, TransactionBuilder},
         node_bindings::{Anvil, AnvilInstance},
         primitives::{self, Address as AlloyAddress, Bytes, U256, aliases, keccak256},
@@ -17,6 +17,7 @@ use hopr_bindings::{
         signers::{Signer, local::PrivateKeySigner},
         sol,
         sol_types::SolCall,
+        transports::TransportErrorKind,
     },
     hopr_channels::HoprChannels::HoprChannelsInstance,
     hopr_token::HoprToken::{self, HoprTokenInstance},
@@ -66,11 +67,11 @@ where
     P: Provider<N>,
     N: Network,
 {
-    let deployer = hopr_token
-        .provider()
-        .get_accounts()
-        .await
-        .expect("client must have a signer")[0];
+    let accounts = hopr_token.provider().get_accounts().await?;
+    let deployer = accounts
+        .first()
+        .copied()
+        .ok_or_else(|| ContractError::TransportError(TransportErrorKind::custom_str("client must have a signer")))?;
 
     hopr_token
         .grantRole(*MINTER_ROLE_VALUE, deployer)
@@ -280,10 +281,14 @@ where
     .abi_encode();
 
     let safe_contract = SafeContract::new(AlloyAddress::from_hopr_address(safe_address), provider.clone());
-    let wallet = PrivateKeySigner::from_slice(deployer.secret().as_ref()).expect("failed to construct wallet");
+    let wallet = PrivateKeySigner::from_slice(deployer.secret().as_ref()).map_err(|error| {
+        ContractError::TransportError(TransportErrorKind::custom_str(&format!(
+            "failed to construct wallet: {error}"
+        )))
+    })?;
     let safe_tx = get_safe_tx(safe_contract, token_address, inner_tx_data.into(), wallet)
         .await
-        .unwrap();
+        .map_err(|error| ContractError::TransportError(TransportErrorKind::custom_str(&error.to_string())))?;
 
     provider.send_transaction(safe_tx).await?.watch().await?;
 
