@@ -1660,21 +1660,23 @@ mod tests {
         db.store_log(orphaned.clone()).await?;
         db.set_log_processed(orphaned.clone()).await?;
 
-        // A reorganisation can put a different log at the same position. `store_logs` keeps the
-        // orphaned row - its position is unique - so keying the skip on the position alone would
-        // drop the canonical event and never apply it.
+        // A reorganisation can put a different log at the same position, so keying the skip on the
+        // position alone would drop the canonical event and never apply it.
         let canonical = SerializableLog {
             block_hash: Hash::create(&[b"canonical block"]).into(),
             ..orphaned
+        };
+        db.store_log(canonical.clone()).await?;
+
+        let block = BlockWithLogs {
+            block_id: canonical.block_number,
+            logs: BTreeSet::from([canonical]),
         };
 
         let result = Indexer::<MockHoprIndexerOps, DispatchTrackingLogHandler, BlokliDb>::process_block(
             &db,
             &handler,
-            BlockWithLogs {
-                block_id: canonical.block_number,
-                logs: BTreeSet::from([canonical]),
-            },
+            block.clone(),
             false,
             false,
             &IndexerState::default(),
@@ -1684,6 +1686,24 @@ mod tests {
 
         assert!(result.is_some());
         assert!(handler.collect_called.load(StdOrdering::SeqCst));
+
+        // ...and once applied, the canonical log is a replay like any other: storing it replaced the
+        // orphaned row, so the processed identity now carries the canonical hash and matches.
+        handler.collect_called.store(false, StdOrdering::SeqCst);
+
+        let result = Indexer::<MockHoprIndexerOps, DispatchTrackingLogHandler, BlokliDb>::process_block(
+            &db,
+            &handler,
+            block,
+            false,
+            false,
+            &IndexerState::default(),
+            false,
+        )
+        .await;
+
+        assert!(result.is_some());
+        assert!(!handler.collect_called.load(StdOrdering::SeqCst));
 
         Ok(())
     }

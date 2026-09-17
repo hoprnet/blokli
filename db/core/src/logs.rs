@@ -14,7 +14,7 @@ use hopr_types::{
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, FromQueryResult, IntoActiveModel, PaginatorTrait, QueryFilter,
     QueryOrder, QuerySelect,
-    entity::Set,
+    entity::{Set, Unchanged},
     query::QueryTrait,
     sea_query::{Expr, OnConflict, Value},
 };
@@ -69,11 +69,14 @@ impl BlokliDbLogOperations for BlokliDb {
                             log_position_to_i64(log.block_number, log.tx_index, log.log_index)
                                 .map_err(DbError::from)?;
 
+                        let block_hash = log.block_hash.to_vec();
+
                         // Build both ActiveModels up front so a conversion failure
                         // cannot leave an orphaned log row without a matching log_status.
                         let log_model = log::ActiveModel::try_from(log.clone())
                             .map_err(DbSqlError::from)
                             .map_err(DbError::from)?;
+                        let replacement_model = log_model.clone();
                         let mut status_model = log_status::ActiveModel::try_from(log)
                             .map_err(DbSqlError::from)
                             .map_err(DbError::from)?;
@@ -130,6 +133,41 @@ impl BlokliDbLogOperations for BlokliDb {
                                     .await
                                 {
                                     Ok(Some(existing_log)) => {
+                                        if existing_log.block_hash != block_hash {
+                                            let mut replacement = replacement_model;
+                                            replacement.id = Unchanged(existing_log.id);
+
+                                            if let Err(e) = replacement.update(tx.as_ref()).await {
+                                                error!(%log_id, error = ?e, "failed to replace reorganised log in db");
+                                                return Err(DbError::General(e.to_string()));
+                                            }
+
+                                            if let Err(e) = LogStatus::update_many()
+                                                .col_expr(
+                                                    log_status::Column::Processed,
+                                                    Expr::value(Value::Bool(Some(false))),
+                                                )
+                                                .col_expr(
+                                                    log_status::Column::ProcessedAt,
+                                                    Expr::value(Value::ChronoDateTimeUtc(None)),
+                                                )
+                                                .col_expr(
+                                                    log_status::Column::Checksum,
+                                                    Expr::value(Value::Bytes(None)),
+                                                )
+                                                .filter(log_status::Column::BlockNumber.eq(block_number))
+                                                .filter(log_status::Column::TxIndex.eq(tx_index))
+                                                .filter(log_status::Column::LogIndex.eq(log_index))
+                                                .exec(tx.as_ref())
+                                                .await
+                                            {
+                                                error!(%log_id, error = ?e, "failed to reset status of reorganised log");
+                                                return Err(DbError::General(e.to_string()));
+                                            }
+
+                                            trace!(log_id, "replaced reorganised log in the DB");
+                                        }
+
                                         // Found existing log, reuse the pre-built status model with its ID
                                         status_model.log_id = Set(existing_log.id);
 
@@ -649,6 +687,57 @@ mod tests {
             .unwrap();
 
         assert_eq!(log_2, log_2_retrieved);
+    }
+
+    #[tokio::test]
+    async fn test_store_log_replaces_a_reorganised_position() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let orphaned = SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: [Hash::create(&[b"my topic"]).into()].into(),
+            data: [1, 2, 3, 4].into(),
+            tx_index: 1u64,
+            block_number: 1u64,
+            block_hash: Hash::create(&[b"orphaned block"]).into(),
+            tx_hash: Hash::create(&[b"my tx hash"]).into(),
+            log_index: 1u64,
+            ..Default::default()
+        };
+
+        db.store_log(orphaned.clone()).await?;
+        db.set_log_processed(orphaned.clone()).await?;
+
+        // A reorganisation puts a different log at the same position. Keeping the orphaned row
+        // would leave the processed identity pointing at a hash that no canonical log ever carries,
+        // so the canonical log would be dispatched again on every later re-delivery.
+        let canonical = SerializableLog {
+            block_hash: Hash::create(&[b"canonical block"]).into(),
+            data: [5, 6, 7].into(),
+            ..orphaned.clone()
+        };
+
+        db.store_log(canonical.clone()).await?;
+
+        let stored = db
+            .get_log(canonical.block_number, canonical.tx_index, canonical.log_index)
+            .await?;
+        assert_eq!(stored.block_hash, canonical.block_hash);
+        assert_eq!(stored.data, canonical.data);
+        assert_eq!(stored.processed, Some(false));
+
+        let identities = db.get_processed_log_identities(canonical.block_number).await?;
+        assert!(identities.is_empty());
+
+        db.set_log_processed(canonical.clone()).await?;
+
+        let identities = db.get_processed_log_identities(canonical.block_number).await?;
+        assert_eq!(
+            identities,
+            HashSet::from([(canonical.tx_index, canonical.log_index, canonical.block_hash)])
+        );
+
+        Ok(())
     }
 
     #[tokio::test]
