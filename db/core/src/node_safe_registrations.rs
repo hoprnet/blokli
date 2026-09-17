@@ -4,8 +4,9 @@ use blokli_db_entity::{
     prelude::HoprNodeSafeRegistration,
 };
 use hopr_types::primitive::prelude::Address;
-use sea_orm::{ColumnTrait, DbErr, EntityTrait, ModelTrait, QueryFilter, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, ModelTrait, QueryFilter, Set};
 use sea_query::OnConflict;
+use tracing::trace;
 
 use crate::{BlokliDb, BlokliDbGeneralModelOperations, DbSqlError, OptTx, Result, numeric::log_position_to_i64};
 
@@ -13,9 +14,9 @@ use crate::{BlokliDb, BlokliDbGeneralModelOperations, DbSqlError, OptTx, Result,
 pub trait BlokliDbNodeSafeRegistrationOperations: BlokliDbGeneralModelOperations {
     /// Register a node to a safe
     ///
-    /// Creates a node-safe registration entry. If a registration with the same event coordinates
-    /// (registered_block, registered_tx_index, registered_log_index) already exists, returns the
-    /// existing registration ID without modification.
+    /// Creates a node-safe registration entry, or moves an existing one to a new safe. A node can
+    /// be registered to at most one safe at a time, which the schema enforces with a unique key on
+    /// `node_address`.
     ///
     /// # Arguments
     /// * `safe_address` - Safe contract address
@@ -25,7 +26,10 @@ pub trait BlokliDbNodeSafeRegistrationOperations: BlokliDbGeneralModelOperations
     /// * `log_index` - Registration event log index
     ///
     /// # Idempotency
-    /// Uses ON CONFLICT DO NOTHING on event coordinates for safe event replay.
+    /// The event coordinates (`registered_block`, `registered_tx_index`, `registered_log_index`)
+    /// decide which registration a node ends up with, so the same set of events yields the same
+    /// result whatever order or number of times they are applied: a registration newer than the
+    /// stored one replaces it, and one that is equal or older is ignored.
     #[allow(clippy::too_many_arguments)]
     async fn register_node_to_safe<'a>(
         &'a self,
@@ -87,9 +91,9 @@ pub trait BlokliDbNodeSafeRegistrationOperations: BlokliDbGeneralModelOperations
 impl BlokliDbNodeSafeRegistrationOperations for BlokliDb {
     /// Registers a node to a safe by creating or updating a registration entry.
     ///
-    /// Uses event coordinates for idempotency. If the same
-    /// event is replayed with identical coordinates, no error occurs and the existing
-    /// registration ID is returned.
+    /// Event coordinates decide the outcome, so replaying events is safe in any order: a
+    /// registration newer than the stored one replaces it, and one that is equal or older is
+    /// ignored.
     ///
     /// # Returns
     ///
@@ -117,50 +121,87 @@ impl BlokliDbNodeSafeRegistrationOperations for BlokliDb {
         let (registered_block, registered_tx_index, registered_log_index) =
             log_position_to_i64(block, tx_index, log_index)?;
 
-        let registration_model = hopr_node_safe_registration::ActiveModel {
-            safe_address: Set(safe_address.as_ref().to_vec()),
-            node_address: Set(node_address.as_ref().to_vec()),
-            registered_block: Set(registered_block),
-            registered_tx_index: Set(registered_tx_index),
-            registered_log_index: Set(registered_log_index),
-            ..Default::default()
+        // A node holds at most one registration, so the row is keyed by node address and the event
+        // coordinates decide which registration it carries. Keying the write on the coordinates
+        // instead would make a replayed registration insert a second row for the node, which the
+        // unique key on `node_address` rejects, aborting the whole block's transaction.
+        let existing = HoprNodeSafeRegistration::find()
+            .filter(hopr_node_safe_registration::Column::NodeAddress.eq(node_address.as_ref().to_vec()))
+            .one(tx.as_ref())
+            .await?;
+
+        let registration_id = match existing {
+            Some(existing) => {
+                let stored_position = (
+                    existing.registered_block,
+                    existing.registered_tx_index,
+                    existing.registered_log_index,
+                );
+                let incoming_position = (registered_block, registered_tx_index, registered_log_index);
+
+                if incoming_position <= stored_position {
+                    // A replay of the stored registration, or of one it has already superseded.
+                    trace!(
+                        node_address = %node_address,
+                        stored_safe_address = %hex::encode(&existing.safe_address),
+                        block,
+                        tx_index,
+                        log_index,
+                        "ignoring node-safe registration that does not supersede the stored one"
+                    );
+                    existing.id
+                } else {
+                    let registration_id = existing.id;
+                    let mut registration = existing.into_active_model();
+                    registration.safe_address = Set(safe_address.as_ref().to_vec());
+                    registration.registered_block = Set(registered_block);
+                    registration.registered_tx_index = Set(registered_tx_index);
+                    registration.registered_log_index = Set(registered_log_index);
+                    registration.update(tx.as_ref()).await?;
+                    registration_id
+                }
+            }
+            None => {
+                let registration_model = hopr_node_safe_registration::ActiveModel {
+                    safe_address: Set(safe_address.as_ref().to_vec()),
+                    node_address: Set(node_address.as_ref().to_vec()),
+                    registered_block: Set(registered_block),
+                    registered_tx_index: Set(registered_tx_index),
+                    registered_log_index: Set(registered_log_index),
+                    ..Default::default()
+                };
+
+                match HoprNodeSafeRegistration::insert(registration_model)
+                    .on_conflict(
+                        OnConflict::column(hopr_node_safe_registration::Column::NodeAddress)
+                            .do_nothing()
+                            .to_owned(),
+                    )
+                    .exec(tx.as_ref())
+                    .await
+                {
+                    Ok(insert_result) => insert_result.last_insert_id,
+                    // Inserted concurrently between the lookup and the insert.
+                    Err(DbErr::RecordNotInserted) => {
+                        HoprNodeSafeRegistration::find()
+                            .filter(hopr_node_safe_registration::Column::NodeAddress.eq(node_address.as_ref().to_vec()))
+                            .one(tx.as_ref())
+                            .await?
+                            .ok_or_else(|| {
+                                DbSqlError::EntityNotFound(format!(
+                                    "Node safe registration not found after insert at block {} tx {} log {}",
+                                    block, tx_index, log_index
+                                ))
+                            })?
+                            .id
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
         };
 
-        match HoprNodeSafeRegistration::insert(registration_model)
-            .on_conflict(
-                OnConflict::columns([
-                    hopr_node_safe_registration::Column::RegisteredBlock,
-                    hopr_node_safe_registration::Column::RegisteredTxIndex,
-                    hopr_node_safe_registration::Column::RegisteredLogIndex,
-                ])
-                .do_nothing()
-                .to_owned(),
-            )
-            .exec(tx.as_ref())
-            .await
-        {
-            Ok(_) | Err(DbErr::RecordNotInserted) => {
-                // Success or already exists due to ON CONFLICT DO NOTHING
-            }
-            Err(e) => return Err(e.into()),
-        }
-
-        // Retrieve the ID (whether newly inserted or existing)
-        let registration = HoprNodeSafeRegistration::find()
-            .filter(hopr_node_safe_registration::Column::RegisteredBlock.eq(registered_block))
-            .filter(hopr_node_safe_registration::Column::RegisteredTxIndex.eq(registered_tx_index))
-            .filter(hopr_node_safe_registration::Column::RegisteredLogIndex.eq(registered_log_index))
-            .one(tx.as_ref())
-            .await?
-            .ok_or_else(|| {
-                DbSqlError::EntityNotFound(format!(
-                    "Node safe registration not found after insert at block {} tx {} log {}",
-                    block, tx_index, log_index
-                ))
-            })?;
-
         tx.commit().await?;
-        Ok(registration.id)
+        Ok(registration_id)
     }
 
     /// Deletes a node-safe registration entry from the database.
@@ -347,6 +388,97 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_register_node_moves_it_to_a_newer_safe() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let first_safe = random_address();
+        let second_safe = random_address();
+        let node_address = random_address();
+
+        let id = db
+            .register_node_to_safe(None, first_safe, node_address, 100, 0, 0)
+            .await?;
+        let moved_id = db
+            .register_node_to_safe(None, second_safe, node_address, 200, 0, 0)
+            .await?;
+
+        assert_eq!(id, moved_id, "the node keeps its single registration row");
+
+        let registration = HoprNodeSafeRegistration::find_by_id(id)
+            .one(db.conn(crate::TargetDb::Index))
+            .await?
+            .expect("registration should exist");
+        assert_eq!(registration.safe_address, second_safe.as_ref().to_vec());
+        assert_eq!(registration.registered_block, 200);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_register_node_ignores_a_superseded_registration() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let first_safe = random_address();
+        let second_safe = random_address();
+        let node_address = random_address();
+
+        let id = db
+            .register_node_to_safe(None, first_safe, node_address, 100, 0, 0)
+            .await?;
+        db.register_node_to_safe(None, second_safe, node_address, 200, 0, 0)
+            .await?;
+
+        // Replaying the first registration must not resurrect it, nor fail on the unique key that
+        // allows a node only one registration: this is what a re-indexed block looks like.
+        let replayed_id = db
+            .register_node_to_safe(None, first_safe, node_address, 100, 0, 0)
+            .await?;
+
+        assert_eq!(id, replayed_id);
+
+        let registration = HoprNodeSafeRegistration::find_by_id(id)
+            .one(db.conn(crate::TargetDb::Index))
+            .await?
+            .expect("registration should exist");
+        assert_eq!(registration.safe_address, second_safe.as_ref().to_vec());
+        assert_eq!(registration.registered_block, 200);
+
+        let count = HoprNodeSafeRegistration::find()
+            .count(db.conn(crate::TargetDb::Index))
+            .await?;
+        assert_eq!(count, 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_register_node_orders_registrations_within_a_block() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let first_safe = random_address();
+        let second_safe = random_address();
+        let node_address = random_address();
+
+        db.register_node_to_safe(None, first_safe, node_address, 100, 2, 1)
+            .await?;
+        // Same block and transaction, later log: newer.
+        db.register_node_to_safe(None, second_safe, node_address, 100, 2, 7)
+            .await?;
+        // Same block and transaction, earlier log: older.
+        db.register_node_to_safe(None, first_safe, node_address, 100, 2, 1)
+            .await?;
+
+        let registration = HoprNodeSafeRegistration::find()
+            .one(db.conn(crate::TargetDb::Index))
+            .await?
+            .expect("registration should exist");
+        assert_eq!(registration.safe_address, second_safe.as_ref().to_vec());
+        assert_eq!(registration.registered_log_index, 7);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_deregister_node_from_safe() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
 
@@ -431,7 +563,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_node_unique_constraint() -> anyhow::Result<()> {
+    async fn test_node_holds_a_single_registration() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
 
         let safe1 = random_address();
@@ -441,9 +573,15 @@ mod tests {
         // Register node to safe1
         db.register_node_to_safe(None, safe1, node, 100, 0, 0).await?;
 
-        // Try to register same node to safe2 (should fail due to unique constraint on node_address)
-        let result = db.register_node_to_safe(None, safe2, node, 100, 1, 0).await;
-        assert!(result.is_err());
+        // Registering the same node to safe2 moves it rather than adding a second row: the schema
+        // allows a node only one registration, and the newer event is the one that counts.
+        db.register_node_to_safe(None, safe2, node, 100, 1, 0).await?;
+
+        let count = HoprNodeSafeRegistration::find()
+            .count(db.conn(crate::TargetDb::Index))
+            .await?;
+        assert_eq!(count, 1);
+        assert_eq!(db.get_safe_for_registered_node(None, node).await?, Some(safe2));
 
         Ok(())
     }
