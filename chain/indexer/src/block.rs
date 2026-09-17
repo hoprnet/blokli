@@ -12,7 +12,9 @@ use std::{
 use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
 use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{
-    BlokliDbGeneralModelOperations, TargetDb, api::logs::BlokliDbLogOperations, info::BlokliDbInfoOperations,
+    BlokliDbGeneralModelOperations, TargetDb,
+    api::logs::BlokliDbLogOperations,
+    info::{BlokliDbInfoOperations, HistoricalSyncProgress},
     safe_contracts::BlokliDbSafeContractOperations,
 };
 use blokli_db_entity::{channel_state, prelude::ChannelState};
@@ -373,6 +375,20 @@ where
             let mut stream_start_block = next_block_to_process;
 
             if stream_start_block <= historical_sync_head {
+                let mut sync_progress = db
+                    .get_historical_sync_progress()
+                    .await
+                    .expect("historical sync progress should be readable")
+                    .unwrap_or(HistoricalSyncProgress {
+                        range_start: stream_start_block,
+                        range_end: historical_sync_head,
+                        discovery_next: stream_start_block,
+                        backfill_next: stream_start_block,
+                    });
+                db.set_historical_sync_progress(sync_progress)
+                    .await
+                    .expect("historical sync progress should be writable");
+                let historical_sync_head = sync_progress.range_end;
                 let historical_sync_head_u32 = match u64_to_u32(historical_sync_head, "block_number") {
                     Ok(block_number) => block_number,
                     Err(error) => {
@@ -386,7 +402,7 @@ where
                 };
 
                 info!(
-                    start_block = stream_start_block,
+                    start_block = sync_progress.discovery_next,
                     end_block = historical_sync_head,
                     "Starting historical discovery phase without Safe log filters"
                 );
@@ -395,7 +411,7 @@ where
                     &db,
                     &logs_handler,
                     &indexer_state,
-                    stream_start_block,
+                    sync_progress.discovery_next,
                     historical_sync_head,
                     LogFilterPhase::HistoricalDiscovery,
                     "discover-safes",
@@ -403,9 +419,10 @@ where
                 )
                 .await
                 .expect("historical discovery phase should complete");
+                sync_progress.discovery_next = historical_sync_head.saturating_add(1);
 
                 info!(
-                    start_block = stream_start_block,
+                    start_block = sync_progress.backfill_next,
                     end_block = historical_sync_head,
                     "Starting historical Safe backfill phase for discovered Safes"
                 );
@@ -414,7 +431,7 @@ where
                     &db,
                     &logs_handler,
                     &indexer_state,
-                    stream_start_block,
+                    sync_progress.backfill_next,
                     historical_sync_head,
                     LogFilterPhase::HistoricalSafeBackfill,
                     "backfill-safe-logs",
@@ -422,7 +439,6 @@ where
                 )
                 .await
                 .expect("historical Safe backfill phase should complete");
-
                 let checksum = db
                     .update_logs_checksums()
                     .await
@@ -430,6 +446,9 @@ where
                 db.set_indexer_state_info(None, historical_sync_head_u32)
                     .await
                     .expect("historical sync state finalization should succeed");
+                db.clear_historical_sync_progress()
+                    .await
+                    .expect("historical sync progress should be cleared after finalization");
 
                 info!(
                     latest_block = historical_sync_head,
@@ -687,7 +706,7 @@ where
     ) -> crate::errors::Result<Option<()>>
     where
         U: ChainLogHandler + 'static,
-        Db: BlokliDbLogOperations + 'static,
+        Db: BlokliDbInfoOperations + BlokliDbLogOperations + 'static,
     {
         let logs = db.get_logs(Some(block_id), Some(0)).await?;
         let mut block = BlockWithLogs {
@@ -780,6 +799,22 @@ where
 
             Self::store_block_logs(db, logs_handler, &block).await?;
             Self::process_block(db, logs_handler, block.clone(), false, false, indexer_state, false).await;
+
+            let mut sync_progress = db
+                .get_historical_sync_progress()
+                .await
+                .map_err(|error| CoreEthereumIndexerError::ProcessError(error.to_string()))?
+                .ok_or_else(|| CoreEthereumIndexerError::ProcessError("historical sync progress is missing".into()))?;
+            match filter_phase {
+                LogFilterPhase::HistoricalDiscovery => sync_progress.discovery_next = block.block_id.saturating_add(1),
+                LogFilterPhase::HistoricalSafeBackfill => {
+                    sync_progress.backfill_next = block.block_id.saturating_add(1)
+                }
+                LogFilterPhase::Continuous => unreachable!("continuous sync does not use historical progress"),
+            }
+            db.set_historical_sync_progress(sync_progress)
+                .await
+                .map_err(|error| CoreEthereumIndexerError::ProcessError(error.to_string()))?;
 
             let progress = if end_block == start_block {
                 100_f64

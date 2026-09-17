@@ -184,6 +184,8 @@ RPC Endpoint
 - **Reorg Handling**: Detects blockchain reorganizations by tracking block hashes and marks affected logs as removed
 - **Watermark Tracking**: Maintains precise last processed position using (block, tx_index, log_index) triplet for exact resume capability
 - **Dual Database Support**: Separates logs (high write volume) from indexed state (frequent reads) to reduce contention
+- **Resumable Historical Sync**: Persists a bounded synchronisation session with separate cursors for contract discovery and Safe-log
+  backfill. A restart resumes the interrupted phase; backfill covers the session range independently before the live watermark advances.
 
 **Contract Event Types**:
 

@@ -145,6 +145,14 @@ CREATE TABLE "curvy_sync_checkpoint" (
     CONSTRAINT "idx_curvy_sync_checkpoint_block" UNIQUE ("block_number")
 );
 
+CREATE TABLE "historical_sync_progress" (
+    "id" integer NOT NULL PRIMARY KEY,
+    "range_start" integer NOT NULL,
+    "range_end" integer NOT NULL,
+    "discovery_next" integer NOT NULL,
+    "backfill_next" integer NOT NULL
+);
+
 CREATE TABLE "hopr_balance" (
     "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
     "address" blob (20) NOT NULL UNIQUE,

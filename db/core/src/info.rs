@@ -1,10 +1,11 @@
 use async_trait::async_trait;
 use blokli_db_entity::{
-    chain_info,
+    chain_info, historical_sync_progress,
     prelude::{
         Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, CurvyCommittedNote,
         CurvyCommittedNullifier, CurvyPendingNote, CurvyShardRoot, CurvySyncCheckpoint,
-        HoprBalance as HoprBalanceEntity, HoprSafeContract, NativeBalance,
+        HistoricalSyncProgress as HistoricalSyncProgressEntity, HoprBalance as HoprBalanceEntity, HoprSafeContract,
+        NativeBalance,
     },
 };
 use futures::TryFutureExt;
@@ -21,7 +22,7 @@ use crate::{
     api::info::{DomainSeparator, IndexerData},
     db::BlokliDb,
     errors::{DbSqlError, DbSqlError::MissingFixedTableEntry, Result},
-    numeric::i64_to_u32,
+    numeric::{i64_to_u32, i64_to_u64},
 };
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -30,6 +31,15 @@ pub struct IndexerStateInfo {
     pub latest_block_number: u32,
     pub latest_log_block_number: u32,
     pub latest_log_checksum: Hash,
+}
+
+/// Durable cursors for a bounded two-pass historical synchronisation session.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct HistoricalSyncProgress {
+    pub range_start: u64,
+    pub range_end: u64,
+    pub discovery_next: u64,
+    pub backfill_next: u64,
 }
 
 /// Defines DB access API for various node information.
@@ -101,6 +111,12 @@ pub trait BlokliDbInfoOperations {
 
     /// Updates the indexer state info.
     async fn set_indexer_state_info<'a>(&'a self, tx: OptTx<'a>, block_num: u32) -> Result<()>;
+
+    async fn get_historical_sync_progress(&self) -> Result<Option<HistoricalSyncProgress>>;
+
+    async fn set_historical_sync_progress(&self, progress: HistoricalSyncProgress) -> Result<()>;
+
+    async fn clear_historical_sync_progress(&self) -> Result<()>;
 }
 
 #[async_trait]
@@ -168,6 +184,7 @@ impl BlokliDbInfoOperations for BlokliDb {
                     CurvyPendingNote::delete_many().exec(tx.as_ref()).await?;
                     CurvyCommittedNote::delete_many().exec(tx.as_ref()).await?;
                     CurvyCommittedNullifier::delete_many().exec(tx.as_ref()).await?;
+                    HistoricalSyncProgressEntity::delete_many().exec(tx.as_ref()).await?;
                     ChainInfo::delete_many().exec(tx.as_ref()).await?;
 
                     // Initial row is needed in the ChainInfo table
@@ -415,6 +432,45 @@ impl BlokliDbInfoOperations for BlokliDb {
                 })
             })
             .await
+    }
+
+    async fn get_historical_sync_progress(&self) -> Result<Option<HistoricalSyncProgress>> {
+        HistoricalSyncProgressEntity::find_by_id(SINGULAR_TABLE_FIXED_ID)
+            .one(self.conn(TargetDb::Index))
+            .await?
+            .map(|model| {
+                Ok(HistoricalSyncProgress {
+                    range_start: i64_to_u64(model.range_start, "historical sync range start")?,
+                    range_end: i64_to_u64(model.range_end, "historical sync range end")?,
+                    discovery_next: i64_to_u64(model.discovery_next, "historical discovery cursor")?,
+                    backfill_next: i64_to_u64(model.backfill_next, "historical backfill cursor")?,
+                })
+            })
+            .transpose()
+    }
+
+    async fn set_historical_sync_progress(&self, progress: HistoricalSyncProgress) -> Result<()> {
+        historical_sync_progress::ActiveModel {
+            id: Set(SINGULAR_TABLE_FIXED_ID),
+            range_start: Set(i64::try_from(progress.range_start)
+                .map_err(|_| DbSqlError::Construction("historical sync range start exceeds i64".into()))?),
+            range_end: Set(i64::try_from(progress.range_end)
+                .map_err(|_| DbSqlError::Construction("historical sync range end exceeds i64".into()))?),
+            discovery_next: Set(i64::try_from(progress.discovery_next)
+                .map_err(|_| DbSqlError::Construction("historical discovery cursor exceeds i64".into()))?),
+            backfill_next: Set(i64::try_from(progress.backfill_next)
+                .map_err(|_| DbSqlError::Construction("historical backfill cursor exceeds i64".into()))?),
+        }
+        .save(self.conn(TargetDb::Index))
+        .await?;
+        Ok(())
+    }
+
+    async fn clear_historical_sync_progress(&self) -> Result<()> {
+        HistoricalSyncProgressEntity::delete_by_id(SINGULAR_TABLE_FIXED_ID)
+            .exec(self.conn(TargetDb::Index))
+            .await?;
+        Ok(())
     }
 }
 
