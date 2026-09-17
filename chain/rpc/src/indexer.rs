@@ -34,11 +34,11 @@ use crate::{
 
 #[cfg(all(feature = "telemetry", not(test)))]
 lazy_static::lazy_static! {
-    static ref METRIC_RPC_CHAIN_HEAD: SimpleGauge =
+    static ref METRIC_RPC_CHAIN_HEAD: Option<SimpleGauge> =
         SimpleGauge::new(
             "blokli_chain_head_block_number",
             "Current block number of chain head",
-    ).unwrap();
+    ).ok();
 }
 
 /// Splits a block range into smaller chunks and applies filters to each chunk.
@@ -319,7 +319,9 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
 
 
                         #[cfg(all(feature = "telemetry", not(test)))]
-                        METRIC_RPC_CHAIN_HEAD.set(latest_block as f64);
+                        if let Some(metric) = METRIC_RPC_CHAIN_HEAD.as_ref() {
+                            metric.set(latest_block as f64);
+                        }
 
                         let mut retrieved_logs = self.stream_logs(log_filters.clone(), from_block, latest_block);
 

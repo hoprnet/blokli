@@ -246,7 +246,7 @@ async fn insert_channel_state_and_emit(
     let balance_bytes_32 = channel_entry.balance.to_be_bytes();
     let balance_bytes_12: [u8; 12] = balance_bytes_32[20..32]
         .try_into()
-        .expect("slice should be exactly 12 bytes");
+        .map_err(|_| DbSqlError::Construction("channel balance does not fit into 12 bytes".into()))?;
 
     let state_model = channel_state::ActiveModel {
         channel_id: Set(channel_id),

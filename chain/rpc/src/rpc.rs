@@ -130,7 +130,7 @@ pub struct RpcOperationsConfig {
     /// URL to the gas price oracle.
     ///
     /// Defaults to [`DEFAULT_GAS_ORACLE_URL`].
-    #[default(Some(DEFAULT_GAS_ORACLE_URL.parse().unwrap()))]
+    #[default(None)]
     pub gas_oracle_url: Option<Url>,
     /// Fallback max fee per gas for EIP-1559 transactions (in wei).
     ///
@@ -362,12 +362,15 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
             .filler(ChainIdFiller::default())
             .filler(NonceFiller::new(CachedNonceManager::default()))
             .filler(GasFiller::default())
-            .filler(GasOracleFiller::new(
-                requestor.clone(),
-                cfg.gas_oracle_url.clone(),
-                cfg.gas_oracle_fallback_max_fee,
-                cfg.gas_oracle_fallback_priority_fee,
-            ))
+            .filler(
+                GasOracleFiller::new(
+                    requestor.clone(),
+                    cfg.gas_oracle_url.clone(),
+                    cfg.gas_oracle_fallback_max_fee,
+                    cfg.gas_oracle_fallback_priority_fee,
+                )
+                .map_err(|error| RpcError::Other(format!("invalid default gas oracle URL: {error}")))?,
+            )
             .filler(BlobGasFiller::default())
             .connect_client(rpc_client);
 

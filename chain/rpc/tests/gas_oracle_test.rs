@@ -64,7 +64,7 @@ async fn test_client_should_use_fallback_for_eip1559_tx() -> anyhow::Result<()> 
             Some((server.url() + "/gasapi.ashx?apikey=key&method=gasoracle").parse()?),
             EIP1559_FEE_ESTIMATION_DEFAULT_MAX_FEE_GNOSIS,
             EIP1559_FEE_ESTIMATION_DEFAULT_PRIORITY_FEE_GNOSIS,
-        ))
+        )?)
         .filler(GasFiller::default())
         .connect_client(rpc_client);
 
@@ -112,7 +112,7 @@ async fn test_client_should_call_on_gas_oracle_for_legacy_tx() -> anyhow::Result
             Some((server.url() + "/gasapi.ashx?apikey=key&method=gasoracle").parse()?),
             EIP1559_FEE_ESTIMATION_DEFAULT_MAX_FEE_GNOSIS,
             EIP1559_FEE_ESTIMATION_DEFAULT_PRIORITY_FEE_GNOSIS,
-        ))
+        )?)
         .filler(GasFiller::default())
         .filler(BlobGasFiller::default())
         .connect_client(rpc_client);

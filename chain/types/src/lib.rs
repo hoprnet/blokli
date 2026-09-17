@@ -70,7 +70,8 @@ impl AlloyAddressExt for AlloyAddress {
     }
 
     fn from_hopr_address(addr: Address) -> Self {
-        AlloyAddress::from(<[u8; 20]>::try_from(addr.as_ref()).expect("Address is 20 bytes"))
+        let address_bytes = <[u8; 20]>::try_from(addr.as_ref()).unwrap_or_default();
+        AlloyAddress::from(address_bytes)
     }
 }
 

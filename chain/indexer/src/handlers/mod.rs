@@ -56,17 +56,19 @@ use hopr_types::telemetry::MultiCounter;
 
 #[cfg(all(feature = "telemetry", not(test)))]
 lazy_static::lazy_static! {
-    static ref METRIC_INDEXER_LOG_COUNTERS: MultiCounter =
+    static ref METRIC_INDEXER_LOG_COUNTERS: Option<MultiCounter> =
         MultiCounter::new(
             "blokli_indexer_contract_log_count",
             "Counts of different HOPR contract logs processed by the Indexer",
             &["contract"]
-    ).unwrap();
+    ).ok();
 }
 
 #[cfg(all(feature = "telemetry", not(test)))]
 fn increment_indexer_contract_log_count(contract: &str) {
-    METRIC_INDEXER_LOG_COUNTERS.increment(&[contract]);
+    if let Some(metric) = METRIC_INDEXER_LOG_COUNTERS.as_ref() {
+        metric.increment(&[contract]);
+    }
 }
 
 /// Event handling an object for on-chain operations

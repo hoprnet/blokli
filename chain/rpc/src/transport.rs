@@ -56,18 +56,22 @@ impl<T> HttpWrapper<T> {
     }
 }
 
-impl<T: Clone> From<Http<T>> for HttpWrapper<T> {
-    fn from(value: Http<T>) -> Self {
-        Self {
+impl<T: Clone> TryFrom<Http<T>> for HttpWrapper<T> {
+    type Error = url::ParseError;
+
+    fn try_from(value: Http<T>) -> Result<Self, Self::Error> {
+        Ok(Self {
             client: value.client().clone(),
-            url: Url::parse(value.url()).unwrap(),
-        }
+            url: Url::parse(value.url())?,
+        })
     }
 }
 
-impl<T: Clone> From<HttpWrapper<T>> for Http<T> {
-    fn from(value: HttpWrapper<T>) -> Self {
-        Self::with_client(value.client().clone(), Url::parse(value.url()).unwrap())
+impl<T: Clone> TryFrom<HttpWrapper<T>> for Http<T> {
+    type Error = url::ParseError;
+
+    fn try_from(value: HttpWrapper<T>) -> Result<Self, Self::Error> {
+        Ok(Self::with_client(value.client().clone(), Url::parse(value.url())?))
     }
 }
 
