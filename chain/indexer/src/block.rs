@@ -883,17 +883,19 @@ where
         // range after any interrupted run, and fast sync replays every log of a block that holds a
         // single unprocessed one - so the processed flag is the only thing that makes those replays
         // cheap and safe. Logs that were never stored (token logs are filtered out of the logs DB)
-        // are absent from the set and are therefore dispatched, as before.
-        let processed_positions = if block.logs.is_empty() {
+        // are absent from the set and are therefore dispatched, as before, and so is a log that a
+        // reorganisation put at the position of one already applied: the identity carries the block
+        // hash precisely so the canonical replacement is not mistaken for what it replaces.
+        let processed_logs = if block.logs.is_empty() {
             HashSet::new()
         } else {
-            match db.get_processed_log_positions(block_id).await {
-                Ok(positions) => positions,
+            match db.get_processed_log_identities(block_id).await {
+                Ok(identities) => identities,
                 Err(error) => {
                     // The logs DB is unreachable; dispatching now would mean marking the logs as
                     // processed right after, which would fail the same way.
-                    error!(block_id, %error, "failed to load processed log positions, panicking to prevent double-processing");
-                    panic!("failed to load processed log positions, panicking to prevent double-processing")
+                    error!(block_id, %error, "failed to load processed log identities, panicking to prevent double-processing");
+                    panic!("failed to load processed log identities, panicking to prevent double-processing")
                 }
             }
         };
@@ -902,7 +904,7 @@ where
         // transaction. This is difficult since currently this would be across databases.
         // Process all logs - events are published internally via IndexerState
         for log in block.logs.clone() {
-            if processed_positions.contains(&(log.tx_index, log.log_index)) {
+            if processed_logs.contains(&(log.tx_index, log.log_index, log.block_hash)) {
                 debug!(
                     block_id = log.block_number,
                     tx_index = log.tx_index,
@@ -1636,6 +1638,52 @@ mod tests {
 
         assert!(result.is_some());
         assert!(!handler.collect_called.load(StdOrdering::SeqCst));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_block_dispatches_reorg_replacement_at_a_processed_position() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let handler = DispatchTrackingLogHandler::default();
+        let orphaned = SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: vec![Hash::create(&[b"my topic"]).into()],
+            data: vec![1, 2, 3],
+            tx_hash: Hash::create(&[b"my tx hash"]).into(),
+            block_hash: Hash::create(&[b"orphaned block"]).into(),
+            tx_index: 1,
+            block_number: 100,
+            log_index: 2,
+            ..Default::default()
+        };
+        db.store_log(orphaned.clone()).await?;
+        db.set_log_processed(orphaned.clone()).await?;
+
+        // A reorganisation can put a different log at the same position. `store_logs` keeps the
+        // orphaned row - its position is unique - so keying the skip on the position alone would
+        // drop the canonical event and never apply it.
+        let canonical = SerializableLog {
+            block_hash: Hash::create(&[b"canonical block"]).into(),
+            ..orphaned
+        };
+
+        let result = Indexer::<MockHoprIndexerOps, DispatchTrackingLogHandler, BlokliDb>::process_block(
+            &db,
+            &handler,
+            BlockWithLogs {
+                block_id: canonical.block_number,
+                logs: BTreeSet::from([canonical]),
+            },
+            false,
+            false,
+            &IndexerState::default(),
+            false,
+        )
+        .await;
+
+        assert!(result.is_some());
+        assert!(handler.collect_called.load(StdOrdering::SeqCst));
 
         Ok(())
     }

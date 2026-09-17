@@ -37,9 +37,10 @@ struct BlockNumber {
 }
 
 #[derive(FromQueryResult)]
-struct LogPosition {
+struct LogIdentity {
     tx_index: i64,
     log_index: i64,
+    block_hash: Vec<u8>,
 }
 
 #[async_trait]
@@ -283,30 +284,36 @@ impl BlokliDbLogOperations for BlokliDb {
             .collect()
     }
 
-    async fn get_processed_log_positions(&self, block_number: u64) -> Result<HashSet<(u64, u64)>> {
+    async fn get_processed_log_identities(&self, block_number: u64) -> Result<HashSet<(u64, u64, [u8; 32])>> {
         let block_number = u64_to_i64(block_number, "block_number").map_err(DbError::from)?;
 
-        LogStatus::find()
+        // The block hash comes from the log row rather than its status: a reorganisation can put a
+        // different log at the same position, and only the hash tells the two apart.
+        Ok(Log::find()
             .select_only()
-            .column(log_status::Column::TxIndex)
-            .column(log_status::Column::LogIndex)
-            .filter(log_status::Column::BlockNumber.eq(block_number))
+            .column(log::Column::TxIndex)
+            .column(log::Column::LogIndex)
+            .column(log::Column::BlockHash)
+            .inner_join(LogStatus)
+            .filter(log::Column::BlockNumber.eq(block_number))
             .filter(log_status::Column::Processed.eq(true))
-            .into_model::<LogPosition>()
+            .into_model::<LogIdentity>()
             .all(self.conn(TargetDb::Logs))
             .await
             .map_err(|e| {
-                error!(error = ?e, "failed to get processed log positions from db");
+                error!(error = ?e, "failed to get processed log identities from db");
                 DbError::from(DbSqlError::from(e))
             })?
             .into_iter()
-            .map(|position| {
-                Ok((
-                    i64_to_u64(position.tx_index, "tx_index").map_err(DbError::from)?,
-                    i64_to_u64(position.log_index, "log_index").map_err(DbError::from)?,
+            .filter_map(|identity| {
+                let block_hash: [u8; 32] = identity.block_hash.try_into().ok()?;
+                Some((
+                    i64_to_u64(identity.tx_index, "tx_index").ok()?,
+                    i64_to_u64(identity.log_index, "log_index").ok()?,
+                    block_hash,
                 ))
             })
-            .collect()
+            .collect())
     }
 
     async fn set_logs_processed(&self, block_number: Option<u64>, block_offset: Option<u64>) -> Result<()> {
