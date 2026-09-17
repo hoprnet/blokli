@@ -4,18 +4,19 @@ use blokli_db_entity::{
     prelude::HoprNodeSafeRegistration,
 };
 use hopr_types::primitive::prelude::Address;
-use sea_orm::{ColumnTrait, DbErr, EntityTrait, ModelTrait, QueryFilter, Set};
+use sea_orm::{ColumnTrait, DbErr, EntityTrait, ModelTrait, QueryFilter, QueryOrder, Set};
 use sea_query::OnConflict;
 
 use crate::{BlokliDb, BlokliDbGeneralModelOperations, DbSqlError, OptTx, Result, numeric::log_position_to_i64};
 
 #[async_trait]
 pub trait BlokliDbNodeSafeRegistrationOperations: BlokliDbGeneralModelOperations {
-    /// Register a node to a safe
+    /// Register a node to a Safe.
     ///
     /// Creates a node-safe registration entry. If a registration with the same event coordinates
     /// (registered_block, registered_tx_index, registered_log_index) already exists, returns the
-    /// existing registration ID without modification.
+    /// existing registration ID without modification. Registering a node to a different Safe
+    /// removes its previous Safe registration.
     ///
     /// # Arguments
     /// * `safe_address` - Safe contract address
@@ -68,13 +69,13 @@ pub trait BlokliDbNodeSafeRegistrationOperations: BlokliDbGeneralModelOperations
 
     /// Get safe address for a registered node
     ///
-    /// Finds the safe that a given node is registered to.
+    /// Finds the Safe from a node's latest registration.
     ///
     /// # Arguments
     /// * `node_address` - Node address to query
     ///
     /// # Returns
-    /// * `Ok(Some(Address))` - Node is registered to this safe
+    /// * `Ok(Some(Address))` - Node's latest registration is to this Safe
     /// * `Ok(None)` - Node is not registered to any safe
     async fn get_safe_for_registered_node<'a>(
         &'a self,
@@ -116,6 +117,12 @@ impl BlokliDbNodeSafeRegistrationOperations for BlokliDb {
         let tx = self.nest_transaction(tx).await?;
         let (registered_block, registered_tx_index, registered_log_index) =
             log_position_to_i64(block, tx_index, log_index)?;
+
+        HoprNodeSafeRegistration::delete_many()
+            .filter(hopr_node_safe_registration::Column::NodeAddress.eq(node_address.as_ref().to_vec()))
+            .filter(hopr_node_safe_registration::Column::SafeAddress.ne(safe_address.as_ref().to_vec()))
+            .exec(tx.as_ref())
+            .await?;
 
         let registration_model = hopr_node_safe_registration::ActiveModel {
             safe_address: Set(safe_address.as_ref().to_vec()),
@@ -239,10 +246,7 @@ impl BlokliDbNodeSafeRegistrationOperations for BlokliDb {
         }
     }
 
-    /// Retrieves the safe address that a node is registered to.
-    ///
-    /// Looks up the registration by node address (which has a unique constraint) and returns
-    /// the associated safe address if found.
+    /// Retrieves the Safe address from a node's latest registration.
     ///
     /// # Returns
     ///
@@ -266,7 +270,10 @@ impl BlokliDbNodeSafeRegistrationOperations for BlokliDb {
         node_address: Address,
     ) -> Result<Option<Address>> {
         let query = HoprNodeSafeRegistration::find()
-            .filter(hopr_node_safe_registration::Column::NodeAddress.eq(node_address.as_ref().to_vec()));
+            .filter(hopr_node_safe_registration::Column::NodeAddress.eq(node_address.as_ref().to_vec()))
+            .order_by_desc(hopr_node_safe_registration::Column::RegisteredBlock)
+            .order_by_desc(hopr_node_safe_registration::Column::RegisteredTxIndex)
+            .order_by_desc(hopr_node_safe_registration::Column::RegisteredLogIndex);
 
         let registration = if let Some(t) = tx {
             query.one(t.as_ref()).await?
@@ -431,7 +438,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_node_unique_constraint() -> anyhow::Result<()> {
+    async fn test_node_registering_to_a_new_safe_replaces_the_previous_registration() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
 
         let safe1 = random_address();
@@ -441,9 +448,13 @@ mod tests {
         // Register node to safe1
         db.register_node_to_safe(None, safe1, node, 100, 0, 0).await?;
 
-        // Try to register same node to safe2 (should fail due to unique constraint on node_address)
-        let result = db.register_node_to_safe(None, safe2, node, 100, 1, 0).await;
-        assert!(result.is_err());
+        // The node can later register to a different Safe.
+        db.register_node_to_safe(None, safe2, node, 100, 1, 0).await?;
+
+        // The new registration replaces the previous binding.
+        assert_eq!(db.get_safe_for_registered_node(None, node).await?, Some(safe2));
+        assert!(db.get_registered_nodes_for_safe(None, safe1).await?.is_empty());
+        assert_eq!(db.get_registered_nodes_for_safe(None, safe2).await?, vec![node]);
 
         Ok(())
     }

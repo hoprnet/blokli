@@ -157,7 +157,7 @@ CREATE TABLE "hopr_balance" (
 CREATE TABLE "hopr_node_safe_registration" (
     "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
     "safe_address" blob (20) NOT NULL,
-    "node_address" blob (20) NOT NULL UNIQUE,
+    "node_address" blob (20) NOT NULL,
     "registered_block" integer NOT NULL,
     "registered_tx_index" integer NOT NULL,
     "registered_log_index" integer NOT NULL
