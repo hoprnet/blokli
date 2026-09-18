@@ -325,6 +325,37 @@ impl BlokliDbLogOperations for BlokliDb {
     async fn get_processed_log_identities(&self, block_number: u64) -> Result<HashSet<(u64, u64, [u8; 32])>> {
         let block_number = u64_to_i64(block_number, "block_number").map_err(DbError::from)?;
 
+        let conn = self.conn(TargetDb::Logs);
+
+        // Read the two tables separately, each filtered by block number, and pair them up in
+        // memory. Joining them on `log_status.log_id` instead reads correctly but is not indexed -
+        // Postgres does not index the referencing side of a foreign key - so the planner drives
+        // from `log_status` and walks every processed row in the database to answer a question
+        // about one block. That is linear in the total log count, which is invisible on a fresh
+        // database and throttles indexing once the table has grown. Both queries here are bounded
+        // by the block: `idx_log_composite` covers the first and `idx_unprocessed_log_status` the
+        // second. The position triple is `log_status`'s own unique key, so keying on it rather than
+        // on `log_id` selects exactly the same rows.
+        let processed: HashSet<(i64, i64)> = LogStatus::find()
+            .select_only()
+            .column(log_status::Column::TxIndex)
+            .column(log_status::Column::LogIndex)
+            .filter(log_status::Column::BlockNumber.eq(block_number))
+            .filter(log_status::Column::Processed.eq(true))
+            .into_tuple()
+            .all(conn)
+            .await
+            .map_err(|e| {
+                error!(error = ?e, "failed to get processed log positions from db");
+                DbError::from(DbSqlError::from(e))
+            })?
+            .into_iter()
+            .collect();
+
+        if processed.is_empty() {
+            return Ok(HashSet::new());
+        }
+
         // The block hash comes from the log row rather than its status: a reorganisation can put a
         // different log at the same position, and only the hash tells the two apart.
         Ok(Log::find()
@@ -332,17 +363,16 @@ impl BlokliDbLogOperations for BlokliDb {
             .column(log::Column::TxIndex)
             .column(log::Column::LogIndex)
             .column(log::Column::BlockHash)
-            .inner_join(LogStatus)
             .filter(log::Column::BlockNumber.eq(block_number))
-            .filter(log_status::Column::Processed.eq(true))
             .into_model::<LogIdentity>()
-            .all(self.conn(TargetDb::Logs))
+            .all(conn)
             .await
             .map_err(|e| {
                 error!(error = ?e, "failed to get processed log identities from db");
                 DbError::from(DbSqlError::from(e))
             })?
             .into_iter()
+            .filter(|identity| processed.contains(&(identity.tx_index, identity.log_index)))
             .filter_map(|identity| {
                 let block_hash: [u8; 32] = identity.block_hash.try_into().ok()?;
                 Some((
