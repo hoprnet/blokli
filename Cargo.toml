@@ -57,7 +57,7 @@ futures-util = "0.3.32"
 hex = "0.4.3"
 hex-literal = "1.1.0"
 hopli = { git = "https://github.com/hoprnet/hopli", branch = "main" }
-hopr-bindings = "4.14.0"
+hopr-bindings = "4.15.0"
 hopr-types = "2.3.0"
 
 http = "1.4.2"
