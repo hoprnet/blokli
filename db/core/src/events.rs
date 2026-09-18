@@ -15,17 +15,24 @@
 //! // Create event bus
 //! let event_bus = EventBus::new(1000);
 //!
-//! // Subscribe to events
+//! // Subscribe to events. The bus runs in overflow mode, so a subscriber that falls behind is
+//! // told how many events it missed instead of being disconnected - resynchronise and carry on.
 //! let mut subscriber = event_bus.subscribe();
 //! tokio::spawn(async move {
-//!     while let Ok(event) = subscriber.recv().await {
-//!         match event {
-//!             StateChange::AccountState(change) => {
+//!     loop {
+//!         match subscriber.recv().await {
+//!             Ok(StateChange::AccountState(change)) => {
 //!                 // Handle account state change
 //!             }
-//!             StateChange::ChannelState(change) => {
+//!             Ok(StateChange::ChannelState(change)) => {
 //!                 // Handle channel state change
 //!             }
+//!             Err(RecvError::Overflowed(missed)) => {
+//!                 // Fell behind by `missed` events: re-read current state from the database,
+//!                 // then keep consuming. Breaking here would stop receiving for good.
+//!                 eprintln!("missed {missed} state changes; resynchronising");
+//!             }
+//!             Err(RecvError::Closed) => break,
 //!         }
 //!     }
 //! });
@@ -164,6 +171,11 @@ pub struct EventBus {
 impl EventBus {
     /// Create a new event bus with the given channel capacity
     ///
+    /// The bus runs in overflow mode: once a subscriber is `capacity` events behind, publishing
+    /// drops that subscriber's oldest buffered event instead of blocking the publisher. Indexing
+    /// therefore never stalls on a slow subscriber, at the cost of that subscriber missing events
+    /// and being told so through `RecvError::Overflowed`.
+    ///
     /// # Arguments
     ///
     /// * `capacity` - Maximum number of events to buffer per subscriber
@@ -195,8 +207,14 @@ impl EventBus {
 
     /// Subscribe to state change events
     ///
-    /// Returns a receiver that will receive all future state changes.
-    /// Multiple subscribers can receive the same events concurrently.
+    /// Returns a receiver for future state changes. Multiple subscribers can receive the same
+    /// events concurrently.
+    ///
+    /// A subscriber that falls more than the bus capacity behind misses events and its next
+    /// `recv()` resolves to `Err(RecvError::Overflowed(n))`, reporting how many it skipped. That
+    /// is recoverable, not terminal: treat it as a signal to resynchronise from the database and
+    /// keep reading, rather than as the end of the stream. A `while let Ok(..) = recv().await`
+    /// loop exits on overflow and will silently stop receiving, so match the error explicitly.
     ///
     /// # Example
     ///
@@ -215,8 +233,10 @@ impl EventBus {
 
     /// Publish a state change event to all subscribers
     ///
-    /// This never waits for a subscriber. If a subscriber is behind the configured capacity,
-    /// it misses the oldest event rather than blocking indexing.
+    /// This never waits for a subscriber. If a subscriber is behind the configured capacity, the
+    /// bus drops the oldest buffered event rather than blocking indexing, and that subscriber sees
+    /// `RecvError::Overflowed` on its next `recv()`. An eviction is logged here so the loss is
+    /// visible to the operator and not only to the subscriber that suffered it.
     ///
     /// # Arguments
     ///
@@ -225,10 +245,20 @@ impl EventBus {
     /// # Returns
     ///
     /// Returns `Ok(true)` when an event was delivered to active subscribers and `Ok(false)`
-    /// when none are subscribed. The latter is an expected no-op during indexing.
+    /// when none are subscribed. The latter is an expected no-op during indexing. `Ok(true)` is
+    /// returned even when the publish evicted an older event, because the new event was delivered.
     pub fn publish(&self, event: StateChange) -> Result<bool, TrySendError<StateChange>> {
         match self.sender.try_broadcast(event) {
-            Ok(_) => Ok(true),
+            Ok(evicted) => {
+                if evicted.is_some() {
+                    tracing::warn!(
+                        capacity = self.sender.capacity(),
+                        subscribers = self.sender.receiver_count(),
+                        "event bus is full; dropped the oldest state change event because a subscriber fell behind"
+                    );
+                }
+                Ok(true)
+            }
             Err(TrySendError::Inactive(_)) => Ok(false),
             Err(error) => Err(error),
         }

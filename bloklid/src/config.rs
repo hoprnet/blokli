@@ -1050,6 +1050,46 @@ mod tests {
     }
 
     #[test]
+    fn test_partial_safe_tx_prefetch_config() {
+        // Only set batch_size; concurrency must fall back to its default.
+        let config = r#"
+         [indexer.safe_tx_prefetch]
+         batch_size = 32
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
+        let res: Result<Config, _> = toml::from_str(config);
+        assert!(res.is_ok(), "Should allow partial prefetch config: {:?}", res.err());
+
+        let cfg = res.unwrap();
+        assert_eq!(cfg.indexer.safe_tx_prefetch.batch_size, 32);
+        assert_eq!(cfg.indexer.safe_tx_prefetch.concurrency, 8); // Default
+    }
+
+    #[test]
+    fn test_safe_tx_prefetch_config_rejects_unknown_fields() {
+        // `SafeTxPrefetchConfig` is `deny_unknown_fields`, so a misspelled key must fail loudly
+        // rather than being ignored and leaving the setting at its default.
+        let config = r#"
+         [indexer.safe_tx_prefetch]
+         batch_size = 32
+         concurrancy = 4
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
+        let res: Result<Config, _> = toml::from_str(config);
+        let error = res.expect_err("an unknown prefetch field must be rejected").to_string();
+        assert!(
+            error.contains("concurrancy"),
+            "error should name the offending key: {error}"
+        );
+    }
+
+    #[test]
     fn test_postgres_config_debug_redacts_password_field() {
         let config = PostgreSqlConfig {
             url: None,

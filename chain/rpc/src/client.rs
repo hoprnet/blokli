@@ -318,6 +318,27 @@ pub struct InstrumentedRetryBackoffLayer<P> {
 }
 
 impl<P> InstrumentedRetryBackoffLayer<P> {
+    /// Builds the layer from an explicit retry policy.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_rate_limit_retries` - How many times a retryable request is retried before failing
+    /// * `initial_backoff` - Fallback delay in milliseconds when the policy offers no backoff hint
+    /// * `compute_units_per_second` - Provider compute budget used to pace queued retries
+    /// * `policy` - Decides which transport errors are worth retrying
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # use blokli_chain_rpc::client::{DefaultRetryPolicy, InstrumentedRetryBackoffLayer};
+    /// let layer = InstrumentedRetryBackoffLayer::new_with_policy(
+    ///     5,
+    ///     100,
+    ///     100,
+    ///     DefaultRetryPolicy::default(),
+    /// );
+    /// let client = ClientBuilder::default().layer(layer).transport(transport, false);
+    /// ```
     pub const fn new_with_policy(
         max_rate_limit_retries: u32,
         initial_backoff: u64,
@@ -351,6 +372,25 @@ where
     }
 }
 
+/// The [`tower::Service`] that [`InstrumentedRetryBackoffLayer`] wraps around a transport.
+///
+/// This is not constructed directly; it is the layer's associated service type, produced by
+/// [`Layer::layer`] and named here only because it appears in that public signature. It retries
+/// requests the policy considers retryable, paces those retries against the provider's compute
+/// budget, and records the retry count for each completed request.
+///
+/// Item-level errors inside a batch response are left in the packet for the individual calls to
+/// read, so one failing item does not fail the rest of the batch.
+///
+/// # Examples
+///
+/// ```ignore
+/// # use blokli_chain_rpc::client::{DefaultRetryPolicy, InstrumentedRetryBackoffLayer};
+/// // Obtained by applying the layer, never built by hand:
+/// let client = ClientBuilder::default()
+///     .layer(InstrumentedRetryBackoffLayer::new_with_policy(5, 100, 100, DefaultRetryPolicy::default()))
+///     .transport(transport, false);
+/// ```
 #[derive(Debug, Clone)]
 pub struct InstrumentedRetryBackoffService<S, P> {
     inner: S,
@@ -437,7 +477,24 @@ where
             loop {
                 let error = match inner.call(request.clone()).await {
                     Ok(response) => match response.as_error() {
-                        Some(error) => TransportError::ErrorResp(error.clone()),
+                        Some(error) => {
+                            let error = TransportError::ErrorResp(error.clone());
+
+                            // `as_error` reports only the first error in the packet, so a batch
+                            // whose items partly succeeded looks identical to a wholly failed
+                            // one. Retrying is still right when that first error is retryable -
+                            // a rate-limited batch is rejected as a whole - but failing the call
+                            // for a non-retryable item error would throw away the responses the
+                            // other items did get, leaving every waiter with the same error and
+                            // sending successful lookups down the fallback path. Hand the packet
+                            // back intact instead and let each call read its own response.
+                            if matches!(response, ResponsePacket::Batch(_)) && !this.policy.should_retry(&error) {
+                                record_rpc_retries(&method_names, retry_count);
+                                return Ok(response);
+                            }
+
+                            error
+                        }
                         None => {
                             record_rpc_retries(&method_names, retry_count);
                             return Ok(response);

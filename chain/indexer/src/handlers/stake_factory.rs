@@ -151,7 +151,10 @@ mod tests {
 
     use crate::{
         custom_abis::safe_contract_events::SafeContract,
-        handlers::test_utils::test_helpers::*,
+        handlers::test_utils::test_helpers::{
+            ClonableMockOperations, MockIndexerRpcOperations, init_handlers, init_handlers_with_events, test_log,
+            try_recv_event,
+        },
         state::IndexerEvent,
         traits::{ChainLogHandler, PrefetchedLogData},
     };

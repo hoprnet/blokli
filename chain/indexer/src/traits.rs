@@ -3,7 +3,10 @@ use std::{collections::HashMap, sync::Arc};
 use async_trait::async_trait;
 use blokli_chain_types::ContractAddresses;
 use hopr_bindings::exports::alloy::primitives::B256;
-use hopr_types::{crypto::prelude::Hash, primitive::prelude::*};
+use hopr_types::{
+    crypto::prelude::Hash,
+    primitive::prelude::{Address, SerializableLog},
+};
 
 use crate::errors::Result;
 

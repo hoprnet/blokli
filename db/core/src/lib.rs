@@ -97,20 +97,26 @@ impl OpenTransaction {
         }
     }
 
+    fn deferred_events_lock(&self) -> MutexGuard<'_, Vec<StateChange>> {
+        lock_deferred_events(&self.deferred_events)
+    }
+
     /// Queues a database state-change event for publication after the root transaction commits.
     ///
     /// Events are deliberately not broadcast while the transaction is open: a later rollback
     /// must not expose state changes which never became durable.
-    fn deferred_events_lock(&self) -> MutexGuard<'_, Vec<StateChange>> {
-        match self.deferred_events.lock() {
-            Ok(events) => events,
-            Err(error) => {
-                tracing::warn!("deferred event queue lock poisoned; continuing with recovered queue");
-                error.into_inner()
-            }
-        }
-    }
-
+    ///
+    /// # Arguments
+    ///
+    /// * `event` - The state change to publish once the root transaction has committed.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # fn example(tx: &OpenTransaction, event: StateChange) {
+    /// tx.defer_event(event);
+    /// # }
+    /// ```
     pub fn defer_event(&self, event: StateChange) {
         self.deferred_events_lock().push(event);
     }
@@ -153,25 +159,12 @@ impl OpenTransaction {
         } = self;
         transaction.commit().await?;
 
-        let mut deferred_events = match deferred_events.lock() {
-            Ok(events) => events,
-            Err(error) => {
-                tracing::warn!("deferred event queue lock poisoned; continuing with recovered queue");
-                error.into_inner()
-            }
-        };
+        let mut deferred_events = lock_deferred_events(&deferred_events);
         let events = std::mem::take(&mut *deferred_events);
         drop(deferred_events);
 
         if let Some(parent_deferred_events) = parent_deferred_events {
-            let mut parent_events = match parent_deferred_events.lock() {
-                Ok(events) => events,
-                Err(error) => {
-                    tracing::warn!("deferred event queue lock poisoned; continuing with recovered queue");
-                    error.into_inner()
-                }
-            };
-            parent_events.extend(events);
+            lock_deferred_events(&parent_deferred_events).extend(events);
         } else if let Some(event_bus) = event_bus {
             for event in events {
                 if let Err(error) = event_bus.publish(event) {
@@ -186,6 +179,21 @@ impl OpenTransaction {
     /// Rollbacks the transaction.
     pub async fn rollback(self) -> Result<()> {
         Ok(self.transaction.rollback().await?)
+    }
+}
+
+/// Locks a deferred-event queue, recovering the queue if a panic poisoned the mutex.
+///
+/// The queued events are needed whether or not some other holder panicked: dropping them would
+/// silently lose state changes that have already been committed, so a poisoned lock is recovered
+/// rather than propagated.
+fn lock_deferred_events(events: &Mutex<Vec<StateChange>>) -> MutexGuard<'_, Vec<StateChange>> {
+    match events.lock() {
+        Ok(events) => events,
+        Err(error) => {
+            tracing::warn!("deferred event queue lock poisoned; continuing with recovered queue");
+            error.into_inner()
+        }
     }
 }
 

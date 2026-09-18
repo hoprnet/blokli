@@ -464,6 +464,28 @@ pub trait HoprIndexerRpcOperations {
     /// The default implementation simply issues one [`Self::get_transaction_bytes`] request per
     /// hash. Implementations backed by a JSON-RPC provider should override it to send the lookups
     /// as one batched request, which saves a round-trip per hash on high-latency endpoints.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx_hashes` - The transaction hashes to look up. An empty slice yields an empty result.
+    ///
+    /// # Returns
+    ///
+    /// One [`Result`] per input hash, in input order. A hash that is not found yields
+    /// `Err(RpcError::TransactionNotFound)` without affecting the others.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # async fn example(rpc: &impl HoprIndexerRpcOperations, hashes: &[Hash]) {
+    /// for (hash, result) in hashes.iter().zip(rpc.get_transaction_bytes_batch(hashes).await) {
+    ///     match result {
+    ///         Ok(bytes) => println!("{hash}: {} bytes", bytes.len()),
+    ///         Err(error) => eprintln!("{hash}: {error}"),
+    ///     }
+    /// }
+    /// # }
+    /// ```
     async fn get_transaction_bytes_batch(&self, tx_hashes: &[Hash]) -> Vec<Result<Vec<u8>>>
     where
         Self: Sync,

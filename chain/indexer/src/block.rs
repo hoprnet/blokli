@@ -866,21 +866,12 @@ where
             .filter(|log| log.address != logs_handler.contract_addresses_map().token)
             .collect::<Vec<_>>();
 
-        match db.store_logs(logs_vec).await {
-            Ok(store_results) => {
-                if let Some(error) = store_results.into_iter().find_map(|result| result.err()) {
-                    return Err(CoreEthereumIndexerError::ProcessError(format!(
-                        "failed to store logs from block {}: {error}",
-                        block.block_id
-                    )));
-                }
-                Ok(())
-            }
-            Err(error) => Err(CoreEthereumIndexerError::ProcessError(format!(
+        db.store_logs(logs_vec).await.map_err(|error| {
+            CoreEthereumIndexerError::ProcessError(format!(
                 "failed to store logs from block {}: {error}",
                 block.block_id
-            ))),
-        }
+            ))
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2104,8 +2095,7 @@ mod tests {
             log_index: 3,
             ..first_log.clone()
         };
-        let store_results = db.store_logs(vec![first_log.clone(), second_log.clone()]).await?;
-        assert!(store_results.into_iter().all(|result| result.is_ok()));
+        db.store_logs(vec![first_log.clone(), second_log.clone()]).await?;
 
         let result = Indexer::<MockHoprIndexerOps, BatchTrackingLogHandler, BlokliDb>::process_block(
             &db,

@@ -453,13 +453,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        },
-        time::Duration,
-    };
+    use std::{sync::Arc, time::Duration};
 
     use blokli_chain_rpc::{Log, errors::RpcError};
     use blokli_db::{

@@ -432,6 +432,48 @@ mod tests {
     }
 
     #[test]
+    fn test_env_var_override_safe_tx_prefetch() {
+        // These two mappings target a nested section, so a typo in the dotted key would leave the
+        // override silently inert. Assert both actually reach the config.
+        let _env = env_guard();
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "jura-dev"
+            rpc_url = "http://localhost:8545"
+            [indexer.safe_tx_prefetch]
+            batch_size = 16
+            concurrency = 8
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        temp_env::with_vars(
+            [
+                ("BLOKLI_INDEXER_SAFE_TX_PREFETCH_BATCH_SIZE", Some("64")),
+                ("BLOKLI_INDEXER_SAFE_TX_PREFETCH_CONCURRENCY", Some("2")),
+            ],
+            || {
+                let args = Args {
+                    verbose: 0,
+                    config: Some(path),
+                    command: None,
+                };
+
+                let config = args.load_config(false).expect("Failed to load config");
+
+                assert_eq!(config.indexer.safe_tx_prefetch.batch_size, 64);
+                assert_eq!(config.indexer.safe_tx_prefetch.concurrency, 2);
+            },
+        );
+    }
+
+    #[test]
     fn test_curvy_aggregator_is_resolved_without_full_contract_override() {
         let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();

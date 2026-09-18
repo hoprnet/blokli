@@ -97,32 +97,31 @@ struct StoredLogPosition {
 #[async_trait]
 impl BlokliDbLogOperations for BlokliDb {
     async fn store_log<'a>(&'a self, log: SerializableLog) -> Result<()> {
-        match self.store_logs([log].to_vec()).await {
-            Ok(results) => {
-                if let Some(result) = results.into_iter().next() {
-                    result
-                } else {
-                    panic!("when inserting a log into the db, the result should be a single item")
-                }
-            }
-            Err(e) => Err(e),
-        }
+        self.store_logs(vec![log]).await
     }
 
-    async fn store_logs(&self, logs: Vec<SerializableLog>) -> Result<Vec<Result<()>>> {
+    async fn store_logs(&self, logs: Vec<SerializableLog>) -> Result<()> {
         let log_count = logs.len();
         if logs.is_empty() {
-            return Ok(Vec::new());
+            return Ok(());
         }
 
-        // Build both ActiveModels up front so a conversion failure cannot leave an orphaned log row
-        // without a matching log_status.
         let mut log_models = Vec::with_capacity(log_count);
         let mut status_models = Vec::with_capacity(log_count);
         let mut seen_positions = HashSet::with_capacity(log_count);
 
         for log in logs {
             let position = log_position_to_i64(log.block_number, log.tx_index, log.log_index).map_err(DbError::from)?;
+
+            // A position repeated inside one call would be collapsed by the database anyway;
+            // dropping it before the conversions below keeps the log_status rows unambiguous and
+            // spares the duplicate the cost of building two ActiveModels it would never use.
+            if !seen_positions.insert(position) {
+                continue;
+            }
+
+            // Build both ActiveModels together so a conversion failure cannot leave an orphaned
+            // log row without a matching log_status.
             let log_model = log::ActiveModel::try_from(log.clone())
                 .map_err(DbSqlError::from)
                 .map_err(DbError::from)?;
@@ -130,11 +129,6 @@ impl BlokliDbLogOperations for BlokliDb {
                 .map_err(DbSqlError::from)
                 .map_err(DbError::from)?;
 
-            // A position repeated inside one call would be collapsed by the database anyway;
-            // dropping it here keeps the log_status rows unambiguous.
-            if !seen_positions.insert(position) {
-                continue;
-            }
             log_models.push(log_model);
             status_models.push((position, status_model));
         }
@@ -147,8 +141,14 @@ impl BlokliDbLogOperations for BlokliDb {
 
                     // Insert the batch with as few statements as the backend's bind-parameter
                     // limit allows, leaving already stored logs untouched.
-                    for chunk in log_models.chunks(import_batch_size(backend, LOG_INSERT_COLUMNS)) {
-                        match Log::insert_many(chunk.to_vec())
+                    let log_chunk_size = import_batch_size(backend, LOG_INSERT_COLUMNS);
+                    while !log_models.is_empty() {
+                        // Draining hands the statement owned models; chunking the vector in place
+                        // and calling `to_vec` would clone every model on the way to the database.
+                        let chunk = log_models
+                            .drain(..log_chunk_size.min(log_models.len()))
+                            .collect::<Vec<_>>();
+                        match Log::insert_many(chunk)
                             .on_conflict(
                                 OnConflict::columns([
                                     log::Column::LogIndex,
@@ -215,8 +215,12 @@ impl BlokliDbLogOperations for BlokliDb {
 
                     // Statuses of logs already present must not be reset, hence the same
                     // do-nothing conflict handling as before.
-                    for chunk in status_models_with_ids.chunks(import_batch_size(backend, LOG_STATUS_INSERT_COLUMNS)) {
-                        match LogStatus::insert_many(chunk.to_vec())
+                    let status_chunk_size = import_batch_size(backend, LOG_STATUS_INSERT_COLUMNS);
+                    while !status_models_with_ids.is_empty() {
+                        let chunk = status_models_with_ids
+                            .drain(..status_chunk_size.min(status_models_with_ids.len()))
+                            .collect::<Vec<_>>();
+                        match LogStatus::insert_many(chunk)
                             .on_conflict(
                                 OnConflict::columns([
                                     log_status::Column::LogIndex,
@@ -240,9 +244,7 @@ impl BlokliDbLogOperations for BlokliDb {
                     Ok(())
                 })
             })
-            .await?;
-
-        Ok((0..log_count).map(|_| Ok(())).collect())
+            .await
     }
 
     async fn get_log(&self, block_number: u64, tx_index: u64, log_index: u64) -> Result<SerializableLog> {
@@ -787,9 +789,7 @@ mod tests {
 
         // The batch mixes an already stored (and processed) log with a new one: the new log must
         // be inserted with its own status, and the existing status must survive untouched.
-        let results = db.store_logs(vec![existing.clone(), fresh.clone()]).await.unwrap();
-        assert_eq!(results.len(), 2);
-        assert!(results.into_iter().all(|result| result.is_ok()));
+        db.store_logs(vec![existing.clone(), fresh.clone()]).await.unwrap();
 
         let logs = db.get_logs(None, None).await.unwrap();
         assert_eq!(logs.len(), 2);
@@ -816,9 +816,8 @@ mod tests {
 
         let log = test_log(1, 1, 1);
 
-        let results = db.store_logs(vec![log.clone(), log.clone()]).await.unwrap();
-        assert_eq!(results.len(), 2, "one result is reported per input log");
-        assert!(results.into_iter().all(|result| result.is_ok()));
+        // A repeated position is stored once and is not an error: the batch succeeds as a whole.
+        db.store_logs(vec![log.clone(), log.clone()]).await.unwrap();
 
         let logs = db.get_logs(None, None).await.unwrap();
         assert_eq!(logs.len(), 1);
@@ -1032,11 +1031,7 @@ mod tests {
             ..Default::default()
         };
 
-        db.store_logs(vec![log_1.clone(), log_2.clone()])
-            .await
-            .unwrap()
-            .into_iter()
-            .for_each(|r| assert!(r.is_ok()));
+        db.store_logs(vec![log_1.clone(), log_2.clone()]).await.unwrap();
 
         let logs = db.get_logs(Some(1), Some(0)).await.unwrap();
 
@@ -1121,9 +1116,7 @@ mod tests {
 
         db.store_logs(vec![log_1.clone(), log_2.clone(), log_3.clone()])
             .await
-            .unwrap()
-            .into_iter()
-            .for_each(|r| assert!(r.is_ok()));
+            .unwrap();
 
         let block_numbers_all = db.get_logs_block_numbers(None, None, None).await.unwrap();
         assert_eq!(block_numbers_all.len(), 3);
@@ -1183,11 +1176,7 @@ mod tests {
             ..log_1.clone()
         };
 
-        db.store_logs(vec![log_2.clone(), log_3.clone()])
-            .await
-            .unwrap()
-            .into_iter()
-            .for_each(|r| assert!(r.is_ok()));
+        db.store_logs(vec![log_2.clone(), log_3.clone()]).await.unwrap();
 
         // ensure the first log is still the last updated
         assert_eq!(

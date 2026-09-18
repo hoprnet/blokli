@@ -378,12 +378,9 @@ where
             return Ok(());
         }
 
-        let store_results = self.db.store_logs(slogs.clone()).await?;
-        if let Some(error) = store_results.into_iter().find_map(|result| result.err()) {
-            return Err(CoreEthereumIndexerError::ProcessError(format!(
-                "failed to store Safe discovery block logs: {error}"
-            )));
-        }
+        self.db.store_logs(slogs.clone()).await.map_err(|error| {
+            CoreEthereumIndexerError::ProcessError(format!("failed to store Safe discovery block logs: {error}"))
+        })?;
 
         self.db.set_log_batch_processed(slogs).await.map_err(|error| {
             CoreEthereumIndexerError::ProcessError(format!(
