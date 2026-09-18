@@ -43,6 +43,7 @@ where
     /// # let tx = todo!();
     /// # let log = todo!();
     /// # let event = todo!();
+    /// # let batch_context = todo!();
     /// handlers.on_node_safe_registry_event(&tx, &log, event, true, &batch_context).await?;
     /// # Ok(())
     /// # }
