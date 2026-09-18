@@ -165,6 +165,19 @@ impl BlokliDbLogOperations for BlokliDb {
                                                 return Err(DbError::General(e.to_string()));
                                             }
 
+                                            if let Err(e) = LogStatus::update_many()
+                                                .col_expr(
+                                                    log_status::Column::Checksum,
+                                                    Expr::value(Value::Bytes(None)),
+                                                )
+                                                .filter(log_status::Column::BlockNumber.gte(block_number))
+                                                .exec(tx.as_ref())
+                                                .await
+                                            {
+                                                error!(%log_id, error = ?e, "failed to invalidate checksums after a reorganised log");
+                                                return Err(DbError::General(e.to_string()));
+                                            }
+
                                             trace!(log_id, "replaced reorganised log in the DB");
                                         }
 
@@ -717,6 +730,77 @@ mod tests {
             .unwrap();
 
         assert_eq!(log_2, log_2_retrieved);
+    }
+
+    #[tokio::test]
+    async fn test_replacing_a_checksummed_log_rebuilds_the_chain_suffix() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let first = SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: [Hash::create(&[b"my topic"]).into()].into(),
+            data: [1, 2, 3, 4].into(),
+            tx_index: 0u64,
+            block_number: 1u64,
+            block_hash: Hash::create(&[b"orphaned block"]).into(),
+            tx_hash: Hash::create(&[b"first tx"]).into(),
+            log_index: 0u64,
+            ..Default::default()
+        };
+        let second = SerializableLog {
+            block_number: 2u64,
+            block_hash: Hash::create(&[b"second block"]).into(),
+            tx_hash: Hash::create(&[b"second tx"]).into(),
+            ..first.clone()
+        };
+
+        db.store_logs(vec![first.clone(), second.clone()]).await?;
+        db.set_log_processed(first.clone()).await?;
+        db.set_log_processed(second.clone()).await?;
+        db.update_logs_checksums().await?;
+
+        let second_before = db.get_log(2, 0, 0).await?.checksum;
+        assert!(second_before.is_some());
+
+        // A reorganisation replaces the log in block 1. Every checksum from block 1 onward was
+        // derived from it, so the whole suffix has to be rebuilt. Clearing only block 1 would make
+        // the refill seed from block 2 and hash block 1 on top of it.
+        let replacement = SerializableLog {
+            block_hash: Hash::create(&[b"canonical block"]).into(),
+            data: [5, 6, 7].into(),
+            ..first.clone()
+        };
+        db.store_log(replacement.clone()).await?;
+        db.set_log_processed(replacement.clone()).await?;
+        db.update_logs_checksums().await?;
+
+        // Recompute the chain by hand and require the stored one to match it exactly.
+        let expected_first = Hash::create(&[
+            Hash::default().as_ref(),
+            Hash::create(&[
+                replacement.block_hash.as_ref(),
+                replacement.tx_hash.as_ref(),
+                &replacement.log_index.to_be_bytes(),
+            ])
+            .as_ref(),
+        ]);
+        let expected_second = Hash::create(&[
+            expected_first.as_ref(),
+            Hash::create(&[
+                second.block_hash.as_ref(),
+                second.tx_hash.as_ref(),
+                &second.log_index.to_be_bytes(),
+            ])
+            .as_ref(),
+        ]);
+
+        assert_eq!(db.get_log(1, 0, 0).await?.checksum, Some(expected_first.to_hex()));
+        assert_eq!(db.get_log(2, 0, 0).await?.checksum, Some(expected_second.to_hex()));
+
+        // The later log's checksum must have moved: it depended on the log that was replaced.
+        assert_ne!(db.get_log(2, 0, 0).await?.checksum, second_before);
+
+        Ok(())
     }
 
     #[tokio::test]
