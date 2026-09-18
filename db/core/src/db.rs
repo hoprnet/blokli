@@ -359,15 +359,24 @@ impl BlokliDb {
 
     /// Get a reference to the event bus for subscribing to state changes.
     ///
-    /// Subscribers will receive real-time notifications when account or channel state changes.
+    /// Subscribers receive real-time notifications when account or channel state changes. The bus
+    /// runs in overflow mode, so a subscriber that falls behind misses events and is told how many
+    /// through `RecvError::Overflowed`; that is recoverable, so match it rather than letting the
+    /// loop end. See [`EventBus::subscribe`] for the full contract.
     ///
     /// # Example
     ///
     /// ```rust,ignore
     /// let mut subscriber = db.event_bus().subscribe();
     /// tokio::spawn(async move {
-    ///     while let Ok(event) = subscriber.recv().await {
-    ///         // Handle state change event
+    ///     loop {
+    ///         match subscriber.recv().await {
+    ///             Ok(event) => { /* Handle state change event */ }
+    ///             Err(RecvError::Overflowed(missed)) => {
+    ///                 // Re-read current state from the database, then keep consuming.
+    ///             }
+    ///             Err(RecvError::Closed) => break,
+    ///         }
     ///     }
     /// });
     /// ```
