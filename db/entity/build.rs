@@ -52,7 +52,7 @@ fn main() -> anyhow::Result<()> {
     );
     println!(
         "cargo:rerun-if-changed={}",
-        db_migration_package_path.join("Cargo.toml").to_str().unwrap()
+        db_migration_package_path.join("Cargo.toml").to_string_lossy()
     );
 
     // Always rerun if build.rs itself changes - this ensures we can check for missing files

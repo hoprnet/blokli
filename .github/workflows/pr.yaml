@@ -84,13 +84,23 @@ jobs:
   # ── Shared checks (lint, pre-commit, audit) ─────────────────────────────────
   checks:
     name: Check
+    # In the merge queue we don't re-run the heavy checks, but their contexts
+    # (`Check / *`) are required and must report on the merge group or the queue
+    # stalls. So the job runs on merge_group too, with the reusable workflow's
+    # enable booleans turned off there: the work is skipped while each `Check / *`
+    # still reports (green). Only Integration throughput does real work in the
+    # queue (see merge-queue.yaml). `!= 'merge_group'` keeps PR behaviour intact.
     uses: hoprnet/hopr-workflows/.github/workflows/checks.yaml@3ee95c480962bb3c1fc0061887da9ba735f537c7 # workflow-checks-v2.1.1
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
       cachix_cache_name: blokli
+      format: ${{ github.event_name != 'merge_group' }}
+      pre_commit: ${{ github.event_name != 'merge_group' }}
+      lint: ${{ github.event_name != 'merge_group' }}
+      audit: ${{ github.event_name != 'merge_group' }}
       lint_command: "nix build -L .#bloklid-clippy"
       audit_command: "nix run -L .#audit"
-      deps: true
+      deps: ${{ github.event_name != 'merge_group' }}
       runner_small: depot-ubuntu-24.04-2
       runner_large: depot-ubuntu-24.04-4
     secrets:
@@ -98,12 +108,15 @@ jobs:
   # ── Shared tests (unit) ─────────────────────────────────────────────────────
   tests:
     name: Test
+    # Runs on merge_group too, but coverage is disabled there so `Test / Coverage /
+    # Unit` reports (skipped) without re-running (see `checks`). The other Test
+    # contexts are already skipped on every event.
     uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@2f28adfb7c34a9f18087d8646e190b6aafcd4b52 # workflow-tests-v6.1.2
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
       cachix_cache_name: blokli
       enable_unit_tests: false
-      enable_unit_coverage: true
+      enable_unit_coverage: ${{ github.event_name != 'merge_group' }}
       unit_coverage_command: "nix build -L .#bloklid-coverage -o coverage.lcov"
       runner_unit: depot-ubuntu-24.04-4
       test_timeout: 30
@@ -131,6 +144,9 @@ jobs:
   # ── Build: binaries ─────────────────────────────────────────────────────────
   build-binaries:
     name: Binary ${{ matrix.architecture }}
+    # Runs on merge_group too; `enabled` is off there so the `Binary … / Build`
+    # and `… / Sign and Publish` contexts report (skipped) without rebuilding
+    # (see `checks`). The reusable job carries the matrix so names stay expanded.
     strategy:
       fail-fast: false
       matrix:
@@ -160,13 +176,17 @@ jobs:
       build_command: ${{ matrix.build_command }}
       binary: bloklid
       runner: ${{ matrix.runner }}
-      enabled: ${{ matrix.required_label == '' || contains(github.event.pull_request.labels.*.name, matrix.required_label) }}
+      enabled: ${{ github.event_name != 'merge_group' && (matrix.required_label == '' || contains(github.event.pull_request.labels.*.name, matrix.required_label)) }}
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       gpg_private_key: ${{ secrets.GPG_HOPRNET_PRIVATE_KEY }}
   # ── Build: Docker ───────────────────────────────────────────────────────────
   build-docker:
     name: Docker
+    # Docker builds are too heavy to run in the queue and build-docker.yaml has no
+    # skip input, so this stays skipped on merge_group; the required `Docker / *`
+    # contexts are reported (green) by merge-queue-docker.yaml instead.
+    if: github.event_name == 'pull_request'
     uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@25898d13dab1b3fbf4c33c394e7c581578a2b0d7 # build-docker-v3.2.0
     needs: build-binaries
     permissions:
@@ -193,6 +213,8 @@ jobs:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
   build-docker-with-anvil:
     name: Docker anvil
+    # Not a required check; skip in the merge queue.
+    if: github.event_name == 'pull_request'
     uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@25898d13dab1b3fbf4c33c394e7c581578a2b0d7 # build-docker-v3.2.0
     needs: build-binaries
     permissions:
