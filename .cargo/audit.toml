@@ -24,4 +24,18 @@ ignore = [
   # Status: Build-time proc-macro only; no runtime impact. Track upstream for a maintained replacement.
   # Review by: 2026-06-30
   "RUSTSEC-2026-0173",
+
+  # RUSTSEC-2026-0253
+  # Crate: lru 0.16.4
+  # Transitive: hopr-bindings -> alloy -> alloy-provider
+  # Status: Potential use-after-free due to lack of panic safety in `LruCache::pop()`
+  # Review by: 2026-06-30
+  "RUSTSEC-2026-0253",
+
+  # RUSTSEC-2026-0249
+  # Crate: smartstring 1.0.1
+  # Transitive: hopli -> open-telemetry
+  # Status: unmaintained
+  # Review by: 2026-06-30
+  "RUSTSEC-2026-0249",
 ]
