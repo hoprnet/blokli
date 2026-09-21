@@ -7,7 +7,7 @@ use async_graphql::{Context, ID, Result, Subscription};
 use async_stream::{stream, try_stream};
 use blokli_api_types::{
     Account, Channel, ChannelUpdate, CurvyCommittedNote, CurvyCommittedNullifier, CurvyEventPosition, CurvyPendingNote,
-    OpenedChannelsGraphEntry, RedeemTicketDetails, Safe, ServiceRegistryConfig, ServiceTypeUpdate,
+    OpenedChannelsGraphEntry, RedeemTicketDetails, Safe, SafeHoprApproval, ServiceRegistryConfig, ServiceTypeUpdate,
     ServiceTypeUpdateKind, ServiceUpdate, ServiceUpdateKind, TicketParameters, TokenValueString, Transaction, UInt64,
 };
 use blokli_chain_api::transaction_store::{
@@ -17,6 +17,8 @@ use blokli_chain_indexer::{
     IndexerState,
     state::{IndexerEvent, RedeemTicketDetailsInfo},
 };
+use blokli_chain_rpc::{HoprIndexerRpcOperations, ReqwestClient, rpc::RpcOperations};
+use blokli_chain_types::ContractAddresses;
 use blokli_db_entity::{
     chain_info,
     chain_info::Entity as ChainInfoEntity,
@@ -46,6 +48,7 @@ use tokio::time::{MissedTickBehavior, interval};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
+use self::approval::safe_hopr_approval_stream;
 use crate::{
     conversions::{
         service_entry_from_aggregate, service_registry_config_from_model, service_type_from_aggregate,
@@ -56,6 +59,8 @@ use crate::{
     readiness::{ReadinessChecker, ReadinessState},
     validation::{parse_service_type, validate_eth_address},
 };
+
+mod approval;
 
 /// Captures the current registry-wide configuration and subscribes to later changes atomically.
 ///
@@ -640,6 +645,56 @@ pub struct SubscriptionRoot;
 
 #[Subscription]
 impl SubscriptionRoot {
+    /// Subscribe to a Safe's wxHOPR allowance to the configured Channels contract.
+    ///
+    /// Registers event receivers before reading the current allowance through RPC, then emits
+    /// that snapshot followed by matching committed Approval updates from the configured token.
+    /// Buffered updates may overlap with or predate the snapshot because RPC state can be ahead
+    /// of finalized indexing. Every value is an absolute allowance; re-read safeHoprAllowance
+    /// before submitting a transaction rather than treating an event as authoritative current state.
+    ///
+    /// RPC failure is reported as an error. Lag reports SUBSCRIPTION_LAGGED and ends the stream;
+    /// reorganization or channel closure also ends it. Reconnect to receive a fresh snapshot.
+    #[graphql(name = "safeHoprApproval")]
+    async fn safe_hopr_approval(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Safe contract address (hexadecimal, with or without 0x prefix)")] address: String,
+    ) -> Result<impl Stream<Item = Result<SafeHoprApproval>>> {
+        validate_eth_address(&address)
+            .map_err(|error| errors::graphql_error(errors::invalid_address_query_failed(error.message)))?;
+        let owner = Address::from_hex(&address).map_err(|error| {
+            errors::graphql_error(errors::invalid_address_query_failed(errors::messages::invalid_address(
+                &address, error,
+            )))
+        })?;
+        let spender = ctx.data::<ContractAddresses>()?.channels;
+        let rpc = ctx.data::<Arc<RpcOperations<ReqwestClient>>>()?.clone();
+        let indexer_state = ctx.data::<IndexerState>()?;
+        let (event_receiver, shutdown_receiver) = {
+            let _lock = indexer_state.acquire_watermark_lock().await;
+            (
+                indexer_state.subscribe_to_events(),
+                indexer_state.subscribe_to_shutdown(),
+            )
+        };
+
+        // Use the same configured-token read as safeHoprAllowance, without holding the
+        // coordination lock across a network request. The receiver buffers concurrent updates.
+        let initial = async move {
+            rpc.get_hopr_allowance(owner, spender)
+                .await
+                .map_err(|error| errors::graphql_error(errors::rpc_query_failed("query HOPR allowance", error)))
+        };
+        Ok(safe_hopr_approval_stream(
+            owner,
+            spender,
+            initial,
+            event_receiver,
+            shutdown_receiver,
+        ))
+    }
+
     /// Stream indexed Curvy `PendingNotes` entries with an optional historical phase.
     #[graphql(name = "curvyPendingNote")]
     async fn curvy_pending_note(

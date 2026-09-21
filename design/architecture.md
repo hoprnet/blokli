@@ -337,6 +337,7 @@ The schema is organized into three root types following GraphQL best practices:
 - Account updates: Real-time changes to account balances and Safe linking
 - Channel updates: Real-time changes to payment channel states
 - Safe deployments: Real-time notifications when new Safe contracts are deployed
+- Safe token approvals: Current wxHOPR allowance to Channels from RPC, followed by matching committed Approval updates
 - Network topology: Opened channel graph updates for routing decisions
 - Service registry updates: snapshot-first streams of entries, service types and registry-wide configuration followed by live changes
 - Transaction updates: Status changes for submitted transactions
@@ -347,6 +348,14 @@ subscriptions capture that same kind of watermark while registering their event 
 and then stream later changes. Service-type and registry-wide configuration subscriptions likewise emit complete current state before live
 changes. Broadcast overflow ends the server stream; the client reconnects and receives a fresh snapshot, turning possible silent loss into a
 deterministic resynchronization.
+
+Safe allowance subscriptions register event and reorganization receivers under the indexer coordination lock before starting the RPC
+snapshot read. They release the lock for the network request, allowing indexing to continue while updates buffer. The snapshot uses the same
+configured-token allowance read as the existing query, and live events are filtered by Safe owner and configured Channels spender. Allowance
+strings preserve the same full precision and currency format as balance and allowance queries. Buffered events may overlap with or predate
+the snapshot because current RPC state can be ahead of finalized indexing; consumers must re-read current allowance before acting. Initial
+RPC failures are returned to the client. Lag returns an explicit error and terminates the stream, while reorganization and channel closure
+also terminate it, including reorganization during the initial read. Reconnecting starts with a fresh snapshot.
 
 **Error Handling**: Uses GraphQL union types to return domain-specific error types (InvalidAddressError, ContractNotAllowedError, etc.)
 alongside success types, providing structured error responses with codes and context.
