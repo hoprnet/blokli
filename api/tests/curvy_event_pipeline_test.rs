@@ -266,6 +266,7 @@ async fn test_curvy_events_are_indexed_and_streamed() -> anyhow::Result<()> {
         indexer_state,
         true,
         true,
+        Default::default(),
     );
 
     let pending_logs = logs_with_signature(&chain_logs, PendingNotes::SIGNATURE_HASH);

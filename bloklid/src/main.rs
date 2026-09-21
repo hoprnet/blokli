@@ -196,6 +196,10 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 data_directory: cfg.data_directory.clone(),
                 event_bus_capacity: cfg.indexer.subscription.event_bus_capacity,
                 shutdown_signal_capacity: cfg.indexer.subscription.shutdown_signal_capacity,
+                safe_tx_prefetch: blokli_chain_indexer::SafeTxPrefetchConfig {
+                    batch_size: cfg.indexer.safe_tx_prefetch.batch_size,
+                    concurrency: cfg.indexer.safe_tx_prefetch.concurrency,
+                },
             };
 
             (

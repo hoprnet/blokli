@@ -17,7 +17,10 @@ use hopr_bindings::exports::alloy::{
     eips::eip2718::Encodable2718,
     primitives::{Address as AlloyAddress, B256, U256},
     providers::Provider,
-    rpc::types::{Filter, Log as AlloyLog},
+    rpc::{
+        client::BatchRequest,
+        types::{Filter, Log as AlloyLog, Transaction as AlloyTransaction},
+    },
 };
 #[cfg(all(feature = "telemetry", not(test)))]
 use hopr_types::telemetry::SimpleGauge;
@@ -244,6 +247,50 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
             .ok_or_else(|| RpcError::TransactionNotFound(tx_hash))?;
 
         Ok(tx.inner.encoded_2718())
+    }
+
+    /// Sends all `eth_getTransactionByHash` lookups as a single JSON-RPC batch request.
+    ///
+    /// Only one HTTP round-trip is paid for the whole set, which is what makes this worthwhile on
+    /// a distant endpoint. If the batch request itself fails, every hash is reported with that
+    /// same transport error; per-hash failures inside a successful batch stay independent.
+    async fn get_transaction_bytes_batch(&self, tx_hashes: &[Hash]) -> Vec<Result<Vec<u8>>> {
+        if tx_hashes.is_empty() {
+            return Vec::new();
+        }
+
+        let mut batch = BatchRequest::new(self.provider.client());
+        let mut waiters = Vec::with_capacity(tx_hashes.len());
+
+        for tx_hash in tx_hashes {
+            let params = (B256::from_slice(tx_hash.as_ref()),);
+            match batch.add_call::<_, Option<AlloyTransaction>>("eth_getTransactionByHash", &params) {
+                Ok(waiter) => waiters.push(Ok(waiter)),
+                Err(error) => waiters.push(Err(RpcError::from(error))),
+            }
+        }
+
+        if let Err(error) = batch.send().await {
+            error!(count = tx_hashes.len(), %error, "batched transaction lookup failed");
+            return tx_hashes
+                .iter()
+                .map(|_| Err(RpcError::Other(format!("batched transaction lookup failed: {error}"))))
+                .collect();
+        }
+
+        let mut results = Vec::with_capacity(tx_hashes.len());
+        for (tx_hash, waiter) in tx_hashes.iter().zip(waiters) {
+            results.push(match waiter {
+                Ok(waiter) => match waiter.await {
+                    Ok(Some(tx)) => Ok(tx.inner.encoded_2718()),
+                    Ok(None) => Err(RpcError::TransactionNotFound(*tx_hash)),
+                    Err(error) => Err(RpcError::from(error)),
+                },
+                Err(error) => Err(error),
+            });
+        }
+
+        results
     }
 
     /// Produces an incremental stream of completed block log batches starting from a given block.
@@ -574,13 +621,14 @@ mod tests {
         },
         transports::http::ReqwestTransport,
     };
-    use hopr_types::primitive::prelude::Address;
+    use hopr_types::{crypto::prelude::Hash, primitive::prelude::Address};
     use serde_json::json;
     use tokio::time::sleep;
     use url::Url;
 
     use crate::{
         HoprIndexerRpcOperations,
+        client::{DefaultRetryPolicy, InstrumentedRetryBackoffLayer},
         errors::{HttpRequestError, RpcError},
         indexer::{fetch_subrange_logs_concurrently, split_range},
         rpc::{RpcOperations, RpcOperationsConfig},
@@ -686,6 +734,116 @@ mod tests {
         })?;
 
         Ok(bounds)
+    }
+
+    /// Builds RPC operations whose client carries the instrumented retry layer, so batch responses
+    /// travel the same path as in production.
+    fn create_test_rpc_operations_with_retries(server_url: &str) -> anyhow::Result<RpcOperations<TestRequestor>> {
+        let transport_client = ReqwestTransport::new(Url::parse(server_url)?);
+        let rpc_client = ClientBuilder::default()
+            .layer(InstrumentedRetryBackoffLayer::new_with_policy(
+                2,
+                1,
+                100,
+                // No error code is retryable, so an item error must not be retried - and must not
+                // discard the successful items sharing its batch.
+                DefaultRetryPolicy {
+                    retryable_json_rpc_errors: vec![],
+                    ..DefaultRetryPolicy::default()
+                },
+            ))
+            .transport(transport_client.clone(), transport_client.guess_local());
+        let cfg = RpcOperationsConfig {
+            contract_addrs: ContractAddresses::default(),
+            gas_oracle_url: None,
+            tx_polling_interval: Duration::from_secs(1),
+            ..RpcOperationsConfig::default()
+        };
+
+        RpcOperations::new(rpc_client, TestRequestor, cfg, Some(true)).map_err(Into::into)
+    }
+
+    #[tokio::test]
+    async fn test_get_transaction_bytes_batch_maps_every_hash_in_input_order() -> anyhow::Result<()> {
+        let mut server = mockito::Server::new_async().await;
+
+        let found = Hash::create(&[b"found"]);
+        let missing = Hash::create(&[b"missing"]);
+        let failing = Hash::create(&[b"failing"]);
+
+        // Answer the batch by echoing back the ids the client chose, so each response lands on the
+        // waiter it belongs to no matter how the client numbers the calls. The order of the
+        // responses is deliberately reversed: JSON-RPC allows it, and results must still be keyed
+        // by id rather than by position.
+        let found_param = format!("{:?}", B256::from_slice(found.as_ref()));
+        let missing_param = format!("{:?}", B256::from_slice(missing.as_ref()));
+        let mock = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body_from_request(move |request| {
+                let body: serde_json::Value = serde_json::from_slice(request.body().unwrap()).unwrap();
+                let calls = body.as_array().expect("a batch request is a JSON array");
+
+                let responses = calls
+                    .iter()
+                    .map(|call| {
+                        let id = call["id"].clone();
+                        let param = call["params"][0].as_str().unwrap_or_default().to_string();
+
+                        if param == found_param {
+                            json!({"jsonrpc":"2.0","id":id,"result":{
+                                "type":"0x2",
+                                "chainId":"0x64",
+                                "nonce":"0x0",
+                                "gas":"0x5208",
+                                "maxFeePerGas":"0x1",
+                                "maxPriorityFeePerGas":"0x1",
+                                "to":"0x0000000000000000000000000000000000000001",
+                                "value":"0x0",
+                                "accessList":[],
+                                "input":"0x",
+                                "r":"0x1","s":"0x1","yParity":"0x0","v":"0x0",
+                                "hash":"0x0000000000000000000000000000000000000000000000000000000000000001",
+                                "blockHash":"0x0000000000000000000000000000000000000000000000000000000000000002",
+                                "blockNumber":"0x1",
+                                "transactionIndex":"0x0",
+                                "from":"0x0000000000000000000000000000000000000002"
+                            }})
+                        } else if param == missing_param {
+                            // A hash the chain does not know about must map to TransactionNotFound.
+                            json!({"jsonrpc":"2.0","id":id,"result":serde_json::Value::Null})
+                        } else {
+                            // A non-retryable item error must stay confined to its own hash.
+                            json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":"no such transaction"}})
+                        }
+                    })
+                    .rev()
+                    .collect::<Vec<_>>();
+
+                serde_json::to_vec(&responses).unwrap()
+            })
+            .expect(1)
+            .create();
+
+        let rpc = create_test_rpc_operations_with_retries(&server.url())?;
+        let results = rpc.get_transaction_bytes_batch(&[found, missing, failing]).await;
+
+        mock.assert();
+        assert_eq!(results.len(), 3, "one result per input hash");
+        assert!(
+            results[0].as_ref().is_ok_and(|bytes| !bytes.is_empty()),
+            "the found transaction must survive the failures sharing its batch: {:?}",
+            results[0]
+        );
+        assert!(
+            matches!(results[1], Err(RpcError::TransactionNotFound(hash)) if hash == missing),
+            "a null result must map to TransactionNotFound: {:?}",
+            results[1]
+        );
+        assert!(results[2].is_err(), "the erroring hash must report its own failure");
+
+        Ok(())
     }
 
     #[test]

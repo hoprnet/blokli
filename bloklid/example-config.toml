@@ -126,6 +126,20 @@ enable_safe_indexing = false
 # PortalFactory is allowed, but Portal-specific GraphQL queries are unavailable.
 enable_curvy_indexing = false
 
+# Concurrent pre-fetch of the transactions needed to decode Safe execution
+# failures. These lookups run before a block's database transaction is opened,
+# so they trade requests in flight against how long a slow RPC endpoint can
+# stall indexing. Only relevant when enable_safe_indexing is true.
+[indexer.safe_tx_prefetch]
+# Transaction hashes packed into a single batched JSON-RPC request (default: 16)
+# Lower it if the RPC provider rejects or truncates large batch requests.
+batch_size = 16
+
+# Batched requests in flight at once (default: 8)
+# The limit is global: the indexer pre-fetches several blocks concurrently and
+# they all draw from this budget.
+concurrency = 8
+
 # GraphQL subscription behavior configuration
 [indexer.subscription]
 # Capacity of the event bus buffer for channel events
