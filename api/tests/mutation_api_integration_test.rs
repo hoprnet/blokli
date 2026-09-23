@@ -24,18 +24,27 @@ use blokli_api::{
 };
 use blokli_chain_api::{
     transaction_executor::RawTransactionExecutorConfig,
+    transaction_policy::{TransactionPolicy, network_transaction_filter},
     transaction_store::{TransactionStatus, TransactionStore},
 };
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
-use hopr_bindings::exports::alloy::{
-    consensus::{SignableTransaction, TxLegacy},
-    eips::eip2718::Encodable2718,
-    primitives::{Address as AlloyAddress, TxKind, U256},
-    providers::{Provider, ProviderBuilder},
-    signers::{SignerSync, local::PrivateKeySigner},
+use hopr_bindings::{
+    exports::alloy::{
+        consensus::{SignableTransaction, TxLegacy},
+        eips::eip2718::Encodable2718,
+        primitives::{Address as AlloyAddress, Bytes, TxKind, U256},
+        providers::{Provider, ProviderBuilder},
+        signers::{SignerSync, local::PrivateKeySigner},
+        sol_types::SolCall,
+    },
+    hopr_channels::HoprChannels::fundChannelCall,
+    hopr_token::HoprToken::approveCall,
 };
-use hopr_types::crypto::keypairs::{ChainKeypair, Keypair};
+use hopr_types::{
+    crypto::keypairs::{ChainKeypair, Keypair},
+    primitive::prelude::Address,
+};
 
 /// Test context containing all components needed for GraphQL mutation tests
 struct TestContext {
@@ -60,12 +69,23 @@ async fn setup_test_environment(
     confirmations: u32,
     executor_config: RawTransactionExecutorConfig,
 ) -> Result<TestContext> {
+    setup_test_environment_with_policy(block_time, confirmations, executor_config, TransactionPolicy::AllowAll).await
+}
+
+/// Same as [`setup_test_environment`], but with an explicit transaction policy.
+async fn setup_test_environment_with_policy(
+    block_time: Duration,
+    confirmations: u32,
+    executor_config: RawTransactionExecutorConfig,
+    policy: TransactionPolicy,
+) -> Result<TestContext> {
     // Use common transaction test helper
-    let tx_ctx = common::setup_transaction_test_environment(
+    let tx_ctx = common::setup_transaction_test_environment_with_policy(
         block_time,
         Duration::from_secs(1), // poll_interval
         confirmations,
         Some(executor_config),
+        policy,
     )
     .await?;
 
@@ -111,6 +131,32 @@ fn create_test_transaction(from: &ChainKeypair, to: AlloyAddress, value: u64, no
 
     let mut encoded = Vec::new();
     signed_tx.encode_2718(&mut encoded);
+    encoded
+}
+
+/// Helper to create a signed contract call for testing the transaction policy
+fn create_test_contract_call(
+    from: &ChainKeypair,
+    to: AlloyAddress,
+    input: Vec<u8>,
+    nonce: u64,
+    chain_id: u64,
+) -> Vec<u8> {
+    let signer = PrivateKeySigner::from_slice(from.secret().as_ref()).expect("valid signer");
+
+    let tx = TxLegacy {
+        chain_id: Some(chain_id),
+        nonce,
+        gas_price: 1_000_000_000, // 1 gwei
+        gas_limit: 100_000,
+        to: TxKind::Call(to),
+        value: U256::ZERO,
+        input: Bytes::from(input),
+    };
+
+    let sig = signer.sign_hash_sync(&tx.signature_hash()).expect("signing failed");
+    let mut encoded = Vec::new();
+    tx.into_signed(sig).encode_2718(&mut encoded);
     encoded
 }
 
@@ -509,6 +555,134 @@ async fn test_send_transaction_sync_timeout() -> Result<()> {
             message
         );
     }
+
+    Ok(())
+}
+
+/// The allowed channels contract of the whitelist policy used by the rejection tests.
+const WHITELISTED_CHANNELS: [u8; 20] = [0x42; 20];
+
+/// A whitelist policy allowing only the HOPR operations on [`WHITELISTED_CHANNELS`].
+fn whitelist_policy() -> TransactionPolicy {
+    TransactionPolicy::Whitelist(network_transaction_filter(&ContractAddresses {
+        channels: Address::from(WHITELISTED_CHANNELS),
+        ..Default::default()
+    }))
+}
+
+/// Build a `sendTransaction` mutation covering the policy rejection arms of the union.
+fn send_transaction_query(raw_tx: &[u8]) -> String {
+    format!(
+        r#"mutation {{
+            sendTransaction(input: {{ rawTransaction: "0x{}" }}) {{
+                __typename
+                ... on SendTransactionSuccess {{
+                    transactionHash
+                }}
+                ... on ContractNotAllowedError {{
+                    code
+                    contractAddress
+                }}
+                ... on FunctionNotAllowedError {{
+                    code
+                    contractAddress
+                    functionSelector
+                }}
+                ... on RpcError {{
+                    code
+                    message
+                }}
+            }}
+        }}"#,
+        hex::encode(raw_tx)
+    )
+}
+
+#[tokio::test]
+async fn test_send_transaction_rejects_contract_outside_whitelist() -> Result<()> {
+    let ctx = setup_test_environment_with_policy(
+        Duration::from_secs(1),
+        2,
+        RawTransactionExecutorConfig::default(),
+        whitelist_policy(),
+    )
+    .await?;
+
+    let nonce = get_current_nonce(&ctx).await;
+    // A token `approve` is a relayable operation, but not on this contract.
+    let raw_tx = create_test_contract_call(
+        ctx.chain_key(),
+        AlloyAddress::from([0x77u8; 20]),
+        approveCall::SELECTOR.to_vec(),
+        nonce,
+        ctx.chain_id,
+    );
+
+    let result = execute_mutation(&ctx.schema, &send_transaction_query(&raw_tx)).await;
+    let data = &result["data"]["sendTransaction"];
+
+    assert_eq!(data["__typename"], "ContractNotAllowedError");
+    assert_eq!(data["code"], "CONTRACT_NOT_ALLOWED");
+    assert_eq!(ctx.store().count(), 0);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_send_transaction_rejects_function_outside_whitelist() -> Result<()> {
+    let ctx = setup_test_environment_with_policy(
+        Duration::from_secs(1),
+        2,
+        RawTransactionExecutorConfig::default(),
+        whitelist_policy(),
+    )
+    .await?;
+
+    let nonce = get_current_nonce(&ctx).await;
+    // The channels contract is whitelisted, but only for the channel operations.
+    let raw_tx = create_test_contract_call(
+        ctx.chain_key(),
+        AlloyAddress::from(WHITELISTED_CHANNELS),
+        vec![0xde, 0xad, 0xbe, 0xef],
+        nonce,
+        ctx.chain_id,
+    );
+
+    let result = execute_mutation(&ctx.schema, &send_transaction_query(&raw_tx)).await;
+    let data = &result["data"]["sendTransaction"];
+
+    assert_eq!(data["__typename"], "FunctionNotAllowedError");
+    assert_eq!(data["code"], "FUNCTION_NOT_ALLOWED");
+    assert_eq!(data["functionSelector"], "0xdeadbeef");
+    assert_eq!(ctx.store().count(), 0);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_send_transaction_accepts_whitelisted_call() -> Result<()> {
+    let ctx = setup_test_environment_with_policy(
+        Duration::from_secs(1),
+        2,
+        RawTransactionExecutorConfig::default(),
+        whitelist_policy(),
+    )
+    .await?;
+
+    let nonce = get_current_nonce(&ctx).await;
+    // `fundChannel` on the whitelisted channels contract passes the policy and reaches the RPC.
+    let raw_tx = create_test_contract_call(
+        ctx.chain_key(),
+        AlloyAddress::from(WHITELISTED_CHANNELS),
+        fundChannelCall::SELECTOR.to_vec(),
+        nonce,
+        ctx.chain_id,
+    );
+
+    let result = execute_mutation(&ctx.schema, &send_transaction_query(&raw_tx)).await;
+    let data = &result["data"]["sendTransaction"];
+
+    assert_eq!(data["__typename"], "SendTransactionSuccess");
 
     Ok(())
 }

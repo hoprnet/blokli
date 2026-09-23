@@ -13,6 +13,7 @@ members = [
   "db/entity",
   "db/migration",
   "helper",
+  "tx",
   "types",
 ]
 
@@ -45,6 +46,7 @@ blokli-chain-types = { path = "chain/types" }
 blokli-db = { path = "db/core" }
 blokli-db-entity = { path = "db/entity" }
 blokli-db-migration = { path = "db/migration" }
+blokli-tx = { path = "tx" }
 chrono = "0.4.45"
 clap = { version = "4.6.1", features = ["derive", "env", "string"] }
 config = "0.15.23"
