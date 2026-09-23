@@ -155,6 +155,22 @@ impl Args {
                 "BLOKLI_API_TRANSACTIONS_ENABLE_REVERT_REASON_TRACING",
                 "api.transactions.enable_revert_reason_tracing",
             ),
+            (
+                "BLOKLI_API_TRANSACTIONS_ENABLE_HOPR_ACTION_VALIDATION",
+                "api.transactions.enable_hopr_action_validation",
+            ),
+            (
+                "BLOKLI_API_TRANSACTIONS_HOPR_ACTION_TTL",
+                "api.transactions.hopr_action_ttl",
+            ),
+            (
+                "BLOKLI_API_TRANSACTIONS_HOPR_INVALID_ACTION_THRESHOLD",
+                "api.transactions.hopr_invalid_action_threshold",
+            ),
+            (
+                "BLOKLI_API_TRANSACTIONS_HOPR_INVALID_ACTION_COOLDOWN",
+                "api.transactions.hopr_invalid_action_cooldown",
+            ),
             ("BLOKLI_API_SSE_KEEPALIVE_ENABLED", "api.sse_keepalive.enabled"),
             ("BLOKLI_API_SSE_KEEPALIVE_INTERVAL", "api.sse_keepalive.interval"),
             ("BLOKLI_API_SSE_KEEPALIVE_TEXT", "api.sse_keepalive.text"),

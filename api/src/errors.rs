@@ -7,8 +7,9 @@
 
 use async_graphql::ErrorExtensions;
 use blokli_api_types::{
-    ContractNotAllowedError, FunctionNotAllowedError, InvalidAddressError, InvalidTransactionIdError,
-    MissingFilterError, OverloadedError, QueryFailedError, RpcError, TimeoutError,
+    ContractNotAllowedError, FunctionNotAllowedError, HoprActionRejectedError, HoprActionThrottledError,
+    InvalidAddressError, InvalidTransactionIdError, MissingFilterError, OverloadedError, QueryFailedError, RpcError,
+    TimeoutError,
 };
 use thiserror::Error;
 
@@ -96,6 +97,12 @@ pub mod codes {
 
     /// Transaction submission capacity is exhausted; the client should retry later
     pub const SUBMISSION_CAPACITY_EXCEEDED: &str = "SUBMISSION_CAPACITY_EXCEEDED";
+
+    /// A supported HOPR action failed Blokli's deterministic preflight.
+    pub const HOPR_ACTION_REJECTED: &str = "HOPR_ACTION_REJECTED";
+
+    /// Repeated invalid HOPR submissions from one signer are temporarily suppressed.
+    pub const HOPR_ACTION_THROTTLED: &str = "HOPR_ACTION_THROTTLED";
 
     /// Invalid transaction ID format
     pub const INVALID_TRANSACTION_ID: &str = "INVALID_TRANSACTION_ID";
@@ -581,6 +588,41 @@ pub fn submission_capacity_exceeded() -> OverloadedError {
     OverloadedError {
         code: codes::SUBMISSION_CAPACITY_EXCEEDED.to_string(),
         message: messages::submission_capacity_exceeded(),
+    }
+}
+
+/// Creates a HoprActionRejectedError for a deterministic HOPR preflight failure.
+///
+/// `operation` and `reason` are fixed-cardinality strings produced by the chain-api policy,
+/// never client input, so they are safe to surface verbatim.
+pub fn hopr_action_rejected(operation: &str, reason_code: &str, reason_message: &str) -> HoprActionRejectedError {
+    HoprActionRejectedError {
+        code: codes::HOPR_ACTION_REJECTED.to_string(),
+        message: format!("HOPR {operation} rejected before broadcast: {reason_message}"),
+        operation: operation.to_string(),
+        reason: reason_code.to_string(),
+    }
+}
+
+/// Creates a HoprActionThrottledError for a signer on invalid-action cooldown.
+pub fn hopr_action_throttled(
+    operation: &str,
+    reason_code: &str,
+    reason_message: &str,
+    retry_after: std::time::Duration,
+) -> HoprActionThrottledError {
+    // Saturating: a cooldown longer than i32::MAX seconds is not representable in GraphQL and
+    // is not a configuration this deployment supports.
+    let retry_after_seconds = i32::try_from(retry_after.as_secs()).unwrap_or(i32::MAX);
+    HoprActionThrottledError {
+        code: codes::HOPR_ACTION_THROTTLED.to_string(),
+        message: format!(
+            "HOPR {operation} is temporarily suppressed after repeated invalid submissions ({reason_message}); retry \
+             in {retry_after_seconds}s"
+        ),
+        operation: operation.to_string(),
+        reason: reason_code.to_string(),
+        retry_after_seconds,
     }
 }
 

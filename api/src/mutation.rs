@@ -4,8 +4,9 @@ use std::sync::Arc;
 
 use async_graphql::{Context, Object, Result, Union};
 use blokli_api_types::{
-    ContractNotAllowedError, FunctionNotAllowedError, InvalidTransactionIdError, OverloadedError, RpcError,
-    SendTransactionSuccess, TimeoutError, Transaction, TransactionInput,
+    ContractNotAllowedError, DeduplicatedTransaction, FunctionNotAllowedError, HoprActionRejectedError,
+    HoprActionThrottledError, InvalidTransactionIdError, OverloadedError, RpcError, SendTransactionSuccess,
+    TimeoutError, Transaction, TransactionInput,
 };
 use blokli_chain_api::{
     DefaultHttpRequestor,
@@ -27,6 +28,8 @@ pub enum SendTransactionResult {
     ContractNotAllowed(ContractNotAllowedError),
     FunctionNotAllowed(FunctionNotAllowedError),
     RpcError(RpcError),
+    HoprActionRejected(HoprActionRejectedError),
+    HoprActionThrottled(HoprActionThrottledError),
 }
 
 /// Result type for asynchronous transaction submission
@@ -37,6 +40,9 @@ pub enum SendTransactionAsyncResult {
     FunctionNotAllowed(FunctionNotAllowedError),
     RpcError(RpcError),
     Overloaded(OverloadedError),
+    HoprActionRejected(HoprActionRejectedError),
+    HoprActionThrottled(HoprActionThrottledError),
+    Deduplicated(DeduplicatedTransaction),
 }
 
 /// Result type for synchronous transaction submission
@@ -47,6 +53,8 @@ pub enum SendTransactionSyncResult {
     FunctionNotAllowed(FunctionNotAllowedError),
     RpcError(RpcError),
     Timeout(TimeoutError),
+    HoprActionRejected(HoprActionRejectedError),
+    HoprActionThrottled(HoprActionThrottledError),
 }
 
 /// Result type for transaction query
@@ -114,6 +122,20 @@ impl MutationRoot {
 
                 Ok(SendTransactionAsyncResult::Transaction(transaction_from_record(record)))
             }
+            // An equivalent logical action is already tracked: hand back that transaction
+            // rather than broadcasting a competing copy of the same intent.
+            Err(TransactionExecutorError::DuplicateHoprAction { operation, existing }) => {
+                match store.get(existing) {
+                    Ok(record) => Ok(SendTransactionAsyncResult::Deduplicated(DeduplicatedTransaction {
+                        transaction: transaction_from_record(record),
+                        operation: operation.to_string(),
+                    })),
+                    // The tracked transaction concluded between the policy check and this
+                    // lookup, so there is nothing to point at. Report capacity-neutral
+                    // transience rather than inventing a terminal outcome.
+                    Err(e) => Ok(SendTransactionAsyncResult::RpcError(errors::rpc_internal_error(e))),
+                }
+            }
             Err(e) => Ok(executor_error_to_async_result(e)),
         }
     }
@@ -176,6 +198,23 @@ fn executor_error_to_send_result(error: TransactionExecutorError) -> SendTransac
         TransactionExecutorError::ValidationFailed(_) => {
             SendTransactionResult::RpcError(errors::rpc_validation_failed(&error))
         }
+        TransactionExecutorError::HoprActionRejected { operation, reason } => {
+            SendTransactionResult::HoprActionRejected(errors::hopr_action_rejected(
+                operation,
+                reason.code(),
+                reason.message(),
+            ))
+        }
+        TransactionExecutorError::HoprActionThrottled {
+            operation,
+            reason,
+            retry_after,
+        } => SendTransactionResult::HoprActionThrottled(errors::hopr_action_throttled(
+            operation,
+            reason.code(),
+            reason.message(),
+            retry_after,
+        )),
         TransactionExecutorError::RpcError(msg) => SendTransactionResult::RpcError(errors::rpc_error_with_message(msg)),
         _ => SendTransactionResult::RpcError(errors::rpc_internal_error(&error)),
     }
@@ -196,6 +235,23 @@ fn executor_error_to_async_result(error: TransactionExecutorError) -> SendTransa
         TransactionExecutorError::RpcError(msg) => {
             SendTransactionAsyncResult::RpcError(errors::rpc_error_with_message(msg))
         }
+        TransactionExecutorError::HoprActionRejected { operation, reason } => {
+            SendTransactionAsyncResult::HoprActionRejected(errors::hopr_action_rejected(
+                operation,
+                reason.code(),
+                reason.message(),
+            ))
+        }
+        TransactionExecutorError::HoprActionThrottled {
+            operation,
+            reason,
+            retry_after,
+        } => SendTransactionAsyncResult::HoprActionThrottled(errors::hopr_action_throttled(
+            operation,
+            reason.code(),
+            reason.message(),
+            retry_after,
+        )),
         TransactionExecutorError::OverloadedError => {
             SendTransactionAsyncResult::Overloaded(errors::submission_capacity_exceeded())
         }
@@ -218,6 +274,23 @@ fn executor_error_to_sync_result(error: TransactionExecutorError) -> SendTransac
         TransactionExecutorError::RpcError(msg) => {
             SendTransactionSyncResult::RpcError(errors::rpc_error_with_message(msg))
         }
+        TransactionExecutorError::HoprActionRejected { operation, reason } => {
+            SendTransactionSyncResult::HoprActionRejected(errors::hopr_action_rejected(
+                operation,
+                reason.code(),
+                reason.message(),
+            ))
+        }
+        TransactionExecutorError::HoprActionThrottled {
+            operation,
+            reason,
+            retry_after,
+        } => SendTransactionSyncResult::HoprActionThrottled(errors::hopr_action_throttled(
+            operation,
+            reason.code(),
+            reason.message(),
+            retry_after,
+        )),
         TransactionExecutorError::Timeout(msg) => SendTransactionSyncResult::Timeout(errors::timeout_error(msg)),
         _ => SendTransactionSyncResult::RpcError(errors::rpc_internal_error(&error)),
     }
