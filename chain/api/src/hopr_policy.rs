@@ -381,7 +381,7 @@ impl HoprPolicy {
             }
         }
 
-        let key = action_key(&action);
+        let key = action_key(&action, source);
         if mode == SubmissionMode::Tracked {
             if let Some(existing) = self.in_flight(&key) {
                 crate::metrics::record_hopr_validation(operation, "deduplicated");
@@ -434,10 +434,6 @@ impl HoprPolicy {
         }
     }
 
-    /// Check the deterministic preconditions of an operation.
-    ///
-    /// `Ok(None)` means the action may proceed; `Ok(Some(reason))` that it is deterministically
-    /// invalid. Funding and announcement have no deterministic precondition by design.
     /// Check the deterministic preconditions of an operation.
     ///
     /// `Ok(None)` means the action may proceed; `Ok(Some(reason))` that it is deterministically
@@ -566,6 +562,10 @@ impl HoprPolicy {
     ///
     /// Returns `false` when the map is full of entries that are all still live, in which case
     /// the caller must skip tracking rather than grow without bound.
+    ///
+    /// The check and the insert that follows are not atomic, so concurrent registrations can
+    /// overshoot the limit by the number of them in flight. The limit exists to stop
+    /// unbounded growth, not to hold an exact count, and overshooting costs one map entry.
     fn reserve_action_slot(&self) -> bool {
         if self.actions.len() < self.config.max_tracked_actions {
             return true;
@@ -596,18 +596,22 @@ impl HoprPolicy {
 /// The key deliberately excludes the nonce, gas parameters and signature, which is exactly
 /// what distinguishes it from raw-hash deduplication: a retry of the same intent produces the
 /// same key even though it is a different transaction.
-fn action_key(action: &DecodedHoprAction) -> String {
+///
+/// It covers the acting Safe as well as the signer because one chain key can own several
+/// Safes. Keyed on the signer alone, the same action for two different Safes would collide
+/// and the second would be reported as a duplicate of the first.
+fn action_key(action: &DecodedHoprAction, source: Address) -> String {
     let signer = action.signer;
     match &action.operation {
-        HoprOperation::Announce { payload_digest } => format!("announce:{signer}:{payload_digest}"),
+        HoprOperation::Announce { payload_digest } => format!("announce:{signer}:{source}:{payload_digest}"),
         HoprOperation::FundChannel { destination, amount } => {
-            format!("fund_channel:{signer}:{destination}:{amount}")
+            format!("fund_channel:{signer}:{source}:{destination}:{amount}")
         }
         HoprOperation::InitiateOutgoingChannelClosure { destination } => {
-            format!("initiate_channel_closure:{signer}:{destination}")
+            format!("initiate_channel_closure:{signer}:{source}:{destination}")
         }
         HoprOperation::FinalizeOutgoingChannelClosure { destination } => {
-            format!("finalize_channel_closure:{signer}:{destination}")
+            format!("finalize_channel_closure:{signer}:{source}:{destination}")
         }
     }
 }
@@ -998,6 +1002,45 @@ mod tests {
                 operation: "fund_channel",
                 existing: id,
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn two_safes_under_one_chain_key_do_not_deduplicate_against_each_other() {
+        let signer = PrivateKeySigner::random();
+        let store = store();
+        let policy = policy(StubChain::with_channel(Some(ChannelState::Open)), store.clone());
+
+        // One chain key can own several Safes, so the same action for two of them is two
+        // distinct intents even though the signer, counterparty and amount all match.
+        let other_safe = [0xEE; 20];
+        let for_first = signed_module_call(&signer, fund_channel(1_000)).await;
+        let for_second = signed_module_call_to(
+            &signer,
+            CHANNELS,
+            HoprChannels::fundChannelSafeCall {
+                selfAddress: AlloyAddress::from_slice(&other_safe),
+                account: AlloyAddress::from_slice(&DESTINATION),
+                amount: U96::from(1_000u64),
+            }
+            .abi_encode(),
+            1,
+        )
+        .await;
+
+        let PolicyDecision::Admit(action) = policy.evaluate(&for_first, SubmissionMode::Tracked).await else {
+            panic!("the first Safe's funding should be admitted");
+        };
+        let id = Uuid::new_v4();
+        store.insert(submitted_record(id)).expect("insert failed");
+        policy.register(&action, id);
+
+        assert!(
+            matches!(
+                policy.evaluate(&for_second, SubmissionMode::Tracked).await,
+                PolicyDecision::Admit(_)
+            ),
+            "a second Safe's funding must not be swallowed as a duplicate of the first"
         );
     }
 

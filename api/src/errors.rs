@@ -611,9 +611,11 @@ pub fn hopr_action_throttled(
     reason_message: &str,
     retry_after: std::time::Duration,
 ) -> HoprActionThrottledError {
-    // Saturating: a cooldown longer than i32::MAX seconds is not representable in GraphQL and
-    // is not a configuration this deployment supports.
-    let retry_after_seconds = i32::try_from(retry_after.as_secs()).unwrap_or(i32::MAX);
+    // Rounded up, not truncated: a sub-second cooldown reported as `0` would invite an
+    // immediate retry that is refused again. Saturating at i32::MAX, since a cooldown that
+    // long is not representable in GraphQL and is not a configuration we support.
+    let whole_seconds = retry_after.as_secs() + u64::from(retry_after.subsec_nanos() > 0);
+    let retry_after_seconds = i32::try_from(whole_seconds).unwrap_or(i32::MAX);
     HoprActionThrottledError {
         code: codes::HOPR_ACTION_THROTTLED.to_string(),
         message: format!(
