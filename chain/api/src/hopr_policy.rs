@@ -20,19 +20,23 @@
 //!    cooldown, so it cannot keep consuming broadcast and monitoring capacity. The cooldown is per signer and per
 //!    operation, so one bad channel action does not suppress that node's unrelated submissions.
 //!
-//! The policy is advisory rather than transactional: evaluation and the subsequent broadcast
-//! are not atomic, so two genuinely simultaneous submissions of the same action can both be
-//! admitted. It bounds sustained retry storms, which is the failure this is designed against.
+//! Deduplication holds across concurrency: a tracked submission claims its logical key before it
+//! is broadcast, and an equivalent submission arriving meanwhile waits for that broadcast to
+//! settle rather than racing it. Preflight, by contrast, is only as fresh as the index.
 
 use std::{
-    sync::Arc,
+    collections::HashMap,
+    sync::{
+        Arc, Mutex, MutexGuard, PoisonError,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
 use blokli_db::BlokliDbAllOperations;
-use dashmap::DashMap;
 use hopr_types::{internal::channels::ChannelStatus, primitive::prelude::Address};
+use tokio::{sync::watch, time::timeout};
 use tracing::{debug, warn};
 use uuid::Uuid;
 
@@ -101,7 +105,7 @@ pub enum SubmissionMode {
 }
 
 /// Outcome of evaluating a raw transaction against the HOPR-aware policy.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum PolicyDecision {
     /// The policy does not apply: either it is disabled, the calldata is not a supported HOPR
     /// operation, or the call target is not a known HOPR module. Generic behaviour applies.
@@ -134,13 +138,57 @@ pub enum PolicyDecision {
 }
 
 /// A supported action that passed preflight, ready to be registered once broadcast succeeds.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// A tracked submission holds its logical key for as long as this value lives. Dropping it
+/// without calling [`register`](Self::register) releases the key, so a failed or cancelled
+/// broadcast never suppresses the retry that follows it.
 pub struct AdmittedAction {
     /// Deduplication key identifying the logical action across re-signed retries.
     key: String,
     /// Operation label, as produced by [`HoprOperation::name`].
     pub operation: &'static str,
+    /// Exclusive hold on `key`; `None` when the action is admitted without deduplication.
+    claim: Option<ActionClaim>,
 }
+
+impl AdmittedAction {
+    /// Bind the action to the transaction that now carries it.
+    ///
+    /// Called once the submission has been broadcast and stored. Until the transaction reaches
+    /// a terminal state, or [`HoprPolicyConfig::action_ttl`] elapses, an equivalent action
+    /// resolves to `transaction` instead of being broadcast again — including one that was
+    /// already waiting on this claim.
+    pub fn register(mut self, transaction: Uuid) {
+        if let Some(claim) = self.claim.take() {
+            claim.register(transaction);
+        }
+    }
+
+    /// Whether this admission holds the deduplication key.
+    pub fn is_tracked(&self) -> bool {
+        self.claim.is_some()
+    }
+}
+
+impl std::fmt::Debug for AdmittedAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AdmittedAction")
+            .field("key", &self.key)
+            .field("operation", &self.operation)
+            .field("tracked", &self.is_tracked())
+            .finish()
+    }
+}
+
+// Equality ignores the claim: two admissions are the same decision when they name the same
+// logical action.
+impl PartialEq for AdmittedAction {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key && self.operation == other.operation
+    }
+}
+
+impl Eq for AdmittedAction {}
 
 /// Read-only view of the chain state the policy needs.
 ///
@@ -216,7 +264,7 @@ impl<T: BlokliDbAllOperations + Send + Sync> HoprChainState for DbHoprChainState
 #[derive(Debug, Clone)]
 pub struct HoprPolicyConfig {
     /// Whether the policy is applied at all. When `false`, every transaction keeps generic
-    /// behaviour and no database lookups are performed.
+    /// behaviour and no database lookups are performed. Off by default: it is an opt-in.
     pub enabled: bool,
     /// How long a logical action stays registered while its transaction is still tracked.
     ///
@@ -244,7 +292,7 @@ pub struct HoprPolicyConfig {
 impl Default for HoprPolicyConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             action_ttl: Duration::from_secs(120),
             invalid_action_threshold: 3,
             invalid_action_cooldown: Duration::from_secs(60),
@@ -256,10 +304,88 @@ impl Default for HoprPolicyConfig {
 }
 
 /// A logical action currently being tracked.
-#[derive(Debug, Clone, Copy)]
-struct RegisteredAction {
-    transaction: Uuid,
-    registered_at: Instant,
+#[derive(Debug, Clone)]
+enum TrackedAction {
+    /// Claimed by a submission that is still being broadcast and stored.
+    ///
+    /// An equivalent submission arriving meanwhile waits on `settled` for the outcome instead
+    /// of racing the first one to the RPC.
+    Claimed {
+        claim: u64,
+        claimed_at: Instant,
+        settled: watch::Receiver<Option<Uuid>>,
+    },
+    /// Carried by a transaction the store is tracking.
+    Registered { transaction: Uuid, registered_at: Instant },
+}
+
+impl TrackedAction {
+    /// Whether the entry is younger than `ttl`, i.e. not reclaimable on age alone.
+    fn is_fresh(&self, ttl: Duration) -> bool {
+        match self {
+            TrackedAction::Claimed { claimed_at, .. } => claimed_at.elapsed() < ttl,
+            TrackedAction::Registered { registered_at, .. } => registered_at.elapsed() < ttl,
+        }
+    }
+}
+
+type ActionMap = HashMap<String, TrackedAction>;
+
+/// Exclusive hold on a logical action key while its submission is broadcast.
+///
+/// [`register`](Self::register) hands the key over to the stored transaction. Dropping the
+/// claim unregistered — a failed broadcast, a failed store insert, or a cancelled request —
+/// releases the key, and any equivalent submission waiting on it retries the claim itself.
+struct ActionClaim {
+    actions: Arc<Mutex<ActionMap>>,
+    key: String,
+    claim: u64,
+    settled: watch::Sender<Option<Uuid>>,
+}
+
+impl ActionClaim {
+    fn register(self, transaction: Uuid) {
+        {
+            let mut actions = lock(&self.actions);
+            // The claim may have been reclaimed on age while the broadcast hung; a newer claim
+            // on the same key then owns it and must not be overwritten.
+            if self.owns(&actions) {
+                actions.insert(
+                    self.key.clone(),
+                    TrackedAction::Registered {
+                        transaction,
+                        registered_at: Instant::now(),
+                    },
+                );
+            }
+        }
+        self.settled.send_replace(Some(transaction));
+    }
+
+    fn owns(&self, actions: &ActionMap) -> bool {
+        matches!(actions.get(&self.key), Some(TrackedAction::Claimed { claim, .. }) if *claim == self.claim)
+    }
+}
+
+impl Drop for ActionClaim {
+    fn drop(&mut self) {
+        // Registered claims were replaced by their `Registered` entry, so this only removes a
+        // claim that never produced a tracked transaction.
+        let mut actions = lock(&self.actions);
+        if self.owns(&actions) {
+            actions.remove(&self.key);
+        }
+    }
+}
+
+/// Result of trying to claim a logical action key.
+enum ClaimOutcome {
+    Claimed(ActionClaim),
+    /// An equivalent action is carried by this tracked transaction.
+    Duplicate(Uuid),
+    /// The key could not be claimed — tracking is at capacity, or an equivalent broadcast did
+    /// not settle in time — so the action is admitted without deduplication.
+    Untracked,
 }
 
 /// Deterministic-failure accounting for one (signer, operation) pair.
@@ -270,6 +396,12 @@ struct FailureState {
     suppressed_until: Option<Instant>,
     /// Last time this pair was seen, so an abandoned entry can be reclaimed.
     last_seen: Instant,
+}
+
+/// Lock a policy map. Every critical section is short and panic-free, so a poisoned lock
+/// still holds consistent data.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// The HOPR-aware transaction policy.
@@ -283,17 +415,24 @@ pub struct HoprPolicy {
     contracts: HoprContracts,
     store: Arc<TransactionStore>,
     config: HoprPolicyConfig,
-    /// Logical action key to the transaction currently carrying it.
-    actions: DashMap<String, RegisteredAction>,
+    /// Logical action key to the submission claiming it or the transaction carrying it.
+    ///
+    /// Both maps sit behind a plain mutex rather than a sharded map so that checking the
+    /// capacity and inserting happen under one lock: their keys are client-controlled, and an
+    /// advisory bound would let a concurrent burst overshoot it.
+    actions: Arc<Mutex<ActionMap>>,
+    /// Source of unique claim tokens, so a released or reclaimed claim never touches a newer
+    /// claim on the same key.
+    next_claim: AtomicU64,
     /// (signer, operation) to its deterministic-failure accounting.
-    failures: DashMap<(Address, &'static str), FailureState>,
+    failures: Mutex<HashMap<(Address, &'static str), FailureState>>,
 }
 
 impl std::fmt::Debug for HoprPolicy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HoprPolicy")
             .field("config", &self.config)
-            .field("tracked_actions", &self.actions.len())
+            .field("tracked_actions", &lock(&self.actions).len())
             .finish_non_exhaustive()
     }
 }
@@ -311,8 +450,9 @@ impl HoprPolicy {
             contracts,
             store,
             config,
-            actions: DashMap::new(),
-            failures: DashMap::new(),
+            actions: Arc::new(Mutex::new(HashMap::new())),
+            next_claim: AtomicU64::new(0),
+            failures: Mutex::new(HashMap::new()),
         }
     }
 
@@ -321,6 +461,10 @@ impl HoprPolicy {
     /// A database error during preflight yields [`PolicyDecision::NotApplicable`]: the policy
     /// is an optional safety net and must never turn a transient lookup failure into a
     /// rejected submission.
+    ///
+    /// In [`SubmissionMode::Tracked`] an admitted action holds its logical key until the
+    /// returned [`AdmittedAction`] is registered or dropped, so the caller must keep it alive
+    /// across the broadcast.
     pub async fn evaluate(&self, raw_tx: &[u8], mode: SubmissionMode) -> PolicyDecision {
         if !self.config.enabled {
             return PolicyDecision::NotApplicable;
@@ -344,12 +488,7 @@ impl HoprPolicy {
         let operation = action.operation.name();
 
         // An already-suppressed signer is refused before any further lookup.
-        if let Some(retry_after) = self.suppression_for(action.signer, operation) {
-            let reason = self
-                .failures
-                .get(&(action.signer, operation))
-                .map(|state| state.reason)
-                .unwrap_or(ValidationReason::ChannelNotFound);
+        if let Some((retry_after, reason)) = self.suppression_for(action.signer, operation) {
             crate::metrics::record_hopr_validation(operation, "throttled");
             debug!(
                 tx_hash = %action.transaction_hash, signer = %action.signer, operation,
@@ -382,42 +521,99 @@ impl HoprPolicy {
         }
 
         let key = action_key(&action, source);
-        if mode == SubmissionMode::Tracked {
-            if let Some(existing) = self.in_flight(&key) {
-                crate::metrics::record_hopr_validation(operation, "deduplicated");
-                debug!(
-                    tx_hash = %action.transaction_hash, signer = %action.signer, operation, %existing,
-                    "returning the in-flight transaction for an equivalent HOPR action"
-                );
-                return PolicyDecision::Duplicate { operation, existing };
-            }
-        }
+        let claim = match mode {
+            SubmissionMode::Untracked => None,
+            SubmissionMode::Tracked => match self.claim_action(&key).await {
+                ClaimOutcome::Claimed(claim) => Some(claim),
+                ClaimOutcome::Untracked => None,
+                ClaimOutcome::Duplicate(existing) => {
+                    crate::metrics::record_hopr_validation(operation, "deduplicated");
+                    debug!(
+                        tx_hash = %action.transaction_hash, signer = %action.signer, operation, %existing,
+                        "returning the in-flight transaction for an equivalent HOPR action"
+                    );
+                    return PolicyDecision::Duplicate { operation, existing };
+                }
+            },
+        };
 
         crate::metrics::record_hopr_validation(operation, "admitted");
-        PolicyDecision::Admit(AdmittedAction { key, operation })
+        PolicyDecision::Admit(AdmittedAction { key, operation, claim })
     }
 
-    /// Bind an admitted action to the transaction that now carries it.
+    /// Claim a logical action key before broadcasting, or find what already carries it.
     ///
-    /// Called once the submission has been accepted and given an identity. Until the
-    /// transaction reaches a terminal state, or [`HoprPolicyConfig::action_ttl`] elapses,
-    /// an equivalent action resolves to `transaction` instead of being broadcast again.
-    pub fn register(&self, action: &AdmittedAction, transaction: Uuid) {
-        if !self.reserve_action_slot() {
-            warn!(
-                tracked = self.actions.len(),
-                "HOPR action tracking is at capacity; this action will not be deduplicated"
-            );
-            return;
+    /// Claiming is atomic, so of several equivalent submissions arriving together exactly one
+    /// is broadcast. The others wait for it to settle, bounded by
+    /// [`HoprPolicyConfig::action_ttl`]: they then resolve to its transaction, or — if it
+    /// failed — contend for the key again.
+    async fn claim_action(&self, key: &str) -> ClaimOutcome {
+        loop {
+            let mut settled = match self.try_claim(key) {
+                Ok(outcome) => return outcome,
+                Err(settled) => settled,
+            };
+
+            let outcome = timeout(self.config.action_ttl, settled.wait_for(Option::is_some))
+                .await
+                .map(|settled| settled.map(|transaction| *transaction));
+            match outcome {
+                Ok(Ok(Some(transaction))) => return ClaimOutcome::Duplicate(transaction),
+                // The claim was released without a transaction: contend for the key again.
+                Ok(Ok(None) | Err(_)) => continue,
+                Err(_) => {
+                    warn!("an equivalent HOPR action did not settle in time; this one will not be deduplicated");
+                    return ClaimOutcome::Untracked;
+                }
+            }
+        }
+    }
+
+    /// One claim attempt under the lock. `Err` carries the receiver of an equivalent claim
+    /// still in progress, to be awaited without holding the lock.
+    fn try_claim(&self, key: &str) -> Result<ClaimOutcome, watch::Receiver<Option<Uuid>>> {
+        let mut actions = lock(&self.actions);
+
+        match actions.get(key) {
+            Some(TrackedAction::Claimed { settled, .. }) => return Err(settled.clone()),
+            Some(&TrackedAction::Registered {
+                transaction,
+                registered_at,
+            }) => {
+                if self.is_in_flight(transaction, registered_at) {
+                    return Ok(ClaimOutcome::Duplicate(transaction));
+                }
+                // The action concluded, so the key is free for a new attempt.
+                actions.remove(key);
+            }
+            None => {}
         }
 
-        self.actions.insert(
-            action.key.clone(),
-            RegisteredAction {
-                transaction,
-                registered_at: Instant::now(),
+        if !self.make_room(&mut actions) {
+            warn!(
+                tracked = actions.len(),
+                "HOPR action tracking is at capacity; this action will not be deduplicated"
+            );
+            return Ok(ClaimOutcome::Untracked);
+        }
+
+        let (sender, receiver) = watch::channel(None);
+        let claim = self.next_claim.fetch_add(1, Ordering::Relaxed);
+        actions.insert(
+            key.to_owned(),
+            TrackedAction::Claimed {
+                claim,
+                claimed_at: Instant::now(),
+                settled: receiver,
             },
         );
+
+        Ok(ClaimOutcome::Claimed(ActionClaim {
+            actions: self.actions.clone(),
+            key: key.to_owned(),
+            claim,
+            settled: sender,
+        }))
     }
 
     /// Resolve the channel source.
@@ -485,35 +681,26 @@ impl HoprPolicy {
         })
     }
 
-    /// The transaction already carrying this logical action, if it is still in flight.
+    /// Whether a registered action is still carried by a live transaction.
     ///
     /// An entry is released when its TTL elapses or its transaction has reached a terminal
     /// state, so a finished action never blocks the next legitimate submission.
-    fn in_flight(&self, key: &str) -> Option<Uuid> {
-        let registered = *self.actions.get(key)?;
-
-        if registered.registered_at.elapsed() >= self.config.action_ttl {
-            self.actions.remove(key);
-            return None;
+    fn is_in_flight(&self, transaction: Uuid, registered_at: Instant) -> bool {
+        if registered_at.elapsed() >= self.config.action_ttl {
+            return false;
         }
-
-        match self.store.get(registered.transaction) {
-            Ok(record) if record.status == TransactionStatus::Submitted => Some(registered.transaction),
-            // Terminal, or no longer known to the store: the action is concluded.
-            _ => {
-                self.actions.remove(key);
-                None
-            }
-        }
+        // Terminal, or no longer known to the store: the action is concluded.
+        matches!(self.store.get(transaction), Ok(record) if record.status == TransactionStatus::Submitted)
     }
 
-    /// Remaining cooldown for a (signer, operation) pair, if it is currently suppressed.
-    fn suppression_for(&self, signer: Address, operation: &'static str) -> Option<Duration> {
-        let mut entry = self.failures.get_mut(&(signer, operation))?;
+    /// Remaining cooldown and the reason behind it for a (signer, operation) pair, if it is
+    /// currently suppressed.
+    fn suppression_for(&self, signer: Address, operation: &'static str) -> Option<(Duration, ValidationReason)> {
+        let mut failures = lock(&self.failures);
+        let entry = failures.get_mut(&(signer, operation))?;
         let until = entry.suppressed_until?;
-        let remaining = until.checked_duration_since(Instant::now());
-        match remaining {
-            Some(remaining) if !remaining.is_zero() => Some(remaining),
+        match until.checked_duration_since(Instant::now()) {
+            Some(remaining) if !remaining.is_zero() => Some((remaining, entry.reason)),
             // The cooldown elapsed: give the signer a clean slate rather than letting a single
             // further rejection immediately re-suppress it.
             _ => {
@@ -530,26 +717,28 @@ impl HoprPolicy {
             return;
         }
 
-        if !self.failures.contains_key(&(signer, operation)) && !self.reserve_failure_slot() {
+        let mut failures = lock(&self.failures);
+        if !failures.contains_key(&(signer, operation)) && !self.make_failure_room(&mut failures) {
             warn!(
-                tracked = self.failures.len(),
+                tracked = failures.len(),
                 "HOPR invalid-action tracking is at capacity; this signer will not be suppressed"
             );
             return;
         }
 
-        let mut entry = self.failures.entry((signer, operation)).or_insert(FailureState {
+        let now = Instant::now();
+        let entry = failures.entry((signer, operation)).or_insert(FailureState {
             consecutive: 0,
             reason,
             suppressed_until: None,
-            last_seen: Instant::now(),
+            last_seen: now,
         });
         entry.consecutive = entry.consecutive.saturating_add(1);
         entry.reason = reason;
-        entry.last_seen = Instant::now();
+        entry.last_seen = now;
 
         if entry.consecutive >= self.config.invalid_action_threshold {
-            entry.suppressed_until = Some(Instant::now() + self.config.invalid_action_cooldown);
+            entry.suppressed_until = Some(now + self.config.invalid_action_cooldown);
             warn!(
                 %signer, operation, reason = reason.code(), failures = entry.consecutive,
                 cooldown_secs = self.config.invalid_action_cooldown.as_secs(),
@@ -558,36 +747,33 @@ impl HoprPolicy {
         }
     }
 
-    /// Make room in the action map, reclaiming expired entries first.
+    /// Make room in the action map, reclaiming entries older than the TTL first.
     ///
-    /// Returns `false` when the map is full of entries that are all still live, in which case
-    /// the caller must skip tracking rather than grow without bound.
-    ///
-    /// The check and the insert that follows are not atomic, so concurrent registrations can
-    /// overshoot the limit by the number of them in flight. The limit exists to stop
-    /// unbounded growth, not to hold an exact count, and overshooting costs one map entry.
-    fn reserve_action_slot(&self) -> bool {
-        if self.actions.len() < self.config.max_tracked_actions {
+    /// Returns `false` when the map is full of entries that are all still fresh, in which case
+    /// the caller must skip tracking rather than grow without bound. The caller holds the lock
+    /// across this check and its insert, so the bound is exact.
+    fn make_room(&self, actions: &mut ActionMap) -> bool {
+        if actions.len() < self.config.max_tracked_actions {
             return true;
         }
         let ttl = self.config.action_ttl;
-        self.actions.retain(|_, action| action.registered_at.elapsed() < ttl);
-        self.actions.len() < self.config.max_tracked_actions
+        actions.retain(|_, action| action.is_fresh(ttl));
+        actions.len() < self.config.max_tracked_actions
     }
 
     /// Make room in the failure map, reclaiming entries that have gone idle.
-    fn reserve_failure_slot(&self) -> bool {
-        if self.failures.len() < self.config.max_tracked_signers {
+    fn make_failure_room(&self, failures: &mut HashMap<(Address, &'static str), FailureState>) -> bool {
+        if failures.len() < self.config.max_tracked_signers {
             return true;
         }
         let retention = self.config.failure_retention;
-        self.failures.retain(|_, state| state.last_seen.elapsed() < retention);
-        self.failures.len() < self.config.max_tracked_signers
+        failures.retain(|_, state| state.last_seen.elapsed() < retention);
+        failures.len() < self.config.max_tracked_signers
     }
 
     /// Drop the failure accounting for a (signer, operation) pair after a valid submission.
     fn clear_failures(&self, signer: Address, operation: &'static str) {
-        self.failures.remove(&(signer, operation));
+        lock(&self.failures).remove(&(signer, operation));
     }
 }
 
@@ -770,7 +956,14 @@ mod tests {
     }
 
     fn policy(chain: Arc<dyn HoprChainState>, store: Arc<TransactionStore>) -> HoprPolicy {
-        HoprPolicy::new(chain, store, HoprPolicyConfig::default(), contracts())
+        HoprPolicy::new(chain, store, enabled_config(), contracts())
+    }
+
+    fn enabled_config() -> HoprPolicyConfig {
+        HoprPolicyConfig {
+            enabled: true,
+            ..Default::default()
+        }
     }
 
     fn store() -> Arc<TransactionStore> {
@@ -968,7 +1161,7 @@ mod tests {
 
         let id = Uuid::new_v4();
         store.insert(submitted_record(id)).expect("insert failed");
-        policy.register(&action, id);
+        action.register(id);
 
         // A retry of the same intent is a different raw transaction: different nonce, hence a
         // different hash and a different signature. Only the logical key matches.
@@ -1033,7 +1226,7 @@ mod tests {
         };
         let id = Uuid::new_v4();
         store.insert(submitted_record(id)).expect("insert failed");
-        policy.register(&action, id);
+        action.register(id);
 
         assert!(
             matches!(
@@ -1057,7 +1250,7 @@ mod tests {
 
         let id = Uuid::new_v4();
         store.insert(submitted_record(id)).expect("insert failed");
-        policy.register(&action, id);
+        action.register(id);
 
         store
             .update_status(id, TransactionStatus::Confirmed, None)
@@ -1083,7 +1276,7 @@ mod tests {
         };
         let id = Uuid::new_v4();
         store.insert(submitted_record(id)).expect("insert failed");
-        policy.register(&action, id);
+        action.register(id);
 
         // Sync and fire-and-forget leave no tracked record, so there is no identity to hand
         // back in place of a broadcast.
@@ -1094,13 +1287,131 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_concurrent_retry_waits_for_the_first_broadcast_and_resolves_to_it() {
+        let signer = PrivateKeySigner::random();
+        let store = store();
+        let policy = policy(StubChain::with_channel(Some(ChannelState::Open)), store.clone());
+
+        let first = signed_module_call(&signer, fund_channel(1_000)).await;
+        let retry = signed_module_call_to(&signer, CHANNELS, fund_channel(1_000), 7).await;
+
+        // The first submission holds the key while it is "being broadcast"; nothing is
+        // registered yet, which is exactly the window a check-then-register design leaves open.
+        let PolicyDecision::Admit(action) = policy.evaluate(&first, SubmissionMode::Tracked).await else {
+            panic!("the first submission should be admitted");
+        };
+        assert!(action.is_tracked());
+
+        let id = Uuid::new_v4();
+        let broadcast = async {
+            tokio::task::yield_now().await;
+            store.insert(submitted_record(id)).expect("insert failed");
+            action.register(id);
+        };
+        let (decision, ()) = tokio::join!(policy.evaluate(&retry, SubmissionMode::Tracked), broadcast);
+
+        assert_eq!(
+            decision,
+            PolicyDecision::Duplicate {
+                operation: "fund_channel",
+                existing: id,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_broadcast_releases_its_claim_to_a_waiting_retry() {
+        let signer = PrivateKeySigner::random();
+        let policy = policy(StubChain::with_channel(Some(ChannelState::Open)), store());
+
+        let first = signed_module_call(&signer, fund_channel(1_000)).await;
+        let retry = signed_module_call_to(&signer, CHANNELS, fund_channel(1_000), 7).await;
+
+        let PolicyDecision::Admit(action) = policy.evaluate(&first, SubmissionMode::Tracked).await else {
+            panic!("the first submission should be admitted");
+        };
+
+        // Dropping the admission unregistered is what a failed RPC send or a cancelled request
+        // does. The waiting retry must then take the key over rather than being told it is a
+        // duplicate of a transaction that does not exist.
+        let fail = async {
+            tokio::task::yield_now().await;
+            drop(action);
+        };
+        let (decision, ()) = tokio::join!(policy.evaluate(&retry, SubmissionMode::Tracked), fail);
+
+        let PolicyDecision::Admit(retried) = decision else {
+            panic!("the retry should be admitted once the claim is released, got {decision:?}");
+        };
+        assert!(retried.is_tracked(), "the retry should now hold the key itself");
+    }
+
+    #[tokio::test]
+    async fn a_claim_that_never_settles_does_not_block_the_retry_forever() {
+        let signer = PrivateKeySigner::random();
+        let config = HoprPolicyConfig {
+            action_ttl: Duration::from_millis(50),
+            ..enabled_config()
+        };
+        let policy = HoprPolicy::new(
+            StubChain::with_channel(Some(ChannelState::Open)),
+            store(),
+            config,
+            contracts(),
+        );
+
+        let first = signed_module_call(&signer, fund_channel(1_000)).await;
+        let retry = signed_module_call_to(&signer, CHANNELS, fund_channel(1_000), 7).await;
+
+        let PolicyDecision::Admit(_hung) = policy.evaluate(&first, SubmissionMode::Tracked).await else {
+            panic!("the first submission should be admitted");
+        };
+
+        let PolicyDecision::Admit(retried) = policy.evaluate(&retry, SubmissionMode::Tracked).await else {
+            panic!("the retry should be admitted after the wait times out");
+        };
+        assert!(!retried.is_tracked(), "a timed-out wait admits without deduplication");
+    }
+
+    #[tokio::test]
+    async fn outstanding_claims_count_against_the_tracking_bound() {
+        let config = HoprPolicyConfig {
+            max_tracked_actions: 4,
+            ..enabled_config()
+        };
+        let policy = HoprPolicy::new(
+            StubChain::with_channel(Some(ChannelState::Open)),
+            store(),
+            config,
+            contracts(),
+        );
+
+        // Hold every admission, as concurrent in-flight broadcasts would: the bound must be
+        // enforced at claim time, not at registration.
+        let mut held = Vec::new();
+        for nonce in 0..10u64 {
+            let raw = signed_module_call_to(&PrivateKeySigner::random(), CHANNELS, fund_channel(1), nonce).await;
+            let PolicyDecision::Admit(action) = policy.evaluate(&raw, SubmissionMode::Tracked).await else {
+                panic!("every submission should be admitted");
+            };
+            held.push(action);
+        }
+
+        assert_eq!(held.iter().filter(|action| action.is_tracked()).count(), 4);
+        assert_eq!(lock(&policy.actions).len(), 4);
+
+        drop(held);
+        assert_eq!(lock(&policy.actions).len(), 0, "released claims must leave the map");
+    }
+
+    #[tokio::test]
     async fn repeated_invalid_actions_are_suppressed_then_released() {
         let signer = PrivateKeySigner::random();
         let raw = signed_module_call(&signer, finalize_closure()).await;
         let config = HoprPolicyConfig {
             invalid_action_threshold: 2,
             invalid_action_cooldown: Duration::from_millis(80),
-            ..Default::default()
+            ..enabled_config()
         };
         let policy = HoprPolicy::new(
             StubChain::with_channel(Some(ChannelState::Open)),
@@ -1143,7 +1454,7 @@ mod tests {
         let signer = PrivateKeySigner::random();
         let config = HoprPolicyConfig {
             invalid_action_threshold: 1,
-            ..Default::default()
+            ..enabled_config()
         };
         let policy = HoprPolicy::new(
             StubChain::with_channel(Some(ChannelState::Open)),
@@ -1175,7 +1486,7 @@ mod tests {
         let store = store();
         let config = HoprPolicyConfig {
             max_tracked_actions: 4,
-            ..Default::default()
+            ..enabled_config()
         };
         let policy = HoprPolicy::new(
             StubChain::with_channel(Some(ChannelState::Open)),
@@ -1191,14 +1502,14 @@ mod tests {
             if let PolicyDecision::Admit(action) = policy.evaluate(&raw, SubmissionMode::Tracked).await {
                 let id = Uuid::new_v4();
                 store.insert(submitted_record(id)).expect("insert failed");
-                policy.register(&action, id);
+                action.register(id);
             }
         }
 
         assert!(
-            policy.actions.len() <= 4,
+            lock(&policy.actions).len() <= 4,
             "action tracking grew past its bound: {}",
-            policy.actions.len()
+            lock(&policy.actions).len()
         );
     }
 
@@ -1206,7 +1517,7 @@ mod tests {
     async fn suppression_tracking_is_bounded_by_fresh_keys() {
         let config = HoprPolicyConfig {
             max_tracked_signers: 4,
-            ..Default::default()
+            ..enabled_config()
         };
         // Finalizing against an open channel is always rejected, so each fresh signer creates
         // a failure entry. The map must not follow the attacker's key supply.
@@ -1226,9 +1537,9 @@ mod tests {
         }
 
         assert!(
-            policy.failures.len() <= 4,
+            lock(&policy.failures).len() <= 4,
             "suppression tracking grew past its bound: {}",
-            policy.failures.len()
+            lock(&policy.failures).len()
         );
     }
 
@@ -1237,7 +1548,7 @@ mod tests {
         let raw = signed_module_call(&PrivateKeySigner::random(), finalize_closure()).await;
         let config = HoprPolicyConfig {
             enabled: false,
-            ..Default::default()
+            ..enabled_config()
         };
         // A failing chain reader proves nothing was looked up.
         let policy = HoprPolicy::new(StubChain::failing(), store(), config, contracts());

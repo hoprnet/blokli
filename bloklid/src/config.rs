@@ -547,8 +547,11 @@ pub struct TransactionConfig {
     ///
     /// When disabled, every transaction keeps generic Blokli behaviour. Transactions the
     /// policy does not recognise are unaffected either way.
-    #[default(true)]
-    #[serde(default = "default_true")]
+    ///
+    /// Off unless set explicitly, so an existing deployment does not start rejecting or
+    /// deduplicating transactions before its clients understand the new result types.
+    #[default(false)]
+    #[serde(default)]
     pub enable_hopr_action_validation: bool,
 
     /// How long one logical HOPR action stays deduplicated while its transaction is tracked.

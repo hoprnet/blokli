@@ -376,8 +376,8 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
 
         // Bind the logical action to this identity only once it is actually tracked, so a
         // failed submission never suppresses the retry that follows it.
-        if let (Some(policy), Some(action)) = (self.hopr_policy.as_ref(), admitted.as_ref()) {
-            policy.register(action, id);
+        if let Some(action) = admitted {
+            action.register(id);
         }
 
         Ok(id)

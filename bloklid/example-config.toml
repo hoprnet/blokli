@@ -188,6 +188,7 @@ enable_revert_reason_tracing = true
 # one of these, or that do not target a known HOPR module, always keep generic behaviour.
 # Blokli performs no balance or allowance pre-check: only conditions decidable from indexed
 # chain state are enforced, so a rejection is never a guess.
+# Defaults to false: enable it once clients understand the rejection and deduplication results.
 enable_hopr_action_validation = true
 
 # How long one logical HOPR action stays deduplicated while its transaction is still tracked.

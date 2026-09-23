@@ -229,6 +229,7 @@ impl Args {
             "api.enabled",
             "api.playground_enabled",
             "api.transactions.enable_revert_reason_tracing",
+            "api.transactions.enable_hopr_action_validation",
             "api.sse_keepalive.enabled",
         ];
 
