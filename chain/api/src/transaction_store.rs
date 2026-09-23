@@ -252,17 +252,30 @@ impl TransactionStore {
     ///
     /// The signer is only recovered when a transaction enters `Submitted`
     /// without already being indexed, so terminal transitions stay cheap.
-    fn sync_submitted_status(&self, id: Uuid, status: TransactionStatus) {
+    /// Reconcile the submitted-transaction indexes with a record's new state.
+    ///
+    /// `identity` is supplied by the caller rather than read back from `transactions`: a
+    /// caller may still hold that entry's guard, and re-reading it from here would deadlock
+    /// on the same shard. It is only meaningful when `status` is `Submitted`.
+    fn sync_submitted_status(&self, id: Uuid, status: TransactionStatus, identity: SubmissionIdentity) {
         if status != TransactionStatus::Submitted {
             self.untrack_submitted(id);
             return;
         }
-        if self.submitted_identities.contains_key(&id) {
-            return;
-        }
-        if let Some(entry) = self.transactions.get(&id) {
-            let identity = transaction_identity(&entry.value().raw_transaction);
-            self.track_submitted(id, identity);
+
+        // Bind before matching so the read guard is released before the branches below
+        // mutate the same map.
+        let cached = self.submitted_identities.get(&id).map(|entry| *entry.value());
+        match cached {
+            // Already counted against this identity.
+            Some(existing) if existing == identity => {}
+            // A submitted record was replaced by one with a different signer. Without moving
+            // the count the old signer would stay charged and the new one would go free.
+            Some(_) => {
+                self.untrack_submitted(id);
+                self.track_submitted(id, identity);
+            }
+            None => self.track_submitted(id, identity),
         }
     }
 
@@ -286,8 +299,14 @@ impl TransactionStore {
             Entry::Occupied(mut entry) => {
                 let id = record.id;
                 let status = record.status;
+                // The replacement may carry a different raw transaction, so the identity is
+                // taken from it rather than from whatever was indexed before.
+                let identity = (status == TransactionStatus::Submitted)
+                    .then(|| transaction_identity(&record.raw_transaction))
+                    .flatten();
                 entry.insert(record);
-                self.sync_submitted_status(id, status);
+                drop(entry);
+                self.sync_submitted_status(id, status, identity);
                 Ok(())
             }
             Entry::Vacant(_) => Err(TransactionStoreError::NotFound(record.id)),
@@ -308,7 +327,7 @@ impl TransactionStore {
         error_message: Option<String>,
     ) -> Result<(), TransactionStoreError> {
         // Update the transaction and extract delta fields for event
-        let (confirmed_at, error_msg) = self
+        let (confirmed_at, error_msg, identity) = self
             .transactions
             .get_mut(&id)
             .map(|mut entry| {
@@ -321,12 +340,17 @@ impl TransactionStore {
                     record.confirmed_at = Some(Utc::now());
                 }
 
-                // Extract only fields needed for event (no cloning raw_transaction)
-                (record.confirmed_at, record.error_message.clone())
+                // Extract only fields needed for event (no cloning raw_transaction). The
+                // signer is recovered only when the record is entering `Submitted`, so
+                // terminal transitions stay free.
+                let identity = (status == TransactionStatus::Submitted)
+                    .then(|| transaction_identity(&record.raw_transaction))
+                    .flatten();
+                (record.confirmed_at, record.error_message.clone(), identity)
             })
             .ok_or(TransactionStoreError::NotFound(id))?;
 
-        self.sync_submitted_status(id, status);
+        self.sync_submitted_status(id, status, identity);
 
         if let Some(label) = status.metric_label() {
             record_transaction_status(label);
@@ -1004,6 +1028,35 @@ mod tests {
             error_message: None,
             safe_execution: None,
         }
+    }
+
+    #[tokio::test]
+    async fn replacing_a_submitted_record_moves_the_identity_count() {
+        let store = TransactionStore::new();
+        let first = PrivateKeySigner::random();
+        let second = PrivateKeySigner::random();
+
+        let id = Uuid::new_v4();
+        store
+            .insert(submitted_record(id, signed_raw_tx(&first, [0x11; 20], 0).await))
+            .expect("insert failed");
+        assert!(!store.can_admit_submission(&signed_raw_tx(&first, [0x11; 20], 1).await, 0, 1));
+
+        // Replace the tracked record with one signed by somebody else. The count must follow
+        // the new signer, or the old one stays charged for a transaction it no longer owns
+        // while the new one submits for free.
+        let mut replacement = submitted_record(id, signed_raw_tx(&second, [0x11; 20], 0).await);
+        replacement.status = TransactionStatus::Submitted;
+        store.update(replacement).expect("update failed");
+
+        assert!(
+            store.can_admit_submission(&signed_raw_tx(&first, [0x11; 20], 2).await, 0, 1),
+            "the previous signer should no longer be charged"
+        );
+        assert!(
+            !store.can_admit_submission(&signed_raw_tx(&second, [0x11; 20], 1).await, 0, 1),
+            "the replacement signer should now be charged"
+        );
     }
 
     #[tokio::test]
