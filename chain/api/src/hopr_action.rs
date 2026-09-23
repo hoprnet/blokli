@@ -37,6 +37,9 @@ use hopr_bindings::{
 };
 use hopr_types::{crypto::types::Hash, primitive::prelude::Address};
 
+/// `Operation::Call` as encoded in `execTransactionFromModule`; `1` is `DelegateCall`.
+const OPERATION_CALL: u8 = 0;
+
 /// Addresses of the HOPR contracts a supported call may target.
 ///
 /// Decoding is gated on these rather than on selectors alone, so a foreign contract that
@@ -123,8 +126,9 @@ pub struct DecodedHoprAction {
     /// The channel source, where the calldata determines it.
     ///
     /// A `*Safe` call names it in `selfAddress`; a direct plain call makes it the signer.
-    /// It is `None` only for a module-routed plain call, where the source is the Safe
-    /// registered for [`target`](Self::target) and only a database lookup can resolve it.
+    /// It is `None` for a module-routed plain call — where the source is the Safe registered
+    /// for [`target`](Self::target), resolvable only by a database lookup — and for a
+    /// module-routed announcement, which names no channel source at all.
     pub explicit_source: Option<Address>,
     /// The decoded operation.
     pub operation: HoprOperation,
@@ -143,8 +147,13 @@ pub fn decode_hopr_action(raw_tx: &[u8], contracts: &HoprContracts) -> Option<De
     let transaction_hash = Hash::from(envelope.tx_hash().0);
     let input = envelope.input();
 
-    // A node with a Safe routes everything through its module.
+    // A node with a Safe routes everything through its module. Only a plain CALL is a
+    // supported shape: a DELEGATECALL runs the target's code in the module's own context, so
+    // the preconditions checked downstream would not describe what actually executes.
     if let Ok(exec) = HoprNodeManagementModule::execTransactionFromModuleCall::abi_decode(input) {
+        if exec.operation != OPERATION_CALL {
+            return None;
+        }
         let (explicit_source, operation) = decode_call(exec.to.to_hopr_address(), &exec.data, contracts)?;
         return Some(DecodedHoprAction {
             transaction_hash,
@@ -486,6 +495,32 @@ mod tests {
 
         // Same calldata, different target: decoding is gated on the contract address.
         let raw = sign(&signer, [0x99; 20], input).await;
+        assert!(decode_hopr_action(&raw, &contracts()).is_none());
+    }
+
+    #[tokio::test]
+    async fn a_delegatecall_wrapper_is_not_a_hopr_action() {
+        let signer = PrivateKeySigner::random();
+        let inner = HoprChannels::fundChannelSafeCall {
+            selfAddress: AlloyAddress::from_slice(&SAFE),
+            account: AlloyAddress::from_slice(&DESTINATION),
+            amount: U96::from(1u64),
+        }
+        .abi_encode();
+
+        // Identical to the supported shape but executed as DELEGATECALL, which runs the
+        // target's code in the module's own context. The channel preconditions checked
+        // downstream would not describe what actually executes, so this keeps generic
+        // behaviour instead.
+        let input = HoprNodeManagementModule::execTransactionFromModuleCall {
+            to: AlloyAddress::from_slice(&CHANNELS),
+            value: U256::ZERO,
+            data: Bytes::from(inner),
+            operation: 1,
+        }
+        .abi_encode();
+
+        let raw = sign(&signer, MODULE, input).await;
         assert!(decode_hopr_action(&raw, &contracts()).is_none());
     }
 
