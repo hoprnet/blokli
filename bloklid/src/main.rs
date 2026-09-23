@@ -16,7 +16,8 @@ use args::{Args, Command, generate_config_template, peek_verbosity_from_env_args
 use async_signal::{Signal, Signals};
 use blokli_api::server::ApiDatabases;
 use blokli_chain_api::{
-    BlokliChain, transaction_executor::RawTransactionExecutorConfig, transaction_monitor::TransactionMonitorConfig,
+    BlokliChain, hopr_policy::HoprPolicyConfig, transaction_executor::RawTransactionExecutorConfig,
+    transaction_monitor::TransactionMonitorConfig,
 };
 use blokli_chain_indexer::{snapshot::SnapshotManager, startup, utils::redact_url};
 use blokli_db::{
@@ -284,6 +285,13 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
             max_submitted_transactions: api_config.transactions.max_submitted_transactions,
             max_submitted_transactions_per_identity: api_config.transactions.max_submitted_transactions_per_identity,
             enable_revert_reason_tracing: api_config.transactions.enable_revert_reason_tracing,
+            hopr_policy: HoprPolicyConfig {
+                enabled: api_config.transactions.enable_hopr_action_validation,
+                action_ttl: api_config.transactions.hopr_action_ttl,
+                invalid_action_threshold: api_config.transactions.hopr_invalid_action_threshold,
+                invalid_action_cooldown: api_config.transactions.hopr_invalid_action_cooldown,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let transaction_monitor_config = TransactionMonitorConfig {

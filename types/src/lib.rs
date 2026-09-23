@@ -804,6 +804,55 @@ pub struct FunctionNotAllowedError {
     pub function_selector: String,
 }
 
+/// A supported HOPR action was refused by Blokli's deterministic preflight.
+///
+/// The transaction was never broadcast: no reachable chain state would have made the call
+/// succeed. Re-submitting the same action without first changing the on-chain state will be
+/// refused again.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct HoprActionRejectedError {
+    /// Error code
+    pub code: String,
+    /// Human-readable error message
+    pub message: String,
+    /// The decoded HOPR operation that was refused
+    pub operation: String,
+    /// Stable code for the precondition that failed
+    pub reason: String,
+}
+
+/// Repeated deterministically invalid submissions from this signer are temporarily suppressed.
+///
+/// The transaction was not broadcast. Unlike [`HoprActionRejectedError`] this is transient:
+/// the same action may be submitted again after `retryAfterSeconds`.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct HoprActionThrottledError {
+    /// Error code
+    pub code: String,
+    /// Human-readable error message
+    pub message: String,
+    /// The decoded HOPR operation that was suppressed
+    pub operation: String,
+    /// Stable code for the precondition that most recently failed
+    pub reason: String,
+    /// Seconds until this signer may submit this operation again
+    #[graphql(name = "retryAfterSeconds")]
+    pub retry_after_seconds: i32,
+}
+
+/// An equivalent logical HOPR action was already in flight, so nothing was broadcast.
+///
+/// Retries of a HOPR action are re-signed with a new nonce, so they are distinct raw
+/// transactions describing one intent. Blokli returns the transaction already tracking that
+/// intent instead of submitting a competing copy.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct DeduplicatedTransaction {
+    /// The transaction already tracking this logical action
+    pub transaction: Transaction,
+    /// The decoded HOPR operation that was deduplicated
+    pub operation: String,
+}
+
 /// Operation timed out
 #[derive(SimpleObject, Clone, Debug)]
 pub struct TimeoutError {
