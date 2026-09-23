@@ -6,7 +6,7 @@
 
 use std::{
     collections::{HashMap, VecDeque},
-    sync::Arc,
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
 };
 
 use async_broadcast::{InactiveReceiver, Receiver, Sender, TrySendError, broadcast};
@@ -141,6 +141,62 @@ pub struct TransactionRecord {
 /// stream of undecodable envelopes cannot spread across unlimited buckets.
 type SubmissionIdentity = Option<[u8; 20]>;
 
+/// Receipt-monitoring capacity in use: tracked `Submitted` records plus
+/// reservations whose transaction is still being broadcast.
+///
+/// Both counts change under one lock, so an admission check and the
+/// reservation it grants are a single step.
+#[derive(Debug, Default)]
+struct SubmissionCounts {
+    total: usize,
+    per_identity: HashMap<SubmissionIdentity, usize>,
+}
+
+impl SubmissionCounts {
+    fn acquire(&mut self, identity: SubmissionIdentity) {
+        self.total += 1;
+        *self.per_identity.entry(identity).or_insert(0) += 1;
+    }
+
+    fn release(&mut self, identity: SubmissionIdentity) {
+        self.total = self.total.saturating_sub(1);
+        if let Some(count) = self.per_identity.get_mut(&identity) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                self.per_identity.remove(&identity);
+            }
+        }
+    }
+}
+
+/// Lock the capacity counts.
+///
+/// They are plain integers updated in one step, so a panic while the lock was
+/// held cannot leave them half-written and poisoning is safe to ignore.
+fn lock_counts(counts: &Mutex<SubmissionCounts>) -> MutexGuard<'_, SubmissionCounts> {
+    counts.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Capacity held for an async submission between admission and insertion.
+///
+/// Dropping it gives the capacity back, so a failed broadcast frees its slot.
+/// [`TransactionStore::insert_reserved`] hands the capacity over to the stored
+/// record instead.
+#[must_use = "dropping a reservation immediately releases the capacity it holds"]
+pub struct SubmissionReservation {
+    counts: Arc<Mutex<SubmissionCounts>>,
+    identity: SubmissionIdentity,
+    held: bool,
+}
+
+impl Drop for SubmissionReservation {
+    fn drop(&mut self) {
+        if self.held {
+            lock_counts(&self.counts).release(self.identity);
+        }
+    }
+}
+
 /// Thread-safe in-memory store for transaction records
 #[derive(Clone)]
 pub struct TransactionStore {
@@ -150,8 +206,8 @@ pub struct TransactionStore {
     /// Maintained alongside `transactions` so admission control never has to
     /// scan the store or re-recover a signer.
     submitted_identities: Arc<DashMap<Uuid, SubmissionIdentity>>,
-    /// Number of `Submitted` transactions per identity, for O(1) admission checks.
-    submitted_per_identity: Arc<DashMap<SubmissionIdentity, usize>>,
+    /// Capacity in use, globally and per identity, for O(1) admission checks.
+    submission_counts: Arc<Mutex<SubmissionCounts>>,
     /// Event bus sender for broadcasting transaction status updates
     event_bus: Sender<TransactionEvent>,
     /// Inactive receiver kept alive to maintain channel state
@@ -201,7 +257,7 @@ impl TransactionStore {
         Self {
             transactions: Arc::new(DashMap::new()),
             submitted_identities: Arc::new(DashMap::new()),
-            submitted_per_identity: Arc::new(DashMap::new()),
+            submission_counts: Arc::new(Mutex::new(SubmissionCounts::default())),
             event_bus,
             _inactive_event_bus_rx: Arc::new(inactive_event_bus_rx),
         }
@@ -227,31 +283,53 @@ impl TransactionStore {
         }
     }
 
+    /// Insert an async submission, handing its reserved capacity over to the record.
+    ///
+    /// `reservation` must come from [`Self::try_reserve_submission`] on this store for the
+    /// same raw transaction. If the record is not `Submitted` or cannot be inserted, the
+    /// reservation is dropped and its capacity released.
+    ///
+    /// # Errors
+    /// Returns `TransactionStoreError::AlreadyExists` if a transaction with the same ID already exists
+    pub fn insert_reserved(
+        &self,
+        record: TransactionRecord,
+        mut reservation: SubmissionReservation,
+    ) -> Result<(), TransactionStoreError> {
+        match self.transactions.entry(record.id) {
+            Entry::Vacant(entry) => {
+                let id = record.id;
+                let submitted = record.status == TransactionStatus::Submitted;
+                entry.insert(record);
+                // The reservation already counted this record, so the index entry takes over
+                // that count instead of adding a second one.
+                if submitted && self.submitted_identities.insert(id, reservation.identity).is_none() {
+                    reservation.held = false;
+                }
+                Ok(())
+            }
+            Entry::Occupied(entry) => Err(TransactionStoreError::AlreadyExists(*entry.key())),
+        }
+    }
+
+    fn counts(&self) -> MutexGuard<'_, SubmissionCounts> {
+        lock_counts(&self.submission_counts)
+    }
+
     /// Record a transaction as occupying receipt-monitoring capacity.
     fn track_submitted(&self, id: Uuid, identity: SubmissionIdentity) {
         if self.submitted_identities.insert(id, identity).is_none() {
-            *self.submitted_per_identity.entry(identity).or_insert(0) += 1;
+            self.counts().acquire(identity);
         }
     }
 
     /// Release the receipt-monitoring capacity held by a transaction.
     fn untrack_submitted(&self, id: Uuid) {
         if let Some((_, identity)) = self.submitted_identities.remove(&id) {
-            if let Entry::Occupied(mut entry) = self.submitted_per_identity.entry(identity) {
-                let remaining = entry.get().saturating_sub(1);
-                if remaining == 0 {
-                    entry.remove();
-                } else {
-                    *entry.get_mut() = remaining;
-                }
-            }
+            self.counts().release(identity);
         }
     }
 
-    /// Keep the submitted index in step with a status transition.
-    ///
-    /// The signer is only recovered when a transaction enters `Submitted`
-    /// without already being indexed, so terminal transitions stay cheap.
     /// Reconcile the submitted-transaction indexes with a record's new state.
     ///
     /// `identity` is supplied by the caller rather than read back from `transactions`: a
@@ -465,31 +543,40 @@ impl TransactionStore {
         fair
     }
 
-    /// Check capacity before a raw transaction is broadcast.
+    /// Reserve capacity before a raw transaction is broadcast.
     ///
     /// The identity is the recovered transaction signer, so it is bound to the
     /// signature rather than chosen by the caller, and deliberately never a
-    /// client IP address. Both counts are read from the submitted index, so the
-    /// cost is independent of how many transactions the store holds.
+    /// client IP address. Counts cover both stored `Submitted` records and
+    /// reservations still in flight, so concurrent submissions cannot overshoot
+    /// a limit while they wait on the RPC. The cost is independent of how many
+    /// transactions the store holds.
     ///
-    /// A limit of `0` means unbounded. Note that the limits are advisory rather
-    /// than hard: this check and the subsequent insert are not a single atomic
-    /// operation, so concurrent submissions can transiently exceed a limit by
-    /// the number of requests in flight.
-    pub fn can_admit_submission(&self, raw_transaction: &[u8], max_submitted: usize, max_per_identity: usize) -> bool {
-        if max_submitted > 0 && self.submitted_identities.len() >= max_submitted {
-            return false;
-        }
-        if max_per_identity == 0 {
-            return true;
-        }
+    /// A limit of `0` means unbounded. Returns `None` when either limit is
+    /// reached; otherwise the capacity is held until the returned reservation is
+    /// dropped or passed to [`Self::insert_reserved`].
+    pub fn try_reserve_submission(
+        &self,
+        raw_transaction: &[u8],
+        max_submitted: usize,
+        max_per_identity: usize,
+    ) -> Option<SubmissionReservation> {
+        // Recover the signer before locking so the critical section stays short.
         let identity = transaction_identity(raw_transaction);
-        let submitted_for_identity = self
-            .submitted_per_identity
-            .get(&identity)
-            .map(|count| *count.value())
-            .unwrap_or(0);
-        submitted_for_identity < max_per_identity
+        let mut counts = self.counts();
+        if max_submitted > 0 && counts.total >= max_submitted {
+            return None;
+        }
+        let submitted_for_identity = counts.per_identity.get(&identity).copied().unwrap_or(0);
+        if max_per_identity > 0 && submitted_for_identity >= max_per_identity {
+            return None;
+        }
+        counts.acquire(identity);
+        Some(SubmissionReservation {
+            counts: self.submission_counts.clone(),
+            identity,
+            held: true,
+        })
     }
 
     /// Number of transactions currently awaiting receipt monitoring.
@@ -1040,7 +1127,11 @@ mod tests {
         store
             .insert(submitted_record(id, signed_raw_tx(&first, [0x11; 20], 0).await))
             .expect("insert failed");
-        assert!(!store.can_admit_submission(&signed_raw_tx(&first, [0x11; 20], 1).await, 0, 1));
+        assert!(
+            !store
+                .try_reserve_submission(&signed_raw_tx(&first, [0x11; 20], 1).await, 0, 1)
+                .is_some()
+        );
 
         // Replace the tracked record with one signed by somebody else. The count must follow
         // the new signer, or the old one stays charged for a transaction it no longer owns
@@ -1050,11 +1141,15 @@ mod tests {
         store.update(replacement).expect("update failed");
 
         assert!(
-            store.can_admit_submission(&signed_raw_tx(&first, [0x11; 20], 2).await, 0, 1),
+            store
+                .try_reserve_submission(&signed_raw_tx(&first, [0x11; 20], 2).await, 0, 1)
+                .is_some(),
             "the previous signer should no longer be charged"
         );
         assert!(
-            !store.can_admit_submission(&signed_raw_tx(&second, [0x11; 20], 1).await, 0, 1),
+            !store
+                .try_reserve_submission(&signed_raw_tx(&second, [0x11; 20], 1).await, 0, 1)
+                .is_some(),
             "the replacement signer should now be charged"
         );
     }
@@ -1084,11 +1179,11 @@ mod tests {
         // A second transaction from the same signer to a different contract
         // still counts against that signer's quota.
         let second = signed_raw_tx(&signer, [0x22; 20], 1).await;
-        assert!(!store.can_admit_submission(&second, 0, 1));
+        assert!(!store.try_reserve_submission(&second, 0, 1).is_some());
 
         // A different signer is unaffected by the first signer's usage.
         let other = signed_raw_tx(&PrivateKeySigner::random(), [0x11; 20], 0).await;
-        assert!(store.can_admit_submission(&other, 0, 1));
+        assert!(store.try_reserve_submission(&other, 0, 1).is_some());
     }
 
     #[tokio::test]
@@ -1102,7 +1197,7 @@ mod tests {
         }
 
         let next = signed_raw_tx(&signer, [0x11; 20], 4).await;
-        assert!(store.can_admit_submission(&next, 0, 0));
+        assert!(store.try_reserve_submission(&next, 0, 0).is_some());
     }
 
     #[tokio::test]
@@ -1114,14 +1209,14 @@ mod tests {
 
         store.insert(submitted_record(id, raw.clone())).unwrap();
         assert_eq!(store.submitted_count(), 1);
-        assert!(!store.can_admit_submission(&raw, 1, 1));
+        assert!(!store.try_reserve_submission(&raw, 1, 1).is_some());
 
         store.update_status(id, TransactionStatus::Confirmed, None).unwrap();
         assert_eq!(store.submitted_count(), 0);
-        assert!(store.can_admit_submission(&raw, 1, 1));
+        assert!(store.try_reserve_submission(&raw, 1, 1).is_some());
 
         // The per-identity bucket is dropped once it reaches zero.
-        assert!(store.submitted_per_identity.is_empty());
+        assert!(store.counts().per_identity.is_empty());
     }
 
     #[tokio::test]
@@ -1134,7 +1229,7 @@ mod tests {
         store.confirm_with_safe_execution(id, None).unwrap();
 
         assert_eq!(store.submitted_count(), 0);
-        assert!(store.submitted_per_identity.is_empty());
+        assert!(store.counts().per_identity.is_empty());
     }
 
     #[test]
@@ -1147,6 +1242,60 @@ mod tests {
         assert_eq!(store.submitted_count(), 0);
     }
 
+    #[tokio::test]
+    async fn test_reservation_holds_capacity_until_dropped() {
+        let store = TransactionStore::new();
+        let signer = PrivateKeySigner::random();
+        let first = signed_raw_tx(&signer, [0x11; 20], 0).await;
+        let second = signed_raw_tx(&signer, [0x11; 20], 1).await;
+
+        // An in-flight reservation counts against both limits, so a concurrent submission
+        // cannot slip through while the first one is still being broadcast.
+        let reservation = store.try_reserve_submission(&first, 1, 0).expect("capacity available");
+        assert!(store.try_reserve_submission(&second, 1, 0).is_none());
+        assert!(store.try_reserve_submission(&second, 0, 1).is_none());
+
+        // A failed broadcast drops the reservation and gives the slot back.
+        drop(reservation);
+        assert!(store.try_reserve_submission(&second, 1, 1).is_some());
+        assert!(store.counts().per_identity.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_insert_reserved_transfers_capacity_without_double_counting() {
+        let store = TransactionStore::new();
+        let signer = PrivateKeySigner::random();
+        let raw = signed_raw_tx(&signer, [0x11; 20], 0).await;
+        let id = Uuid::new_v4();
+
+        let reservation = store.try_reserve_submission(&raw, 0, 0).expect("capacity available");
+        store
+            .insert_reserved(submitted_record(id, raw), reservation)
+            .expect("insert failed");
+        assert_eq!(store.submitted_count(), 1);
+        assert_eq!(store.counts().total, 1);
+
+        store.update_status(id, TransactionStatus::Confirmed, None).unwrap();
+        assert_eq!(store.counts().total, 0);
+        assert!(store.counts().per_identity.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_failed_insert_reserved_releases_capacity() {
+        let store = TransactionStore::new();
+        let signer = PrivateKeySigner::random();
+        let raw = signed_raw_tx(&signer, [0x11; 20], 0).await;
+        let id = Uuid::new_v4();
+        store.insert(submitted_record(id, raw.clone())).unwrap();
+
+        let reservation = store.try_reserve_submission(&raw, 0, 0).expect("capacity available");
+        assert_eq!(
+            store.insert_reserved(submitted_record(id, raw), reservation),
+            Err(TransactionStoreError::AlreadyExists(id))
+        );
+        assert_eq!(store.counts().total, 1);
+    }
+
     #[test]
     fn test_undecodable_transactions_share_one_bucket() {
         let store = TransactionStore::new();
@@ -1155,8 +1304,8 @@ mod tests {
 
         // A second undecodable envelope lands in the same `None` bucket rather
         // than creating an unbounded number of identities.
-        assert!(!store.can_admit_submission(&[0xfe], 0, 1));
-        assert_eq!(store.submitted_per_identity.len(), 1);
+        assert!(!store.try_reserve_submission(&[0xfe], 0, 1).is_some());
+        assert_eq!(store.counts().per_identity.len(), 1);
     }
 
     #[tokio::test]
