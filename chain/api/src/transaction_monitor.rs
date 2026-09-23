@@ -159,9 +159,10 @@ pub struct TransactionMonitorConfig {
 
 /// Translate a `0` limit into an effectively unbounded one.
 ///
-/// Tokio's channel and semaphore both reject a zero capacity, so unbounded is
-/// expressed as the largest capacity they accept. Neither preallocates, so this
-/// costs nothing until the capacity is actually used.
+/// Tokio's channel rejects a zero buffer capacity, so unbounded is expressed as the
+/// largest capacity it accepts, and the semaphore is given the same value for
+/// consistency. Neither preallocates, so this costs nothing until the capacity is
+/// actually used.
 fn unbounded_if_zero(limit: usize) -> usize {
     if limit == 0 { Semaphore::MAX_PERMITS } else { limit }
 }
