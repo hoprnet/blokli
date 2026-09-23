@@ -28,6 +28,12 @@ lazy_static::lazy_static! {
             "Safe execution outcomes and inspection retries",
             &["outcome"],
         ).unwrap();
+    static ref METRIC_BLOKLI_HOPR_VALIDATION_TOTAL: hopr_metrics::MultiCounter =
+        hopr_metrics::MultiCounter::new(
+            "blokli_hopr_validation_total",
+            "HOPR-aware transaction policy decisions, by operation and outcome",
+            &["operation", "reason"],
+        ).unwrap();
     static ref METRIC_BLOKLI_TRACE_TOTAL: hopr_metrics::MultiCounter =
         hopr_metrics::MultiCounter::new(
             "blokli_safe_trace_total",
@@ -89,4 +95,23 @@ pub fn record_trace_failure() {
 pub fn record_trace_timeout() {
     #[cfg(all(feature = "telemetry", not(test)))]
     METRIC_BLOKLI_TRACE_TOTAL.increment(&["timeout"]);
+}
+
+/// Increment `blokli_hopr_validation_total` for a HOPR-aware policy decision.
+///
+/// `operation` is the decoded HOPR operation and `reason` is either `admitted`,
+/// `deduplicated`, `throttled`, or a [`crate::hopr_policy::ValidationReason`] code. Both are
+/// fixed-cardinality strings, so the metric cannot be inflated by client input.
+///
+/// # Examples
+///
+/// ```
+/// use blokli_chain_api::metrics::record_hopr_validation;
+///
+/// record_hopr_validation("fund_channel", "admitted");
+/// ```
+#[allow(unused_variables)]
+pub fn record_hopr_validation(operation: &str, reason: &str) {
+    #[cfg(all(feature = "telemetry", not(test)))]
+    METRIC_BLOKLI_HOPR_VALIDATION_TOTAL.increment(&[operation, reason]);
 }
