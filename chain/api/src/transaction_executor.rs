@@ -235,20 +235,20 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         }
 
         // Admission control applies to this mode only: async submissions are the
-        // only ones that occupy receipt-monitoring capacity. The check and the
-        // later insert are not atomic, so the configured limits are advisory and
-        // may be exceeded by the number of concurrent in-flight submissions.
-        if !self.transaction_store.can_admit_submission(
+        // only ones that occupy receipt-monitoring capacity. The slot is reserved
+        // before broadcasting so concurrent submissions cannot overshoot the limits
+        // while they wait on the RPC; returning early drops and releases it.
+        let Some(reservation) = self.transaction_store.try_reserve_submission(
             &raw_tx,
             self.config.max_submitted_transactions,
             self.config.max_submitted_transactions_per_identity,
-        ) {
+        ) else {
             warn!(
                 submitted = self.transaction_store.submitted_count(),
                 "Rejecting raw transaction before broadcast because submission capacity is exhausted"
             );
             return Err(TransactionExecutorError::OverloadedError);
-        }
+        };
 
         // Submit to RPC first to get transaction hash
         let tx_hash = match self.rpc_client.send_raw_transaction(raw_tx.clone()).await {
@@ -272,7 +272,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             safe_execution: None,
         };
 
-        if let Err(e) = self.transaction_store.insert(record) {
+        if let Err(e) = self.transaction_store.insert_reserved(record, reservation) {
             error!(id = %id, tx_hash = %tx_hash, error = %e, "Failed to store submitted transaction");
             return Err(e.into());
         }
@@ -524,6 +524,26 @@ mod tests {
 
         let result = executor.send_raw_transaction_async(vec![0x02]).await;
         assert!(matches!(result, Err(TransactionExecutorError::OverloadedError)));
+    }
+
+    #[tokio::test]
+    async fn test_async_rpc_failure_releases_reserved_capacity() {
+        let executor = RawTransactionExecutor::new(
+            MockRpcClient::with_failure(),
+            TransactionStore::new(),
+            TransactionValidator::new(),
+            RawTransactionExecutorConfig {
+                max_submitted_transactions: 1,
+                ..Default::default()
+            },
+        );
+
+        // Both attempts reach the RPC: the first failure must not keep holding the only slot.
+        for raw_tx in [vec![0x01], vec![0x02]] {
+            let result = executor.send_raw_transaction_async(raw_tx).await;
+            assert!(matches!(result, Err(TransactionExecutorError::RpcError(_))));
+        }
+        assert_eq!(executor.transaction_store().submitted_count(), 0);
     }
 
     #[tokio::test]

@@ -536,10 +536,14 @@ pub async fn enrich_safe_execution(
 
     if let Some(safe_result) = result.as_mut() {
         if !safe_result.success && enable_revert_reason_tracing {
-            safe_result.revert_reason = receipt_provider
-                .get_revert_reason(record.transaction_hash)
-                .await
-                .unwrap_or(None);
+            safe_result.revert_reason = match receipt_provider.get_revert_reason(record.transaction_hash).await {
+                Ok(reason) => reason,
+                Err(error) => {
+                    record_trace_failure();
+                    warn!(id = %record.id, %error, "Failed to trace Safe failure");
+                    None
+                }
+            };
         }
     }
 

@@ -13,7 +13,7 @@ use hopr_bindings::exports::alloy::{
     providers::Provider,
 };
 use hopr_types::crypto::types::Hash;
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 
 use crate::{
     transaction_executor::{ConfirmationError, RpcClient},
@@ -239,13 +239,10 @@ impl<R: HttpRequestor + 'static + Clone> ReceiptProvider for RpcAdapter<R> {
                 let output = crate::revert_decoder::extract_revert_output_from_trace(&trace);
                 Ok(output.and_then(|b| crate::revert_decoder::decode_revert_reason(&b)))
             }
-            Err(e) => {
-                // RPC supports tracing (verified at startup) but this specific
-                // call failed — log and return None rather than blocking confirmation.
-                let tx_hash = format!("{b256_hash:#x}");
-                warn!(tx_hash = %tx_hash, error = %e, "debug_traceTransaction failed");
-                Ok(None)
-            }
+            // RPC supports tracing (verified at startup) but this specific call failed.
+            // Surface it so callers count the failure instead of mistaking it for a
+            // successful trace without a decodable reason; confirmation never waits on it.
+            Err(e) => Err(format!("debug_traceTransaction failed: {e}")),
         }
     }
 }
