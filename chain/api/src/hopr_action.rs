@@ -165,12 +165,18 @@ pub fn decode_hopr_action(raw_tx: &[u8], contracts: &HoprContracts) -> Option<De
     }
 
     // A node without a Safe calls the contract directly, so it is itself the channel source.
+    // The `*Safe` variants are only valid through the module wrapper, which is what makes the
+    // named Safe meaningful: called directly they are not a shape any node sends, so they keep
+    // generic behaviour rather than being judged against a Safe the caller merely named.
     let (explicit_source, operation) = decode_call(target, input, contracts)?;
+    if explicit_source.is_some() {
+        return None;
+    }
     Some(DecodedHoprAction {
         transaction_hash,
         signer,
         target,
-        explicit_source: explicit_source.or(Some(signer)),
+        explicit_source: Some(signer),
         operation,
     })
 }
@@ -495,6 +501,22 @@ mod tests {
 
         // Same calldata, different target: decoding is gated on the contract address.
         let raw = sign(&signer, [0x99; 20], input).await;
+        assert!(decode_hopr_action(&raw, &contracts()).is_none());
+    }
+
+    #[tokio::test]
+    async fn a_direct_safe_variant_call_is_not_a_hopr_action() {
+        let signer = PrivateKeySigner::random();
+        let input = HoprChannels::fundChannelSafeCall {
+            selfAddress: AlloyAddress::from_slice(&SAFE),
+            account: AlloyAddress::from_slice(&DESTINATION),
+            amount: U96::from(1u64),
+        }
+        .abi_encode();
+
+        // The `*Safe` variants are only valid behind the module wrapper. Called directly, the
+        // Safe is merely named by the caller, so the transaction keeps generic behaviour.
+        let raw = sign(&signer, CHANNELS, input).await;
         assert!(decode_hopr_action(&raw, &contracts()).is_none());
     }
 
