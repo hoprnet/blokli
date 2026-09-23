@@ -3492,3 +3492,6 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod approval_tests;
