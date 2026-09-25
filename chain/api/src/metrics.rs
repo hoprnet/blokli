@@ -31,7 +31,7 @@ lazy_static::lazy_static! {
     static ref METRIC_BLOKLI_TRACE_TOTAL: hopr_metrics::MultiCounter =
         hopr_metrics::MultiCounter::new(
             "blokli_safe_trace_total",
-            "Optional Safe revert trace failures and timeouts",
+            "Optional Safe revert trace failures, timeouts and queue saturation",
             &["outcome"],
         ).unwrap();
 }
@@ -89,4 +89,10 @@ pub fn record_trace_failure() {
 pub fn record_trace_timeout() {
     #[cfg(all(feature = "telemetry", not(test)))]
     METRIC_BLOKLI_TRACE_TOTAL.increment(&["timeout"]);
+}
+
+#[allow(unused_variables)]
+pub fn record_trace_queue_saturated() {
+    #[cfg(all(feature = "telemetry", not(test)))]
+    METRIC_BLOKLI_TRACE_TOTAL.increment(&["queue_saturated"]);
 }

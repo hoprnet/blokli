@@ -10,13 +10,19 @@ use futures::{StreamExt, stream};
 use hopr_types::crypto::types::Hash;
 use thiserror::Error;
 use tokio::{
-    sync::{Semaphore, mpsc},
+    sync::{
+        Semaphore,
+        mpsc::{self, error::TrySendError},
+    },
     time::{Instant, sleep, timeout},
 };
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    metrics::{record_safe_execution, record_safe_inspection_retry, record_trace_failure, record_trace_timeout},
+    metrics::{
+        record_safe_execution, record_safe_inspection_retry, record_trace_failure, record_trace_queue_saturated,
+        record_trace_timeout,
+    },
     safe_execution::{decode_transaction_to_address, inspect_safe_execution_logs},
     transaction_store::{SafeExecutionResult, TransactionStatus, TransactionStore},
 };
@@ -48,16 +54,10 @@ pub struct TransactionReceipt {
 pub trait ReceiptProvider: Send + Sync {
     /// Fetch the complete receipt once. `None` means the transaction is not
     /// mined yet.
-    async fn get_transaction_receipt(&self, tx_hash: Hash) -> Result<Option<TransactionReceipt>, String> {
-        let Some(success) = self.get_transaction_status(tx_hash).await? else {
-            return Ok(None);
-        };
-        let logs = self.get_transaction_receipt_logs(tx_hash).await?.unwrap_or_default();
-        Ok(Some(TransactionReceipt { success, logs }))
-    }
-    /// Get the status of a transaction by its hash
-    /// Returns Some(true) if confirmed, Some(false) if reverted, None if still pending
-    async fn get_transaction_status(&self, tx_hash: Hash) -> Result<Option<bool>, String>;
+    ///
+    /// Implementations must derive status and logs from a single receipt
+    /// response so the two can never disagree.
+    async fn get_transaction_receipt(&self, tx_hash: Hash) -> Result<Option<TransactionReceipt>, String>;
 
     /// Fetch receipt logs for a confirmed transaction.
     ///
@@ -95,7 +95,7 @@ pub struct NoSafeEnrichment;
 
 #[async_trait]
 impl ReceiptProvider for NoSafeEnrichment {
-    async fn get_transaction_status(&self, _tx_hash: Hash) -> Result<Option<bool>, String> {
+    async fn get_transaction_receipt(&self, _tx_hash: Hash) -> Result<Option<TransactionReceipt>, String> {
         unreachable!("NoSafeEnrichment is behind Option::None")
     }
 
@@ -164,7 +164,12 @@ pub struct TransactionMonitorConfig {
 /// consistency. Neither preallocates, so this costs nothing until the capacity is
 /// actually used.
 fn unbounded_if_zero(limit: usize) -> usize {
-    if limit == 0 { Semaphore::MAX_PERMITS } else { limit }
+    // Tokio semaphores and bounded channels panic above `MAX_PERMITS`.
+    if limit == 0 {
+        Semaphore::MAX_PERMITS
+    } else {
+        limit.min(Semaphore::MAX_PERMITS)
+    }
 }
 
 impl Default for TransactionMonitorConfig {
@@ -361,11 +366,17 @@ impl<R: ReceiptProvider + 'static, S: SafeAddressChecker> TransactionMonitor<R, 
                     error!(id = %record.id, tx_hash = %tx_hash, error = %e, "Failed to confirm transaction");
                 } else if let Some(result) = safe_execution.as_ref() {
                     record_safe_execution(result.success);
-                    if safe_failure
-                        && self.config.enable_revert_reason_tracing
-                        && self.trace_jobs.try_send(TraceJob { id: record.id, tx_hash }).is_err()
-                    {
-                        warn!(id = %record.id, "Safe failure trace queue is full; skipping optional enrichment");
+                    if safe_failure && self.config.enable_revert_reason_tracing {
+                        match self.trace_jobs.try_send(TraceJob { id: record.id, tx_hash }) {
+                            Ok(()) => {}
+                            Err(TrySendError::Full(_)) => {
+                                record_trace_queue_saturated();
+                                warn!(id = %record.id, "Safe failure trace queue is full; skipping optional enrichment");
+                            }
+                            Err(TrySendError::Closed(_)) => {
+                                warn!(id = %record.id, "Safe failure trace worker is not running; skipping optional enrichment");
+                            }
+                        }
                     }
                 }
             }
@@ -661,13 +672,6 @@ mod tests {
             Ok(Some(TransactionReceipt { success, logs }))
         }
 
-        async fn get_transaction_status(&self, tx_hash: Hash) -> Result<Option<bool>, String> {
-            if self.hanging_statuses.contains_key(&tx_hash) {
-                return pending().await;
-            }
-            Ok(self.statuses.get(&tx_hash).map(|entry| *entry.value()).unwrap_or(None))
-        }
-
         async fn get_transaction_receipt_logs(&self, tx_hash: Hash) -> Result<Option<Vec<ReceiptLog>>, String> {
             match self.receipt_logs.get(&tx_hash) {
                 Some(entry) => entry.value().clone(),
@@ -776,6 +780,29 @@ mod tests {
             TransactionMonitorConfig::default(),
             Some(Arc::new(safe_checker)),
         )
+    }
+
+    #[test]
+    fn test_unbounded_if_zero_caps_at_max_permits() {
+        assert_eq!(unbounded_if_zero(0), Semaphore::MAX_PERMITS);
+        assert_eq!(unbounded_if_zero(3), 3);
+        assert_eq!(unbounded_if_zero(usize::MAX), Semaphore::MAX_PERMITS);
+    }
+
+    #[tokio::test]
+    async fn test_monitor_accepts_oversized_trace_limits() {
+        let config = TransactionMonitorConfig {
+            enable_revert_reason_tracing: true,
+            max_concurrent_trace_jobs: usize::MAX,
+            max_queued_trace_jobs: usize::MAX,
+            ..TransactionMonitorConfig::default()
+        };
+        let _monitor: TransactionMonitor<MockReceiptProvider, NoSafeEnrichment> = TransactionMonitor::new(
+            Arc::new(TransactionStore::new()),
+            MockReceiptProvider::new(),
+            config,
+            None,
+        );
     }
 
     #[tokio::test]
