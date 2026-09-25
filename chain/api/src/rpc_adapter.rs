@@ -13,11 +13,11 @@ use hopr_bindings::exports::alloy::{
     providers::Provider,
 };
 use hopr_types::crypto::types::Hash;
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 
 use crate::{
     transaction_executor::{ConfirmationError, RpcClient},
-    transaction_monitor::{ReceiptLog, ReceiptProvider},
+    transaction_monitor::{ReceiptLog, ReceiptProvider, TransactionReceipt},
 };
 
 /// RPC adapter that implements RpcClient and ReceiptProvider traits for RpcOperations
@@ -136,35 +136,26 @@ impl<R: HttpRequestor + 'static + Clone> RpcClient for RpcAdapter<R> {
 
 #[async_trait]
 impl<R: HttpRequestor + 'static + Clone> ReceiptProvider for RpcAdapter<R> {
-    /// Get the status of a transaction by its hash
-    ///
-    /// Returns:
-    /// - Some(true) if the transaction is confirmed with successful status
-    /// - Some(false) if the transaction is confirmed but reverted
-    /// - None if the transaction is still pending or not found
-    async fn get_transaction_status(&self, tx_hash: Hash) -> Result<Option<bool>, String> {
-        debug!(?tx_hash, "checking transaction status");
-
-        // Convert Hash to alloy B256
+    async fn get_transaction_receipt(&self, tx_hash: Hash) -> Result<Option<TransactionReceipt>, String> {
+        debug!(?tx_hash, "fetching transaction receipt");
         let b256_hash = B256::from_slice(tx_hash.as_ref());
-
-        // Try to get the transaction receipt
         match self.rpc.provider.get_transaction_receipt(b256_hash).await {
             Ok(Some(receipt)) => {
-                // Transaction found - check status
                 let success = receipt.status();
-                debug!(?tx_hash, success, "transaction status retrieved");
-                Ok(Some(success))
+                let logs = receipt
+                    .inner
+                    .logs()
+                    .iter()
+                    .map(|log| ReceiptLog {
+                        address: log.address().into_array(),
+                        topics: log.topics().iter().map(|topic| topic.0).collect(),
+                        data: log.data().data.to_vec(),
+                    })
+                    .collect();
+                Ok(Some(TransactionReceipt { success, logs }))
             }
-            Ok(None) => {
-                // Transaction not found (still pending)
-                debug!(?tx_hash, "transaction still pending");
-                Ok(None)
-            }
-            Err(e) => {
-                error!(?tx_hash, error = %e, "error getting transaction receipt");
-                Err(format!("Receipt error: {}", e))
-            }
+            Ok(None) => Ok(None),
+            Err(error) => Err(format!("Receipt error: {error}")),
         }
     }
 
@@ -216,13 +207,10 @@ impl<R: HttpRequestor + 'static + Clone> ReceiptProvider for RpcAdapter<R> {
                 let output = crate::revert_decoder::extract_revert_output_from_trace(&trace);
                 Ok(output.and_then(|b| crate::revert_decoder::decode_revert_reason(&b)))
             }
-            Err(e) => {
-                // RPC supports tracing (verified at startup) but this specific
-                // call failed — log and return None rather than blocking confirmation.
-                let tx_hash = format!("{b256_hash:#x}");
-                warn!(tx_hash = %tx_hash, error = %e, "debug_traceTransaction failed");
-                Ok(None)
-            }
+            // RPC supports tracing (verified at startup) but this specific call failed.
+            // Surface it so callers count the failure instead of mistaking it for a
+            // successful trace without a decodable reason; confirmation never waits on it.
+            Err(e) => Err(format!("debug_traceTransaction failed: {e}")),
         }
     }
 }

@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use async_graphql::{Context, Object, Result, Union};
 use blokli_api_types::{
-    ContractNotAllowedError, FunctionNotAllowedError, InvalidTransactionIdError, RpcError, SendTransactionSuccess,
-    TimeoutError, Transaction, TransactionInput,
+    ContractNotAllowedError, FunctionNotAllowedError, InvalidTransactionIdError, OverloadedError, RpcError,
+    SendTransactionSuccess, TimeoutError, Transaction, TransactionInput,
 };
 use blokli_chain_api::{
     DefaultHttpRequestor,
@@ -36,6 +36,7 @@ pub enum SendTransactionAsyncResult {
     ContractNotAllowed(ContractNotAllowedError),
     FunctionNotAllowed(FunctionNotAllowedError),
     RpcError(RpcError),
+    Overloaded(OverloadedError),
 }
 
 /// Result type for synchronous transaction submission
@@ -194,6 +195,9 @@ fn executor_error_to_async_result(error: TransactionExecutorError) -> SendTransa
         }
         TransactionExecutorError::RpcError(msg) => {
             SendTransactionAsyncResult::RpcError(errors::rpc_error_with_message(msg))
+        }
+        TransactionExecutorError::OverloadedError => {
+            SendTransactionAsyncResult::Overloaded(errors::submission_capacity_exceeded())
         }
         _ => SendTransactionAsyncResult::RpcError(errors::rpc_internal_error(&error)),
     }
