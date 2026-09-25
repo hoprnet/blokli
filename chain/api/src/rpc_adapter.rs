@@ -159,38 +159,6 @@ impl<R: HttpRequestor + 'static + Clone> ReceiptProvider for RpcAdapter<R> {
         }
     }
 
-    /// Get the status of a transaction by its hash
-    ///
-    /// Returns:
-    /// - Some(true) if the transaction is confirmed with successful status
-    /// - Some(false) if the transaction is confirmed but reverted
-    /// - None if the transaction is still pending or not found
-    async fn get_transaction_status(&self, tx_hash: Hash) -> Result<Option<bool>, String> {
-        debug!(?tx_hash, "checking transaction status");
-
-        // Convert Hash to alloy B256
-        let b256_hash = B256::from_slice(tx_hash.as_ref());
-
-        // Try to get the transaction receipt
-        match self.rpc.provider.get_transaction_receipt(b256_hash).await {
-            Ok(Some(receipt)) => {
-                // Transaction found - check status
-                let success = receipt.status();
-                debug!(?tx_hash, success, "transaction status retrieved");
-                Ok(Some(success))
-            }
-            Ok(None) => {
-                // Transaction not found (still pending)
-                debug!(?tx_hash, "transaction still pending");
-                Ok(None)
-            }
-            Err(e) => {
-                error!(?tx_hash, error = %e, "error getting transaction receipt");
-                Err(format!("Receipt error: {}", e))
-            }
-        }
-    }
-
     async fn get_transaction_receipt_logs(&self, tx_hash: Hash) -> Result<Option<Vec<ReceiptLog>>, String> {
         debug!(?tx_hash, "fetching receipt logs");
 
