@@ -394,7 +394,8 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         })
     }
 
-    /// Resolves the Curvy Vault and optional PortalFactory from the configured Aggregator proxy.
+    /// Resolves the Curvy Vault and optional PortalFactory from the configured Aggregator proxy, and the shield
+    /// router from its one canonical address.
     ///
     /// The Aggregator is the sole Curvy bootstrap address. Resolution happens once
     /// during daemon startup so the indexer and GraphQL API share one validated
@@ -416,13 +417,29 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
             warn!("Curvy Aggregator returned the zero address for Curvy PortalFactory");
         }
 
+        // The shield router is not configured anywhere: its init code takes no arguments and deploys through CreateX
+        // under a chain-agnostic salt, so it can only ever be at this one address. Published only when code is
+        // there, because an ERC-777 `send` to an empty address succeeds and would strand the shield.
+        let expected_shield_router = curvy_bindings::config::shield_router_address();
+        let shield_router_address = if self.provider.get_code_at(expected_shield_router).await?.is_empty() {
+            warn!(
+                shield_router = %expected_shield_router,
+                "no Curvy shield router is deployed on this network; nodes cannot shield directly from their Safe"
+            );
+            AlloyAddress::ZERO
+        } else {
+            expected_shield_router
+        };
+
         self.cfg.contract_addrs.curvy_vault = vault_address.to_hopr_address();
         self.cfg.contract_addrs.curvy_portal_factory = portal_factory_address.to_hopr_address();
+        self.cfg.contract_addrs.curvy_shield_router = shield_router_address.to_hopr_address();
 
         debug!(
             aggregator = %aggregator_address,
             vault = %vault_address,
             portal_factory = %portal_factory_address,
+            shield_router = %shield_router_address,
             "resolved Curvy contract addresses from Aggregator"
         );
 

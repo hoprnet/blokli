@@ -285,6 +285,7 @@ impl Args {
             curvy_aggregator: Default::default(),
             curvy_vault: Default::default(),
             curvy_portal_factory: Default::default(),
+            curvy_shield_router: Default::default(),
             service_registry: network_config.addresses.service_registry.to_hopr_address(),
         };
 
