@@ -1885,7 +1885,7 @@ dependencies = [
  "env_logger",
  "futures",
  "hex",
- "hopr-bindings",
+ "hopr-bindings 5.0.0",
  "hopr-types",
  "humantime-serde",
  "insta",
@@ -1942,7 +1942,7 @@ dependencies = [
  "env_logger",
  "futures",
  "hex",
- "hopr-bindings",
+ "hopr-bindings 5.0.0",
  "hopr-types",
  "insta",
  "rand 0.10.2",
@@ -1975,7 +1975,7 @@ dependencies = [
  "futures",
  "futures-util",
  "hex-literal",
- "hopr-bindings",
+ "hopr-bindings 5.0.0",
  "hopr-types",
  "lazy_static",
  "mockall",
@@ -2005,7 +2005,7 @@ dependencies = [
  "futures",
  "futures-timer",
  "hex-literal",
- "hopr-bindings",
+ "hopr-bindings 5.0.0",
  "hopr-types",
  "http",
  "lazy_static",
@@ -2035,7 +2035,7 @@ name = "blokli-chain-types"
 version = "0.4.0"
 dependencies = [
  "hex-literal",
- "hopr-bindings",
+ "hopr-bindings 5.0.0",
  "hopr-types",
  "lazy_static",
  "libp2p-identity",
@@ -2112,7 +2112,7 @@ dependencies = [
  "blokli-chain-types",
  "clap",
  "hex",
- "hopr-bindings",
+ "hopr-bindings 5.0.0",
  "hopr-types",
 ]
 
@@ -2135,7 +2135,7 @@ dependencies = [
  "flagset",
  "futures",
  "hopli",
- "hopr-bindings",
+ "hopr-bindings 5.0.0",
  "hopr-types",
  "humantime-serde",
  "opentelemetry 0.32.0",
@@ -3977,7 +3977,7 @@ dependencies = [
  "clap",
  "hex",
  "hex-literal",
- "hopr-bindings",
+ "hopr-bindings 4.12.0",
  "hopr-types",
  "lazy_static",
  "rpassword",
@@ -3996,6 +3996,24 @@ name = "hopr-bindings"
 version = "4.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0375fb0dc90a31484ae7620ce71681203f5ed1ee670cab51e02fb3b7a9d351dc"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "const_format",
+ "hex-literal",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "hopr-bindings"
+version = "5.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13cb248171e67e6bf5891c2e60e5a02389ba3121da8a1aa77b3f435e75c6099f"
 dependencies = [
  "alloy",
  "anyhow",
@@ -4035,7 +4053,7 @@ dependencies = [
  "float-cmp",
  "hash2curve",
  "hex-literal",
- "hopr-bindings",
+ "hopr-bindings 4.12.0",
  "hybrid-array",
  "k256 0.14.0",
  "lazy_static",
@@ -7817,7 +7835,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
