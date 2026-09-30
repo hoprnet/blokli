@@ -46,4 +46,4 @@ local/
 
 *.log
 
-**/*.mjs
+**/*.mjs/data/

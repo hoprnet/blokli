@@ -22,10 +22,8 @@ sol! {
     /// Gnosis Safe `MultiSend` batch entrypoint, invoked as a delegate call.
     ///
     /// `transactions` is the tightly packed concatenation of the batched calls; see
-    /// [`decode_multi_send`] for the per-entry layout.
-    ///
-    /// Declared here because `hopr-bindings` carries no `MultiSend` binding; the Safe module
-    /// entrypoint comes from [`execTransactionFromModuleCall`] instead.
+    /// [`decode_multi_send`] for the per-entry layout. Declared here because `hopr-bindings`
+    /// carries no `MultiSend` binding.
     function multiSend(bytes transactions) external payable;
 }
 
@@ -42,8 +40,8 @@ pub type Selector = [u8; 4];
 
 /// A single effective contract call carried by a transaction.
 ///
-/// A plain transaction and a Safe-module call yield exactly one of these; a `MultiSend` batch
-/// yields one per batched call. Every call must be in the allow-set for the transaction to pass.
+/// A plain transaction and a Safe-module call yield one; a `MultiSend` batch yields one per
+/// batched call.
 ///
 /// # Example
 ///
@@ -51,7 +49,6 @@ pub type Selector = [u8; 4];
 /// use blokli_tx::AuthorizedCall;
 /// use hopr_types::primitive::prelude::Address;
 ///
-/// // `filter_transaction` reports one of these per effective call it authorized.
 /// let call = AuthorizedCall {
 ///     to: Address::from([0x02u8; 20]),
 ///     selector: Some([0x09, 0x5e, 0xa7, 0xb3]), // ERC-20 `approve`
@@ -59,7 +56,6 @@ pub type Selector = [u8; 4];
 ///
 /// assert_eq!(call.selector, Some([0x09, 0x5e, 0xa7, 0xb3]));
 ///
-/// // A call carrying no calldata reaches no contract function: it only moves native value.
 /// let value_transfer = AuthorizedCall {
 ///     to: Address::from([0x03u8; 20]),
 ///     selector: None,
@@ -71,8 +67,8 @@ pub type Selector = [u8; 4];
 pub struct AuthorizedCall {
     /// Effective target contract of the call.
     pub to: Address,
-    /// Effective 4-byte function selector of the call, or `None` when the call carries no calldata
-    /// and therefore only transfers native value.
+    /// Effective 4-byte function selector, or `None` when the call carries no calldata and so
+    /// only transfers native value.
     pub selector: Option<Selector>,
 }
 
@@ -92,7 +88,6 @@ impl fmt::Display for AuthorizedCall {
 /// ```
 /// use blokli_tx::{FilterError, TransactionFilter};
 ///
-/// // Nothing is authorized by an empty filter, so no `FilteredTransaction` is ever produced.
 /// assert_eq!(
 ///     TransactionFilter::default().filter_transaction(&[]),
 ///     Err(FilterError::Empty)
@@ -110,40 +105,33 @@ pub struct FilteredTransaction {
 
 /// Filters signed Ethereum transactions against an allow-set of `(contract, selector)` pairs.
 ///
-/// A transaction is authorized only if every effective call it performs matches a
-/// `(contract, selector)` pair present in the allow-set. The effective calls are:
+/// A transaction passes only if every effective call it performs is in the allow-set. The
+/// effective calls are:
 ///
 /// - a plain transaction: its own `(to, selector)`;
-/// - a Safe-module `execTransactionFromModule` call with `operation = Call`: the inner `(to, selector)` (the outer
-///   module address is not matched, as it is per-node);
-/// - a Safe-module call with `operation = DelegateCall` targeting the canonical `MultiSend` singleton: every `(to,
-///   selector)` in the batch, each of which must itself be a plain call.
+/// - a Safe-module `execTransactionFromModule` call with `operation = Call`: the inner `(to, selector)`, since the
+///   outer module address is per-node;
+/// - a Safe-module `DelegateCall` into the canonical `MultiSend` singleton: every `(to, selector)` in the batch, each
+///   of which must itself be a plain call.
 ///
-/// Any other delegate call is rejected.
-///
-/// The sender is recovered to reject contract-creation and malformed transactions and is surfaced
-/// in [`FilteredTransaction`] for logging, but it is not part of the matching key.
+/// Any other delegate call is rejected. The sender is recovered to reject contract-creation and
+/// malformed transactions, but is not part of the matching key.
 ///
 /// # Calls without a `(contract, selector)` pair
 ///
-/// Two relayable operation shapes carry no such pair, so both are refused unless the filter was
-/// explicitly built to permit them:
+/// Two operation shapes have no pair to match and are refused unless opted in:
 ///
-/// - a call with no calldata at all moves native value and reaches no contract function, so it has no selector to
-///   match. [`TransactionFilter::allowing_value_transfers`] permits it, for any destination.
-/// - a call whose target is a per-node Safe management module — notably `deregisterNodeBySafe`, which a Safe payload
-///   generator sends to the module directly rather than wrapping it — has no target knowable when the allow-set is
-///   built. [`TransactionFilter::allowing_on_any_target`] permits the named selectors on any destination.
+/// - no calldata at all — a native value transfer. See [`TransactionFilter::allowing_value_transfers`].
+/// - a per-node Safe management module as target, such as `deregisterNodeBySafe`. See
+///   [`TransactionFilter::allowing_on_any_target`].
 ///
 /// # Trust assumptions
 ///
-/// Safe-module unwrapping is keyed on the outer 4-byte selector alone: the filter has no source of
-/// truth for which addresses are genuine HOPR node modules (they are per-node and discovered by
-/// indexing), so it cannot verify that the outer target really is one. A contract that exposes the
-/// same `execTransactionFromModule` ABI is therefore unwrapped like a module, and authorization is
-/// decided on the inner call while the chain executes the outer one. Selectors allowed on any
-/// target rest on the same assumption. Verifying the outer target against the indexed node modules
-/// is tracked as follow-up work.
+/// The filter has no source of truth for which addresses are genuine node modules, so it unwraps
+/// on the outer selector alone: any contract exposing the same ABI is unwrapped like a module, and
+/// authorization is decided on the inner call while the chain executes the outer one. Selectors
+/// allowed on any target rest on the same assumption. Checking the target against the indexed node
+/// modules is follow-up work.
 ///
 /// # Example
 ///
@@ -213,10 +201,10 @@ impl TransactionFilter {
         }
     }
 
-    /// Permit the given selectors on any target, whatever the allow-set says.
+    /// Permit the given selectors on any target.
     ///
-    /// For operations whose destination is a per-node Safe management module, and therefore not
-    /// knowable when the allow-set is built. Every other selector keeps matching on its target.
+    /// For operations whose destination is a per-node Safe management module, and so not knowable
+    /// when the allow-set is built. Every other selector keeps matching on its target.
     ///
     /// # Example
     ///
@@ -234,10 +222,9 @@ impl TransactionFilter {
         self
     }
 
-    /// Permit calls that carry no calldata, which move native value and reach no contract function.
+    /// Permit calls that carry no calldata and so only move native value.
     ///
-    /// The destination of such a call is not matched: a native transfer names an arbitrary
-    /// recipient, so there is no pair to match it against.
+    /// Their destination is not matched: a native transfer names an arbitrary recipient.
     ///
     /// # Example
     ///
@@ -256,11 +243,7 @@ impl TransactionFilter {
     /// Decode a raw signed transaction and verify it against the allow-set.
     ///
     /// # Errors
-    /// Returns a [`FilterError`] describing why the transaction was rejected: empty input, undecodable
-    /// bytes, trailing bytes after the envelope, an unsupported transaction type, a contract-creation
-    /// transaction, a signature that fails sender recovery, calldata shorter than four bytes, a
-    /// Safe-module call that fails to decode or requests an unsupported delegate call, a malformed
-    /// `MultiSend` batch, or an effective call whose contract or selector is not allowed.
+    /// Returns the [`FilterError`] naming the reason for rejection.
     ///
     /// # Example
     ///
@@ -302,9 +285,8 @@ impl TransactionFilter {
 
         // Unwrap Safe-module calls and match on the inner target(s); match other calls directly.
         let (calls, via_module) = if outer_selector == Some(execTransactionFromModuleCall::SELECTOR) {
-            // `abi_decode_validate` also range-checks the parameter words. Without it the
-            // non-validating decoder keeps only the low byte of `operation`, so a word like
-            // `0x0100` would read as `Call` here while the Safe's own enum check reverts on chain.
+            // `abi_decode_validate` range-checks the parameter words. `abi_decode` would keep only
+            // the low byte of `operation`, reading `0x0100` as `Call` while the chain reverts it.
             let call = execTransactionFromModuleCall::abi_decode_validate(&input[..])
                 .map_err(|e| FilterError::ModuleUnwrap(e.to_string()))?;
 
@@ -335,8 +317,7 @@ impl TransactionFilter {
         }
 
         for call in &calls {
-            // A call with no calldata reaches no contract function, so there is no pair to match:
-            // it is authorized by the filter's value-transfer setting alone, for any destination.
+            // No calldata, so no pair to match: authorized by the value-transfer setting alone.
             let Some(selector) = call.selector else {
                 if !self.allow_value_transfers {
                     return Err(FilterError::ValueTransferNotAllowed);
@@ -344,8 +325,7 @@ impl TransactionFilter {
                 continue;
             };
 
-            // A selector allowed on any target has no pair to match either: its destination is a
-            // per-node module, which no allow-set built from network contracts can carry.
+            // Likewise for a per-node destination, which no network-derived allow-set can carry.
             if self.any_target.contains(&selector) {
                 continue;
             }
@@ -375,9 +355,8 @@ impl TransactionFilter {
 
 /// Extract the leading 4-byte selector from calldata.
 ///
-/// Empty calldata reaches no contract function — the call only moves native value — and yields
-/// `None`. Calldata that is non-empty but shorter than a selector is malformed and yields
-/// [`FilterError::MissingSelector`].
+/// Empty calldata yields `None`: the call only moves native value. Non-empty calldata shorter
+/// than a selector is malformed and yields [`FilterError::MissingSelector`].
 fn call_selector(input: &[u8]) -> Result<Option<Selector>> {
     if input.is_empty() {
         return Ok(None);
