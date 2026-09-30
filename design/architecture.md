@@ -401,6 +401,16 @@ canonical Gnosis Safe `MultiSend` singleton are unpacked and every batched call 
 any other delegate call, and unsupported transaction types are always rejected. This prevents submission of malicious or unintended
 transactions while keeping the filtering logic decoupled from the daemon internals.
 
+Two relayable operations carry no `(contract, selector)` pair and are admitted by narrower rules the filter must be built to permit. Node
+deregistration is sent to the node's own Safe management module, whose address is per-node and so cannot appear in an allow-set built from
+network contracts; its selector is therefore matched on any target. A native xDAI transfer carries no calldata at all and so has no selector
+to match; value transfers are permitted for any recipient, which does not make those recipients allowed contracts, because any call that
+does carry a selector is still matched normally. Both rest on the same trust assumption as Safe-module unwrapping: the filter has no source
+of truth for which addresses are genuine node modules.
+
+The standalone API server derives the same allow-set from its configured contract addresses. With no contracts configured there is nothing
+to derive and it relays nothing, rather than failing open into an unrestricted relay.
+
 **TransactionExecutor**: Provides three submission modes with different guarantees:
 
 1. **Fire-and-forget Mode**: Submits transaction and returns hash immediately. No tracking or confirmation monitoring. Lowest latency,
