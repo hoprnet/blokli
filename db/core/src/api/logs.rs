@@ -34,14 +34,27 @@ pub trait BlokliDbLogOperations {
 
     /// Stores multiple log entries in the database.
     ///
+    /// The whole batch is written in one transaction, so it either applies in full or not at all.
+    /// Logs already stored are left untouched, and a position repeated within `logs` is stored
+    /// once. There is deliberately no per-log outcome: a single log cannot fail on its own.
+    ///
     /// # Arguments
     ///
-    /// * `logs` - A vector of log entries to store, each of type `SerializableLog`.
+    /// * `logs` - The log entries to store, each of type `SerializableLog`. May span several blocks.
     ///
     /// # Returns
     ///
-    /// A `Result` containing a vector of `Result<()>`, each representing the result of storing an individual log entry.
-    async fn store_logs(&self, logs: Vec<SerializableLog>) -> Result<Vec<Result<()>>>;
+    /// `Ok(())` if the batch was committed, or an `Err` describing why the transaction was rolled
+    /// back. Nothing is stored in the error case.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # async fn example(db: &BlokliDb, logs: Vec<SerializableLog>) -> Result<()> {
+    /// db.store_logs(logs).await?;
+    /// # Ok(()) }
+    /// ```
+    async fn store_logs(&self, logs: Vec<SerializableLog>) -> Result<()>;
 
     /// Retrieves a specific log entry from the database.
     ///
@@ -112,6 +125,31 @@ pub trait BlokliDbLogOperations {
     ///
     /// A `Result` which is `Ok(())` if the operation succeeds or an error if it fails.
     async fn set_log_processed(&self, log: SerializableLog) -> Result<()>;
+
+    /// Marks the supplied log entries as processed in a single transaction.
+    ///
+    /// Prefer this over calling [`Self::set_log_processed`] in a loop: the whole batch is one
+    /// transaction and one set of statements, so the marker either applies to every supplied log
+    /// or to none of them.
+    ///
+    /// # Arguments
+    ///
+    /// * `logs` - The log entries to mark as processed. May span several blocks. Entries not present in `logs` are left
+    ///   unchanged, and a position repeated within `logs` is marked once.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if every supplied log was marked, or an `Err` if the transaction was rolled back,
+    /// in which case none of them were.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # async fn example(db: &BlokliDb, logs: Vec<SerializableLog>) -> Result<()> {
+    /// db.set_log_batch_processed(logs).await?;
+    /// # Ok(()) }
+    /// ```
+    async fn set_log_batch_processed(&self, logs: Vec<SerializableLog>) -> Result<()>;
 
     /// Marks multiple log entries as processed.
     ///

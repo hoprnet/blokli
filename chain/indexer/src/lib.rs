@@ -34,6 +34,6 @@ pub mod utils;
 /// Configuration for the chain indexer functionality.
 ///
 /// Includes settings for fast synchronization and snapshot downloads.
-pub use config::IndexerConfig;
+pub use config::{IndexerConfig, SafeTxPrefetchConfig};
 /// Shared state for coordinating indexer operations with subscriptions
 pub use state::IndexerState;

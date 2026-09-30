@@ -13,35 +13,52 @@
 //!
 //! ```rust,ignore
 //! // Create event bus
-//! let (tx, rx) = async_broadcast::broadcast(1000);
-//! let event_bus = EventBus::new(tx);
+//! let event_bus = EventBus::new(1000);
 //!
-//! // Subscribe to events
+//! // Subscribe to events. The bus runs in overflow mode, so a subscriber that falls behind is
+//! // told how many events it missed instead of being disconnected - resynchronise and carry on.
 //! let mut subscriber = event_bus.subscribe();
 //! tokio::spawn(async move {
-//!     while let Ok(event) = subscriber.recv().await {
-//!         match event {
-//!             StateChange::AccountState(change) => {
+//!     loop {
+//!         match subscriber.recv().await {
+//!             Ok(StateChange::AccountState(change)) => {
 //!                 // Handle account state change
 //!             }
-//!             StateChange::ChannelState(change) => {
+//!             Ok(StateChange::ChannelState(change)) => {
 //!                 // Handle channel state change
 //!             }
+//!             Err(RecvError::Overflowed(missed)) => {
+//!                 // Fell behind by `missed` events: re-read current state from the database,
+//!                 // then keep consuming. Breaking here would stop receiving for good.
+//!                 eprintln!("missed {missed} state changes; resynchronising");
+//!             }
+//!             Err(RecvError::Closed) => break,
 //!         }
 //!     }
 //! });
 //!
 //! // Publish events (done by database layer)
-//! event_bus.publish(StateChange::AccountState(AccountStateChange {
+//! match event_bus.publish(StateChange::AccountState(AccountStateChange {
 //!     account_id: 1,
 //!     state_id: 42,
 //!     published_block: 1000,
 //!     published_tx_index: 5,
 //!     published_log_index: 2,
-//! })).await;
+//! })) {
+//!     Ok(true) => {
+//!         // Event delivered to at least one active subscriber.
+//!     }
+//!     Ok(false) => {
+//!         // No active subscribers; this is an expected no-op.
+//!     }
+//!     Err(error) => {
+//!         // Handle a full or closed event bus.
+//!         eprintln!("failed to publish state change: {error}");
+//!     }
+//! }
 //! ```
 
-use async_broadcast::{Receiver, Sender, broadcast};
+use async_broadcast::{InactiveReceiver, Receiver, Sender, TrySendError, broadcast};
 
 /// Position in the blockchain for ordering events and temporal queries
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -143,16 +160,21 @@ impl StateChange {
 ///
 /// Uses async-broadcast for efficient multi-subscriber distribution.
 /// Subscribers can join at any time and will receive all future events.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct EventBus {
     sender: Sender<StateChange>,
-    // Keep one receiver alive to prevent SendError when no subscribers exist
+    // Keep the channel open when no clients are subscribed without retaining its events.
     #[allow(dead_code)]
-    _keepalive: Receiver<StateChange>,
+    _keepalive: InactiveReceiver<StateChange>,
 }
 
 impl EventBus {
     /// Create a new event bus with the given channel capacity
+    ///
+    /// The bus runs in overflow mode: once a subscriber is `capacity` events behind, publishing
+    /// drops that subscriber's oldest buffered event instead of blocking the publisher. Indexing
+    /// therefore never stalls on a slow subscriber, at the cost of that subscriber missing events
+    /// and being told so through `RecvError::Overflowed`.
     ///
     /// # Arguments
     ///
@@ -166,25 +188,33 @@ impl EventBus {
     /// let event_bus = EventBus::new(1000);
     /// ```
     pub fn new(capacity: usize) -> Self {
-        let (sender, receiver) = broadcast(capacity);
+        let (mut sender, receiver) = broadcast(capacity);
+        sender.set_overflow(true);
         Self {
             sender,
-            _keepalive: receiver,
+            _keepalive: receiver.deactivate(),
         }
     }
 
     /// Create event bus from an existing sender
     ///
     /// Useful when you need to share the same channel across multiple components.
-    pub fn from_sender(sender: Sender<StateChange>) -> Self {
-        let _keepalive = sender.new_receiver();
+    pub fn from_sender(mut sender: Sender<StateChange>) -> Self {
+        sender.set_overflow(true);
+        let _keepalive = sender.new_receiver().deactivate();
         Self { sender, _keepalive }
     }
 
     /// Subscribe to state change events
     ///
-    /// Returns a receiver that will receive all future state changes.
-    /// Multiple subscribers can receive the same events concurrently.
+    /// Returns a receiver for future state changes. Multiple subscribers can receive the same
+    /// events concurrently.
+    ///
+    /// A subscriber that falls more than the bus capacity behind misses events and its next
+    /// `recv()` resolves to `Err(RecvError::Overflowed(n))`, reporting how many it skipped. That
+    /// is recoverable, not terminal: treat it as a signal to resynchronise from the database and
+    /// keep reading, rather than as the end of the stream. A `while let Ok(..) = recv().await`
+    /// loop exits on overflow and will silently stop receiving, so match the error explicitly.
     ///
     /// # Example
     ///
@@ -203,8 +233,10 @@ impl EventBus {
 
     /// Publish a state change event to all subscribers
     ///
-    /// This is non-blocking and will succeed as long as there's capacity in the channel.
-    /// If the channel is full, it will drop the oldest event.
+    /// This never waits for a subscriber. If a subscriber is behind the configured capacity, the
+    /// bus drops the oldest buffered event rather than blocking indexing, and that subscriber sees
+    /// `RecvError::Overflowed` on its next `recv()`. An eviction is logged here so the loss is
+    /// visible to the operator and not only to the subscriber that suffered it.
     ///
     /// # Arguments
     ///
@@ -212,11 +244,24 @@ impl EventBus {
     ///
     /// # Returns
     ///
-    /// Returns Ok(()) if the event was successfully published,
-    /// or Err if all receivers have been dropped.
-    pub async fn publish(&self, event: StateChange) -> Result<(), async_broadcast::SendError<StateChange>> {
-        self.sender.broadcast(event).await?;
-        Ok(())
+    /// Returns `Ok(true)` when an event was delivered to active subscribers and `Ok(false)`
+    /// when none are subscribed. The latter is an expected no-op during indexing. `Ok(true)` is
+    /// returned even when the publish evicted an older event, because the new event was delivered.
+    pub fn publish(&self, event: StateChange) -> Result<bool, TrySendError<StateChange>> {
+        match self.sender.try_broadcast(event) {
+            Ok(evicted) => {
+                if evicted.is_some() {
+                    tracing::warn!(
+                        capacity = self.sender.capacity(),
+                        subscribers = self.sender.receiver_count(),
+                        "event bus is full; dropped the oldest state change event because a subscriber fell behind"
+                    );
+                }
+                Ok(true)
+            }
+            Err(TrySendError::Inactive(_)) => Ok(false),
+            Err(error) => Err(error),
+        }
     }
 
     /// Get the number of active subscribers
@@ -242,10 +287,24 @@ mod tests {
             published_log_index: 2,
         });
 
-        event_bus.publish(event.clone()).await.unwrap();
+        event_bus.publish(event.clone()).unwrap();
 
         let received = subscriber.recv().await.unwrap();
         assert!(matches!(received, StateChange::AccountState(_)));
+    }
+
+    #[test]
+    fn test_event_bus_discards_events_without_active_subscribers() {
+        let event_bus = EventBus::new(1);
+        let event = StateChange::AccountState(AccountStateChange {
+            account_id: 1,
+            state_id: 42,
+            published_block: 1000,
+            published_tx_index: 5,
+            published_log_index: 2,
+        });
+
+        assert!(!event_bus.publish(event).unwrap());
     }
 
     #[tokio::test]
@@ -254,8 +313,7 @@ mod tests {
         let mut subscriber1 = event_bus.subscribe();
         let mut subscriber2 = event_bus.subscribe();
 
-        // Count includes keepalive receiver + 2 subscribers
-        assert_eq!(event_bus.subscriber_count(), 3);
+        assert_eq!(event_bus.subscriber_count(), 2);
 
         let event = StateChange::ChannelState(ChannelStateChange {
             channel_id: 10,
@@ -265,13 +323,44 @@ mod tests {
             published_log_index: 1,
         });
 
-        event_bus.publish(event.clone()).await.unwrap();
+        event_bus.publish(event.clone()).unwrap();
 
         let received1 = subscriber1.recv().await.unwrap();
         let received2 = subscriber2.recv().await.unwrap();
 
         assert!(matches!(received1, StateChange::ChannelState(_)));
         assert!(matches!(received2, StateChange::ChannelState(_)));
+    }
+
+    #[tokio::test]
+    async fn test_event_bus_drops_old_events_for_slow_subscribers() {
+        let event_bus = EventBus::new(1);
+        let mut subscriber = event_bus.subscribe();
+
+        let first = StateChange::ChannelState(ChannelStateChange {
+            channel_id: 10,
+            state_id: 100,
+            published_block: 2000,
+            published_tx_index: 3,
+            published_log_index: 1,
+        });
+        let second = StateChange::ChannelState(ChannelStateChange {
+            channel_id: 10,
+            state_id: 101,
+            published_block: 2001,
+            published_tx_index: 0,
+            published_log_index: 0,
+        });
+
+        event_bus.publish(first).unwrap();
+        event_bus.publish(second).unwrap();
+
+        assert!(subscriber.recv().await.is_err());
+        let received = subscriber.recv().await.unwrap();
+        let StateChange::ChannelState(change) = received else {
+            panic!("expected a channel state change");
+        };
+        assert_eq!(change.state_id, 101);
     }
 
     #[test]

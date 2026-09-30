@@ -19,6 +19,14 @@ fn default_network() -> Network {
     Network::default()
 }
 
+fn default_safe_tx_prefetch_batch_size() -> usize {
+    16
+}
+
+fn default_safe_tx_prefetch_concurrency() -> usize {
+    8
+}
+
 fn default_max_block_range() -> u32 {
     10000
 }
@@ -411,6 +419,24 @@ pub struct IndexerConfig {
 
     #[serde(default)]
     pub subscription: SubscriptionConfig,
+
+    #[serde(default)]
+    pub safe_tx_prefetch: SafeTxPrefetchConfig,
+}
+
+/// Tuning for the concurrent pre-fetch of transactions needed to decode Safe execution failures
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
+#[serde(deny_unknown_fields)]
+pub struct SafeTxPrefetchConfig {
+    /// Number of transaction hashes packed into a single batched JSON-RPC request
+    #[default(16)]
+    #[serde(default = "default_safe_tx_prefetch_batch_size")]
+    pub batch_size: usize,
+
+    /// Maximum number of batched requests in flight at once
+    #[default(8)]
+    #[serde(default = "default_safe_tx_prefetch_concurrency")]
+    pub concurrency: usize,
 }
 
 /// Configuration for GraphQL subscription behavior
@@ -1021,6 +1047,46 @@ mod tests {
         assert_eq!(cfg.indexer.subscription.event_bus_capacity, 500);
         assert_eq!(cfg.indexer.subscription.shutdown_signal_capacity, 10); // Default
         assert_eq!(cfg.indexer.subscription.batch_size, 100); // Default
+    }
+
+    #[test]
+    fn test_partial_safe_tx_prefetch_config() {
+        // Only set batch_size; concurrency must fall back to its default.
+        let config = r#"
+         [indexer.safe_tx_prefetch]
+         batch_size = 32
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
+        let res: Result<Config, _> = toml::from_str(config);
+        assert!(res.is_ok(), "Should allow partial prefetch config: {:?}", res.err());
+
+        let cfg = res.unwrap();
+        assert_eq!(cfg.indexer.safe_tx_prefetch.batch_size, 32);
+        assert_eq!(cfg.indexer.safe_tx_prefetch.concurrency, 8); // Default
+    }
+
+    #[test]
+    fn test_safe_tx_prefetch_config_rejects_unknown_fields() {
+        // `SafeTxPrefetchConfig` is `deny_unknown_fields`, so a misspelled key must fail loudly
+        // rather than being ignored and leaving the setting at its default.
+        let config = r#"
+         [indexer.safe_tx_prefetch]
+         batch_size = 32
+         concurrancy = 4
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
+        let res: Result<Config, _> = toml::from_str(config);
+        let error = res.expect_err("an unknown prefetch field must be rejected").to_string();
+        assert!(
+            error.contains("concurrancy"),
+            "error should name the offending key: {error}"
+        );
     }
 
     #[test]
