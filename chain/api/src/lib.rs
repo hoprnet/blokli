@@ -1,6 +1,8 @@
 //! Crate containing the API object for chain operations used by the HOPRd node.
 
 pub mod errors;
+pub mod hopr_action;
+pub mod hopr_policy;
 pub mod metrics;
 pub(crate) mod revert_decoder;
 pub mod rpc_adapter;
@@ -44,6 +46,8 @@ use tracing::info;
 
 use crate::{
     errors::{BlokliChainError, Result},
+    hopr_action::HoprContracts,
+    hopr_policy::{DbHoprChainState, HoprPolicy},
     rpc_adapter::RpcAdapter,
     safe_execution::DbSafeAddressChecker,
     transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
@@ -155,15 +159,33 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
 
         let safe_checker = Arc::new(DbSafeAddressChecker::new(db.clone()));
 
-        let transaction_executor = Arc::new(
-            RawTransactionExecutor::with_shared_dependencies(
-                rpc_adapter.clone(),
+        // The HOPR-aware policy reads indexed chain state, so it is only meaningful once the database is available
+        let hopr_policy = transaction_executor_config.hopr_policy.enabled.then(|| {
+            Arc::new(HoprPolicy::new(
+                Arc::new(DbHoprChainState::new(db.clone())),
                 transaction_store.clone(),
-                transaction_validator,
-                transaction_executor_config,
-            )
-            .with_safe_enrichment(rpc_adapter.clone(), safe_checker.clone()),
-        );
+                transaction_executor_config.hopr_policy.clone(),
+                HoprContracts {
+                    token: contract_addresses.token,
+                    channels: contract_addresses.channels,
+                    announcements: contract_addresses.announcements,
+                },
+            ))
+        });
+
+        let mut transaction_executor = RawTransactionExecutor::with_shared_dependencies(
+            rpc_adapter.clone(),
+            transaction_store.clone(),
+            transaction_validator,
+            transaction_executor_config,
+        )
+        .with_safe_enrichment(rpc_adapter.clone(), safe_checker.clone());
+
+        if let Some(policy) = hopr_policy {
+            transaction_executor = transaction_executor.with_hopr_policy(policy);
+        }
+
+        let transaction_executor = Arc::new(transaction_executor);
 
         let transaction_monitor = Arc::new(TransactionMonitor::new(
             transaction_store.clone(),

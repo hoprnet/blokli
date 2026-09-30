@@ -28,6 +28,12 @@ lazy_static::lazy_static! {
             "Safe execution outcomes and inspection retries",
             &["outcome"],
         ).unwrap();
+    static ref METRIC_BLOKLI_HOPR_VALIDATION_TOTAL: hopr_metrics::MultiCounter =
+        hopr_metrics::MultiCounter::new(
+            "blokli_hopr_validation_total",
+            "HOPR-aware transaction policy decisions, by operation and outcome",
+            &["operation", "reason"],
+        ).unwrap();
     static ref METRIC_BLOKLI_TRACE_TOTAL: hopr_metrics::MultiCounter =
         hopr_metrics::MultiCounter::new(
             "blokli_safe_trace_total",
@@ -95,4 +101,10 @@ pub fn record_trace_timeout() {
 pub fn record_trace_queue_saturated() {
     #[cfg(all(feature = "telemetry", not(test)))]
     METRIC_BLOKLI_TRACE_TOTAL.increment(&["queue_saturated"]);
+}
+
+#[allow(unused_variables)]
+pub fn record_hopr_validation(operation: &str, reason: &str) {
+    #[cfg(all(feature = "telemetry", not(test)))]
+    METRIC_BLOKLI_HOPR_VALIDATION_TOTAL.increment(&[operation, reason]);
 }

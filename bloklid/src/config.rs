@@ -362,6 +362,22 @@ impl Config {
             self.api.transactions.enable_revert_reason_tracing
         ));
         output.push_str(&format!(
+            "  api.transactions.enable_hopr_action_validation: {}\n",
+            self.api.transactions.enable_hopr_action_validation
+        ));
+        output.push_str(&format!(
+            "  api.transactions.hopr_action_ttl: {:?}\n",
+            self.api.transactions.hopr_action_ttl
+        ));
+        output.push_str(&format!(
+            "  api.transactions.hopr_invalid_action_threshold: {}\n",
+            self.api.transactions.hopr_invalid_action_threshold
+        ));
+        output.push_str(&format!(
+            "  api.transactions.hopr_invalid_action_cooldown: {:?}\n",
+            self.api.transactions.hopr_invalid_action_cooldown
+        ));
+        output.push_str(&format!(
             "  api.sse_keepalive.enabled: {}\n",
             self.api.sse_keepalive.enabled
         ));
@@ -526,6 +542,36 @@ pub struct TransactionConfig {
     #[default(true)]
     #[serde(default = "default_true")]
     pub enable_revert_reason_tracing: bool,
+
+    /// Whether to apply the HOPR-aware policy to supported HOPR node-management transactions.
+    ///
+    /// When disabled, every transaction keeps generic Blokli behaviour. Transactions the
+    /// policy does not recognise are unaffected either way.
+    ///
+    /// Off unless set explicitly, so an existing deployment does not start rejecting or
+    /// deduplicating transactions before its clients understand the new result types.
+    #[default(false)]
+    #[serde(default)]
+    pub enable_hopr_action_validation: bool,
+
+    /// How long one logical HOPR action stays deduplicated while its transaction is tracked.
+    ///
+    /// This is an upper bound: an action whose transaction already concluded is released
+    /// earlier.
+    #[default(_code = "Duration::from_secs(120)")]
+    #[serde(default = "default_hopr_action_ttl", with = "humantime_serde")]
+    pub hopr_action_ttl: Duration,
+
+    /// Consecutive deterministically invalid submissions of one operation by one signer
+    /// before that signer is put on cooldown. `0` disables invalid-action suppression.
+    #[default(3)]
+    #[serde(default = "default_hopr_invalid_action_threshold")]
+    pub hopr_invalid_action_threshold: u32,
+
+    /// How long a signer is suppressed for an operation once the threshold is reached.
+    #[default(_code = "Duration::from_secs(60)")]
+    #[serde(default = "default_hopr_invalid_action_cooldown", with = "humantime_serde")]
+    pub hopr_invalid_action_cooldown: Duration,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
@@ -626,6 +672,18 @@ fn default_max_queued_trace_jobs() -> usize {
 
 fn default_max_concurrent_trace_jobs() -> usize {
     2
+}
+
+fn default_hopr_action_ttl() -> Duration {
+    Duration::from_secs(120)
+}
+
+fn default_hopr_invalid_action_threshold() -> u32 {
+    3
+}
+
+fn default_hopr_invalid_action_cooldown() -> Duration {
+    Duration::from_secs(60)
 }
 
 fn default_max_indexer_lag() -> u64 {

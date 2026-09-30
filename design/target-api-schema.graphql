@@ -818,6 +818,24 @@ The input/output is a string in RFC3339 format.
 scalar DateTime
 
 """
+An equivalent logical HOPR action was already in flight, so nothing was broadcast.
+
+Retries of a HOPR action are re-signed with a new nonce, so they are distinct raw
+transactions describing one intent. Blokli returns the transaction already tracking that
+intent instead of submitting a competing copy.
+"""
+type DeduplicatedTransaction {
+	"""
+	The transaction already tracking this logical action
+	"""
+	transaction: Transaction!
+	"""
+	The decoded HOPR operation that was deduplicated
+	"""
+	operation: String!
+}
+
+"""
 Function selector not allowed
 """
 type FunctionNotAllowedError {
@@ -840,6 +858,61 @@ type FunctionNotAllowedError {
 }
 
 scalar Hex32
+
+"""
+A supported HOPR action was refused by Blokli's deterministic preflight.
+
+The transaction was never broadcast: no reachable chain state would have made the call
+succeed. Re-submitting the same action without first changing the on-chain state will be
+refused again.
+"""
+type HoprActionRejectedError {
+	"""
+	Error code
+	"""
+	code: String!
+	"""
+	Human-readable error message
+	"""
+	message: String!
+	"""
+	The decoded HOPR operation that was refused
+	"""
+	operation: String!
+	"""
+	Stable code for the precondition that failed
+	"""
+	reason: String!
+}
+
+"""
+Repeated deterministically invalid submissions from this signer are temporarily suppressed.
+
+The transaction was not broadcast. Unlike [`HoprActionRejectedError`] this is transient:
+the same action may be submitted again after `retryAfterSeconds`.
+"""
+type HoprActionThrottledError {
+	"""
+	Error code
+	"""
+	code: String!
+	"""
+	Human-readable error message
+	"""
+	message: String!
+	"""
+	The decoded HOPR operation that was suppressed
+	"""
+	operation: String!
+	"""
+	Stable code for the precondition that most recently failed
+	"""
+	reason: String!
+	"""
+	Seconds until this signer may submit this operation again
+	"""
+	retryAfterSeconds: Int!
+}
 
 """
 HOPR token balance information for a specific address
@@ -2041,12 +2114,12 @@ union SafesResult = SafesList | QueryFailedError
 """
 Result type for asynchronous transaction submission
 """
-union SendTransactionAsyncResult = Transaction | ContractNotAllowedError | FunctionNotAllowedError | RpcError | OverloadedError
+union SendTransactionAsyncResult = Transaction | ContractNotAllowedError | FunctionNotAllowedError | RpcError | OverloadedError | HoprActionRejectedError | HoprActionThrottledError | DeduplicatedTransaction
 
 """
 Result type for fire-and-forget transaction submission
 """
-union SendTransactionResult = SendTransactionSuccess | ContractNotAllowedError | FunctionNotAllowedError | RpcError
+union SendTransactionResult = SendTransactionSuccess | ContractNotAllowedError | FunctionNotAllowedError | RpcError | HoprActionRejectedError | HoprActionThrottledError
 
 """
 Success response for fire-and-forget transaction submission
@@ -2061,7 +2134,7 @@ type SendTransactionSuccess {
 """
 Result type for synchronous transaction submission
 """
-union SendTransactionSyncResult = Transaction | ContractNotAllowedError | FunctionNotAllowedError | RpcError | TimeoutError
+union SendTransactionSyncResult = Transaction | ContractNotAllowedError | FunctionNotAllowedError | RpcError | TimeoutError | HoprActionRejectedError | HoprActionThrottledError
 
 """
 A single entry in the on-chain service registry: one node offering one service type
