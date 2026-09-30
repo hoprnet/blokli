@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use async_trait::async_trait;
 use hopr_types::{
     crypto::prelude::Hash,
@@ -101,6 +103,25 @@ pub trait BlokliDbLogOperations {
         block_offset: Option<u64>,
         processed: Option<bool>,
     ) -> Result<Vec<u64>>;
+
+    /// Retrieves the identities of logs in the given block that are already marked as processed.
+    ///
+    /// Used to gate log dispatch: a log that has already been applied to the index must not be
+    /// applied a second time when its block is streamed or read again.
+    ///
+    /// # Arguments
+    ///
+    /// * `block_number` - The block whose processed logs should be returned.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the `(tx_index, log_index, block_hash)` triples of the processed logs
+    /// in that block. The block hash is part of the identity because a reorganisation can put a
+    /// different log at the same position: keyed on the position alone, the canonical replacement
+    /// would be mistaken for the log it replaces and never applied. Logs that were never stored are
+    /// absent from the set and must therefore be treated as unprocessed, as are stored logs whose
+    /// block hash is not the expected 32 bytes.
+    async fn get_processed_log_identities(&self, block_number: u64) -> Result<HashSet<(u64, u64, [u8; 32])>>;
 
     /// Marks a specific log entry as processed.
     ///

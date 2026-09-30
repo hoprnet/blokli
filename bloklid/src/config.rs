@@ -342,6 +342,42 @@ impl Config {
             self.api.max_query_complexity
         ));
         output.push_str(&format!(
+            "  api.transactions.max_submitted_transactions: {}\n",
+            self.api.transactions.max_submitted_transactions
+        ));
+        output.push_str(&format!(
+            "  api.transactions.max_submitted_transactions_per_identity: {}\n",
+            self.api.transactions.max_submitted_transactions_per_identity
+        ));
+        output.push_str(&format!(
+            "  api.transactions.max_queued_trace_jobs: {}\n",
+            self.api.transactions.max_queued_trace_jobs
+        ));
+        output.push_str(&format!(
+            "  api.transactions.max_concurrent_trace_jobs: {}\n",
+            self.api.transactions.max_concurrent_trace_jobs
+        ));
+        output.push_str(&format!(
+            "  api.transactions.enable_revert_reason_tracing: {}\n",
+            self.api.transactions.enable_revert_reason_tracing
+        ));
+        output.push_str(&format!(
+            "  api.transactions.enable_hopr_action_validation: {}\n",
+            self.api.transactions.enable_hopr_action_validation
+        ));
+        output.push_str(&format!(
+            "  api.transactions.hopr_action_ttl: {:?}\n",
+            self.api.transactions.hopr_action_ttl
+        ));
+        output.push_str(&format!(
+            "  api.transactions.hopr_invalid_action_threshold: {}\n",
+            self.api.transactions.hopr_invalid_action_threshold
+        ));
+        output.push_str(&format!(
+            "  api.transactions.hopr_invalid_action_cooldown: {:?}\n",
+            self.api.transactions.hopr_invalid_action_cooldown
+        ));
+        output.push_str(&format!(
             "  api.sse_keepalive.enabled: {}\n",
             self.api.sse_keepalive.enabled
         ));
@@ -463,6 +499,9 @@ pub struct ApiConfig {
     #[serde(default)]
     pub health: HealthConfig,
 
+    #[serde(default)]
+    pub transactions: TransactionConfig,
+
     #[default(8)]
     #[serde(default = "default_max_query_depth")]
     pub max_query_depth: usize,
@@ -470,6 +509,69 @@ pub struct ApiConfig {
     #[default(500)]
     #[serde(default = "default_max_query_complexity")]
     pub max_query_complexity: usize,
+}
+
+/// Configuration for transaction submission and optional Safe revert tracing.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
+#[serde(deny_unknown_fields)]
+pub struct TransactionConfig {
+    /// Global limit for transactions awaiting receipt monitoring. `0` means unbounded.
+    ///
+    /// Applies to asynchronous submissions only, since they are the only ones
+    /// tracked by the background receipt monitor.
+    #[default(1024)]
+    #[serde(default = "default_max_submitted_transactions")]
+    pub max_submitted_transactions: usize,
+
+    /// Per-signer limit for transactions awaiting receipt monitoring. `0` means unbounded.
+    #[default(64)]
+    #[serde(default = "default_max_submitted_transactions_per_identity")]
+    pub max_submitted_transactions_per_identity: usize,
+
+    /// Maximum number of optional Safe revert-reason trace jobs waiting to run. `0` means unbounded.
+    #[default(128)]
+    #[serde(default = "default_max_queued_trace_jobs")]
+    pub max_queued_trace_jobs: usize,
+
+    /// Number of concurrent optional Safe revert-reason trace jobs. `0` means unbounded.
+    #[default(2)]
+    #[serde(default = "default_max_concurrent_trace_jobs")]
+    pub max_concurrent_trace_jobs: usize,
+
+    /// Whether to request optional Safe revert reasons through debug tracing.
+    #[default(true)]
+    #[serde(default = "default_true")]
+    pub enable_revert_reason_tracing: bool,
+
+    /// Whether to apply the HOPR-aware policy to supported HOPR node-management transactions.
+    ///
+    /// When disabled, every transaction keeps generic Blokli behaviour. Transactions the
+    /// policy does not recognise are unaffected either way.
+    ///
+    /// Off unless set explicitly, so an existing deployment does not start rejecting or
+    /// deduplicating transactions before its clients understand the new result types.
+    #[default(false)]
+    #[serde(default)]
+    pub enable_hopr_action_validation: bool,
+
+    /// How long one logical HOPR action stays deduplicated while its transaction is tracked.
+    ///
+    /// This is an upper bound: an action whose transaction already concluded is released
+    /// earlier.
+    #[default(_code = "Duration::from_secs(120)")]
+    #[serde(default = "default_hopr_action_ttl", with = "humantime_serde")]
+    pub hopr_action_ttl: Duration,
+
+    /// Consecutive deterministically invalid submissions of one operation by one signer
+    /// before that signer is put on cooldown. `0` disables invalid-action suppression.
+    #[default(3)]
+    #[serde(default = "default_hopr_invalid_action_threshold")]
+    pub hopr_invalid_action_threshold: u32,
+
+    /// How long a signer is suppressed for an operation once the threshold is reached.
+    #[default(_code = "Duration::from_secs(60)")]
+    #[serde(default = "default_hopr_invalid_action_cooldown", with = "humantime_serde")]
+    pub hopr_invalid_action_cooldown: Duration,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
@@ -554,6 +656,34 @@ fn default_max_query_depth() -> usize {
 
 fn default_max_query_complexity() -> usize {
     500
+}
+
+fn default_max_submitted_transactions() -> usize {
+    1024
+}
+
+fn default_max_submitted_transactions_per_identity() -> usize {
+    64
+}
+
+fn default_max_queued_trace_jobs() -> usize {
+    128
+}
+
+fn default_max_concurrent_trace_jobs() -> usize {
+    2
+}
+
+fn default_hopr_action_ttl() -> Duration {
+    Duration::from_secs(120)
+}
+
+fn default_hopr_invalid_action_threshold() -> u32 {
+    3
+}
+
+fn default_hopr_invalid_action_cooldown() -> Duration {
+    Duration::from_secs(60)
 }
 
 fn default_max_indexer_lag() -> u64 {
