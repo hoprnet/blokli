@@ -7,7 +7,7 @@
 //! so the set of relayable HOPR operations is a property of the network, not operator configuration.
 
 use blokli_chain_types::ContractAddresses;
-use blokli_tx::{FilterError, TransactionFilter};
+use blokli_tx::{FilterError, FilteredTransaction, TransactionFilter};
 use curvy_bindings::curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2::submitWithdrawalRequestCall;
 use hopr_bindings::{
     exports::alloy::sol_types::SolCall,
@@ -44,10 +44,15 @@ use hopr_types::primitive::prelude::Address;
 /// Contracts that the network does not deploy carry the zero address; their pairs are dropped so
 /// the allow-set never authorizes calls to `0x0`.
 ///
-/// One relayable operation cannot be expressed here: `SafePayloadGenerator::deregister_node_by_safe`
-/// sends `deregisterNodeBySafe` straight to the per-node management module rather than wrapping it,
-/// and module addresses are per-node, so the filter cannot match it. The entry below covers the
-/// registry-targeted form of that call only.
+/// Two relayable operations carry no `(contract, selector)` pair of their own and are admitted by
+/// the filter's two escape hatches instead:
+///
+/// - `SafePayloadGenerator::deregister_node_by_safe` sends `deregisterNodeBySafe` straight to the per-node management
+///   module rather than wrapping it, and module addresses are per-node. The selector is therefore allowed on any
+///   target, alongside the registry-targeted entry for the same call.
+/// - both payload generators relay a native xDAI transfer with no calldata at all — directly to the recipient, or as a
+///   module `Call` carrying only `value`. Value transfers are permitted, for any destination; permitting them does not
+///   make those destinations allowed contracts, since any call with a selector is still matched normally.
 pub fn network_transaction_filter(contracts: &ContractAddresses) -> TransactionFilter {
     let token = contracts.token;
     let xhopr_token = contracts.xhopr_token;
@@ -91,6 +96,8 @@ pub fn network_transaction_filter(contracts: &ContractAddresses) -> TransactionF
             .into_iter()
             .filter(|(contract, _)| *contract != Address::default()),
     )
+    .allowing_on_any_target([deregisterNodeBySafeCall::SELECTOR])
+    .allowing_value_transfers()
 }
 
 /// Decides whether a raw signed transaction may be submitted to the chain.
@@ -110,19 +117,21 @@ impl TransactionPolicy {
     ///
     /// An empty payload is rejected in all modes. Under [`TransactionPolicy::Whitelist`] the
     /// transaction is decoded and matched against the allow-set via
-    /// [`TransactionFilter::filter_transaction`].
+    /// [`TransactionFilter::filter_transaction`], and the decoded sender and effective calls are
+    /// returned so the caller can record what it authorized. [`TransactionPolicy::AllowAll`]
+    /// decodes nothing and so has nothing to report.
     ///
     /// # Errors
     /// Returns a [`FilterError`] when the payload is empty or, under a whitelist policy, when the
     /// transaction cannot be decoded or is not authorized.
-    pub fn check(&self, raw_tx: &[u8]) -> Result<(), FilterError> {
+    pub fn check(&self, raw_tx: &[u8]) -> Result<Option<FilteredTransaction>, FilterError> {
         if raw_tx.is_empty() {
             return Err(FilterError::Empty);
         }
 
         match self {
-            TransactionPolicy::AllowAll => Ok(()),
-            TransactionPolicy::Whitelist(filter) => filter.filter_transaction(raw_tx).map(|_| ()),
+            TransactionPolicy::AllowAll => Ok(None),
+            TransactionPolicy::Whitelist(filter) => filter.filter_transaction(raw_tx).map(Some),
         }
     }
 }
@@ -133,6 +142,7 @@ mod tests {
     use blokli_tx::FilterError;
     use curvy_bindings::curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2::submitWithdrawalRequestCall;
     use hopr_bindings::{
+        constants::SAFE_MULTISEND_ADDRESS,
         exports::alloy::{
             consensus::{SignableTransaction, TxEip1559},
             eips::eip2718::Encodable2718,
@@ -142,7 +152,8 @@ mod tests {
             sol_types::SolCall,
         },
         hopr_channels::HoprChannels::fundChannelSafeCall,
-        hopr_node_safe_registry::HoprNodeSafeRegistry::registerSafeByNodeCall,
+        hopr_node_management_module::HoprNodeManagementModule::execTransactionFromModuleCall,
+        hopr_node_safe_registry::HoprNodeSafeRegistry::{deregisterNodeBySafeCall, registerSafeByNodeCall},
         hopr_service_registry::HoprServiceRegistry::{
             registerServiceTypeCall, selfDeregisterCall, selfRegisterCall, selfUpdateCall,
         },
@@ -155,7 +166,6 @@ mod tests {
     use crate::transaction_policy::{TransactionPolicy, network_transaction_filter};
 
     sol! {
-        function execTransactionFromModule(address to, uint256 value, bytes data, uint8 operation) external returns (bool);
         function multiSend(bytes transactions) external payable;
     }
 
@@ -170,11 +180,6 @@ mod tests {
     const TICKET_PRICE_ORACLE: [u8; 20] = [0x88; 20];
     /// Per-node Safe management module; never part of the allow-set, only an unwrapping target.
     const MODULE: [u8; 20] = [0x99; 20];
-    /// Canonical Gnosis Safe `MultiSend` singleton, the only permitted delegate-call target.
-    const SAFE_MULTI_SEND: [u8; 20] = [
-        0x38, 0x86, 0x9b, 0xf6, 0x6a, 0x61, 0xcf, 0x6b, 0xdb, 0x99, 0x6a, 0x6a, 0xe4, 0x0d, 0x58, 0x53, 0xfd, 0x43,
-        0xb5, 0x26,
-    ];
 
     fn calldata(selector: [u8; 4]) -> Vec<u8> {
         let mut input = selector.to_vec();
@@ -219,6 +224,19 @@ mod tests {
         sign(MODULE, input)
     }
 
+    /// A Safe-wrapped native transfer: a module `Call` carrying the amount as `value` and no payload.
+    fn signed_module_native_transfer(destination: [u8; 20]) -> Vec<u8> {
+        let input = execTransactionFromModuleCall {
+            to: AlloyAddress::from(destination),
+            value: U256::from(1_000u64),
+            data: Bytes::new(),
+            operation: 0,
+        }
+        .abi_encode();
+
+        sign(MODULE, input)
+    }
+
     /// A paid service-registry transaction: a module delegate call into `MultiSend` batching an
     /// allowance on the token and the service-registry call itself.
     fn signed_paid_service_tx(registry_selector: [u8; 4]) -> Vec<u8> {
@@ -241,7 +259,7 @@ mod tests {
         .abi_encode();
 
         let input = execTransactionFromModuleCall {
-            to: AlloyAddress::from(SAFE_MULTI_SEND),
+            to: SAFE_MULTISEND_ADDRESS,
             value: U256::ZERO,
             data: Bytes::from(multi_send),
             operation: 1, // DelegateCall, as the Safe payload generator emits for MultiSend
@@ -303,6 +321,49 @@ mod tests {
     fn network_filter_allows_safe_registration() {
         let raw = signed_tx(REGISTRY, registerSafeByNodeCall::SELECTOR);
         assert!(network_policy().check(&raw).is_ok());
+    }
+
+    #[test]
+    fn network_filter_allows_deregistration_on_the_per_node_module() {
+        // `SafePayloadGenerator::deregister_node_by_safe` sends the call to the node's own
+        // management module, whose address no allow-set can carry.
+        let raw = signed_tx(MODULE, deregisterNodeBySafeCall::SELECTOR);
+        assert!(network_policy().check(&raw).is_ok());
+    }
+
+    #[test]
+    fn network_filter_rejects_other_selectors_on_the_per_node_module() {
+        // Only `deregisterNodeBySafe` is matched without a target; the module is not whitelisted.
+        let raw = signed_tx(MODULE, registerSafeByNodeCall::SELECTOR);
+        assert!(matches!(
+            network_policy().check(&raw),
+            Err(FilterError::ContractNotAllowed { .. })
+        ));
+    }
+
+    #[test]
+    fn network_filter_allows_direct_native_transfer() {
+        // `BasicPayloadGenerator::transfer::<XDai>` carries the amount as `value` and no calldata,
+        // so there is no selector to match.
+        let raw = sign([0xab; 20], Vec::new());
+        assert!(network_policy().check(&raw).is_ok());
+    }
+
+    #[test]
+    fn network_filter_allows_safe_wrapped_native_transfer() {
+        // `SafePayloadGenerator::transfer::<XDai>` wraps an empty payload in a module `Call`.
+        let raw = signed_module_native_transfer([0xab; 20]);
+        assert!(network_policy().check(&raw).is_ok());
+    }
+
+    #[test]
+    fn network_filter_rejects_unknown_calls_on_a_native_transfer_destination() {
+        // Permitting value transfers must not turn their destination into an allowed contract.
+        let raw = signed_tx([0xab; 20], approveCall::SELECTOR);
+        assert!(matches!(
+            network_policy().check(&raw),
+            Err(FilterError::ContractNotAllowed { .. })
+        ));
     }
 
     #[test]

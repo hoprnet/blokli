@@ -153,6 +153,11 @@ or a removed one stays allowed. The `blokli-tx` filter unwraps Safe-module `exec
 `(contract, selector)`, so add the inner call's selector (the `*Safe` variant for module-wrapped ops). Cover any new operation with a test
 in `transaction_policy.rs`.
 
+Not every relayed operation has a `(contract, selector)` pair. An operation sent straight to the node's own Safe management module has a
+per-node target, and a native xDAI transfer has no calldata at all. These use `TransactionFilter::allowing_on_any_target` and
+`allowing_value_transfers` respectively; a filter built without them rejects both. Reach for an escape hatch only when the operation
+genuinely has no static pair — everything else belongs in the `(contract, selector)` set, which is the tighter check.
+
 ## Testing
 
 - Unit tests: `#[cfg(test)]` in same file, `#[tokio::test]` for async

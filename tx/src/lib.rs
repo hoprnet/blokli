@@ -10,16 +10,22 @@
 //!
 //! The allow-set is injected by the caller — Blokli derives it from the network's contract addresses.
 //! Transactions are rejected when they are empty, undecodable, of an unsupported type,
-//! contract-creation transactions, fail sender recovery, carry calldata shorter than four bytes,
-//! carry trailing bytes after the envelope, request an unsupported Safe delegate call, or whose
-//! effective `(contract, selector)` pair is not allowed. See [`FilterError`] for the full set of
-//! rejection reasons.
+//! contract-creation transactions, fail sender recovery, carry calldata that is non-empty but
+//! shorter than four bytes, carry trailing bytes after the envelope, request an unsupported Safe
+//! delegate call, or whose effective `(contract, selector)` pair is not allowed. See
+//! [`FilterError`] for the full set of rejection reasons.
+//!
+//! Two relayable operation shapes carry no `(contract, selector)` pair at all — a native value
+//! transfer, which has no calldata, and a call to a per-node Safe management module, whose target
+//! is not knowable when the allow-set is built. Both are rejected unless the caller opts in with
+//! [`TransactionFilter::allowing_value_transfers`] or
+//! [`TransactionFilter::allowing_on_any_target`].
 //!
 //! # Trust assumptions
 //!
 //! The filter has no source of truth for the per-node Safe module addresses, so it unwraps
 //! `execTransactionFromModule` on the outer selector alone and authorizes on the inner call. See
-//! [`TransactionFilter`] for what that implies and which operations it cannot express.
+//! [`TransactionFilter`] for what that implies.
 //!
 //! # Example
 //!

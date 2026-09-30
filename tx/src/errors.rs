@@ -48,9 +48,14 @@ pub enum FilterError {
     #[error("failed to recover sender address: {0}")]
     SenderRecovery(String),
 
-    /// The calldata is too short to contain a 4-byte function selector.
+    /// The calldata is non-empty but too short to contain a 4-byte function selector.
     #[error("calldata is too short to contain a 4-byte function selector")]
     MissingSelector,
+
+    /// The call carries no calldata at all, so it only moves native value, and the filter was not
+    /// built to permit that.
+    #[error("unauthorized: native value transfers are not allowed")]
+    ValueTransferNotAllowed,
 
     /// A Safe-module `execTransactionFromModule` call could not be decoded.
     #[error("failed to decode Safe module call: {0}")]
