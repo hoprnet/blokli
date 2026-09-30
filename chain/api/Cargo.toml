@@ -27,6 +27,7 @@ alloy-sol-types = { workspace = true }
 async-broadcast = { workspace = true }
 async-trait     = { workspace = true }
 chrono          = { workspace = true }
+curvy-bindings  = { workspace = true }
 dashmap         = { workspace = true }
 futures         = { workspace = true }
 hex             = { workspace = true }
@@ -43,6 +44,7 @@ blokli-chain-indexer = { workspace = true }
 blokli-chain-rpc = { workspace = true }
 blokli-chain-types = { workspace = true }
 blokli-db = { workspace = true }
+blokli-tx = { workspace = true }
 hopr-bindings = { workspace = true }
 hopr-types = { workspace = true, features = [
   "crypto",

@@ -9,6 +9,7 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
+use blokli_tx::FilterError;
 use chrono::Utc;
 use hopr_types::crypto::types::Hash;
 use thiserror::Error;
@@ -21,15 +22,15 @@ use crate::{
         record_transaction_status,
     },
     transaction_monitor::{ReceiptProvider, SafeAddressChecker, enrich_safe_execution},
+    transaction_policy::TransactionPolicy,
     transaction_store::{TransactionRecord, TransactionStatus, TransactionStore, TransactionStoreError},
-    transaction_validator::{TransactionValidator, ValidationError},
 };
 
 /// Errors that can occur during transaction execution
 #[derive(Error, Debug)]
 pub enum TransactionExecutorError {
     #[error("Validation failed: {0}")]
-    ValidationFailed(#[from] ValidationError),
+    ValidationFailed(#[from] FilterError),
     #[error("RPC error: {0}")]
     RpcError(String),
     #[error("Transaction store error: {0}")]
@@ -102,7 +103,7 @@ impl Default for RawTransactionExecutorConfig {
 pub struct RawTransactionExecutor<R: RpcClient> {
     rpc_client: Arc<R>,
     transaction_store: Arc<TransactionStore>,
-    validator: Arc<TransactionValidator>,
+    policy: Arc<TransactionPolicy>,
     config: RawTransactionExecutorConfig,
     /// Receipt provider for Safe enrichment in sync mode
     receipt_provider: Option<Arc<dyn ReceiptProvider>>,
@@ -123,13 +124,13 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
     pub fn new(
         rpc_client: R,
         transaction_store: TransactionStore,
-        validator: TransactionValidator,
+        policy: TransactionPolicy,
         config: RawTransactionExecutorConfig,
     ) -> Self {
         Self {
             rpc_client: Arc::new(rpc_client),
             transaction_store: Arc::new(transaction_store),
-            validator: Arc::new(validator),
+            policy: Arc::new(policy),
             config,
             receipt_provider: None,
             safe_checker: None,
@@ -143,13 +144,13 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
     pub fn with_shared_dependencies(
         rpc_client: Arc<R>,
         transaction_store: Arc<TransactionStore>,
-        validator: Arc<TransactionValidator>,
+        policy: Arc<TransactionPolicy>,
         config: RawTransactionExecutorConfig,
     ) -> Self {
         Self {
             rpc_client,
             transaction_store,
-            validator,
+            policy,
             config,
             receipt_provider: None,
             safe_checker: None,
@@ -180,7 +181,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
     /// - Does NOT wait for confirmation
     pub async fn send_raw_transaction(&self, raw_tx: Vec<u8>) -> Result<Hash, TransactionExecutorError> {
         // Validate transaction
-        if let Err(e) = self.validator.validate_raw_transaction(&raw_tx) {
+        if let Err(e) = self.policy.check(&raw_tx) {
             warn!(error = %e, "Transaction validation failed");
             record_transaction_status(STATUS_VALIDATION_FAILED);
             return Err(e.into());
@@ -208,7 +209,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
     /// - Background monitor handles confirmation tracking
     pub async fn send_raw_transaction_async(&self, raw_tx: Vec<u8>) -> Result<Uuid, TransactionExecutorError> {
         // Validate transaction
-        if let Err(e) = self.validator.validate_raw_transaction(&raw_tx) {
+        if let Err(e) = self.policy.check(&raw_tx) {
             warn!(error = %e, "Transaction validation failed");
             record_transaction_status(STATUS_VALIDATION_FAILED);
             return Err(e.into());
@@ -256,7 +257,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         confirmations: Option<u64>,
     ) -> Result<TransactionRecord, TransactionExecutorError> {
         // Validate transaction
-        if let Err(e) = self.validator.validate_raw_transaction(&raw_tx) {
+        if let Err(e) = self.policy.check(&raw_tx) {
             warn!(error = %e, "Transaction validation failed");
             record_transaction_status(STATUS_VALIDATION_FAILED);
             return Err(e.into());
@@ -322,6 +323,14 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
+
+    use blokli_tx::TransactionFilter;
+    use hopr_bindings::exports::alloy::{
+        consensus::{SignableTransaction, TxEip1559},
+        eips::eip2718::Encodable2718,
+        primitives::{Address as AlloyAddress, Bytes, TxKind, U256},
+        signers::{SignerSync, local::PrivateKeySigner},
+    };
 
     use super::*;
 
@@ -405,7 +414,7 @@ mod tests {
         RawTransactionExecutor::new(
             rpc_client,
             TransactionStore::new(),
-            TransactionValidator::new(),
+            TransactionPolicy::AllowAll,
             RawTransactionExecutorConfig::default(),
         )
     }
@@ -438,6 +447,55 @@ mod tests {
 
         let result = executor.send_raw_transaction(empty_tx).await;
         assert!(matches!(result, Err(TransactionExecutorError::ValidationFailed(_))));
+    }
+
+    /// A valid, signed EIP-1559 transaction calling `selector` on `to`.
+    fn signed_tx(to: [u8; 20], selector: [u8; 4]) -> Vec<u8> {
+        let signer: PrivateKeySigner = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+            .parse()
+            .expect("valid private key");
+        let mut input = selector.to_vec();
+        input.extend_from_slice(&[0u8; 32]);
+
+        let tx = TxEip1559 {
+            chain_id: 1,
+            nonce: 0,
+            gas_limit: 21_000,
+            max_fee_per_gas: 1_000_000_000,
+            max_priority_fee_per_gas: 1_000_000_000,
+            to: TxKind::Call(AlloyAddress::from(to)),
+            value: U256::ZERO,
+            access_list: Default::default(),
+            input: Bytes::from(input),
+        };
+        let signature = signer.sign_hash_sync(&tx.signature_hash()).expect("sign tx");
+        let mut raw = Vec::new();
+        tx.into_signed(signature).encode_2718(&mut raw);
+        raw
+    }
+
+    #[tokio::test]
+    async fn test_whitelist_policy_rejects_unauthorized() {
+        // An empty whitelist authorizes nothing, so a perfectly well-formed transaction is still
+        // rejected — on authorization, not on decoding — before it ever reaches the RPC client.
+        let executor = RawTransactionExecutor::new(
+            MockRpcClient::new(),
+            TransactionStore::new(),
+            TransactionPolicy::Whitelist(TransactionFilter::default()),
+            RawTransactionExecutorConfig::default(),
+        );
+
+        let result = executor
+            .send_raw_transaction(signed_tx([0x11; 20], [0xa9, 0x05, 0x9c, 0xbb]))
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(TransactionExecutorError::ValidationFailed(
+                FilterError::ContractNotAllowed { .. }
+            ))
+        ));
+        assert_eq!(executor.transaction_store().count(), 0);
     }
 
     #[tokio::test]

@@ -7,8 +7,8 @@ pub mod rpc_adapter;
 pub mod safe_execution;
 pub mod transaction_executor;
 pub mod transaction_monitor;
+pub mod transaction_policy;
 pub mod transaction_store;
-pub mod transaction_validator;
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
@@ -48,8 +48,8 @@ use crate::{
     safe_execution::DbSafeAddressChecker,
     transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
     transaction_monitor::{TransactionMonitor, TransactionMonitorConfig},
+    transaction_policy::{TransactionPolicy, network_transaction_filter},
     transaction_store::TransactionStore,
-    transaction_validator::TransactionValidator,
 };
 
 pub type DefaultHttpRequestor = blokli_chain_rpc::transport::ReqwestClient;
@@ -148,7 +148,10 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
 
         // Build transaction submission infrastructure
         let transaction_store = Arc::new(TransactionStore::new());
-        let transaction_validator = Arc::new(TransactionValidator::new());
+        // The transaction allow-set is a property of the network, derived from its contract addresses.
+        let transaction_policy = Arc::new(TransactionPolicy::Whitelist(network_transaction_filter(
+            &contract_addresses,
+        )));
         let rpc_adapter = Arc::new(RpcAdapter::new(rpc_operations.clone()));
 
         let safe_checker = Arc::new(DbSafeAddressChecker::new(db.clone()));
@@ -157,7 +160,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
             RawTransactionExecutor::with_shared_dependencies(
                 rpc_adapter.clone(),
                 transaction_store.clone(),
-                transaction_validator,
+                transaction_policy,
                 RawTransactionExecutorConfig::default(),
             )
             .with_safe_enrichment(rpc_adapter.clone(), safe_checker.clone()),
