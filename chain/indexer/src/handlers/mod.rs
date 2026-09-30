@@ -48,7 +48,7 @@ mod safe_contracts;
 mod service_registry;
 mod stake_factory;
 #[cfg(test)]
-mod test_utils;
+pub(crate) mod test_utils;
 mod tokens;
 
 #[cfg(all(feature = "telemetry", not(test)))]

@@ -189,7 +189,10 @@ RPC Endpoint
 
 - **HoprAnnouncements**: Node multiaddress announcements for network discovery
 - **HoprChannels**: Payment channel lifecycle events (open, fund, close)
-- **HoprToken**: wxHOPR token transfers and approvals for balance tracking
+- **HoprToken**: wxHOPR token transfers and approvals. Approval updates carry the owner, spender, and full-precision absolute allowance from
+  the configured token. They use the synchronized live event path after the log transaction commits, with the existing block coordination
+  and reorganization handling. Allowances remain RPC reads rather than persisted derived state; consumers must re-read current allowance
+  before acting on potentially superseded updates.
 - **HoprNodeSafeRegistry**: Safe contract address registration linking accounts to multisig wallets
 - **HoprNodeStakeFactory**: Safe contract deployment events with module and owner tracking
 - **HoprTicketPriceOracle**: Network-wide ticket price updates
