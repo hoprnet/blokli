@@ -61,7 +61,10 @@ pub type Selector = [u8; 4];
 ///     selector: None,
 /// };
 ///
-/// assert_eq!(value_transfer.to_string(), "0x0303030303030303030303030303030303030303:value");
+/// assert_eq!(
+///     value_transfer.to_string(),
+///     "0x0303030303030303030303030303030303030303:value"
+/// );
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AuthorizedCall {

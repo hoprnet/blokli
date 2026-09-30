@@ -32,8 +32,8 @@ use hopr_types::primitive::prelude::Address;
 /// Maps each HOPR contract to the selectors bloklid relays for it. A few entries are not obvious
 /// from the list below:
 ///
-/// - channel operations appear in both direct and `*Safe` variants, because the filter unwraps `execTransactionFromModule`
-///   and matches the inner call;
+/// - channel operations appear in both direct and `*Safe` variants, because the filter unwraps
+///   `execTransactionFromModule` and matches the inner call;
 /// - node announcements and Safe deployments ride on the token's `send`, so they need no entry;
 /// - paid service registration arrives as a module delegate call into `MultiSend`, whose batched `(token, approve)` and
 ///   service-registry calls are matched individually;
@@ -42,8 +42,8 @@ use hopr_types::primitive::prelude::Address;
 /// Two relayable operations have no `(contract, selector)` pair and use the filter's escape
 /// hatches instead:
 ///
-/// - `SafePayloadGenerator::deregister_node_by_safe` targets the per-node management module directly, so its selector is
-///   allowed on any target;
+/// - `SafePayloadGenerator::deregister_node_by_safe` targets the per-node management module directly, so its selector
+///   is allowed on any target;
 /// - both payload generators relay native xDAI with no calldata, so value transfers are permitted for any destination.
 ///   This does not make those destinations allowed contracts — anything carrying a selector is still matched normally.
 pub fn network_transaction_filter(contracts: &ContractAddresses) -> TransactionFilter {
