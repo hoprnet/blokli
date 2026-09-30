@@ -1,10 +1,10 @@
 //! Policy controlling which raw transactions the executor will submit.
 //!
-//! The policy is the integration point for the stand-alone [`blokli_tx`] filtering crate.
-//! [`TransactionPolicy::AllowAll`] accepts any non-empty transaction (used by the standalone API
-//! stubs and tests). [`TransactionPolicy::Whitelist`] enforces a `(contract, selector)` allow-set;
-//! in production it is built by [`network_transaction_filter`] from the network's contract addresses,
-//! so the set of relayable HOPR operations is a property of the network, not operator configuration.
+//! The integration point for the stand-alone [`blokli_tx`] filtering crate.
+//! [`TransactionPolicy::AllowAll`] accepts any non-empty transaction and is for tests and schema
+//! export only. [`TransactionPolicy::Whitelist`] enforces an allow-set, built in production by
+//! [`network_transaction_filter`] — so what is relayable is a property of the network, not of
+//! operator configuration.
 
 use blokli_chain_types::ContractAddresses;
 use blokli_tx::{FilterError, FilteredTransaction, TransactionFilter};
@@ -29,30 +29,23 @@ use hopr_types::primitive::prelude::Address;
 
 /// Build the network transaction allow-set from its contract addresses.
 ///
-/// Maps each HOPR contract to the function selectors bloklid relays for it. Channel operations are
-/// included in both their direct and Safe-module (`*Safe`) variants, since the filter unwraps
-/// `execTransactionFromModule` and matches the inner call. Token `approve`/`transfer`/`send` and the
-/// safe-registry and service-registry operations cover the remaining relayable calls; node
-/// announcements and Safe deployments are relayed as `send` on the token contract, so they need no
-/// entry of their own. Paid service registration and updates arrive as a module delegate call into
-/// the canonical `MultiSend`, whose batched `(token, approve)` and service-registry calls are
-/// matched individually. When Curvy is configured, its aggregator's withdrawal submission
-/// entrypoint is included as well. The network winning-probability and ticket-price update
-/// entrypoints are also relayed for ticket parameter updates. The integration network's xHOPR
-/// ERC-677 token accepts standard `transfer` calls.
+/// Maps each HOPR contract to the selectors bloklid relays for it. A few entries are not obvious
+/// from the list below:
 ///
-/// Contracts that the network does not deploy carry the zero address; their pairs are dropped so
-/// the allow-set never authorizes calls to `0x0`.
+/// - channel operations appear in both direct and `*Safe` variants, because the filter unwraps `execTransactionFromModule`
+///   and matches the inner call;
+/// - node announcements and Safe deployments ride on the token's `send`, so they need no entry;
+/// - paid service registration arrives as a module delegate call into `MultiSend`, whose batched `(token, approve)` and
+///   service-registry calls are matched individually;
+/// - undeployed contracts carry the zero address and are dropped, so nothing authorizes calls to `0x0`.
 ///
-/// Two relayable operations carry no `(contract, selector)` pair of their own and are admitted by
-/// the filter's two escape hatches instead:
+/// Two relayable operations have no `(contract, selector)` pair and use the filter's escape
+/// hatches instead:
 ///
-/// - `SafePayloadGenerator::deregister_node_by_safe` sends `deregisterNodeBySafe` straight to the per-node management
-///   module rather than wrapping it, and module addresses are per-node. The selector is therefore allowed on any
-///   target, alongside the registry-targeted entry for the same call.
-/// - both payload generators relay a native xDAI transfer with no calldata at all — directly to the recipient, or as a
-///   module `Call` carrying only `value`. Value transfers are permitted, for any destination; permitting them does not
-///   make those destinations allowed contracts, since any call with a selector is still matched normally.
+/// - `SafePayloadGenerator::deregister_node_by_safe` targets the per-node management module directly, so its selector is
+///   allowed on any target;
+/// - both payload generators relay native xDAI with no calldata, so value transfers are permitted for any destination.
+///   This does not make those destinations allowed contracts — anything carrying a selector is still matched normally.
 pub fn network_transaction_filter(contracts: &ContractAddresses) -> TransactionFilter {
     let token = contracts.token;
     let xhopr_token = contracts.xhopr_token;
@@ -89,8 +82,7 @@ pub fn network_transaction_filter(contracts: &ContractAddresses) -> TransactionF
         (curvy_aggregator, submitWithdrawalRequestCall::SELECTOR),
     ];
 
-    // Contracts a network does not deploy are left at the zero address; whitelisting them would
-    // authorize calls to `0x0`.
+    // Whitelisting an undeployed contract would authorize calls to `0x0`.
     TransactionFilter::from_pairs(
         allowed
             .into_iter()
@@ -115,15 +107,12 @@ pub enum TransactionPolicy {
 impl TransactionPolicy {
     /// Check a raw signed transaction against the policy.
     ///
-    /// An empty payload is rejected in all modes. Under [`TransactionPolicy::Whitelist`] the
-    /// transaction is decoded and matched against the allow-set via
-    /// [`TransactionFilter::filter_transaction`], and the decoded sender and effective calls are
-    /// returned so the caller can record what it authorized. [`TransactionPolicy::AllowAll`]
-    /// decodes nothing and so has nothing to report.
+    /// An empty payload is rejected in all modes. A whitelist returns the decoded sender and
+    /// effective calls so the caller can record what it authorized; [`TransactionPolicy::AllowAll`]
+    /// decodes nothing and returns `None`.
     ///
     /// # Errors
-    /// Returns a [`FilterError`] when the payload is empty or, under a whitelist policy, when the
-    /// transaction cannot be decoded or is not authorized.
+    /// Returns a [`FilterError`] when the payload is empty or the whitelist rejects it.
     pub fn check(&self, raw_tx: &[u8]) -> Result<Option<FilteredTransaction>, FilterError> {
         if raw_tx.is_empty() {
             return Err(FilterError::Empty);
