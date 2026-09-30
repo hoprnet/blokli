@@ -392,24 +392,18 @@ limit) and non-retryable errors (invalid transaction), and respects rate limits 
 **Components**:
 
 **TransactionPolicy**: Gates which raw transactions may be submitted. The allow-set is derived from the network's contract addresses
-(rotsee, jura, anvil-localhost, ...) — a property of the network, not operator configuration. Each transaction is decoded by the stand-alone
-`blokli-tx` filtering crate, which recovers the sender via ECDSA, extracts the 4-byte function selector, and unwraps Safe-module
-`execTransactionFromModule` calls so the inner call is validated. A transaction is authorized only if its effective `(contract, selector)`
-pair belongs to the network's curated set of relayable HOPR operations (channel funding/closure/redemption, token approve/transfer/send,
-safe registry operations in both directions, service registry operations). Batched operations arriving as a module delegate call into the
-canonical Gnosis Safe `MultiSend` singleton are unpacked and every batched call is validated individually. Contract-creation transactions,
-any other delegate call, and unsupported transaction types are always rejected. This prevents submission of malicious or unintended
-transactions while keeping the filtering logic decoupled from the daemon internals.
+(rotsee, jura, anvil-localhost, ...) — a property of the network, not operator configuration. The stand-alone `blokli-tx` crate decodes each
+transaction, recovers the sender, and unwraps Safe-module `execTransactionFromModule` calls so the inner call is what gets authorized; a
+module delegate call into the canonical Gnosis Safe `MultiSend` singleton is unpacked and each batched call validated individually. A
+transaction passes only if every effective `(contract, selector)` pair is in the set. Contract creation, any other delegate call, and
+unsupported transaction types are always rejected.
 
-Two relayable operations carry no `(contract, selector)` pair and are admitted by narrower rules the filter must be built to permit. Node
-deregistration is sent to the node's own Safe management module, whose address is per-node and so cannot appear in an allow-set built from
-network contracts; its selector is therefore matched on any target. A native xDAI transfer carries no calldata at all and so has no selector
-to match; value transfers are permitted for any recipient, which does not make those recipients allowed contracts, because any call that
-does carry a selector is still matched normally. Both rest on the same trust assumption as Safe-module unwrapping: the filter has no source
-of truth for which addresses are genuine node modules.
+Two relayable operations have no such pair. Node deregistration targets the node's own Safe management module, whose address is per-node, so
+its selector is matched on any target. A native xDAI transfer carries no calldata, so value transfers are permitted for any recipient —
+which does not make those recipients allowed contracts, since anything carrying a selector is still matched normally. Both rest on the same
+trust assumption as module unwrapping: the filter cannot verify which addresses are genuine node modules.
 
-The standalone API server derives the same allow-set from its configured contract addresses. With no contracts configured there is nothing
-to derive and it relays nothing, rather than failing open into an unrestricted relay.
+The standalone API server derives the same allow-set. With no contracts configured it relays nothing rather than failing open.
 
 **TransactionExecutor**: Provides three submission modes with different guarantees:
 

@@ -171,14 +171,10 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         self
     }
 
-    /// Check a raw transaction against the policy, recording what was authorized or rejected.
-    ///
-    /// A whitelist policy resolves the sender and the effective calls while matching; both are
-    /// logged so a submission can be traced back to what the filter actually let through.
+    /// Check a raw transaction against the policy, logging what was authorized or rejected.
     ///
     /// # Errors
-    /// Returns [`TransactionExecutorError::ValidationFailed`] when the policy rejects the
-    /// transaction.
+    /// Returns [`TransactionExecutorError::ValidationFailed`] when the policy rejects it.
     fn authorize(&self, raw_tx: &[u8]) -> Result<(), TransactionExecutorError> {
         match self.policy.check(raw_tx) {
             Ok(Some(filtered)) => {

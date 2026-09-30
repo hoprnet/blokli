@@ -80,11 +80,9 @@ fn redact_url(url: &str) -> String {
 
 /// Build the transaction policy for a standalone API server.
 ///
-/// Standalone `blokli-api` wires up a fully functional [`RawTransactionExecutor`] against the
-/// configured RPC, so an unrestricted policy would turn it into an open relay for any signed
-/// transaction, contract creation included. The allow-set is derived from the configured contract
-/// addresses exactly as bloklid derives it. When none are configured there is nothing to derive,
-/// and an empty allow-set refuses every transaction rather than failing open.
+/// Derives the same allow-set bloklid does, from the configured contract addresses. With none
+/// configured there is nothing to derive, so the empty allow-set refuses everything: the executor
+/// here is fully functional, and failing open would make it an unrestricted relay.
 fn standalone_transaction_policy(contracts: &ContractAddresses) -> TransactionPolicy {
     if contracts == &ContractAddresses::default() {
         warn!("No contract addresses configured - transaction relaying is disabled");
@@ -112,9 +110,6 @@ pub async fn start_server(network: String, finality: u16, config: ApiConfig) -> 
     // Use small buffer sizes since no events will flow through in standalone mode
     let indexer_state = blokli_chain_indexer::IndexerState::new(16, 16);
 
-    // Transaction mutations are served here too, gated by the same network-derived allow-set
-    // bloklid enforces. Without configured contract addresses there is no allow-set to derive and
-    // the policy relays nothing, which `standalone_transaction_policy` logs.
     info!("Running in standalone mode - transaction mutations are gated by the configured contract addresses");
 
     let transaction_store = Arc::new(TransactionStore::new());
