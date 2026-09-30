@@ -1,40 +1,31 @@
 //! Decoding and allow-set filtering of signed Ethereum transactions.
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+};
 
 use alloy_sol_types::{SolCall, sol};
-use hopr_bindings::exports::alloy::{
-    consensus::{Transaction, TxEnvelope, TxType, transaction::SignerRecoverable},
-    eips::eip2718::Decodable2718,
+use hopr_bindings::{
+    constants::SAFE_MULTISEND_ADDRESS,
+    exports::alloy::{
+        consensus::{Transaction, TxEnvelope, TxType, transaction::SignerRecoverable},
+        eips::eip2718::Decodable2718,
+    },
+    hopr_node_management_module::HoprNodeManagementModule::execTransactionFromModuleCall,
 };
 use hopr_types::primitive::{prelude::Address, traits::ToHex};
 
 use crate::errors::{FilterError, Result};
 
 sol! {
-    /// Standard Gnosis Safe module execution entrypoint.
-    ///
-    /// HOPR node operations are relayed wrapped in this call: the transaction's `to` is the node's
-    /// own management module and the real contract call is carried in `data`. The filter unwraps it
-    /// to validate the inner `(to, selector)` against the allow-set.
-    function execTransactionFromModule(address to, uint256 value, bytes data, uint8 operation) external returns (bool);
-
     /// Gnosis Safe `MultiSend` batch entrypoint, invoked as a delegate call.
     ///
     /// `transactions` is the tightly packed concatenation of the batched calls; see
-    /// [`decode_multi_send`] for the per-entry layout.
+    /// [`decode_multi_send`] for the per-entry layout. Declared here because `hopr-bindings`
+    /// carries no `MultiSend` binding.
     function multiSend(bytes transactions) external payable;
 }
-
-/// Canonical Gnosis Safe `MultiSend` singleton, deployed at the same address on every chain.
-///
-/// A module `DelegateCall` is only unwrapped when it targets this address: it is the one delegate
-/// target whose bytecode is known to merely replay the batched calls, so authorizing the batch
-/// entries is equivalent to authorizing what the chain will execute.
-const SAFE_MULTI_SEND_ADDRESS: [u8; 20] = [
-    0x38, 0x86, 0x9b, 0xf6, 0x6a, 0x61, 0xcf, 0x6b, 0xdb, 0x99, 0x6a, 0x6a, 0xe4, 0x0d, 0x58, 0x53, 0xfd, 0x43, 0xb5,
-    0x26,
-];
 
 /// Operation code for a plain `CALL` in Safe module and `MultiSend` payloads.
 const OPERATION_CALL: u8 = 0;
@@ -49,8 +40,8 @@ pub type Selector = [u8; 4];
 
 /// A single effective contract call carried by a transaction.
 ///
-/// A plain transaction and a Safe-module call yield exactly one of these; a `MultiSend` batch
-/// yields one per batched call. Every call must be in the allow-set for the transaction to pass.
+/// A plain transaction and a Safe-module call yield one; a `MultiSend` batch yields one per
+/// batched call.
 ///
 /// # Example
 ///
@@ -58,20 +49,36 @@ pub type Selector = [u8; 4];
 /// use blokli_tx::AuthorizedCall;
 /// use hopr_types::primitive::prelude::Address;
 ///
-/// // `filter_transaction` reports one of these per effective call it authorized.
 /// let call = AuthorizedCall {
 ///     to: Address::from([0x02u8; 20]),
-///     selector: [0x09, 0x5e, 0xa7, 0xb3], // ERC-20 `approve`
+///     selector: Some([0x09, 0x5e, 0xa7, 0xb3]), // ERC-20 `approve`
 /// };
 ///
-/// assert_eq!(call.selector, [0x09, 0x5e, 0xa7, 0xb3]);
+/// assert_eq!(call.selector, Some([0x09, 0x5e, 0xa7, 0xb3]));
+///
+/// let value_transfer = AuthorizedCall {
+///     to: Address::from([0x03u8; 20]),
+///     selector: None,
+/// };
+///
+/// assert_eq!(value_transfer.to_string(), "0x0303030303030303030303030303030303030303:value");
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AuthorizedCall {
     /// Effective target contract of the call.
     pub to: Address,
-    /// Effective 4-byte function selector of the call.
-    pub selector: Selector,
+    /// Effective 4-byte function selector, or `None` when the call carries no calldata and so
+    /// only transfers native value.
+    pub selector: Option<Selector>,
+}
+
+impl fmt::Display for AuthorizedCall {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.selector {
+            Some(selector) => write!(f, "{}:0x{}", self.to.to_hex(), hex::encode(selector)),
+            None => write!(f, "{}:value", self.to.to_hex()),
+        }
+    }
 }
 
 /// The decoded, authorized details of a transaction that passed the filter.
@@ -81,7 +88,6 @@ pub struct AuthorizedCall {
 /// ```
 /// use blokli_tx::{FilterError, TransactionFilter};
 ///
-/// // Nothing is authorized by an empty filter, so no `FilteredTransaction` is ever produced.
 /// assert_eq!(
 ///     TransactionFilter::default().filter_transaction(&[]),
 ///     Err(FilterError::Empty)
@@ -99,32 +105,33 @@ pub struct FilteredTransaction {
 
 /// Filters signed Ethereum transactions against an allow-set of `(contract, selector)` pairs.
 ///
-/// A transaction is authorized only if every effective call it performs matches a
-/// `(contract, selector)` pair present in the allow-set. The effective calls are:
+/// A transaction passes only if every effective call it performs is in the allow-set. The
+/// effective calls are:
 ///
 /// - a plain transaction: its own `(to, selector)`;
-/// - a Safe-module `execTransactionFromModule` call with `operation = Call`: the inner `(to, selector)` (the outer
-///   module address is not matched, as it is per-node);
-/// - a Safe-module call with `operation = DelegateCall` targeting the canonical `MultiSend` singleton: every `(to,
-///   selector)` in the batch, each of which must itself be a plain call.
+/// - a Safe-module `execTransactionFromModule` call with `operation = Call`: the inner `(to, selector)`, since the
+///   outer module address is per-node;
+/// - a Safe-module `DelegateCall` into the canonical `MultiSend` singleton: every `(to, selector)` in the batch, each
+///   of which must itself be a plain call.
 ///
-/// Any other delegate call is rejected.
+/// Any other delegate call is rejected. The sender is recovered to reject contract-creation and
+/// malformed transactions, but is not part of the matching key.
 ///
-/// The sender is recovered to reject contract-creation and malformed transactions and is surfaced
-/// in [`FilteredTransaction`] for logging, but it is not part of the matching key.
+/// # Calls without a `(contract, selector)` pair
+///
+/// Two operation shapes have no pair to match and are refused unless opted in:
+///
+/// - no calldata at all — a native value transfer. See [`TransactionFilter::allowing_value_transfers`].
+/// - a per-node Safe management module as target, such as `deregisterNodeBySafe`. See
+///   [`TransactionFilter::allowing_on_any_target`].
 ///
 /// # Trust assumptions
 ///
-/// Safe-module unwrapping is keyed on the outer 4-byte selector alone: the filter has no source of
-/// truth for which addresses are genuine HOPR node modules (they are per-node and discovered by
-/// indexing), so it cannot verify that the outer target really is one. A contract that exposes the
-/// same `execTransactionFromModule` ABI is therefore unwrapped like a module, and authorization is
-/// decided on the inner call while the chain executes the outer one. Verifying the outer target
-/// against the indexed node modules is tracked as follow-up work.
-///
-/// For the same reason, operations that a Safe payload generator sends *directly* to the per-node
-/// module — notably `deregisterNodeBySafe` — cannot be matched by a static allow-set and are
-/// rejected.
+/// The filter has no source of truth for which addresses are genuine node modules, so it unwraps
+/// on the outer selector alone: any contract exposing the same ABI is unwrapped like a module, and
+/// authorization is decided on the inner call while the chain executes the outer one. Selectors
+/// allowed on any target rest on the same assumption. Checking the target against the indexed node
+/// modules is follow-up work.
 ///
 /// # Example
 ///
@@ -142,6 +149,10 @@ pub struct FilteredTransaction {
 pub struct TransactionFilter {
     /// Maps a target contract to the set of selectors permitted on it.
     allowed: HashMap<Address, HashSet<Selector>>,
+    /// Selectors permitted on any target, for calls whose destination is per-node.
+    any_target: HashSet<Selector>,
+    /// Whether calls carrying no calldata, which only move native value, are permitted.
+    allow_value_transfers: bool,
 }
 
 impl TransactionFilter {
@@ -162,7 +173,10 @@ impl TransactionFilter {
     /// assert!(filter.filter_transaction(&[]).is_err());
     /// ```
     pub fn new(allowed: HashMap<Address, HashSet<Selector>>) -> Self {
-        Self { allowed }
+        Self {
+            allowed,
+            ..Default::default()
+        }
     }
 
     /// Create a filter from an iterator of `(contract, selector)` pairs.
@@ -181,17 +195,55 @@ impl TransactionFilter {
         for (contract, selector) in pairs {
             allowed.entry(contract).or_default().insert(selector);
         }
-        Self { allowed }
+        Self {
+            allowed,
+            ..Default::default()
+        }
+    }
+
+    /// Permit the given selectors on any target.
+    ///
+    /// For operations whose destination is a per-node Safe management module, and so not knowable
+    /// when the allow-set is built. Every other selector keeps matching on its target.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use blokli_tx::TransactionFilter;
+    /// use hopr_types::primitive::prelude::Address;
+    ///
+    /// let deregister = [0x91, 0x60, 0x7c, 0x4c]; // `deregisterNodeBySafe(address)`
+    /// let filter = TransactionFilter::default().allowing_on_any_target([deregister]);
+    ///
+    /// assert!(filter.filter_transaction(&[]).is_err());
+    /// ```
+    pub fn allowing_on_any_target(mut self, selectors: impl IntoIterator<Item = Selector>) -> Self {
+        self.any_target.extend(selectors);
+        self
+    }
+
+    /// Permit calls that carry no calldata and so only move native value.
+    ///
+    /// Their destination is not matched: a native transfer names an arbitrary recipient.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use blokli_tx::TransactionFilter;
+    ///
+    /// let filter = TransactionFilter::default().allowing_value_transfers();
+    ///
+    /// assert!(filter.filter_transaction(&[]).is_err());
+    /// ```
+    pub fn allowing_value_transfers(mut self) -> Self {
+        self.allow_value_transfers = true;
+        self
     }
 
     /// Decode a raw signed transaction and verify it against the allow-set.
     ///
     /// # Errors
-    /// Returns a [`FilterError`] describing why the transaction was rejected: empty input, undecodable
-    /// bytes, trailing bytes after the envelope, an unsupported transaction type, a contract-creation
-    /// transaction, a signature that fails sender recovery, calldata shorter than four bytes, a
-    /// Safe-module call that fails to decode or requests an unsupported delegate call, a malformed
-    /// `MultiSend` batch, or an effective call whose contract or selector is not allowed.
+    /// Returns the [`FilterError`] naming the reason for rejection.
     ///
     /// # Example
     ///
@@ -229,23 +281,23 @@ impl TransactionFilter {
             .map_err(|e| FilterError::SenderRecovery(e.to_string()))?;
 
         let input = envelope.input();
-        let outer_selector = selector_of(&input[..])?;
+        let outer_selector = call_selector(&input[..])?;
 
         // Unwrap Safe-module calls and match on the inner target(s); match other calls directly.
-        let (calls, via_module) = if outer_selector == execTransactionFromModuleCall::SELECTOR {
-            let call = execTransactionFromModuleCall::abi_decode(&input[..])
+        let (calls, via_module) = if outer_selector == Some(execTransactionFromModuleCall::SELECTOR) {
+            // `abi_decode_validate` range-checks the parameter words. `abi_decode` would keep only
+            // the low byte of `operation`, reading `0x0100` as `Call` while the chain reverts it.
+            let call = execTransactionFromModuleCall::abi_decode_validate(&input[..])
                 .map_err(|e| FilterError::ModuleUnwrap(e.to_string()))?;
 
             let calls = match call.operation {
                 OPERATION_CALL => vec![AuthorizedCall {
                     to: Address::from(call.to.into_array()),
-                    selector: selector_of(&call.data[..])?,
+                    selector: call_selector(&call.data[..])?,
                 }],
                 // The only delegate target that is transparent about what it executes is the
                 // canonical MultiSend singleton, whose batch entries are validated individually.
-                OPERATION_DELEGATE_CALL if call.to.into_array() == SAFE_MULTI_SEND_ADDRESS => {
-                    decode_multi_send(&call.data[..])?
-                }
+                OPERATION_DELEGATE_CALL if call.to == SAFE_MULTISEND_ADDRESS => decode_multi_send(&call.data[..])?,
                 _ => return Err(FilterError::DelegateCallNotAllowed),
             };
 
@@ -265,6 +317,19 @@ impl TransactionFilter {
         }
 
         for call in &calls {
+            // No calldata, so no pair to match: authorized by the value-transfer setting alone.
+            let Some(selector) = call.selector else {
+                if !self.allow_value_transfers {
+                    return Err(FilterError::ValueTransferNotAllowed);
+                }
+                continue;
+            };
+
+            // Likewise for a per-node destination, which no network-derived allow-set can carry.
+            if self.any_target.contains(&selector) {
+                continue;
+            }
+
             let selectors = self
                 .allowed
                 .get(&call.to)
@@ -272,10 +337,10 @@ impl TransactionFilter {
                     contract: call.to.to_hex(),
                 })?;
 
-            if !selectors.contains(&call.selector) {
+            if !selectors.contains(&selector) {
                 return Err(FilterError::Unauthorized {
                     contract: call.to.to_hex(),
-                    selector: format!("0x{}", hex::encode(call.selector)),
+                    selector: format!("0x{}", hex::encode(selector)),
                 });
             }
         }
@@ -288,12 +353,20 @@ impl TransactionFilter {
     }
 }
 
-/// Extract the leading 4-byte selector from calldata, or [`FilterError::MissingSelector`].
-fn selector_of(input: &[u8]) -> Result<Selector> {
+/// Extract the leading 4-byte selector from calldata.
+///
+/// Empty calldata yields `None`: the call only moves native value. Non-empty calldata shorter
+/// than a selector is malformed and yields [`FilterError::MissingSelector`].
+fn call_selector(input: &[u8]) -> Result<Option<Selector>> {
+    if input.is_empty() {
+        return Ok(None);
+    }
+
     input
         .get(..4)
         .ok_or(FilterError::MissingSelector)?
         .try_into()
+        .map(Some)
         .map_err(|_| FilterError::MissingSelector)
 }
 
@@ -303,7 +376,7 @@ fn selector_of(input: &[u8]) -> Result<Selector> {
 /// repeated for each batched call. Only plain calls are accepted — a nested delegate call would
 /// again execute unknown code under the Safe's own context.
 fn decode_multi_send(input: &[u8]) -> Result<Vec<AuthorizedCall>> {
-    let batch = multiSendCall::abi_decode(input).map_err(|e| FilterError::MultiSendDecode(e.to_string()))?;
+    let batch = multiSendCall::abi_decode_validate(input).map_err(|e| FilterError::MultiSendDecode(e.to_string()))?;
     let packed = &batch.transactions[..];
 
     let mut calls = Vec::new();
@@ -350,7 +423,7 @@ fn decode_multi_send(input: &[u8]) -> Result<Vec<AuthorizedCall>> {
 
         calls.push(AuthorizedCall {
             to: Address::from(to),
-            selector: selector_of(data)?,
+            selector: call_selector(data)?,
         });
     }
 
@@ -359,21 +432,22 @@ fn decode_multi_send(input: &[u8]) -> Result<Vec<AuthorizedCall>> {
 
 #[cfg(test)]
 mod tests {
-    use hopr_bindings::exports::alloy::{
-        consensus::{SignableTransaction, TxEip1559, TxEip2930, TxLegacy},
-        eips::eip2718::Encodable2718,
-        primitives::{Address as AlloyAddress, Bytes, TxKind, U256},
-        signers::{SignerSync, local::PrivateKeySigner},
-        sol_types::SolCall,
+    use hopr_bindings::{
+        constants::SAFE_MULTISEND_ADDRESS,
+        exports::alloy::{
+            consensus::{SignableTransaction, TxEip1559, TxEip2930, TxLegacy},
+            eips::eip2718::Encodable2718,
+            primitives::{Address as AlloyAddress, Bytes, TxKind, U256},
+            signers::{SignerSync, local::PrivateKeySigner},
+            sol_types::SolCall,
+        },
+        hopr_node_management_module::HoprNodeManagementModule::execTransactionFromModuleCall,
     };
     use hopr_types::primitive::prelude::Address;
 
     use crate::{
         errors::FilterError,
-        filter::{
-            OPERATION_CALL, OPERATION_DELEGATE_CALL, SAFE_MULTI_SEND_ADDRESS, Selector, TransactionFilter,
-            execTransactionFromModuleCall, multiSendCall,
-        },
+        filter::{OPERATION_CALL, OPERATION_DELEGATE_CALL, Selector, TransactionFilter, multiSendCall},
     };
 
     const KEY: &str = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
@@ -382,6 +456,8 @@ mod tests {
     const OTHER: [u8; 20] = [0x33; 20];
     const SELECTOR_APPROVE: Selector = [0x09, 0x5e, 0xa7, 0xb3];
     const SELECTOR_TRANSFER: Selector = [0xa9, 0x05, 0x9c, 0xbb];
+    /// Stands in for a selector whose target is per-node and thus not in any static allow-set.
+    const SELECTOR_ANY_TARGET: Selector = [0x1b, 0x2c, 0x3d, 0x4e];
 
     fn signer() -> PrivateKeySigner {
         KEY.parse().expect("valid private key")
@@ -462,7 +538,7 @@ mod tests {
         }
         .abi_encode();
 
-        module_calldata(SAFE_MULTI_SEND_ADDRESS, multi_send, OPERATION_DELEGATE_CALL)
+        module_calldata(SAFE_MULTISEND_ADDRESS.into_array(), multi_send, OPERATION_DELEGATE_CALL)
     }
 
     /// A filter allowing `transfer`/`approve` on `CONTRACT`.
@@ -561,6 +637,100 @@ mod tests {
         assert!(matches!(
             filter().filter_transaction(&raw),
             Err(FilterError::MultiSendDecode(_))
+        ));
+    }
+
+    #[test]
+    fn plain_value_transfer_is_rejected_by_default() {
+        // No calldata at all: the transaction only moves native value, which a
+        // `(contract, selector)` pair cannot express.
+        let raw = signed_tx(TxKind::Call(AlloyAddress::from(OTHER)), Vec::new());
+        assert_eq!(
+            filter().filter_transaction(&raw),
+            Err(FilterError::ValueTransferNotAllowed)
+        );
+    }
+
+    #[test]
+    fn plain_value_transfer_passes_when_allowed() {
+        // As `BasicPayloadGenerator::transfer::<XDai>` emits it: value only, empty input.
+        let raw = signed_tx(TxKind::Call(AlloyAddress::from(OTHER)), Vec::new());
+        let result = filter()
+            .allowing_value_transfers()
+            .filter_transaction(&raw)
+            .expect("authorized value transfer");
+        insta::assert_debug_snapshot!(result);
+    }
+
+    #[test]
+    fn safe_wrapped_value_transfer_is_rejected_by_default() {
+        let outer = module_calldata(OTHER, Vec::new(), OPERATION_CALL);
+        let raw = signed_tx(TxKind::Call(AlloyAddress::from(MODULE)), outer);
+        assert_eq!(
+            filter().filter_transaction(&raw),
+            Err(FilterError::ValueTransferNotAllowed)
+        );
+    }
+
+    #[test]
+    fn safe_wrapped_value_transfer_passes_when_allowed() {
+        // As `SafePayloadGenerator::transfer::<XDai>` emits it: a module `Call` carrying the amount
+        // as `value` and no inner payload.
+        let outer = module_calldata(OTHER, Vec::new(), OPERATION_CALL);
+        let raw = signed_tx(TxKind::Call(AlloyAddress::from(MODULE)), outer);
+        let result = filter()
+            .allowing_value_transfers()
+            .filter_transaction(&raw)
+            .expect("authorized safe-wrapped value transfer");
+        insta::assert_debug_snapshot!(result);
+    }
+
+    #[test]
+    fn multi_send_entry_without_data_is_a_value_transfer() {
+        let entries = multi_send_entry(OPERATION_CALL, OTHER, &[]);
+        let raw = signed_tx(TxKind::Call(AlloyAddress::from(MODULE)), multi_send_calldata(entries));
+
+        assert_eq!(
+            filter().filter_transaction(&raw),
+            Err(FilterError::ValueTransferNotAllowed)
+        );
+    }
+
+    #[test]
+    fn any_target_selector_passes_on_an_unknown_contract() {
+        let raw = signed_tx(TxKind::Call(AlloyAddress::from(OTHER)), calldata(SELECTOR_ANY_TARGET));
+        let result = filter()
+            .allowing_on_any_target([SELECTOR_ANY_TARGET])
+            .filter_transaction(&raw)
+            .expect("authorized target-agnostic call");
+        insta::assert_debug_snapshot!(result);
+    }
+
+    #[test]
+    fn any_target_selector_does_not_widen_other_selectors() {
+        let raw = signed_tx(TxKind::Call(AlloyAddress::from(OTHER)), calldata(SELECTOR_TRANSFER));
+        assert!(matches!(
+            filter()
+                .allowing_on_any_target([SELECTOR_ANY_TARGET])
+                .filter_transaction(&raw),
+            Err(FilterError::ContractNotAllowed { .. })
+        ));
+    }
+
+    #[test]
+    fn module_operation_with_dirty_upper_bytes_is_rejected() {
+        // A non-validating decoder keeps only the low byte of a `uint8` word, so `0x0100` would
+        // read as `Call`, authorize the inner call and relay a transaction that the Safe's own
+        // enum check reverts on chain.
+        let mut outer = module_calldata(CONTRACT, calldata(SELECTOR_APPROVE), OPERATION_CALL);
+        // Head words after the 4-byte selector: `to`, `value`, the `data` offset, then `operation`.
+        let operation_word = 4 + 3 * 32;
+        outer[operation_word..operation_word + 32].copy_from_slice(&U256::from(0x0100).to_be_bytes::<32>());
+        let raw = signed_tx(TxKind::Call(AlloyAddress::from(MODULE)), outer);
+
+        assert!(matches!(
+            filter().filter_transaction(&raw),
+            Err(FilterError::ModuleUnwrap(_))
         ));
     }
 

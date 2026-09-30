@@ -6,16 +6,16 @@ FilteredTransaction {
     sender: 0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266,
     calls: [
         AuthorizedCall {
-            to: 0x1111111111111111111111111111111111111111,
+            to: 0x3333333333333333333333333333333333333333,
             selector: Some(
                 [
-                    9,
-                    94,
-                    167,
-                    179,
+                    27,
+                    44,
+                    61,
+                    78,
                 ],
             ),
         },
     ],
-    via_module: true,
+    via_module: false,
 }

@@ -147,11 +147,14 @@ on-chain confirmation for permanent records.
 HOPR contract to the function selectors bloklid relays, using `hopr-bindings` `<…Call as SolCall>::SELECTOR` consts. The set mirrors the
 operations in `hopr-types` `chain/payload/bindings_based.rs` (`PayloadGenerator`/`SafePayloadGenerator`).
 
-**Keep this allow-set in sync with `hopr-types`.** When a `hopr-types` update adds, removes, or renames a relayed operation (or changes its
-target contract or `*Safe` variant), update `network_transaction_filter` to match — otherwise a legitimate operation is silently rejected,
-or a removed one stays allowed. The `blokli-tx` filter unwraps Safe-module `execTransactionFromModule` calls and matches the inner
-`(contract, selector)`, so add the inner call's selector (the `*Safe` variant for module-wrapped ops). Cover any new operation with a test
-in `transaction_policy.rs`.
+**Keep this allow-set in sync with `hopr-types`.** When an update adds, removes, or renames a relayed operation (or changes its target
+contract or `*Safe` variant), update `network_transaction_filter` — otherwise a legitimate operation is silently rejected, or a removed one
+stays allowed. The filter unwraps `execTransactionFromModule` and matches the inner call, so add the inner selector (the `*Safe` variant for
+module-wrapped ops). Cover every new operation with a test in `transaction_policy.rs`.
+
+Two operations have no `(contract, selector)` pair: one sent straight to the node's own Safe management module (per-node target), and a
+native xDAI transfer (no calldata). They use `TransactionFilter::allowing_on_any_target` and `allowing_value_transfers`. Reach for these
+only when an operation genuinely has no static pair — the `(contract, selector)` set is the tighter check.
 
 ## Testing
 
