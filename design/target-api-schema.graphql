@@ -1000,6 +1000,20 @@ type OpenedChannelsGraphEntry {
 }
 
 """
+Transaction submission capacity exceeded (transient, retryable error)
+"""
+type OverloadedError {
+	"""
+	Error code
+	"""
+	code: String!
+	"""
+	Human-readable error message
+	"""
+	message: String!
+}
+
+"""
 Database or internal query error
 """
 type QueryFailedError {
@@ -2027,7 +2041,7 @@ union SafesResult = SafesList | QueryFailedError
 """
 Result type for asynchronous transaction submission
 """
-union SendTransactionAsyncResult = Transaction | ContractNotAllowedError | FunctionNotAllowedError | RpcError
+union SendTransactionAsyncResult = Transaction | ContractNotAllowedError | FunctionNotAllowedError | RpcError | OverloadedError
 
 """
 Result type for fire-and-forget transaction submission

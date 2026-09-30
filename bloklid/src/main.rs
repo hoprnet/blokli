@@ -15,7 +15,9 @@ use std::{
 use args::{Args, Command, generate_config_template, peek_verbosity_from_env_args};
 use async_signal::{Signal, Signals};
 use blokli_api::server::ApiDatabases;
-use blokli_chain_api::BlokliChain;
+use blokli_chain_api::{
+    BlokliChain, transaction_executor::RawTransactionExecutorConfig, transaction_monitor::TransactionMonitorConfig,
+};
 use blokli_chain_indexer::{snapshot::SnapshotManager, startup, utils::redact_url};
 use blokli_db::{
     db::{BlokliDb, BlokliDbConfig},
@@ -278,11 +280,38 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
 
         // Create BlokliChain instance
         let enable_safe_indexing = indexer_config.enable_safe_indexing;
-        let blokli_chain = BlokliChain::new(db, chain_network, contracts, indexer_config, rpc_url).await?;
+        let transaction_executor_config = RawTransactionExecutorConfig {
+            max_submitted_transactions: api_config.transactions.max_submitted_transactions,
+            max_submitted_transactions_per_identity: api_config.transactions.max_submitted_transactions_per_identity,
+            enable_revert_reason_tracing: api_config.transactions.enable_revert_reason_tracing,
+            ..Default::default()
+        };
+        let transaction_monitor_config = TransactionMonitorConfig {
+            max_queued_trace_jobs: api_config.transactions.max_queued_trace_jobs,
+            max_concurrent_trace_jobs: api_config.transactions.max_concurrent_trace_jobs,
+            enable_revert_reason_tracing: api_config.transactions.enable_revert_reason_tracing,
+            ..Default::default()
+        };
+        let blokli_chain = BlokliChain::new(
+            db,
+            chain_network,
+            contracts,
+            indexer_config,
+            rpc_url,
+            transaction_executor_config,
+            transaction_monitor_config,
+        )
+        .await?;
         let contracts = blokli_chain.contract_addresses();
 
         // Verify RPC supports required capabilities (debug tracing)
-        blokli_chain.verify_rpc_capabilities().await?;
+        if api_config.transactions.enable_revert_reason_tracing {
+            blokli_chain.verify_rpc_capabilities().await?;
+        } else {
+            tracing::info!(
+                "Skipping debug tracing capability verification because Safe revert-reason tracing is disabled"
+            );
+        }
 
         if enable_safe_indexing {
             startup::refresh_preseeded_safe_modules(blokli_chain.db(), blokli_chain.rpc()).await?;
