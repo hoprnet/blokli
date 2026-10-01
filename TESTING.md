@@ -90,9 +90,9 @@ Integration tests are in `bloklid/tests/`:
 
 ### PostgreSQL Schema Check
 
-Most tests run on SQLite, which hides type mismatches that only fail on PostgreSQL when a row is decoded
-(for example an `i64` entity field over an `INTEGER` column). `db/core/tests/postgres_schema_test.rs`
-migrates a scratch PostgreSQL database and compares every SeaORM entity against `information_schema`.
+Most tests run on SQLite, which hides type mismatches that only fail on PostgreSQL when a row is decoded (for example an `i64` entity field
+over an `INTEGER` column). `db/core/tests/postgres_schema_test.rs` migrates a scratch PostgreSQL database and compares every SeaORM entity
+against `information_schema`.
 
 ```bash
 # Starts a throwaway PostgreSQL server, or uses BLOKLI_TEST_POSTGRES_URL if set
