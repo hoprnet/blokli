@@ -31,6 +31,10 @@ pub enum Network {
     /// PizPalu staging network (staging network)
     #[serde(alias = "piz-palu-staging")]
     PizPaluStaging,
+    /// PizPalu production network (production network)
+    #[serde(alias = "piz-palu-prod")]
+    PizPaluProd,
+    
 }
 
 impl Network {
@@ -45,6 +49,7 @@ impl Network {
             Network::JuraProd,
             Network::PizPaluDev,
             Network::PizPaluStaging,
+            Network::PizPaluProd,
         ]
     }
 
@@ -66,6 +71,7 @@ impl Network {
             Network::JuraProd => "jura-prod",
             Network::PizPaluDev => "piz-palu-dev",
             Network::PizPaluStaging => "piz-palu-staging",
+            Network::PizPaluProd => "piz-palu-prod",
         }
     }
 
@@ -98,6 +104,7 @@ impl Network {
             Network::JuraProd => 1000,
             Network::PizPaluDev => 1000,
             Network::PizPaluStaging => 1000,
+            Network::PizPaluProd => 1000,
         }
     }
 
@@ -109,6 +116,7 @@ impl Network {
             Network::JuraProd => 3,
             Network::PizPaluDev => 3,
             Network::PizPaluStaging => 3,
+            Network::PizPaluProd => 3,
         }
     }
 
@@ -120,6 +128,7 @@ impl Network {
             Network::JuraProd => 5,
             Network::PizPaluDev => 5,
             Network::PizPaluStaging => 5,
+            Network::PizPaluProd => 5,
         }
     }
 }
@@ -140,6 +149,7 @@ impl FromStr for Network {
             "jura-prod" => Ok(Network::JuraProd),
             "piz-palu-dev" => Ok(Network::PizPaluDev),
             "piz-palu-staging" => Ok(Network::PizPaluStaging),
+            "piz-palu-prod" => Ok(Network::PizPaluProd),
             _ => Err(NetworkParseError::UnknownNetwork {
                 name: s.to_string(),
                 available: Self::all_names(),
@@ -186,6 +196,7 @@ mod tests {
         assert!(err.to_string().contains("jura-prod"));
         assert!(err.to_string().contains("piz-palu-dev"));
         assert!(err.to_string().contains("piz-palu-staging"));
+        assert!(err.to_string().contains("piz-palu-prod"));
     }
 
     #[test]
@@ -195,17 +206,19 @@ mod tests {
         assert_eq!(Network::JuraProd.to_string(), "jura-prod");
         assert_eq!(Network::PizPaluDev.to_string(), "piz-palu-dev");
         assert_eq!(Network::PizPaluStaging.to_string(), "piz-palu-staging");
+        assert_eq!(Network::PizPaluProd.to_string(), "piz-palu-prod");
     }
 
     #[test]
     fn test_network_all() {
         let networks = Network::all();
-        assert_eq!(networks.len(), 5);
+        assert_eq!(networks.len(), 6);
         assert!(networks.contains(&Network::AnvilLocalhost));
         assert!(networks.contains(&Network::JuraDev));
         assert!(networks.contains(&Network::JuraProd));
         assert!(networks.contains(&Network::PizPaluDev));
         assert!(networks.contains(&Network::PizPaluStaging));
+        assert!(networks.contains(&Network::PizPaluProd));
     }
 
     #[test]
@@ -242,6 +255,12 @@ mod tests {
         assert!(
             piz_palu_staging.is_some(),
             "PizPaluStaging network should be defined in hopr-bindings"
+        );
+
+        let piz_palu_prod = Network::PizPaluProd.resolve();
+        assert!(
+            piz_palu_prod.is_some(),
+            "PizPaluProd network should be defined in hopr-bindings"
         );
     }
 }
