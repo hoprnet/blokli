@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use async_trait::async_trait;
 use blokli_db_entity::{
     errors::DbEntityError,
@@ -12,7 +14,7 @@ use hopr_types::{
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, FromQueryResult, IntoActiveModel, PaginatorTrait, QueryFilter,
     QueryOrder, QuerySelect,
-    entity::Set,
+    entity::{Set, Unchanged},
     query::QueryTrait,
     sea_query::{Expr, OnConflict, Value},
 };
@@ -26,12 +28,19 @@ use crate::{
     },
     db::BlokliDb,
     errors::DbSqlError,
-    numeric::{block_range_to_i64, i64_to_u64, log_position_to_i64},
+    numeric::{block_range_to_i64, i64_to_u64, log_position_to_i64, u64_to_i64},
 };
 
 #[derive(FromQueryResult)]
 struct BlockNumber {
     block_number: i64,
+}
+
+#[derive(FromQueryResult)]
+struct LogIdentity {
+    tx_index: i64,
+    log_index: i64,
+    block_hash: Vec<u8>,
 }
 
 #[async_trait]
@@ -60,11 +69,14 @@ impl BlokliDbLogOperations for BlokliDb {
                             log_position_to_i64(log.block_number, log.tx_index, log.log_index)
                                 .map_err(DbError::from)?;
 
+                        let block_hash = log.block_hash.to_vec();
+
                         // Build both ActiveModels up front so a conversion failure
                         // cannot leave an orphaned log row without a matching log_status.
                         let log_model = log::ActiveModel::try_from(log.clone())
                             .map_err(DbSqlError::from)
                             .map_err(DbError::from)?;
+                        let replacement_model = log_model.clone();
                         let mut status_model = log_status::ActiveModel::try_from(log)
                             .map_err(DbSqlError::from)
                             .map_err(DbError::from)?;
@@ -121,6 +133,54 @@ impl BlokliDbLogOperations for BlokliDb {
                                     .await
                                 {
                                     Ok(Some(existing_log)) => {
+                                        if existing_log.block_hash != block_hash {
+                                            let mut replacement = replacement_model;
+                                            replacement.id = Unchanged(existing_log.id);
+
+                                            if let Err(e) = replacement.update(tx.as_ref()).await {
+                                                error!(%log_id, error = ?e, "failed to replace reorganised log in db");
+                                                return Err(DbError::General(e.to_string()));
+                                            }
+
+                                            if let Err(e) = LogStatus::update_many()
+                                                .col_expr(
+                                                    log_status::Column::Processed,
+                                                    Expr::value(Value::Bool(Some(false))),
+                                                )
+                                                .col_expr(
+                                                    log_status::Column::ProcessedAt,
+                                                    Expr::value(Value::ChronoDateTimeUtc(None)),
+                                                )
+                                                .col_expr(
+                                                    log_status::Column::Checksum,
+                                                    Expr::value(Value::Bytes(None)),
+                                                )
+                                                .filter(log_status::Column::BlockNumber.eq(block_number))
+                                                .filter(log_status::Column::TxIndex.eq(tx_index))
+                                                .filter(log_status::Column::LogIndex.eq(log_index))
+                                                .exec(tx.as_ref())
+                                                .await
+                                            {
+                                                error!(%log_id, error = ?e, "failed to reset status of reorganised log");
+                                                return Err(DbError::General(e.to_string()));
+                                            }
+
+                                            if let Err(e) = LogStatus::update_many()
+                                                .col_expr(
+                                                    log_status::Column::Checksum,
+                                                    Expr::value(Value::Bytes(None)),
+                                                )
+                                                .filter(log_status::Column::BlockNumber.gte(block_number))
+                                                .exec(tx.as_ref())
+                                                .await
+                                            {
+                                                error!(%log_id, error = ?e, "failed to invalidate checksums after a reorganised log");
+                                                return Err(DbError::General(e.to_string()));
+                                            }
+
+                                            trace!(log_id, "replaced reorganised log in the DB");
+                                        }
+
                                         // Found existing log, reuse the pre-built status model with its ID
                                         status_model.log_id = Set(existing_log.id);
 
@@ -273,6 +333,68 @@ impl BlokliDbLogOperations for BlokliDb {
             .into_iter()
             .map(|b| i64_to_u64(b.block_number, "block_number").map_err(DbError::from))
             .collect()
+    }
+
+    async fn get_processed_log_identities(&self, block_number: u64) -> Result<HashSet<(u64, u64, [u8; 32])>> {
+        let block_number = u64_to_i64(block_number, "block_number").map_err(DbError::from)?;
+
+        let conn = self.conn(TargetDb::Logs);
+
+        // Read the two tables separately, each filtered by block number, and pair them up in
+        // memory. Joining them on `log_status.log_id` instead reads correctly but is not indexed -
+        // Postgres does not index the referencing side of a foreign key - so the planner drives
+        // from `log_status` and walks every processed row in the database to answer a question
+        // about one block. That is linear in the total log count, which is invisible on a fresh
+        // database and throttles indexing once the table has grown. Both queries here are bounded
+        // by the block: `idx_log_composite` covers the first and `idx_unprocessed_log_status` the
+        // second. The position triple is `log_status`'s own unique key, so keying on it rather than
+        // on `log_id` selects exactly the same rows.
+        let processed: HashSet<(i64, i64)> = LogStatus::find()
+            .select_only()
+            .column(log_status::Column::TxIndex)
+            .column(log_status::Column::LogIndex)
+            .filter(log_status::Column::BlockNumber.eq(block_number))
+            .filter(log_status::Column::Processed.eq(true))
+            .into_tuple()
+            .all(conn)
+            .await
+            .map_err(|e| {
+                error!(error = ?e, "failed to get processed log positions from db");
+                DbError::from(DbSqlError::from(e))
+            })?
+            .into_iter()
+            .collect();
+
+        if processed.is_empty() {
+            return Ok(HashSet::new());
+        }
+
+        // The block hash comes from the log row rather than its status: a reorganisation can put a
+        // different log at the same position, and only the hash tells the two apart.
+        Ok(Log::find()
+            .select_only()
+            .column(log::Column::TxIndex)
+            .column(log::Column::LogIndex)
+            .column(log::Column::BlockHash)
+            .filter(log::Column::BlockNumber.eq(block_number))
+            .into_model::<LogIdentity>()
+            .all(conn)
+            .await
+            .map_err(|e| {
+                error!(error = ?e, "failed to get processed log identities from db");
+                DbError::from(DbSqlError::from(e))
+            })?
+            .into_iter()
+            .filter(|identity| processed.contains(&(identity.tx_index, identity.log_index)))
+            .filter_map(|identity| {
+                let block_hash: [u8; 32] = identity.block_hash.try_into().ok()?;
+                Some((
+                    i64_to_u64(identity.tx_index, "tx_index").ok()?,
+                    i64_to_u64(identity.log_index, "log_index").ok()?,
+                    block_hash,
+                ))
+            })
+            .collect())
     }
 
     async fn set_logs_processed(&self, block_number: Option<u64>, block_offset: Option<u64>) -> Result<()> {
@@ -608,6 +730,128 @@ mod tests {
             .unwrap();
 
         assert_eq!(log_2, log_2_retrieved);
+    }
+
+    #[tokio::test]
+    async fn test_replacing_a_checksummed_log_rebuilds_the_chain_suffix() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let first = SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: [Hash::create(&[b"my topic"]).into()].into(),
+            data: [1, 2, 3, 4].into(),
+            tx_index: 0u64,
+            block_number: 1u64,
+            block_hash: Hash::create(&[b"orphaned block"]).into(),
+            tx_hash: Hash::create(&[b"first tx"]).into(),
+            log_index: 0u64,
+            ..Default::default()
+        };
+        let second = SerializableLog {
+            block_number: 2u64,
+            block_hash: Hash::create(&[b"second block"]).into(),
+            tx_hash: Hash::create(&[b"second tx"]).into(),
+            ..first.clone()
+        };
+
+        db.store_logs(vec![first.clone(), second.clone()]).await?;
+        db.set_log_processed(first.clone()).await?;
+        db.set_log_processed(second.clone()).await?;
+        db.update_logs_checksums().await?;
+
+        let second_before = db.get_log(2, 0, 0).await?.checksum;
+        assert!(second_before.is_some());
+
+        // A reorganisation replaces the log in block 1. Every checksum from block 1 onward was
+        // derived from it, so the whole suffix has to be rebuilt. Clearing only block 1 would make
+        // the refill seed from block 2 and hash block 1 on top of it.
+        let replacement = SerializableLog {
+            block_hash: Hash::create(&[b"canonical block"]).into(),
+            data: [5, 6, 7].into(),
+            ..first.clone()
+        };
+        db.store_log(replacement.clone()).await?;
+        db.set_log_processed(replacement.clone()).await?;
+        db.update_logs_checksums().await?;
+
+        // Recompute the chain by hand and require the stored one to match it exactly.
+        let expected_first = Hash::create(&[
+            Hash::default().as_ref(),
+            Hash::create(&[
+                replacement.block_hash.as_ref(),
+                replacement.tx_hash.as_ref(),
+                &replacement.log_index.to_be_bytes(),
+            ])
+            .as_ref(),
+        ]);
+        let expected_second = Hash::create(&[
+            expected_first.as_ref(),
+            Hash::create(&[
+                second.block_hash.as_ref(),
+                second.tx_hash.as_ref(),
+                &second.log_index.to_be_bytes(),
+            ])
+            .as_ref(),
+        ]);
+
+        assert_eq!(db.get_log(1, 0, 0).await?.checksum, Some(expected_first.to_hex()));
+        assert_eq!(db.get_log(2, 0, 0).await?.checksum, Some(expected_second.to_hex()));
+
+        // The later log's checksum must have moved: it depended on the log that was replaced.
+        assert_ne!(db.get_log(2, 0, 0).await?.checksum, second_before);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_store_log_replaces_a_reorganised_position() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let orphaned = SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: [Hash::create(&[b"my topic"]).into()].into(),
+            data: [1, 2, 3, 4].into(),
+            tx_index: 1u64,
+            block_number: 1u64,
+            block_hash: Hash::create(&[b"orphaned block"]).into(),
+            tx_hash: Hash::create(&[b"my tx hash"]).into(),
+            log_index: 1u64,
+            ..Default::default()
+        };
+
+        db.store_log(orphaned.clone()).await?;
+        db.set_log_processed(orphaned.clone()).await?;
+
+        // A reorganisation puts a different log at the same position. Keeping the orphaned row
+        // would leave the processed identity pointing at a hash that no canonical log ever carries,
+        // so the canonical log would be dispatched again on every later re-delivery.
+        let canonical = SerializableLog {
+            block_hash: Hash::create(&[b"canonical block"]).into(),
+            data: [5, 6, 7].into(),
+            ..orphaned.clone()
+        };
+
+        db.store_log(canonical.clone()).await?;
+
+        let stored = db
+            .get_log(canonical.block_number, canonical.tx_index, canonical.log_index)
+            .await?;
+        assert_eq!(stored.block_hash, canonical.block_hash);
+        assert_eq!(stored.data, canonical.data);
+        assert_eq!(stored.processed, Some(false));
+
+        let identities = db.get_processed_log_identities(canonical.block_number).await?;
+        assert!(identities.is_empty());
+
+        db.set_log_processed(canonical.clone()).await?;
+
+        let identities = db.get_processed_log_identities(canonical.block_number).await?;
+        assert_eq!(
+            identities,
+            HashSet::from([(canonical.tx_index, canonical.log_index, canonical.block_hash)])
+        );
+
+        Ok(())
     }
 
     #[tokio::test]

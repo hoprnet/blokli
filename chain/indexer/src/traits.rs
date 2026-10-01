@@ -47,6 +47,17 @@ pub trait ChainLogHandler {
     /// # Returns
     /// * `Result<()>` - Success or error
     async fn collect_log_event(&self, log: SerializableLog, is_synced: bool) -> Result<()>;
+
+    /// Returns whether a fetched, canonical log should be dispatched to the contract handler.
+    /// Removed logs are filtered by the indexer before this hook is called.
+    fn should_process_log(&self, _log: &SerializableLog) -> bool {
+        true
+    }
+
+    /// Reverts handler-owned derived state from the first affected block onward.
+    async fn revert_block_derived_state(&self, _from_block: u64) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -75,5 +86,6 @@ mock! {
         fn contract_addresses_map(&self) -> Arc<ContractAddresses>;
         fn contract_address_topics(&self, contract: Address) -> Vec<B256>;
         async fn collect_log_event(&self, log: SerializableLog, is_synced: bool) -> Result<()>;
+        async fn revert_block_derived_state(&self, from_block: u64) -> Result<()>;
     }
 }

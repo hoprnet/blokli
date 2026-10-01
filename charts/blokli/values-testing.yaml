@@ -15,7 +15,7 @@ resources:
     cpu: 500m
     memory: 1Gi
 persistence:
-  storageClass: standard-rwo
+  storageClass: regional-rwo
   size: 10Gi
 # Database configuration
 database:

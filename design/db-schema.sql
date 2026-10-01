@@ -66,6 +66,85 @@ CREATE TABLE "channel_state" (
     FOREIGN KEY ("channel_id") REFERENCES "channel" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
+CREATE TABLE "curvy_committed_note" (
+    "id" integer PRIMARY KEY AUTOINCREMENT,
+    "batch_index" blob (32) NOT NULL,
+    "note_id" blob (32) NOT NULL,
+    "event_item_index" integer NOT NULL,
+    "chain_tx_hash" blob (32) NOT NULL,
+    "block_hash" blob (32) NOT NULL,
+    "published_block" integer NOT NULL,
+    "published_tx_index" integer NOT NULL,
+    "published_log_index" integer NOT NULL,
+    "leaf_index" integer NOT NULL,
+    CONSTRAINT "idx_curvy_committed_note_unique_position" UNIQUE ("published_block", "published_tx_index", "published_log_index", "event_item_index"),
+    CONSTRAINT "idx_curvy_committed_note_leaf_index" UNIQUE ("leaf_index")
+);
+
+CREATE TABLE "curvy_committed_nullifier" (
+    "id" integer PRIMARY KEY AUTOINCREMENT,
+    "batch_index" blob (32) NOT NULL,
+    "nullifier" blob (32) NOT NULL,
+    "event_item_index" integer NOT NULL,
+    "chain_tx_hash" blob (32) NOT NULL,
+    "block_hash" blob (32) NOT NULL,
+    "published_block" integer NOT NULL,
+    "published_tx_index" integer NOT NULL,
+    "published_log_index" integer NOT NULL,
+    "nullifier_index" integer NOT NULL,
+    CONSTRAINT "idx_curvy_committed_nullifier_unique_position" UNIQUE ("published_block", "published_tx_index", "published_log_index", "event_item_index"),
+    CONSTRAINT "idx_curvy_committed_nullifier_index" UNIQUE ("nullifier_index")
+);
+
+CREATE TABLE "curvy_pending_note" (
+    "id" integer PRIMARY KEY AUTOINCREMENT,
+    "note_id" blob (32) NOT NULL,
+    "ephemeral_key_x" blob (32) NOT NULL,
+    "ephemeral_key_y" blob (32) NOT NULL,
+    "view_tag" integer NOT NULL,
+    "token_id" blob (32) NOT NULL,
+    "amount" blob (32) NOT NULL,
+    "is_plaintext" boolean NOT NULL,
+    "event_item_index" integer NOT NULL,
+    "chain_tx_hash" blob (32) NOT NULL,
+    "block_hash" blob (32) NOT NULL,
+    "published_block" integer NOT NULL,
+    "published_tx_index" integer NOT NULL,
+    "published_log_index" integer NOT NULL,
+    CONSTRAINT "idx_curvy_pending_note_unique_position" UNIQUE ("published_block", "published_tx_index", "published_log_index", "event_item_index")
+);
+
+CREATE TABLE "curvy_shard_root" (
+    "id" integer PRIMARY KEY AUTOINCREMENT,
+    "tree_version" integer NOT NULL,
+    "shard_height" integer NOT NULL,
+    "shard_index" integer NOT NULL,
+    "root" blob (32) NOT NULL,
+    "block_hash" blob (32) NOT NULL,
+    "chain_tx_hash" blob (32) NOT NULL,
+    "completion_block" integer NOT NULL,
+    "completion_tx_index" integer NOT NULL,
+    "completion_log_index" integer NOT NULL,
+    "completion_event_item_index" integer NOT NULL,
+    CONSTRAINT "idx_curvy_shard_root_geometry_index" UNIQUE ("tree_version", "shard_height", "shard_index")
+);
+
+CREATE TABLE "curvy_sync_checkpoint" (
+    "id" integer PRIMARY KEY AUTOINCREMENT,
+    "block_number" integer NOT NULL,
+    "block_hash" blob (32) NOT NULL UNIQUE,
+    "aggregator_address" blob (20) NOT NULL,
+    "tree_version" integer NOT NULL,
+    "tree_depth" integer NOT NULL,
+    "shard_height" integer NOT NULL,
+    "leaf_count" integer NOT NULL,
+    "nullifier_count" integer NOT NULL,
+    "shard_count" integer NOT NULL,
+    "root" blob (32) NOT NULL,
+    "frontier_snapshot" blob NOT NULL,
+    CONSTRAINT "idx_curvy_sync_checkpoint_block" UNIQUE ("block_number")
+);
+
 CREATE TABLE "hopr_balance" (
     "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
     "address" blob (20) NOT NULL UNIQUE,
@@ -503,6 +582,10 @@ CREATE INDEX "idx_channel_state_status_position" ON "channel_state" ("status", "
 CREATE UNIQUE INDEX "idx_channel_state_unique_position" ON "channel_state" ("channel_id", "published_block", "published_tx_index", "published_log_index");
 
 CREATE UNIQUE INDEX "idx_contract_log_topic" ON "log_topic_info" ("address", "topic");
+
+CREATE INDEX "idx_curvy_committed_note_note_id" ON "curvy_committed_note" ("note_id");
+
+CREATE INDEX "idx_curvy_pending_note_note_id" ON "curvy_pending_note" ("note_id");
 
 CREATE INDEX "idx_hopr_balance_last_changed_block" ON "hopr_balance" ("last_changed_block");
 

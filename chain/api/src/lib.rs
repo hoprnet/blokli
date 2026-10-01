@@ -1,6 +1,8 @@
 //! Crate containing the API object for chain operations used by the HOPRd node.
 
 pub mod errors;
+pub mod hopr_action;
+pub mod hopr_policy;
 pub mod metrics;
 pub(crate) mod revert_decoder;
 pub mod rpc_adapter;
@@ -44,6 +46,8 @@ use tracing::info;
 
 use crate::{
     errors::{BlokliChainError, Result},
+    hopr_action::HoprContracts,
+    hopr_policy::{DbHoprChainState, HoprPolicy},
     rpc_adapter::RpcAdapter,
     safe_execution::DbSafeAddressChecker,
     transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
@@ -87,13 +91,20 @@ pub struct BlokliChain<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt
 }
 
 impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static> BlokliChain<T> {
-    pub fn new(
+    pub async fn new(
         db: T,
         chain_config: ChainConfig,
-        contract_addresses: ContractAddresses,
+        mut contract_addresses: ContractAddresses,
         indexer_cfg: IndexerConfig,
         rpc_url: String,
+        transaction_executor_config: RawTransactionExecutorConfig,
+        transaction_monitor_config: TransactionMonitorConfig,
     ) -> Result<Self> {
+        if indexer_cfg.enable_curvy_indexing && contract_addresses.curvy_aggregator == Address::default() {
+            return Err(BlokliChainError::Configuration(
+                "Curvy indexing is enabled but the Curvy Aggregator address is not configured".to_string(),
+            ));
+        }
         // TODO(#7140): replace this DefaultRetryPolicy with a custom one that computes backoff with the number of
         // retries
         let rpc_http_retry_policy = DefaultRetryPolicy::default();
@@ -133,7 +144,10 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         let requestor = DefaultHttpRequestor::new();
 
         // Build RPC operations
-        let rpc_operations = RpcOperations::new(rpc_client, requestor, rpc_cfg, None)?;
+        let mut rpc_operations = RpcOperations::new(rpc_client, requestor, rpc_cfg, None)?;
+        if indexer_cfg.enable_curvy_indexing {
+            contract_addresses = rpc_operations.resolve_curvy_contract_addresses().await?;
+        }
 
         // Create IndexerState for coordinating block processing with subscriptions
         let indexer_state = IndexerState::new(indexer_cfg.event_bus_capacity, indexer_cfg.shutdown_signal_capacity);
@@ -145,20 +159,38 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
 
         let safe_checker = Arc::new(DbSafeAddressChecker::new(db.clone()));
 
-        let transaction_executor = Arc::new(
-            RawTransactionExecutor::with_shared_dependencies(
-                rpc_adapter.clone(),
+        // The HOPR-aware policy reads indexed chain state, so it is only meaningful once the database is available
+        let hopr_policy = transaction_executor_config.hopr_policy.enabled.then(|| {
+            Arc::new(HoprPolicy::new(
+                Arc::new(DbHoprChainState::new(db.clone())),
                 transaction_store.clone(),
-                transaction_validator,
-                RawTransactionExecutorConfig::default(),
-            )
-            .with_safe_enrichment(rpc_adapter.clone(), safe_checker.clone()),
-        );
+                transaction_executor_config.hopr_policy.clone(),
+                HoprContracts {
+                    token: contract_addresses.token,
+                    channels: contract_addresses.channels,
+                    announcements: contract_addresses.announcements,
+                },
+            ))
+        });
+
+        let mut transaction_executor = RawTransactionExecutor::with_shared_dependencies(
+            rpc_adapter.clone(),
+            transaction_store.clone(),
+            transaction_validator,
+            transaction_executor_config,
+        )
+        .with_safe_enrichment(rpc_adapter.clone(), safe_checker.clone());
+
+        if let Some(policy) = hopr_policy {
+            transaction_executor = transaction_executor.with_hopr_policy(policy);
+        }
+
+        let transaction_executor = Arc::new(transaction_executor);
 
         let transaction_monitor = Arc::new(TransactionMonitor::new(
             transaction_store.clone(),
             (*rpc_adapter).clone(),
-            TransactionMonitorConfig::default(),
+            transaction_monitor_config,
             Some(safe_checker),
         ));
 
@@ -257,6 +289,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
                     self.rpc_operations.clone(),
                     self.indexer_state.clone(),
                     self.indexer_cfg.enable_safe_indexing,
+                    self.indexer_cfg.enable_curvy_indexing,
                 ),
                 self.db.clone(),
                 self.indexer_cfg.clone(),
@@ -270,6 +303,10 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
 
     pub fn indexer_state(&self) -> IndexerState {
         self.indexer_state.clone()
+    }
+
+    pub const fn contract_addresses(&self) -> ContractAddresses {
+        self.contract_addresses
     }
 
     pub fn db(&self) -> &T {

@@ -14,8 +14,8 @@ use std::sync::{
 
 use async_broadcast::{Receiver, Sender, broadcast};
 use blokli_api_types::{
-    Account, ChannelUpdate, RedeemTicketDetails, RedemptionResult, ServiceTypeUpdate, ServiceUpdate, TicketParameters,
-    TokenValueString, UInt64,
+    Account, ChannelUpdate, CurvyCommittedNote, CurvyCommittedNullifier, CurvyPendingNote, RedeemTicketDetails,
+    RedemptionResult, ServiceTypeUpdate, ServiceUpdate, TicketParameters, TokenValueString, UInt64,
 };
 use hopr_types::primitive::prelude::Address;
 use tokio::sync::RwLock;
@@ -104,6 +104,15 @@ pub enum IndexerEvent {
     /// Carries all fields needed to identify the ticket and report the outcome.
     /// Subscribers filter by channel ID, issuer, or recipient address.
     TicketRedeemed(RedeemTicketDetailsInfo),
+
+    /// A note emitted by the Curvy Aggregator's `PendingNotes` event.
+    CurvyPendingNote(CurvyPendingNote),
+
+    /// A note emitted by the Curvy Aggregator's `CommittedNotes` event.
+    CurvyCommittedNote(CurvyCommittedNote),
+
+    /// A nullifier emitted by the Curvy Aggregator's `CommittedNullifiers` event.
+    CurvyCommittedNullifier(CurvyCommittedNullifier),
 
     /// A service registry entry was registered, updated or deregistered.
     ///

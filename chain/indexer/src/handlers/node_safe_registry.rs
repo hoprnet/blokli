@@ -316,6 +316,82 @@ mod tests {
         state::IndexerEvent,
     };
 
+    /// Replays the registry history of a node that moved safes, as recorded on chain:
+    /// registration in block 47655530, deregistration in 47722932, re-registration to a different
+    /// safe in 47722954.
+    ///
+    /// Re-applying the first registration after the node has moved used to abort the block's
+    /// transaction on the unique key over `node_address`, which the indexer turns into a panic -
+    /// and since a re-indexed block is re-indexed on every restart, into a crash loop.
+    #[tokio::test]
+    async fn test_replaying_a_node_that_moved_safes_is_idempotent() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let mut rpc_operations = MockIndexerRpcOperations::new();
+
+        let module_address: Address = "aabbccddee00112233445566778899aabbccddee".parse()?;
+        rpc_operations
+            .expect_get_hopr_module_from_safe()
+            .returning(move |_| Ok(Some(module_address)));
+        rpc_operations
+            .expect_get_logs_for_address()
+            .returning(|_, _, _, _| Ok(vec![]));
+
+        let clonable_rpc_operations = ClonableMockOperations {
+            inner: Arc::new(rpc_operations),
+        };
+        let handlers = init_handlers(clonable_rpc_operations, db.clone());
+
+        let first_safe: Address = "2a6155c848be97d2c013f80515cca4ba9be9cede".parse()?;
+        let second_safe: Address = "5ddb9bf31780b5845d664c4d36df82c0cc0ed19d".parse()?;
+        let node_address: Address = "7fc76fcb32ba568db303a2beed5ffc09cb1fe96e".parse()?;
+
+        let registry_log =
+            |signature: primitive_types::H256, safe: Address, block: u64, log_index: u64| SerializableLog {
+                address: handlers.addresses.node_safe_registry,
+                topics: vec![
+                    signature.into(),
+                    H256::from_slice(&safe.to_bytes32()).into(),
+                    H256::from_slice(&node_address.to_bytes32()).into(),
+                ],
+                data: ().abi_encode(),
+                block_number: block,
+                tx_index: 0,
+                log_index,
+                ..test_log()
+            };
+
+        let registered = primitive_types::H256::from(HoprNodeSafeRegistry::RegisteredNodeSafe::SIGNATURE_HASH.0);
+        let deregistered = primitive_types::H256::from(HoprNodeSafeRegistry::DeregisteredNodeSafe::SIGNATURE_HASH.0);
+
+        let history = [
+            registry_log(registered, first_safe, 47655530, 84),
+            registry_log(deregistered, first_safe, 47722932, 12),
+            registry_log(registered, second_safe, 47722954, 7),
+        ];
+
+        // Index the history, then index it again from the start, as an interrupted historical sync
+        // does when it re-streams its whole range against an index that already holds the result.
+        for log in history.iter().chain(history.iter()) {
+            let log = log.clone();
+            let handlers = handlers.clone();
+            db.begin_transaction()
+                .await?
+                .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, log, false).await }))
+                .await?;
+        }
+
+        let registrations = HoprNodeSafeRegistration::find()
+            .filter(hopr_node_safe_registration::Column::NodeAddress.eq(node_address.as_ref().to_vec()))
+            .all(db.conn(blokli_db::TargetDb::Index))
+            .await?;
+
+        assert_eq!(registrations.len(), 1, "a node holds a single registration");
+        assert_eq!(registrations[0].safe_address, second_safe.as_ref().to_vec());
+        assert_eq!(registrations[0].registered_block, 47722954);
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_on_node_safe_registry_registered_creates_safe_with_module_from_rpc() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;

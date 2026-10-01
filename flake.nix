@@ -97,10 +97,22 @@
           # Filesystem utilities for source filtering
           fs = lib.fileset;
 
+          # Since the 2026-09-05 nightly, `forge` and `cast` link against
+          # libudev.so.1 (hardware-wallet support). foundry.nix does not declare
+          # that dependency, so autoPatchelfHook fails the build on Linux.
+          # Darwin is unaffected, hence the isLinux guard.
+          foundryUdevOverlay = final: prev: {
+            foundry-bin = prev.foundry-bin.overrideAttrs (old: {
+              buildInputs =
+                (old.buildInputs or [ ]) ++ prev.lib.optional prev.stdenv.hostPlatform.isLinux prev.udev;
+            });
+          };
+
           # Nixpkgs with rust-overlay, foundry overlay, and solc overlay
           overlays = [
             rust-overlay.overlays.default
             foundry.overlay
+            foundryUdevOverlay
             solc.overlay
           ];
           pkgs = import nixpkgs {
@@ -245,7 +257,7 @@
               ];
             };
 
-          # Helper: build the bloklid-anvil Docker image for a target platform.
+          # Build the local Anvil image with HOPR and Curvy contracts deployed.
           mkBloklidAnvilDocker =
             targetPlatform:
             let
@@ -257,11 +269,16 @@
               name = "bloklid-anvil";
               Entrypoint = [ "/bin/blokli-anvil-entrypoint" ];
               pkgsLinux = platformPkgs;
-              env = [ "SSL_CERT_FILE=${platformPkgs.cacert}/etc/ssl/certs/ca-bundle.crt" ];
+              env = [
+                "SSL_CERT_FILE=${platformPkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+                "BLOKLI_DEPLOY_CURVY=true"
+              ];
               extraContents = [
                 binary
                 platformPkgs.curl
-                platformPkgs.foundry
+                # The Nixpkgs Foundry 1.7.1 package embeds vulnerable quinn-proto
+                # 0.11.14. The pinned foundry.nix nightly uses 0.11.16.
+                platformPkgs.foundry-bin
                 (mkStaticEntrypoint {
                   pkgs = platformPkgs;
                   binary = anvilEntrypoint;
@@ -374,6 +391,7 @@
             '';
             extraPackages = with pkgs; [
               gh
+              bun
               nodejs
               ast-grep
               foundry-bin
@@ -387,6 +405,7 @@
               uv
               sqlite
               pgformatter
+              postgresql
             ];
           };
           shells = {
@@ -456,6 +475,7 @@
 
               # Generated GraphQL schema (formatted separately)
               "schema.graphql"
+              "design/target-api-schema.graphql"
 
               # locally installed npm packages
               ".npm/"

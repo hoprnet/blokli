@@ -24,6 +24,7 @@ use blokli_chain_api::{
 };
 use blokli_chain_indexer::IndexerState;
 use blokli_chain_rpc::{rpc::RpcOperations, transport::ReqwestClient};
+use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
 use blokli_db_entity::prelude::ChainInfo;
 use futures::stream::{Stream, StreamExt};
 #[cfg(feature = "telemetry")]
@@ -264,10 +265,35 @@ pub struct AppState {
     pub sse_keepalive: crate::config::SseKeepAliveConfig,
 }
 
+/// Database connections selected from Blokli's database owner for API use.
+#[derive(Clone)]
+pub struct ApiDatabases {
+    index: DatabaseConnection,
+    logs: DatabaseConnection,
+}
+
+impl ApiDatabases {
+    /// Uses one connection for both indexed state and raw logs.
+    pub fn single(connection: DatabaseConnection) -> Self {
+        Self {
+            index: connection.clone(),
+            logs: connection,
+        }
+    }
+
+    /// Selects the indexed-state and raw-log connections managed by Blokli.
+    pub fn from_blokli(db: &BlokliDb) -> Self {
+        Self {
+            index: db.conn(TargetDb::Index).clone(),
+            logs: db.conn(TargetDb::Logs).clone(),
+        }
+    }
+}
+
 /// Build the Axum application router
 #[allow(clippy::too_many_arguments)]
 pub async fn build_app(
-    db: DatabaseConnection,
+    databases: ApiDatabases,
     network: String,
     config: ApiConfig,
     expected_block_time: u64,
@@ -277,10 +303,13 @@ pub async fn build_app(
     transaction_store: Arc<TransactionStore>,
     rpc_operations: Arc<RpcOperations<ReqwestClient>>,
 ) -> ApiResult<Router> {
+    let db = databases.index;
+    let logs_db = databases.logs;
     let readiness_checker = ReadinessChecker::new(db.clone(), rpc_operations.clone(), config.health.clone());
 
     let schemas = build_version_registry(
         db.clone(),
+        logs_db.clone(),
         config.chain_id,
         network.clone(),
         config.contract_addresses,
@@ -297,6 +326,7 @@ pub async fn build_app(
 
     let introspection_schema: Arc<dyn ErasedSchema> = Arc::new(crate::schema::build_schema(
         db.clone(),
+        logs_db,
         config.chain_id,
         network,
         config.contract_addresses,
