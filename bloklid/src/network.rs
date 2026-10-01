@@ -34,7 +34,6 @@ pub enum Network {
     /// PizPalu production network (production network)
     #[serde(alias = "piz-palu-prod")]
     PizPaluProd,
-    
 }
 
 impl Network {

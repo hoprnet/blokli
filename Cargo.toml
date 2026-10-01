@@ -49,8 +49,8 @@ chrono = "0.4.45"
 clap = { version = "4.6.1", features = ["derive", "env", "string"] }
 config = "0.15.23"
 # Exact pins until Curvy publishes its stable crates.
-curvy-bindings = { version = "=0.1.0-rc.6" }
-curvy-core = "=0.1.0-rc.3"
+curvy-bindings = { version = "=0.1.0-rc.7" }
+curvy-core = "=0.1.0-rc.6"
 dashmap = "6.2.1"
 env_logger = "0.11.10"
 flagset = "0.4.7"
@@ -59,8 +59,8 @@ futures-timer = "3.0.4"
 futures-util = "0.3.32"
 hex = "0.4.3"
 hex-literal = "1.1.0"
-hopr-bindings = { version = "5.0.0" }
-hopr-types = { version = "4.0.0" }
+hopr-bindings = { version = "5.1.0" }
+hopr-types = { version = "4.1.0" }
 http = "1.4.2"
 humantime-serde = "1.1.1"
 insta = { version = "1.47.2", features = ["yaml"] }
