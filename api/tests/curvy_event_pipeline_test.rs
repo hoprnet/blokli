@@ -242,6 +242,11 @@ async fn test_curvy_events_are_indexed_and_streamed() -> anyhow::Result<()> {
         contract_addresses.curvy_portal_factory,
         curvy_addresses.portal_factory.to_hopr_address()
     );
+    // Never configured above: found at its canonical address because the suite deployed it there.
+    assert_eq!(
+        contract_addresses.curvy_shield_router,
+        curvy_addresses.shield_router.to_hopr_address()
+    );
 
     let db = BlokliDb::new_in_memory().await?;
     chain_info::ActiveModel {

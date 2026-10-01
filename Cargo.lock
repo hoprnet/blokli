@@ -2908,9 +2908,9 @@ dependencies = [
 
 [[package]]
 name = "curvy-bindings"
-version = "0.1.0-rc.5"
+version = "0.1.0-rc.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "372a02d382ff9d8ec31e1063b83e416b18fb58a1952ed858e1fc7602227f094d"
+checksum = "5f6d8ac528a56a8ad95f1488295e0fa96ac90306455fe4ece45ded30c2a55217"
 dependencies = [
  "alloy",
  "anyhow",
@@ -3050,7 +3050,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -7961,7 +7961,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
