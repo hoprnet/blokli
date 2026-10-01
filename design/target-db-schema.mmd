@@ -204,6 +204,36 @@ erDiagram
         bigint last_redeemed_log_index "Last successful redemption log index, or 0 when none has succeeded yet (NOT NULL)"
     }
 
+    curvy_note {
+        bigint leaf_index PK "Dense non-zero note-tree position"
+        binary(32) note_id UK "Curvy note commitment"
+        binary(32) batch_index "Commitment batch identifier"
+        bigint published_block "Event block"
+        bigint published_tx_index "Event transaction index"
+        bigint published_log_index "Event log index"
+        bigint item_index "Raw array position, including skipped padding gaps"
+    }
+    %% Composite unique constraint: UNIQUE(published_block, published_tx_index, published_log_index, item_index)
+
+    curvy_tree_checkpoint {
+        bigint id PK "Primary key"
+        bigint published_block "Committed-note log block"
+        bigint published_tx_index "Committed-note log transaction index"
+        bigint published_log_index "Committed-note log index"
+        bigint leaf_count "Dense non-zero leaves included"
+        binary(32) root "Depth-30 Poseidon root"
+        binary frontier "Versioned compact frontier snapshot"
+    }
+    %% Composite unique constraint: UNIQUE(published_block, published_tx_index, published_log_index)
+
+    curvy_shard_root {
+        bigint shard_index PK "Zero-based completed shard index"
+        binary(32) root "Root of 16,384 dense leaves"
+        bigint completed_block "Block that completed the shard"
+        bigint completed_tx_index "Transaction that completed the shard"
+        bigint completed_log_index "Log that completed the shard"
+    }
+
     service_type {
         int id PK "Primary key, autoincrement"
         binary(32) service_type UK "Service type identifier as it appears on-chain (bytes32, UNIQUE, NOT NULL)"

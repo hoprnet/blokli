@@ -7,8 +7,9 @@
 
 use async_graphql::ErrorExtensions;
 use blokli_api_types::{
-    ContractNotAllowedError, FunctionNotAllowedError, InvalidAddressError, InvalidTransactionIdError,
-    MissingFilterError, QueryFailedError, RpcError, TimeoutError,
+    ContractNotAllowedError, FunctionNotAllowedError, HoprActionRejectedError, HoprActionThrottledError,
+    InvalidAddressError, InvalidTransactionIdError, MissingFilterError, OverloadedError, QueryFailedError, RpcError,
+    TimeoutError,
 };
 use thiserror::Error;
 
@@ -94,6 +95,15 @@ pub mod codes {
     /// Operation timeout
     pub const TIMEOUT: &str = "TIMEOUT";
 
+    /// Transaction submission capacity is exhausted; the client should retry later
+    pub const SUBMISSION_CAPACITY_EXCEEDED: &str = "SUBMISSION_CAPACITY_EXCEEDED";
+
+    /// A supported HOPR action failed Blokli's deterministic preflight.
+    pub const HOPR_ACTION_REJECTED: &str = "HOPR_ACTION_REJECTED";
+
+    /// Repeated invalid HOPR submissions from one signer are temporarily suppressed.
+    pub const HOPR_ACTION_THROTTLED: &str = "HOPR_ACTION_THROTTLED";
+
     /// Invalid transaction ID format
     pub const INVALID_TRANSACTION_ID: &str = "INVALID_TRANSACTION_ID";
 
@@ -115,11 +125,17 @@ pub mod codes {
     /// Request exceeds an allowed resource limit
     pub const LIMIT_EXCEEDED: &str = "LIMIT_EXCEEDED";
 
+    /// A subscription receiver fell behind its event source.
+    pub const SUBSCRIPTION_LAGGED: &str = "SUBSCRIPTION_LAGGED";
+
     /// Requested schema version is not supported by this server
     pub const UNSUPPORTED_SCHEMA_VERSION: &str = "UNSUPPORTED_SCHEMA_VERSION";
 
     /// The X-Blokli-Schema-Version header value is not a valid non-negative integer
     pub const INVALID_SCHEMA_VERSION_HEADER: &str = "INVALID_SCHEMA_VERSION_HEADER";
+
+    /// A requested optional feature is disabled in the server configuration
+    pub const FEATURE_DISABLED: &str = "FEATURE_DISABLED";
 }
 
 // ============================================================================
@@ -211,6 +227,11 @@ pub mod messages {
         format!("Internal error in {}: {}", context, error)
     }
 
+    /// Optional feature disabled error message
+    pub fn feature_disabled(feature: &str) -> String {
+        format!("{} is disabled in the server configuration", feature)
+    }
+
     /// Missing filter error message
     pub fn missing_filter(filter_name: &str, context: &str) -> String {
         format!("Missing required filter '{}' for {}", filter_name, context)
@@ -236,12 +257,22 @@ pub mod messages {
         format!("Invalid pagination parameters: {}", reason)
     }
 
+    /// Subscription lag error message.
+    pub fn subscription_lagged(stream: &str, missed: impl std::fmt::Display) -> String {
+        format!("{stream} lagged and missed {missed} events; reconnect to resume from a persisted position")
+    }
+
     /// Resource limit exceeded message
     pub fn limit_exceeded(resource: &str, actual: impl std::fmt::Display, max: impl std::fmt::Display) -> String {
         format!(
             "{} limit exceeded: {} exceeds the maximum of {}; narrow the query with a filter",
             resource, actual, max
         )
+    }
+
+    /// Transaction submission capacity exhausted message
+    pub fn submission_capacity_exceeded() -> String {
+        "Transaction submission capacity is exhausted; retry later".to_string()
     }
 
     /// Ticket parameters missing or incomplete message
@@ -259,11 +290,28 @@ pub mod messages {
 // GraphQL Error Builder Functions
 // ============================================================================
 
-/// Creates a QueryFailedError for context retrieval failures
-pub fn context_error(context_type: &str, error: impl std::fmt::Display) -> QueryFailedError {
+/// Value accepted by the context-error builder.
+pub trait ContextErrorMessage {
+    fn context_error_message(self) -> String;
+}
+
+impl ContextErrorMessage for String {
+    fn context_error_message(self) -> String {
+        self
+    }
+}
+
+impl ContextErrorMessage for async_graphql::Error {
+    fn context_error_message(self) -> String {
+        self.message
+    }
+}
+
+/// Creates a QueryFailedError for context retrieval failures.
+pub fn context_error(context_type: &str, error: impl ContextErrorMessage) -> QueryFailedError {
     QueryFailedError {
         code: codes::CONTEXT_ERROR.to_string(),
-        message: messages::context_error(context_type, error),
+        message: messages::context_error(context_type, error.context_error_message()),
     }
 }
 
@@ -533,6 +581,53 @@ pub fn rpc_error_with_message(message: impl Into<String>) -> RpcError {
     }
 }
 
+/// Creates an Overloaded error for an exhausted transaction submission capacity
+/// This is a transient, retryable condition rather than an internal failure, so
+/// it carries its own code instead of `INTERNAL_ERROR`.
+pub fn submission_capacity_exceeded() -> OverloadedError {
+    OverloadedError {
+        code: codes::SUBMISSION_CAPACITY_EXCEEDED.to_string(),
+        message: messages::submission_capacity_exceeded(),
+    }
+}
+
+/// Creates a HoprActionRejectedError for a deterministic HOPR preflight failure.
+///
+/// `operation` and `reason` are fixed-cardinality strings produced by the chain-api policy,
+/// never client input, so they are safe to surface verbatim.
+pub fn hopr_action_rejected(operation: &str, reason_code: &str, reason_message: &str) -> HoprActionRejectedError {
+    HoprActionRejectedError {
+        code: codes::HOPR_ACTION_REJECTED.to_string(),
+        message: format!("HOPR {operation} rejected before broadcast: {reason_message}"),
+        operation: operation.to_string(),
+        reason: reason_code.to_string(),
+    }
+}
+
+/// Creates a HoprActionThrottledError for a signer on invalid-action cooldown.
+pub fn hopr_action_throttled(
+    operation: &str,
+    reason_code: &str,
+    reason_message: &str,
+    retry_after: std::time::Duration,
+) -> HoprActionThrottledError {
+    // Rounded up, not truncated: a sub-second cooldown reported as `0` would invite an
+    // immediate retry that is refused again. Saturating at i32::MAX, since a cooldown that
+    // long is not representable in GraphQL and is not a configuration we support.
+    let whole_seconds = retry_after.as_secs() + u64::from(retry_after.subsec_nanos() > 0);
+    let retry_after_seconds = i32::try_from(whole_seconds).unwrap_or(i32::MAX);
+    HoprActionThrottledError {
+        code: codes::HOPR_ACTION_THROTTLED.to_string(),
+        message: format!(
+            "HOPR {operation} is temporarily suppressed after repeated invalid submissions ({reason_message}); retry \
+             in {retry_after_seconds}s"
+        ),
+        operation: operation.to_string(),
+        reason: reason_code.to_string(),
+        retry_after_seconds,
+    }
+}
+
 /// Creates an RpcError for internal errors
 pub fn rpc_internal_error(error: impl std::fmt::Display) -> RpcError {
     RpcError {
@@ -551,6 +646,24 @@ pub fn unsupported_schema_version(version: u32) -> async_graphql::Error {
 pub fn invalid_schema_version_header() -> async_graphql::Error {
     async_graphql::Error::new("Invalid X-Blokli-Schema-Version header: expected a non-negative integer")
         .extend_with(|_, e| e.set("code", codes::INVALID_SCHEMA_VERSION_HEADER))
+}
+
+/// Adapts the shared query-error taxonomy for GraphQL surfaces that cannot return unions.
+pub fn graphql_error(error: QueryFailedError) -> async_graphql::Error {
+    let code = error.code;
+    async_graphql::Error::new(error.message).extend_with(|_, extensions| extensions.set("code", code))
+}
+
+/// Creates a top-level error when a subscription cannot guarantee lossless delivery.
+pub fn graphql_subscription_lagged_error(stream: &str, missed: impl std::fmt::Display) -> async_graphql::Error {
+    async_graphql::Error::new(messages::subscription_lagged(stream, missed))
+        .extend_with(|_, extensions| extensions.set("code", codes::SUBSCRIPTION_LAGGED))
+}
+
+/// Creates an async_graphql::Error when an optional server feature is disabled
+pub fn feature_disabled(feature: &str) -> async_graphql::Error {
+    async_graphql::Error::new(messages::feature_disabled(feature))
+        .extend_with(|_, extensions| extensions.set("code", codes::FEATURE_DISABLED))
 }
 
 /// Creates an async_graphql::Error for a transaction tracking ID that is not present on this server.

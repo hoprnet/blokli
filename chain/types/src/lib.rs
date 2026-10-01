@@ -22,6 +22,7 @@ use hopr_bindings::{
     hopr_winning_probability_oracle::HoprWinningProbabilityOracle::{self, HoprWinningProbabilityOracleInstance},
 };
 use hopr_types::{
+    chain::ContractAddresses as HoprContractAddresses,
     crypto::keypairs::{ChainKeypair, Keypair},
     primitive::primitives::Address,
 };
@@ -32,6 +33,7 @@ pub mod actions;
 pub mod chain_events;
 pub mod channel;
 pub mod constants;
+pub mod curvy_tree;
 pub mod errors;
 // Various (mostly testing related) utility functions
 pub mod utils;
@@ -68,7 +70,8 @@ impl AlloyAddressExt for AlloyAddress {
     }
 
     fn from_hopr_address(addr: Address) -> Self {
-        AlloyAddress::from(<[u8; 20]>::try_from(addr.as_ref()).expect("Address is 20 bytes"))
+        let address_bytes = <[u8; 20]>::try_from(addr.as_ref()).unwrap_or_default();
+        AlloyAddress::from(address_bytes)
     }
 }
 
@@ -130,14 +133,60 @@ pub struct ContractAddresses {
     #[serde_as(as = "DisplayFromStr")]
     #[serde(default)]
     pub xhopr_token: Address,
+    /// Curvy aggregator proxy whose raw note events should be indexed. The zero address disables Curvy indexing.
+    #[serde_as(as = "DisplayFromStr")]
+    #[serde(default)]
+    pub curvy_aggregator: Address,
+    /// Curvy Vault proxy used by typed contract-read queries.
+    #[serde_as(as = "DisplayFromStr")]
+    #[serde(default)]
+    pub curvy_vault: Address,
+    /// Curvy PortalFactory used by typed portal queries.
+    #[serde_as(as = "DisplayFromStr")]
+    #[serde(default)]
+    pub curvy_portal_factory: Address,
+    /// Curvy shield router, through which a node's Safe shields with one ERC-777 `send`.
+    ///
+    /// Never configured: it lives at `curvy_bindings::config::shield_router_address()` on every chain, and is
+    /// resolved at startup only if code is there. The zero address means it is not deployed on this network.
+    #[serde_as(as = "DisplayFromStr")]
+    #[serde(default)]
+    pub curvy_shield_router: Address,
     /// Service registry contract.
     ///
-    /// The zero address means the registry is not deployed on this network - `jura`,
-    /// `debug-staging` and `rotsee` are in that state - and every consumer must skip the
-    /// contract rather than filter logs on the null address.
+    /// The zero address means the registry is not deployed on this network and consumers must skip the contract
+    /// rather than filter logs on the null address.
     #[serde_as(as = "DisplayFromStr")]
     #[serde(default)]
     pub service_registry: Address,
+}
+
+impl ContractAddresses {
+    /// Combines HOPR and Curvy deployment outputs into the runtime address set.
+    pub fn new(
+        hopr: &HoprContractAddresses,
+        curvy_aggregator: Address,
+        curvy_vault: Address,
+        curvy_portal_factory: Address,
+    ) -> Self {
+        Self {
+            token: hopr.token.to_hopr_address(),
+            channels: hopr.channels.to_hopr_address(),
+            announcements: hopr.announcements.to_hopr_address(),
+            module_implementation: hopr.module_implementation.to_hopr_address(),
+            node_safe_migration: hopr.node_safe_migration.to_hopr_address(),
+            node_safe_registry: hopr.node_safe_registry.to_hopr_address(),
+            ticket_price_oracle: hopr.ticket_price_oracle.to_hopr_address(),
+            winning_probability_oracle: hopr.winning_probability_oracle.to_hopr_address(),
+            node_stake_factory: hopr.node_stake_factory.to_hopr_address(),
+            xhopr_token: hopr.xhopr_token.to_hopr_address(),
+            curvy_aggregator,
+            curvy_vault,
+            curvy_portal_factory,
+            curvy_shield_router: Address::default(),
+            service_registry: hopr.service_registry.to_hopr_address(),
+        }
+    }
 }
 
 /// Holds instances to contracts.
@@ -240,10 +289,27 @@ where
 
         let safe_registry = HoprNodeSafeRegistry::deploy(provider.clone()).await?;
         let announcements = HoprAnnouncements::deploy(provider.clone()).await?;
+        let token = HoprToken::deploy(provider.clone()).await?;
+
+        // NOTE: `HoprNodeStakeFactory::deploy` now requires the service registry address as a
+        // constructor argument, so the registry must be deployed before the stake factory. This
+        // matches the order used by `DeployAll.s.sol` and `hopr-bindings`' own testing deploy.
+        let service_registry = HoprServiceRegistry::deploy(
+            provider.clone(),
+            *token.address(),
+            *safe_registry.address(),
+            INIT_ADMIN_DELAY,
+            self_address,
+            self_address,
+            INIT_TYPE_REGISTRATION_FEE,
+        )
+        .await?;
+
         let stake_factory = HoprNodeStakeFactory::deploy(
             provider.clone(),
             AlloyAddress::ZERO, // _moduleSingletonAddress - use zero for testing
             AlloyAddress::from(announcements.address().as_ref()),
+            AlloyAddress::from(service_registry.address().as_ref()),
             self_address,
         )
         .await?;
@@ -260,7 +326,6 @@ where
                                               * decimal values */
         )
         .await?;
-        let token = HoprToken::deploy(provider.clone()).await?;
         // Deploy a distinct xHOPR token (ERC677) so its balance is independent of wxHOPR, and
         // seed the deployer with a recognisably different amount for balance assertions in tests.
         let xhopr_token = ERC677Mock::deploy(provider.clone()).await?;
@@ -282,21 +347,6 @@ where
         // For testing purposes, we create a minimal instance with zero address that won't be used in actual tests.
         // In production, these addresses are loaded from hopr-bindings network configuration.
         let node_safe_migration = HoprNodeSafeMigrationInstance::new(AlloyAddress::ZERO, provider.clone());
-
-        // CAUTION: the service registry must stay LAST. Deploy addresses are nonce-derived
-        // CREATE, so a deployment in any other position churns every `anvil-localhost` address
-        // that follows it. `DeployAll.s.sol` and `hopr-bindings`' own testing deploy both put the
-        // registry after everything that came before it.
-        let service_registry = HoprServiceRegistry::deploy(
-            provider.clone(),
-            *token.address(),
-            *safe_registry.address(),
-            INIT_ADMIN_DELAY,
-            self_address,
-            self_address,
-            INIT_TYPE_REGISTRATION_FEE,
-        )
-        .await?;
 
         Ok(Self {
             token,
@@ -344,6 +394,10 @@ where
             winning_probability_oracle: instances.winning_probability_oracle.address().to_hopr_address(),
             node_stake_factory: instances.node_stake_factory.address().to_hopr_address(),
             xhopr_token: instances.xhopr_token.address().to_hopr_address(),
+            curvy_aggregator: Address::default(),
+            curvy_vault: Address::default(),
+            curvy_portal_factory: Address::default(),
+            curvy_shield_router: Address::default(),
             service_registry: instances.service_registry.address().to_hopr_address(),
         }
     }

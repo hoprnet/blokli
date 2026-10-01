@@ -31,7 +31,7 @@ into outright failures.
   - `histogram_quantile(0.95, sum by (le, call) (rate(blokli_retries_per_rpc_call_bucket[5m])))`
 - Check `config.maxRpcRequestsPerSec` — retries often correlate with the provider rate-limiting Blokli; lowering this value can reduce retry
   pressure.
-- Check the RPC provider's status page for known rate-limit or capacity issues.
+- Check [Tenderly's status page](https://tenderly.co/status) for known rate-limit or capacity issues.
 - Cross-check with [Blokli RPC Failure Rate High](blokli-rpc-failure-rate-high.md) and
   [Blokli RPC Call Latency High](blokli-rpc-call-latency-high.md) — retries frequently precede or accompany both.
 - If retries are consistently high for a specific method, check whether request parameters (e.g. block range size) can be reduced to fit

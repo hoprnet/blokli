@@ -20,7 +20,7 @@ Indexing can slow down or stall (see [Blokli Indexer Lag High](blokli-indexer-la
 
 - Break down failures by RPC method to identify a specific hot spot:
   - `sum by (call) (rate(blokli_rpc_call_count{result="failure"}[5m]))`
-- Check the RPC provider's own status page/dashboard for incidents or rate-limit changes.
+- Check [Tenderly's status page](https://tenderly.co/status) and the RPC provider's own dashboard for incidents or rate-limit changes.
 - Check `config.maxRpcRequestsPerSec` — if unlimited (`0`) or set too high, Blokli may be self-inflicting rate-limit failures.
 - Check `blokli_retries_per_rpc_call` for elevated retries on the same calls (see [Blokli RPC Retries High](blokli-rpc-retries-high.md))
   this often accompanies a failure-rate spike.

@@ -30,7 +30,8 @@ On its own: none directly — it's a diagnostic breadcrumb. Sustained high laten
   - `histogram_quantile(0.95, sum by (le, call) (rate(blokli_rpc_call_time_sec_bucket[5m])))`
 - Check whether the slowdown correlates with a specific indexing phase (`blokli_indexer_sync_progress{phase=...}`) — historical backfill
   phases naturally issue larger/heavier RPC calls than continuous tailing.
-- Check the Tenderly RPC provider's own latency dashboards/status page for a regional or global slowdown.
+- Check the Tenderly RPC provider's own latency dashboards, and [Tenderly's status page](https://tenderly.co/status), for a regional or
+  global slowdown/incident.
 - Check `config.maxRpcRequestsPerSec` — if set very low, calls may be queuing client-side rather than the provider itself being slow;
   compare `blokli_rpc_call_time_sec` against provider-side metrics if available.
 - If a specific method is consistently slow (e.g. large `eth_getLogs` ranges), consider whether batch sizes

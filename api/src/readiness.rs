@@ -21,7 +21,7 @@ use blokli_chain_rpc::rpc::RpcOperations;
 use blokli_db_entity::prelude::ChainInfo;
 use sea_orm::{DatabaseConnection, EntityTrait};
 use tokio::sync::RwLock;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{config::HealthConfig, metrics};
 
@@ -168,7 +168,7 @@ impl ReadinessChecker {
             }
 
             // Log successful readiness check
-            info!(
+            debug!(
                 %lag,
                 confirmed_block = %rpc_block,
                 indexed = %indexed,

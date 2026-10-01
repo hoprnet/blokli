@@ -848,7 +848,7 @@ mod tests {
                 version: U256::from(1u64),
                 admin: alloy_address(0x77),
                 manager: alloy_address(0x78),
-                wxHopr: alloy_address(0x79),
+                token: alloy_address(0x79),
                 initialAdminDelay: U48::from(3_600u64),
             },
             *SERVICE_REGISTRY_ADDR,

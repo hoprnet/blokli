@@ -3,6 +3,7 @@ use std::{fmt, time::Duration};
 use blokli_chain_indexer::utils::redact_url;
 use blokli_chain_types::{ChainConfig, ContractAddresses};
 use blokli_db::utils::redact_database_url;
+use hopr_types::primitive::primitives::Address;
 
 use crate::network::Network;
 
@@ -277,6 +278,13 @@ pub struct Config {
     #[serde(default, rename = "contracts")]
     pub contracts_override: Option<ContractAddresses>,
 
+    /// Optional Curvy Aggregator proxy address. The Vault and optional
+    /// PortalFactory addresses are resolved from this contract during startup.
+    /// This overrides the value in `[contracts]` when both are configured.
+    #[serde_as(as = "Option<serde_with::DisplayFromStr>")]
+    #[serde(default)]
+    pub curvy_aggregator: Option<Address>,
+
     #[serde(skip)]
     #[default(None)]
     pub chain_network: Option<ChainConfig>,
@@ -315,6 +323,10 @@ impl Config {
             "  indexer.enable_safe_indexing: {}\n",
             self.indexer.enable_safe_indexing
         ));
+        output.push_str(&format!(
+            "  indexer.enable_curvy_indexing: {}\n",
+            self.indexer.enable_curvy_indexing
+        ));
 
         if let Some(snapshot_url) = &self.indexer.logs_snapshot_url {
             output.push_str(&format!("  indexer.logs_snapshot_url: {}\n", redact_url(snapshot_url)));
@@ -328,6 +340,42 @@ impl Config {
         output.push_str(&format!(
             "  api.max_query_complexity: {}\n",
             self.api.max_query_complexity
+        ));
+        output.push_str(&format!(
+            "  api.transactions.max_submitted_transactions: {}\n",
+            self.api.transactions.max_submitted_transactions
+        ));
+        output.push_str(&format!(
+            "  api.transactions.max_submitted_transactions_per_identity: {}\n",
+            self.api.transactions.max_submitted_transactions_per_identity
+        ));
+        output.push_str(&format!(
+            "  api.transactions.max_queued_trace_jobs: {}\n",
+            self.api.transactions.max_queued_trace_jobs
+        ));
+        output.push_str(&format!(
+            "  api.transactions.max_concurrent_trace_jobs: {}\n",
+            self.api.transactions.max_concurrent_trace_jobs
+        ));
+        output.push_str(&format!(
+            "  api.transactions.enable_revert_reason_tracing: {}\n",
+            self.api.transactions.enable_revert_reason_tracing
+        ));
+        output.push_str(&format!(
+            "  api.transactions.enable_hopr_action_validation: {}\n",
+            self.api.transactions.enable_hopr_action_validation
+        ));
+        output.push_str(&format!(
+            "  api.transactions.hopr_action_ttl: {:?}\n",
+            self.api.transactions.hopr_action_ttl
+        ));
+        output.push_str(&format!(
+            "  api.transactions.hopr_invalid_action_threshold: {}\n",
+            self.api.transactions.hopr_invalid_action_threshold
+        ));
+        output.push_str(&format!(
+            "  api.transactions.hopr_invalid_action_cooldown: {:?}\n",
+            self.api.transactions.hopr_invalid_action_cooldown
         ));
         output.push_str(&format!(
             "  api.sse_keepalive.enabled: {}\n",
@@ -390,6 +438,10 @@ pub struct IndexerConfig {
     #[serde(default = "default_false")]
     pub enable_safe_indexing: bool,
 
+    #[default(false)]
+    #[serde(default = "default_false")]
+    pub enable_curvy_indexing: bool,
+
     #[serde(default)]
     pub logs_snapshot_url: Option<String>,
 
@@ -447,6 +499,9 @@ pub struct ApiConfig {
     #[serde(default)]
     pub health: HealthConfig,
 
+    #[serde(default)]
+    pub transactions: TransactionConfig,
+
     #[default(8)]
     #[serde(default = "default_max_query_depth")]
     pub max_query_depth: usize,
@@ -454,6 +509,69 @@ pub struct ApiConfig {
     #[default(500)]
     #[serde(default = "default_max_query_complexity")]
     pub max_query_complexity: usize,
+}
+
+/// Configuration for transaction submission and optional Safe revert tracing.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
+#[serde(deny_unknown_fields)]
+pub struct TransactionConfig {
+    /// Global limit for transactions awaiting receipt monitoring. `0` means unbounded.
+    ///
+    /// Applies to asynchronous submissions only, since they are the only ones
+    /// tracked by the background receipt monitor.
+    #[default(1024)]
+    #[serde(default = "default_max_submitted_transactions")]
+    pub max_submitted_transactions: usize,
+
+    /// Per-signer limit for transactions awaiting receipt monitoring. `0` means unbounded.
+    #[default(64)]
+    #[serde(default = "default_max_submitted_transactions_per_identity")]
+    pub max_submitted_transactions_per_identity: usize,
+
+    /// Maximum number of optional Safe revert-reason trace jobs waiting to run. `0` means unbounded.
+    #[default(128)]
+    #[serde(default = "default_max_queued_trace_jobs")]
+    pub max_queued_trace_jobs: usize,
+
+    /// Number of concurrent optional Safe revert-reason trace jobs. `0` means unbounded.
+    #[default(2)]
+    #[serde(default = "default_max_concurrent_trace_jobs")]
+    pub max_concurrent_trace_jobs: usize,
+
+    /// Whether to request optional Safe revert reasons through debug tracing.
+    #[default(true)]
+    #[serde(default = "default_true")]
+    pub enable_revert_reason_tracing: bool,
+
+    /// Whether to apply the HOPR-aware policy to supported HOPR node-management transactions.
+    ///
+    /// When disabled, every transaction keeps generic Blokli behaviour. Transactions the
+    /// policy does not recognise are unaffected either way.
+    ///
+    /// Off unless set explicitly, so an existing deployment does not start rejecting or
+    /// deduplicating transactions before its clients understand the new result types.
+    #[default(false)]
+    #[serde(default)]
+    pub enable_hopr_action_validation: bool,
+
+    /// How long one logical HOPR action stays deduplicated while its transaction is tracked.
+    ///
+    /// This is an upper bound: an action whose transaction already concluded is released
+    /// earlier.
+    #[default(_code = "Duration::from_secs(120)")]
+    #[serde(default = "default_hopr_action_ttl", with = "humantime_serde")]
+    pub hopr_action_ttl: Duration,
+
+    /// Consecutive deterministically invalid submissions of one operation by one signer
+    /// before that signer is put on cooldown. `0` disables invalid-action suppression.
+    #[default(3)]
+    #[serde(default = "default_hopr_invalid_action_threshold")]
+    pub hopr_invalid_action_threshold: u32,
+
+    /// How long a signer is suppressed for an operation once the threshold is reached.
+    #[default(_code = "Duration::from_secs(60)")]
+    #[serde(default = "default_hopr_invalid_action_cooldown", with = "humantime_serde")]
+    pub hopr_invalid_action_cooldown: Duration,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
@@ -540,6 +658,34 @@ fn default_max_query_complexity() -> usize {
     500
 }
 
+fn default_max_submitted_transactions() -> usize {
+    1024
+}
+
+fn default_max_submitted_transactions_per_identity() -> usize {
+    64
+}
+
+fn default_max_queued_trace_jobs() -> usize {
+    128
+}
+
+fn default_max_concurrent_trace_jobs() -> usize {
+    2
+}
+
+fn default_hopr_action_ttl() -> Duration {
+    Duration::from_secs(120)
+}
+
+fn default_hopr_invalid_action_threshold() -> u32 {
+    3
+}
+
+fn default_hopr_invalid_action_cooldown() -> Duration {
+    Duration::from_secs(60)
+}
+
 fn default_max_indexer_lag() -> u64 {
     10
 }
@@ -582,7 +728,7 @@ mod tests {
             winning_probability_oracle = "0x0808080808080808080808080808080808080808"
             node_stake_factory = "0x0909090909090909090909090909090909090909"
             xhopr_token = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-            service_registry = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            service_registry = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
         "#;
 
         let config: Config = toml::from_str(config).expect("contracts should accept hex strings");
@@ -600,7 +746,11 @@ mod tests {
                 winning_probability_oracle: Address::from([8; 20]),
                 node_stake_factory: Address::from([9; 20]),
                 xhopr_token: Address::from([0xaa; 20]),
-                service_registry: Address::from([0xbb; 20]),
+                curvy_aggregator: Address::default(),
+                curvy_vault: Address::default(),
+                curvy_portal_factory: Address::default(),
+                curvy_shield_router: Address::default(),
+                service_registry: Address::from([0xee; 20]),
             })
         );
     }
@@ -633,6 +783,45 @@ mod tests {
         // The zero address is the "not deployed" sentinel every consumer must skip.
         assert_eq!(contracts.service_registry, Address::default());
         assert_eq!(contracts.xhopr_token, Address::default());
+    }
+
+    #[test]
+    fn test_contract_overrides_default_to_disabled_curvy_indexing() {
+        let config = r#"
+            [contracts]
+            token = "0x0101010101010101010101010101010101010101"
+            channels = "0x0202020202020202020202020202020202020202"
+            announcements = "0x0303030303030303030303030303030303030303"
+            module_implementation = "0x0404040404040404040404040404040404040404"
+            node_safe_migration = "0x0505050505050505050505050505050505050505"
+            node_safe_registry = "0x0606060606060606060606060606060606060606"
+            ticket_price_oracle = "0x0707070707070707070707070707070707070707"
+            winning_probability_oracle = "0x0808080808080808080808080808080808080808"
+            node_stake_factory = "0x0909090909090909090909090909090909090909"
+            xhopr_token = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "#;
+
+        let config: Config = toml::from_str(config).expect("legacy contract overrides should remain valid");
+
+        assert_eq!(
+            config
+                .contracts_override
+                .expect("contract overrides should be present")
+                .curvy_aggregator,
+            Address::default()
+        );
+    }
+
+    #[test]
+    fn test_curvy_aggregator_can_be_configured_independently() {
+        let config = r#"
+            curvy_aggregator = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        "#;
+
+        let config: Config = toml::from_str(config).expect("Curvy aggregator should accept a hex string");
+
+        assert_eq!(config.curvy_aggregator, Some(Address::from([0xbb; 20])));
+        assert!(config.contracts_override.is_none());
     }
 
     #[test]
@@ -840,6 +1029,7 @@ mod tests {
         // Check indexer config
         assert!(config.indexer.fast_sync);
         assert!(!config.indexer.enable_safe_indexing);
+        assert!(!config.indexer.enable_curvy_indexing);
         assert_eq!(config.indexer.subscription.event_bus_capacity, 1000);
 
         // Check API config
@@ -872,6 +1062,7 @@ mod tests {
         assert!(!cfg.indexer.fast_sync);
         assert!(!cfg.indexer.enable_logs_snapshot); // Default
         assert!(!cfg.indexer.enable_safe_indexing); // Default
+        assert!(!cfg.indexer.enable_curvy_indexing); // Default
         assert_eq!(cfg.indexer.subscription.event_bus_capacity, 1000); // Default
         assert_eq!(cfg.indexer.subscription.batch_size, 100); // Default
     }
