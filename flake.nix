@@ -405,6 +405,7 @@
               uv
               sqlite
               pgformatter
+              postgresql
             ];
           };
           shells = {
