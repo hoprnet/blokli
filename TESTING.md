@@ -88,6 +88,19 @@ Integration tests are in `bloklid/tests/`:
   - Start block configuration
   - Mock RPC integration
 
+### PostgreSQL Schema Check
+
+Most tests run on SQLite, which hides type mismatches that only fail on PostgreSQL when a row is decoded
+(for example an `i64` entity field over an `INTEGER` column). `db/core/tests/postgres_schema_test.rs`
+migrates a scratch PostgreSQL database and compares every SeaORM entity against `information_schema`.
+
+```bash
+# Starts a throwaway PostgreSQL server, or uses BLOKLI_TEST_POSTGRES_URL if set
+just test-postgres-schema
+```
+
+When you add an entity, list it in `all_entities` in that test; the test fails if a table or view has no entity.
+
 ## Writing New Tests
 
 ### Test Structure
