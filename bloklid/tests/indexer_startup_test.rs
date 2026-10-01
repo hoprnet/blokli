@@ -153,6 +153,7 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
         curvy_aggregator: Address::default(),
         curvy_vault: Address::default(),
         curvy_portal_factory: Address::default(),
+        curvy_shield_router: Address::default(),
         service_registry: Address::from([11; 20]),
     };
 
@@ -242,6 +243,7 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
         curvy_aggregator: Address::default(),
         curvy_vault: Address::default(),
         curvy_portal_factory: Address::default(),
+        curvy_shield_router: Address::default(),
         service_registry: Address::from([11; 20]),
     };
 
@@ -435,6 +437,7 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         curvy_aggregator: Address::default(),
         curvy_vault: Address::default(),
         curvy_portal_factory: Address::default(),
+        curvy_shield_router: Address::default(),
         service_registry: Address::from([11; 20]),
     };
 
@@ -547,6 +550,7 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
         curvy_aggregator: Address::default(),
         curvy_vault: Address::default(),
         curvy_portal_factory: Address::default(),
+        curvy_shield_router: Address::default(),
         service_registry: Address::from([11; 20]),
     };
 
@@ -628,6 +632,7 @@ async fn test_service_registry_is_in_the_handler_filter_set() -> anyhow::Result<
             curvy_aggregator: Address::from([11; 20]),
             curvy_vault: Address::from([12; 20]),
             curvy_portal_factory: Address::from([13; 20]),
+            curvy_shield_router: Address::default(),
         },
         db,
         MockRpcOperations::new(),
@@ -666,6 +671,7 @@ async fn test_zero_service_registry_is_not_monitored() -> anyhow::Result<()> {
             curvy_aggregator: Address::from([11; 20]),
             curvy_vault: Address::from([12; 20]),
             curvy_portal_factory: Address::from([13; 20]),
+            curvy_shield_router: Address::default(),
         },
         db,
         MockRpcOperations::new(),

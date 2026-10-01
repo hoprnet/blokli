@@ -749,6 +749,7 @@ mod tests {
                 curvy_aggregator: Address::default(),
                 curvy_vault: Address::default(),
                 curvy_portal_factory: Address::default(),
+                curvy_shield_router: Address::default(),
                 service_registry: Address::from([0xee; 20]),
             })
         );

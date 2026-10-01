@@ -1437,6 +1437,7 @@ impl From<&blokli_chain_types::ContractAddresses> for ContractAddressMap {
             ("curvy_aggregator", &addresses.curvy_aggregator),
             ("curvy_portal_factory", &addresses.curvy_portal_factory),
             ("curvy_vault", &addresses.curvy_vault),
+            ("curvy_shield_router", &addresses.curvy_shield_router),
             ("service_registry", &addresses.service_registry),
         ]
         .into_iter()
