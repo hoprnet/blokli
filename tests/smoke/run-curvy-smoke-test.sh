@@ -71,6 +71,7 @@ EXPECTED_KEYS=(
   "CurvyVault#CurvyVaultV2Implementation"
   "CurvyVault#ERC1967Proxy"
   "CurvyVault#CurvyVaultV2"
+  "ShieldRouter#CurvyShieldRouter"
   "Devenv#Multicall3"
   "Devenv#ERC20Mock"
 )
