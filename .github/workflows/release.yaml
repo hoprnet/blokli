@@ -93,7 +93,7 @@ jobs:
       id-token: write
     steps:
       - name: Release version
-        uses: hoprnet/hopr-workflows/actions/release-version@711c81d05909e2482d74289084502fb70fecc97b # release-version-v5.3.0
+        uses: hoprnet/hopr-workflows/actions/release-version@c761aa03c00b93ec20c2c0a91c2ee6a2fac2a564 # release-version-v5.5.0
         with:
           source_branch: ${{ github.ref_name }}
           file: bloklid/Cargo.toml
@@ -134,6 +134,6 @@ jobs:
           event-type: deploy_blokli
           client-payload: |-
             {
-              "deployment_environment": "staging",
+              "network": "${{ github.ref_name == 'main' && vars.GNOSIS_DEPLOYMENT_MAIN_NETWORK || vars.GNOSIS_DEPLOYMENT_MAINTENANCE_NETWORK }}-staging",
               "tag": "${{ needs.build-docker.outputs.docker_build_version }}"
             }
