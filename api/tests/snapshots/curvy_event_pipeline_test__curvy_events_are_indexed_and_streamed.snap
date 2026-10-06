@@ -58,7 +58,7 @@ curvyPendingNotes:
         block: "33"
         eventItemIndex: "0"
         logIndex: "1"
-        transactionHash: "0x77babd6ce5504055dc8d62c95552f60a8b0f4295f1aceaf3e48527e6c4184cdd"
+        transactionHash: "0x2e8569b46fb267590af8438887c92a898e49a642bf552ba71b35ffd79823cf0d"
         transactionIndex: "0"
       tokenId: "1"
       viewTag: 44
