@@ -141,6 +141,25 @@ jobs:
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Validate GraphQL schema
         run: nix build -L .#schema-validation
+  # ── Repo-specific: entity / PostgreSQL schema drift ─────────────────────────
+  postgres-schema:
+    name: Postgres Schema
+    runs-on: depot-ubuntu-24.04-4
+    timeout-minutes: 30
+    needs: checks
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: Setup Nix
+        uses: hoprnet/hopr-workflows/actions/setup-nix@ade4bbd75f7204255c61d19c23f67d3da221e7d2 # setup-nix-v2.0.2
+        with:
+          cachix_cache_name: blokli
+          cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Check entities against the PostgreSQL schema
+        run: nix develop -c just test-postgres-schema
   # ── Build: binaries ─────────────────────────────────────────────────────────
   build-binaries:
     name: Binary ${{ matrix.architecture }}
