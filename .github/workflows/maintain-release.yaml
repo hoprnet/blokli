@@ -60,9 +60,6 @@ jobs:
           private-key: ${{ secrets.GH_APP_HOPRNET_BOT_PRIVATE_KEY }}
           owner: hoprnet
           repositories: blokli
-          permission-contents: write
-          permission-workflows: write
-          permission-variables: write
 
       - name: Create release branch
         env:
