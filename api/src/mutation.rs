@@ -215,7 +215,7 @@ fn executor_error_to_send_result(error: TransactionExecutorError) -> SendTransac
             reason.message(),
             retry_after,
         )),
-        TransactionExecutorError::RpcError(msg) => SendTransactionResult::RpcError(errors::rpc_error_with_message(msg)),
+        TransactionExecutorError::RpcError(msg) => SendTransactionResult::RpcError(errors::rpc_broadcast_error(msg)),
         _ => SendTransactionResult::RpcError(errors::rpc_internal_error(&error)),
     }
 }
@@ -233,7 +233,7 @@ fn executor_error_to_async_result(error: TransactionExecutorError) -> SendTransa
             SendTransactionAsyncResult::RpcError(errors::rpc_validation_failed(&error))
         }
         TransactionExecutorError::RpcError(msg) => {
-            SendTransactionAsyncResult::RpcError(errors::rpc_error_with_message(msg))
+            SendTransactionAsyncResult::RpcError(errors::rpc_broadcast_error(msg))
         }
         TransactionExecutorError::HoprActionRejected { operation, reason } => {
             SendTransactionAsyncResult::HoprActionRejected(errors::hopr_action_rejected(
@@ -272,7 +272,7 @@ fn executor_error_to_sync_result(error: TransactionExecutorError) -> SendTransac
             SendTransactionSyncResult::RpcError(errors::rpc_validation_failed(&error))
         }
         TransactionExecutorError::RpcError(msg) => {
-            SendTransactionSyncResult::RpcError(errors::rpc_error_with_message(msg))
+            SendTransactionSyncResult::RpcError(errors::rpc_broadcast_error(msg))
         }
         TransactionExecutorError::HoprActionRejected { operation, reason } => {
             SendTransactionSyncResult::HoprActionRejected(errors::hopr_action_rejected(

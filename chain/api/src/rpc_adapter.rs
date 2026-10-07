@@ -12,10 +12,12 @@ use hopr_bindings::exports::alloy::{
     primitives::{Address as AlloyAddress, B256, Bytes},
     providers::Provider,
 };
-use hopr_types::crypto::types::Hash;
-use tracing::{debug, error};
+use hopr_types::{crypto::types::Hash, primitive::prelude::Address};
+use tracing::{debug, error, info};
 
 use crate::{
+    broadcast_error::{BroadcastRejection, classify_broadcast_error},
+    safe_execution::{decode_transaction_signer, decode_transaction_summary},
     transaction_executor::{ConfirmationError, RpcClient},
     transaction_monitor::{ReceiptLog, ReceiptProvider, TransactionReceipt},
 };
@@ -60,7 +62,32 @@ impl<R: HttpRequestor + 'static + Clone> RpcClient for RpcAdapter<R> {
                 Ok(hash)
             }
             Err(e) => {
-                error!(raw_tx_len, error = %e, "failed to send raw transaction");
+                let rejection = classify_broadcast_error(&e.to_string());
+                let summary = decode_transaction_summary(&bytes);
+
+                // The node already holds this exact transaction, e.g. from an earlier attempt
+                // whose response was lost: it is in the mempool, so track it like a fresh one.
+                if let (Some(BroadcastRejection::AlreadyKnown), Some(summary)) = (rejection, summary) {
+                    info!(
+                        tx_hash = %summary.transaction_hash,
+                        nonce = summary.nonce,
+                        "transaction already known to the RPC node, treating it as submitted"
+                    );
+                    return Ok(summary.transaction_hash);
+                }
+
+                error!(
+                    raw_tx_len,
+                    rejection = rejection.map_or("unclassified", BroadcastRejection::label),
+                    signer = ?decode_transaction_signer(&bytes).map(Address::from),
+                    tx_hash = ?summary.map(|tx| tx.transaction_hash),
+                    nonce = ?summary.map(|tx| tx.nonce),
+                    to = ?summary.and_then(|tx| tx.to),
+                    max_fee_per_gas = ?summary.map(|tx| tx.max_fee_per_gas),
+                    max_priority_fee_per_gas = ?summary.and_then(|tx| tx.max_priority_fee_per_gas),
+                    error = %e,
+                    "failed to send raw transaction"
+                );
                 Err(format!("RPC error: {}", e))
             }
         }

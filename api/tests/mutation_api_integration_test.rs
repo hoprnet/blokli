@@ -512,3 +512,74 @@ async fn test_send_transaction_sync_timeout() -> Result<()> {
 
     Ok(())
 }
+
+/// Submit `raw_tx` through the fire-and-forget mutation and return its result object
+async fn send_transaction(ctx: &TestContext, raw_tx: &[u8]) -> serde_json::Value {
+    let query = format!(
+        r#"mutation {{
+            sendTransaction(input: {{ rawTransaction: "0x{}" }}) {{
+                __typename
+                ... on SendTransactionSuccess {{
+                    transactionHash
+                }}
+                ... on RpcError {{
+                    code
+                    message
+                }}
+            }}
+        }}"#,
+        hex::encode(raw_tx)
+    );
+    execute_mutation(&ctx.schema, &query).await["data"]["sendTransaction"].clone()
+}
+
+#[tokio::test]
+async fn test_send_transaction_already_known_returns_the_same_hash() -> Result<()> {
+    let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
+
+    // Keep the transaction in the mempool so the second submission finds it there
+    let provider = ProviderBuilder::new().connect_http(ctx._tx_ctx.anvil.endpoint_url());
+    provider
+        .client()
+        .request::<_, serde_json::Value>("evm_setIntervalMining", (0u64,))
+        .await?;
+
+    let nonce = get_current_nonce(&ctx).await;
+    let raw_tx = create_test_transaction(ctx.chain_key(), AlloyAddress::ZERO, 1_000_000, nonce, ctx.chain_id);
+
+    let first = send_transaction(&ctx, &raw_tx).await;
+    let second = send_transaction(&ctx, &raw_tx).await;
+
+    assert_eq!(first["__typename"], "SendTransactionSuccess", "{first}");
+    assert_eq!(second["__typename"], "SendTransactionSuccess", "{second}");
+    assert_eq!(first["transactionHash"], second["transactionHash"]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_send_transaction_with_used_nonce_reports_nonce_too_low() -> Result<()> {
+    let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
+
+    let nonce = get_current_nonce(&ctx).await;
+    let mined = create_test_transaction(ctx.chain_key(), AlloyAddress::ZERO, 1_000_000, nonce, ctx.chain_id);
+    assert_eq!(
+        send_transaction(&ctx, &mined).await["__typename"],
+        "SendTransactionSuccess"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while get_current_nonce(&ctx).await <= nonce {
+        assert!(Instant::now() < deadline, "transaction was not mined in time");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+
+    // A different transaction at the nonce that was just used
+    let reused = create_test_transaction(ctx.chain_key(), AlloyAddress::ZERO, 2_000_000, nonce, ctx.chain_id);
+    let result = send_transaction(&ctx, &reused).await;
+
+    assert_eq!(result["__typename"], "RpcError", "{result}");
+    assert_eq!(result["code"], "NONCE_TOO_LOW", "{result}");
+
+    Ok(())
+}
