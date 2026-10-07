@@ -537,9 +537,11 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         let code = provider.get_code_at(address_alloy).await?;
 
         if code.is_empty() {
-            // Empty code means EOA (Externally Owned Account), use eth_getTransactionCount
+            // Empty code means EOA (Externally Owned Account), use eth_getTransactionCount.
+            // Pending, so a client signing its next transaction does not reuse the nonce of one
+            // still in the mempool.
             debug!(%address, "address has no code, using eth_getTransactionCount");
-            let tx_count = provider.get_transaction_count(address_alloy).await?;
+            let tx_count = provider.get_transaction_count(address_alloy).pending().await?;
             return Ok(tx_count);
         }
 
@@ -580,7 +582,9 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
                          eth_getTransactionCount. Error: {:?}",
                         address, e
                     );
-                    let tx_count = provider.get_transaction_count(address_alloy).await?;
+                    // Pending for the same reason as EOAs: this path also serves EOAs with
+                    // delegated code (EIP-7702).
+                    let tx_count = provider.get_transaction_count(address_alloy).pending().await?;
                     Ok(tx_count)
                 } else {
                     // Real error (RPC failure, network issue, etc.) - propagate it

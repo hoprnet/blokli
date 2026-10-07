@@ -11,6 +11,7 @@
 //! - Mock Safe contract deployment and nonce queries
 //! - Nonce progression verification (0 → 1 → 2)
 //! - EOA transaction count queries (returns eth_getTransactionCount)
+//! - EOA transaction count includes transactions still in the mempool (pending block)
 //! - GraphQL response structure validation
 //! - Blockchain state changes reflected in API queries
 //!
@@ -35,7 +36,7 @@ use std::{sync::Arc, time::Duration};
 
 use async_graphql::Schema;
 use blokli_api::{mutation::MutationRoot, query::QueryRoot, subscription::SubscriptionRoot};
-use hopr_bindings::exports::alloy::{primitives::U256, sol};
+use hopr_bindings::exports::alloy::{primitives::U256, providers::Provider, sol};
 use hopr_types::{crypto::keypairs::Keypair, primitive::traits::ToHex};
 
 // Mock Safe contract for testing transaction count queries
@@ -174,6 +175,42 @@ async fn test_transaction_count_eoa_returns_success() -> anyhow::Result<()> {
     let count_str = result["count"].as_str().expect("count should be a string");
     let count: u64 = count_str.parse().expect("count should be a valid u64");
     assert!(count < 20, "EOA transaction count should be reasonable: {}", count);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_transaction_count_eoa_includes_pending_transactions() -> anyhow::Result<()> {
+    let ctx = common::setup_simple_test_environment().await?;
+    let provider = ctx.contract_instances.token.provider().clone();
+
+    // Deployed and mined before mining is paused
+    let mock_safe = deploy_mock_safe(&ctx).await?;
+
+    // The test provider signs with the first test account
+    let eoa_address = ctx.test_accounts[0].public().to_address().to_hex();
+    let parse_count = |data: serde_json::Value| -> u64 {
+        data["transactionCount"]["count"]
+            .as_str()
+            .expect("count should be a string")
+            .parse()
+            .expect("count should be a valid u64")
+    };
+    let before = parse_count(query_transaction_count(&ctx.schema, &eoa_address).await?);
+
+    // Stop mining so the next transaction stays in the mempool
+    provider
+        .client()
+        .request::<_, serde_json::Value>("evm_setIntervalMining", (0u64,))
+        .await?;
+    let _pending = mock_safe.incrementNonce().send().await?;
+
+    let after = parse_count(query_transaction_count(&ctx.schema, &eoa_address).await?);
+    assert_eq!(
+        after,
+        before + 1,
+        "the transaction count must include the unmined transaction, or the next one reuses its nonce"
+    );
 
     Ok(())
 }
