@@ -62,6 +62,20 @@ test:
 test-package package:
     cargo test -p {{ package }} --no-fail-fast
 
+# Check that the SeaORM entities match the schema the migrations build on PostgreSQL.
+# Starts a throwaway PostgreSQL server unless BLOKLI_TEST_POSTGRES_URL already points at one.
+test-postgres-schema:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${BLOKLI_TEST_POSTGRES_URL:-}" ]; then
+        pg_dir=$(mktemp -d "${TMPDIR:-/tmp}/blokli_pg.XXXXXX")
+        trap 'pg_ctl -D "$pg_dir/data" -m immediate stop >/dev/null 2>&1 || true; rm -rf "$pg_dir"' EXIT
+        initdb -D "$pg_dir/data" -U postgres --auth=trust --locale=C --encoding=UTF8 >/dev/null
+        pg_ctl -D "$pg_dir/data" -l "$pg_dir/postgres.log" -o "-k $pg_dir -c listen_addresses='' -p 5433" -w start >/dev/null
+        export BLOKLI_TEST_POSTGRES_URL="postgres://postgres@localhost:5433/postgres?host=$pg_dir"
+    fi
+    {{ cargo_native }} test -p blokli-db --test postgres_schema_test -- --ignored
+
 # Run tests in single thread mode with output (useful for debugging)
 test-debug:
     cargo test --workspace -- --test-threads=1 --nocapture

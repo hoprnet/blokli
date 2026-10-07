@@ -932,10 +932,42 @@ where
             }
         }
 
+        // A log that has already been applied to the index must not be applied again: replaying it
+        // re-runs handler writes whose idempotency is only as good as each handler's conflict
+        // handling. Blocks are re-delivered routinely - the historical phases re-stream their whole
+        // range after any interrupted run, and fast sync replays every log of a block that holds a
+        // single unprocessed one - so the processed flag is the only thing that makes those replays
+        // cheap and safe. Logs that were never stored (token logs are filtered out of the logs DB)
+        // are absent from the set and are therefore dispatched, as before, and so is a log that a
+        // reorganisation put at the position of one already applied: the identity carries the block
+        // hash precisely so the canonical replacement is not mistaken for what it replaces.
+        let processed_logs = if block.logs.is_empty() {
+            HashSet::new()
+        } else {
+            match db.get_processed_log_identities(block_id).await {
+                Ok(identities) => identities,
+                Err(error) => {
+                    // The logs DB is unreachable; dispatching now would mean marking the logs as
+                    // processed right after, which would fail the same way.
+                    error!(block_id, %error, "failed to load processed log identities, panicking to prevent double-processing");
+                    panic!("failed to load processed log identities, panicking to prevent double-processing")
+                }
+            }
+        };
+
         // FIXME: The block indexing and marking as processed should be done in a single
         // transaction. This is difficult since currently this would be across databases.
         // Process all logs - events are published internally via IndexerState
         for log in block.logs.clone() {
+            if processed_logs.contains(&(log.tx_index, log.log_index, log.block_hash)) {
+                debug!(
+                    block_id = log.block_number,
+                    tx_index = log.tx_index,
+                    log_index = %log.log_index,
+                    "skipping log already marked as processed"
+                );
+                continue;
+            }
             if log.removed || !logs_handler.should_process_log(&log) {
                 debug!(
                     block_id = log.block_number,
@@ -1627,6 +1659,150 @@ mod tests {
                 .processed,
             Some(true)
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_block_skips_log_already_marked_processed() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let handler = DispatchTrackingLogHandler::default();
+        let log = SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: vec![Hash::create(&[b"my topic"]).into()],
+            data: vec![1, 2, 3],
+            tx_hash: Hash::create(&[b"my tx hash"]).into(),
+            block_hash: Hash::create(&[b"my block hash"]).into(),
+            tx_index: 1,
+            block_number: 100,
+            log_index: 2,
+            ..Default::default()
+        };
+        db.store_log(log.clone()).await?;
+        db.set_log_processed(log.clone()).await?;
+
+        // Blocks are re-delivered routinely - an interrupted historical run re-streams its whole
+        // range - and a log applied twice re-runs handler writes that are not all idempotent.
+        let result = Indexer::<MockHoprIndexerOps, DispatchTrackingLogHandler, BlokliDb>::process_block(
+            &db,
+            &handler,
+            BlockWithLogs {
+                block_id: log.block_number,
+                logs: BTreeSet::from([log.clone()]),
+            },
+            false,
+            false,
+            &IndexerState::default(),
+            false,
+        )
+        .await;
+
+        assert!(result.is_some());
+        assert!(!handler.collect_called.load(StdOrdering::SeqCst));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_block_dispatches_reorg_replacement_at_a_processed_position() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let handler = DispatchTrackingLogHandler::default();
+        let orphaned = SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: vec![Hash::create(&[b"my topic"]).into()],
+            data: vec![1, 2, 3],
+            tx_hash: Hash::create(&[b"my tx hash"]).into(),
+            block_hash: Hash::create(&[b"orphaned block"]).into(),
+            tx_index: 1,
+            block_number: 100,
+            log_index: 2,
+            ..Default::default()
+        };
+        db.store_log(orphaned.clone()).await?;
+        db.set_log_processed(orphaned.clone()).await?;
+
+        // A reorganisation can put a different log at the same position, so keying the skip on the
+        // position alone would drop the canonical event and never apply it.
+        let canonical = SerializableLog {
+            block_hash: Hash::create(&[b"canonical block"]).into(),
+            ..orphaned
+        };
+        db.store_log(canonical.clone()).await?;
+
+        let block = BlockWithLogs {
+            block_id: canonical.block_number,
+            logs: BTreeSet::from([canonical]),
+        };
+
+        let result = Indexer::<MockHoprIndexerOps, DispatchTrackingLogHandler, BlokliDb>::process_block(
+            &db,
+            &handler,
+            block.clone(),
+            false,
+            false,
+            &IndexerState::default(),
+            false,
+        )
+        .await;
+
+        assert!(result.is_some());
+        assert!(handler.collect_called.load(StdOrdering::SeqCst));
+
+        // ...and once applied, the canonical log is a replay like any other: storing it replaced the
+        // orphaned row, so the processed identity now carries the canonical hash and matches.
+        handler.collect_called.store(false, StdOrdering::SeqCst);
+
+        let result = Indexer::<MockHoprIndexerOps, DispatchTrackingLogHandler, BlokliDb>::process_block(
+            &db,
+            &handler,
+            block,
+            false,
+            false,
+            &IndexerState::default(),
+            false,
+        )
+        .await;
+
+        assert!(result.is_some());
+        assert!(!handler.collect_called.load(StdOrdering::SeqCst));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_block_dispatches_log_that_was_never_stored() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let handler = DispatchTrackingLogHandler::default();
+        let log = SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: vec![Hash::create(&[b"my topic"]).into()],
+            data: vec![1, 2, 3],
+            tx_hash: Hash::create(&[b"my tx hash"]).into(),
+            block_hash: Hash::create(&[b"my block hash"]).into(),
+            tx_index: 1,
+            block_number: 100,
+            log_index: 2,
+            ..Default::default()
+        };
+
+        // Token logs are filtered out of the logs DB, so a log with no stored status must still be
+        // dispatched rather than mistaken for one that was already processed.
+        let result = Indexer::<MockHoprIndexerOps, DispatchTrackingLogHandler, BlokliDb>::process_block(
+            &db,
+            &handler,
+            BlockWithLogs {
+                block_id: log.block_number,
+                logs: BTreeSet::from([log.clone()]),
+            },
+            false,
+            false,
+            &IndexerState::default(),
+            false,
+        )
+        .await;
+
+        assert!(result.is_some());
+        assert!(handler.collect_called.load(StdOrdering::SeqCst));
 
         Ok(())
     }
