@@ -12,6 +12,7 @@
 //! - Nonce progression verification (0 → 1 → 2)
 //! - EOA transaction count queries (returns eth_getTransactionCount)
 //! - EOA transaction count includes transactions still in the mempool (pending block)
+//! - Non-Safe contracts fall back to eth_getTransactionCount
 //! - GraphQL response structure validation
 //! - Blockchain state changes reflected in API queries
 //!
@@ -211,6 +212,23 @@ async fn test_transaction_count_eoa_includes_pending_transactions() -> anyhow::R
         before + 1,
         "the transaction count must include the unmined transaction, or the next one reuses its nonce"
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_transaction_count_non_safe_contract_falls_back_to_account_nonce() -> anyhow::Result<()> {
+    let ctx = common::setup_simple_test_environment().await?;
+
+    // The HOPR token has code but no Safe interface, so getThreshold() reverts
+    let token_address = ctx.contract_addrs.token.to_hex();
+
+    let data = query_transaction_count(&ctx.schema, &token_address).await?;
+    let result = &data["transactionCount"];
+
+    assert_eq!(result["address"].as_str(), Some(token_address.as_str()), "{result}");
+    // EIP-161: a contract account's nonce starts at 1
+    assert_eq!(result["count"].as_str(), Some("1"), "{result}");
 
     Ok(())
 }
