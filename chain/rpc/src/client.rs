@@ -108,26 +108,29 @@ impl StdError for SnapshotSerdeError {
 
 #[cfg(all(feature = "telemetry", not(test)))]
 lazy_static::lazy_static! {
-    static ref METRIC_COUNT_RPC_CALLS: MultiCounter = MultiCounter::new(
+    static ref METRIC_COUNT_RPC_CALLS: Option<MultiCounter> = MultiCounter::new(
         "blokli_rpc_call_count",
         "Number of Ethereum RPC calls over HTTP and their result",
         &["call", "result"]
     )
-    .unwrap();
-    static ref METRIC_RPC_CALLS_TIMING: MultiHistogram = MultiHistogram::new(
+    .inspect_err(|error| error!(%error, metric = "blokli_rpc_call_count", "failed to register telemetry metric"))
+    .ok();
+    static ref METRIC_RPC_CALLS_TIMING: Option<MultiHistogram> = MultiHistogram::new(
         "blokli_rpc_call_time_sec",
         "Timing of RPC calls over HTTP in seconds",
         vec![0.1, 0.5, 1.0, 2.0, 5.0, 7.0, 10.0],
         &["call"]
     )
-    .unwrap();
-    static ref METRIC_RETRIES_PER_RPC_CALL: MultiHistogram = MultiHistogram::new(
+    .inspect_err(|error| error!(%error, metric = "blokli_rpc_call_time_sec", "failed to register telemetry metric"))
+    .ok();
+    static ref METRIC_RETRIES_PER_RPC_CALL: Option<MultiHistogram> = MultiHistogram::new(
         "blokli_retries_per_rpc_call",
         "Number of retries per RPC call",
         vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0],
         &["call"]
     )
-    .unwrap();
+    .inspect_err(|error| error!(%error, metric = "blokli_retries_per_rpc_call", "failed to register telemetry metric"))
+    .ok();
 }
 
 /// Defines a default retry policy suitable for `RpcClient`.
@@ -371,19 +374,32 @@ where
     /// * `url` - Optional gas oracle URL (defaults to Gnosis chain oracle)
     /// * `fallback_max_fee_per_gas` - Fallback max fee per gas for EIP-1559 transactions (in wei)
     /// * `fallback_max_priority_fee_per_gas` - Fallback max priority fee per gas for EIP-1559 transactions (in wei)
+    ///
+    /// # Errors
+    ///
+    /// Returns [`url::ParseError`] if `url` is `None` and the built-in [`DEFAULT_GAS_ORACLE_URL`]
+    /// cannot be parsed.
+    ///
+    /// # Migration
+    ///
+    /// This used to return `Self` and parse [`DEFAULT_GAS_ORACLE_URL`] with an `expect`. Callers
+    /// must now handle the returned [`Result`].
     pub fn new(
         client: C,
         url: Option<Url>,
         fallback_max_fee_per_gas: u128,
         fallback_max_priority_fee_per_gas: u128,
-    ) -> Self {
-        Self {
+    ) -> std::result::Result<Self, url::ParseError> {
+        Ok(Self {
             client,
-            url: url.unwrap_or_else(|| Url::parse(DEFAULT_GAS_ORACLE_URL).unwrap()),
+            url: match url {
+                Some(url) => url,
+                None => Url::parse(DEFAULT_GAS_ORACLE_URL)?,
+            },
             gas_category: GasCategory::Standard,
             fallback_max_fee_per_gas,
             fallback_max_priority_fee_per_gas,
-        }
+        })
     }
 
     /// Sets the gas price category to be used when fetching the gas price.
@@ -590,31 +606,45 @@ where
             method_names.iter().for_each(|method| {
                 trace!(method, duration_in_ms = req_duration.as_millis(), "rpc request took");
                 #[cfg(all(feature = "telemetry", not(test)))]
-                METRIC_RPC_CALLS_TIMING.observe(&[method], req_duration.as_secs_f64());
+                if let Some(metric) = METRIC_RPC_CALLS_TIMING.as_ref() {
+                    metric.observe(&[method], req_duration.as_secs_f64());
+                }
             });
 
             // First deserialize the Response object
             match &res {
                 Ok(result) => match result {
                     ResponsePacket::Single(a) => match a.payload {
-                        ResponsePayload::Success(_) => {
+                        ResponsePayload::Success(_) =>
+                        {
                             #[cfg(all(feature = "telemetry", not(test)))]
-                            METRIC_COUNT_RPC_CALLS.increment(&[&method_names[0], "success"]);
+                            if let Some(metric) = METRIC_COUNT_RPC_CALLS.as_ref() {
+                                metric.increment(&[&method_names[0], "success"]);
+                            }
                         }
-                        ResponsePayload::Failure(_) => {
+                        ResponsePayload::Failure(_) =>
+                        {
                             #[cfg(all(feature = "telemetry", not(test)))]
-                            METRIC_COUNT_RPC_CALLS.increment(&[&method_names[0], "failure"]);
+                            if let Some(metric) = METRIC_COUNT_RPC_CALLS.as_ref() {
+                                metric.increment(&[&method_names[0], "failure"]);
+                            }
                         }
                     },
                     ResponsePacket::Batch(b) => {
                         b.iter().enumerate().for_each(|(i, _)| match b[i].payload {
-                            ResponsePayload::Success(_) => {
+                            ResponsePayload::Success(_) =>
+                            {
                                 #[cfg(all(feature = "telemetry", not(test)))]
-                                METRIC_COUNT_RPC_CALLS.increment(&[&method_names[i], "success"]);
+                                if let Some(metric) = METRIC_COUNT_RPC_CALLS.as_ref() {
+                                    metric.increment(&[&method_names[i], "success"]);
+                                }
                             }
-                            ResponsePayload::Failure(_) => {
+                            ResponsePayload::Failure(_) =>
+                            {
                                 #[cfg(all(feature = "telemetry", not(test)))]
-                                METRIC_COUNT_RPC_CALLS.increment(&[&method_names[i], "failure"]);
+                                if let Some(metric) = METRIC_COUNT_RPC_CALLS.as_ref() {
+                                    metric.increment(&[&method_names[i], "failure"]);
+                                }
                             }
                         });
                     }
@@ -624,7 +654,9 @@ where
                     error!(?method_names, "RPC request failed");
                     method_names.iter().for_each(|_m| {
                         #[cfg(all(feature = "telemetry", not(test)))]
-                        METRIC_COUNT_RPC_CALLS.increment(&[_m, "failure"]);
+                        if let Some(metric) = METRIC_COUNT_RPC_CALLS.as_ref() {
+                            metric.increment(&[_m, "failure"]);
+                        }
                     });
                 }
             };
@@ -962,6 +994,7 @@ pub type AnvilRpcClient = FillProvider<
 >;
 /// Used for testing. Creates RPC client to the local Anvil instance.
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::expect_used)] // Test-only helper retained as infallible for integration-test fixtures.
 pub fn create_rpc_client_to_anvil(
     anvil: &AnvilInstance,
     signer: &hopr_types::crypto::keypairs::ChainKeypair,

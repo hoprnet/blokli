@@ -55,28 +55,28 @@ enum LogFilterPhase {
 
 #[cfg(all(feature = "telemetry", not(test)))]
 lazy_static::lazy_static! {
-    static ref METRIC_INDEXER_CURRENT_BLOCK: SimpleGauge =
+    static ref METRIC_INDEXER_CURRENT_BLOCK: Option<SimpleGauge> =
         SimpleGauge::new(
             "blokli_indexer_block_number",
             "Current last processed block number by the indexer",
-    ).unwrap();
-    static ref METRIC_INDEXER_CHECKSUM: SimpleGauge =
+    ).inspect_err(|error| error!(%error, metric = "blokli_indexer_block_number", "failed to register telemetry metric")).ok();
+    static ref METRIC_INDEXER_CHECKSUM: Option<SimpleGauge> =
         SimpleGauge::new(
             "blokli_indexer_checksum",
             "Contains an unsigned integer that represents the low 32-bits of the Indexer checksum"
-    ).unwrap();
-    static ref METRIC_INDEXER_SYNC_PROGRESS: MultiGauge =
+    ).inspect_err(|error| error!(%error, metric = "blokli_indexer_checksum", "failed to register telemetry metric")).ok();
+    static ref METRIC_INDEXER_SYNC_PROGRESS: Option<MultiGauge> =
         MultiGauge::new(
             "blokli_indexer_sync_progress",
             "Sync progress of the indexer",
             &["phase"],
-    ).unwrap();
-    static ref METRIC_INDEXER_SYNC_SOURCE: MultiGauge =
+    ).inspect_err(|error| error!(%error, metric = "blokli_indexer_sync_progress", "failed to register telemetry metric")).ok();
+    static ref METRIC_INDEXER_SYNC_SOURCE: Option<MultiGauge> =
         MultiGauge::new(
             "blokli_indexer_data_source",
             "Current data source of the Indexer",
             &["source"],
-    ).unwrap();
+    ).inspect_err(|error| error!(%error, metric = "blokli_indexer_data_source", "failed to register telemetry metric")).ok();
 
 }
 
@@ -94,11 +94,11 @@ pub struct ReorgInfo {
 #[cfg(any(test, feature = "telemetry"))]
 fn checksum_low_32_bits(checksum_hash: &Hash) -> u32 {
     let checksum_bytes: &[u8] = checksum_hash.as_ref();
-    u32::from_be_bytes(
-        checksum_bytes[checksum_bytes.len() - 4..]
-            .try_into()
-            .expect("checksum hash should be 32 bytes"),
-    )
+    checksum_bytes
+        .get(checksum_bytes.len().saturating_sub(4)..)
+        .and_then(|bytes| bytes.try_into().ok())
+        .map(u32::from_be_bytes)
+        .unwrap_or_default()
 }
 
 /// Indexer
@@ -189,8 +189,15 @@ where
 
         info!("Starting chain indexing");
 
-        let rpc = self.rpc.take().expect("rpc should be present");
-        let logs_handler = Arc::new(self.db_processor.take().expect("db_processor should be present"));
+        let rpc = self
+            .rpc
+            .take()
+            .ok_or_else(|| CoreEthereumIndexerError::ProcessError("indexer RPC is missing".into()))?;
+        let logs_handler = Arc::new(
+            self.db_processor
+                .take()
+                .ok_or_else(|| CoreEthereumIndexerError::ProcessError("indexer log handler is missing".into()))?,
+        );
         let db = self.db.clone();
         let panic_on_completion = self.panic_on_completion;
 
@@ -291,8 +298,10 @@ where
 
             #[cfg(all(feature = "telemetry", not(test)))]
             {
-                METRIC_INDEXER_SYNC_SOURCE.set(&["fast-sync"], 1.0);
-                METRIC_INDEXER_SYNC_SOURCE.set(&["rpc"], 0.0);
+                if let Some(metric) = METRIC_INDEXER_SYNC_SOURCE.as_ref() {
+                    metric.set(&["fast-sync"], 1.0);
+                    metric.set(&["rpc"], 0.0);
+                }
             }
 
             let log_block_numbers = self.db.get_logs_block_numbers(None, None, processed).await?;
@@ -319,7 +328,9 @@ where
                 {
                     let progress =
                         (block_number - _first_log_block_number) as f64 / (_head - _first_log_block_number) as f64;
-                    METRIC_INDEXER_SYNC_PROGRESS.set(&["fast_sync"], progress);
+                    if let Some(metric) = METRIC_INDEXER_SYNC_PROGRESS.as_ref() {
+                        metric.set(&["fast_sync"], progress);
+                    }
                 }
             }
         }
@@ -327,9 +338,12 @@ where
         info!("Building rpc indexer background process");
 
         let next_block_to_process = if let Some(last_log) = self.db.get_last_checksummed_log().await? {
+            let checksum = last_log
+                .checksum
+                .ok_or_else(|| CoreEthereumIndexerError::ProcessError("last checksummed log has no checksum".into()))?;
             info!(
                 start_block = last_log.block_number,
-                start_checksum = last_log.checksum.unwrap(),
+                start_checksum = checksum,
                 "Loaded indexer state",
             );
 
@@ -363,11 +377,15 @@ where
 
             #[cfg(all(feature = "telemetry", not(test)))]
             {
-                METRIC_INDEXER_SYNC_SOURCE.set(&["fast-sync"], 0.0);
-                METRIC_INDEXER_SYNC_SOURCE.set(&["rpc"], 1.0);
-                METRIC_INDEXER_SYNC_PROGRESS.set(&[&LogFilterPhase::HistoricalDiscovery.to_string()], 0.0);
-                METRIC_INDEXER_SYNC_PROGRESS.set(&[&LogFilterPhase::HistoricalSafeBackfill.to_string()], 0.0);
-                METRIC_INDEXER_SYNC_PROGRESS.set(&[&LogFilterPhase::Continuous.to_string()], 0.0);
+                if let Some(metric) = METRIC_INDEXER_SYNC_SOURCE.as_ref() {
+                    metric.set(&["fast-sync"], 0.0);
+                    metric.set(&["rpc"], 1.0);
+                }
+                if let Some(metric) = METRIC_INDEXER_SYNC_PROGRESS.as_ref() {
+                    metric.set(&[&LogFilterPhase::HistoricalDiscovery.to_string()], 0.0);
+                    metric.set(&[&LogFilterPhase::HistoricalSafeBackfill.to_string()], 0.0);
+                    metric.set(&[&LogFilterPhase::Continuous.to_string()], 0.0);
+                }
             }
 
             let mut stream_start_block = next_block_to_process;
@@ -390,7 +408,7 @@ where
                     end_block = historical_sync_head,
                     "Starting historical discovery phase without Safe log filters"
                 );
-                Self::run_historical_phase(
+                if let Err(error) = Self::run_historical_phase(
                     &rpc,
                     &db,
                     &logs_handler,
@@ -402,14 +420,17 @@ where
                     self.cfg.enable_safe_indexing,
                 )
                 .await
-                .expect("historical discovery phase should complete");
+                {
+                    error!(%error, "historical discovery phase failed");
+                    return;
+                }
 
                 info!(
                     start_block = stream_start_block,
                     end_block = historical_sync_head,
                     "Starting historical Safe backfill phase for discovered Safes"
                 );
-                Self::run_historical_phase(
+                if let Err(error) = Self::run_historical_phase(
                     &rpc,
                     &db,
                     &logs_handler,
@@ -421,15 +442,21 @@ where
                     self.cfg.enable_safe_indexing,
                 )
                 .await
-                .expect("historical Safe backfill phase should complete");
-
-                let checksum = db
-                    .update_logs_checksums()
-                    .await
-                    .expect("historical sync checksum finalization should succeed");
-                db.set_indexer_state_info(None, historical_sync_head_u32)
-                    .await
-                    .expect("historical sync state finalization should succeed");
+                {
+                    error!(%error, "historical Safe backfill phase failed");
+                    return;
+                }
+                let checksum = match db.update_logs_checksums().await {
+                    Ok(checksum) => checksum,
+                    Err(error) => {
+                        error!(%error, "historical sync checksum finalization failed");
+                        return;
+                    }
+                };
+                if let Err(error) = db.set_indexer_state_info(None, historical_sync_head_u32).await {
+                    error!(%error, "historical sync state finalization failed");
+                    return;
+                }
 
                 info!(
                     latest_block = historical_sync_head,
@@ -445,26 +472,42 @@ where
                 error!(%error, "failed to notify about achieving indexer synchronization")
             }
             #[cfg(all(feature = "telemetry", not(test)))]
-            METRIC_INDEXER_SYNC_PROGRESS.set(&[&LogFilterPhase::Continuous.to_string()], 1.0);
+            if let Some(metric) = METRIC_INDEXER_SYNC_PROGRESS.as_ref() {
+                metric.set(&[&LogFilterPhase::Continuous.to_string()], 1.0);
+            }
             let mut safe_filter_epoch = indexer_state.safe_filter_epoch();
 
-            'stream_refresh: loop {
-                let log_filters = Self::generate_log_filters(
+            // Reason why the continuous phase stopped, if it stopped because of a failure.
+            // A failure here must not leave the process running without an indexer, so it is
+            // funnelled into the same termination handling as an exhausted event stream.
+            let termination_reason: Option<String> = 'stream_refresh: loop {
+                let log_filters = match Self::generate_log_filters(
                     &db,
                     &logs_handler,
                     LogFilterPhase::Continuous,
                     self.cfg.enable_safe_indexing,
                 )
                 .await
-                .expect("log filters should be constructible");
-                let mut event_stream = rpc
-                    .try_stream_logs(stream_start_block, log_filters, true)
-                    .expect("block stream should be constructible");
+                {
+                    Ok(log_filters) => log_filters,
+                    Err(error) => {
+                        break 'stream_refresh Some(format!("failed to construct continuous log filters: {error}"));
+                    }
+                };
+                let mut event_stream = match rpc.try_stream_logs(stream_start_block, log_filters, true) {
+                    Ok(event_stream) => event_stream,
+                    Err(error) => {
+                        break 'stream_refresh Some(format!("failed to construct continuous block stream: {error}"));
+                    }
+                };
 
                 while let Some(block) = event_stream.next().await {
-                    Self::store_block_logs(&db, &logs_handler, &block)
-                        .await
-                        .expect("live block logs should be stored");
+                    if let Err(error) = Self::store_block_logs(&db, &logs_handler, &block).await {
+                        break 'stream_refresh Some(format!(
+                            "failed to store logs of live block {}: {error}",
+                            block.block_id
+                        ));
+                    }
 
                     Self::process_block(&db, &logs_handler, block.clone(), false, true, &indexer_state, true).await;
 
@@ -481,14 +524,24 @@ where
                     }
                 }
 
-                if panic_on_completion {
-                    panic!(
-                        "Indexer event stream has been terminated. This error may be caused by a failed RPC \
-                         connection."
-                    );
-                }
+                break 'stream_refresh None;
+            };
 
-                break;
+            match termination_reason {
+                Some(reason) => {
+                    error!(reason, "Indexer has terminated due to an unrecoverable failure");
+                    if panic_on_completion {
+                        panic!("Indexer has terminated due to an unrecoverable failure: {reason}");
+                    }
+                }
+                None => {
+                    if panic_on_completion {
+                        panic!(
+                            "Indexer event stream has been terminated. This error may be caused by a failed RPC \
+                             connection."
+                        );
+                    }
+                }
             }
         });
         let _indexing_task = tokio::spawn(indexing_process);
@@ -789,7 +842,9 @@ where
             };
             #[cfg(all(feature = "telemetry", not(test)))]
             {
-                METRIC_INDEXER_SYNC_PROGRESS.set(&[&filter_phase.to_string()], progress / 100_f64);
+                if let Some(metric) = METRIC_INDEXER_SYNC_PROGRESS.as_ref() {
+                    metric.set(&[&filter_phase.to_string()], progress / 100_f64);
+                }
             }
             info!(
                 phase = phase_name,
@@ -877,10 +932,42 @@ where
             }
         }
 
+        // A log that has already been applied to the index must not be applied again: replaying it
+        // re-runs handler writes whose idempotency is only as good as each handler's conflict
+        // handling. Blocks are re-delivered routinely - the historical phases re-stream their whole
+        // range after any interrupted run, and fast sync replays every log of a block that holds a
+        // single unprocessed one - so the processed flag is the only thing that makes those replays
+        // cheap and safe. Logs that were never stored (token logs are filtered out of the logs DB)
+        // are absent from the set and are therefore dispatched, as before, and so is a log that a
+        // reorganisation put at the position of one already applied: the identity carries the block
+        // hash precisely so the canonical replacement is not mistaken for what it replaces.
+        let processed_logs = if block.logs.is_empty() {
+            HashSet::new()
+        } else {
+            match db.get_processed_log_identities(block_id).await {
+                Ok(identities) => identities,
+                Err(error) => {
+                    // The logs DB is unreachable; dispatching now would mean marking the logs as
+                    // processed right after, which would fail the same way.
+                    error!(block_id, %error, "failed to load processed log identities, panicking to prevent double-processing");
+                    panic!("failed to load processed log identities, panicking to prevent double-processing")
+                }
+            }
+        };
+
         // FIXME: The block indexing and marking as processed should be done in a single
         // transaction. This is difficult since currently this would be across databases.
         // Process all logs - events are published internally via IndexerState
         for log in block.logs.clone() {
+            if processed_logs.contains(&(log.tx_index, log.log_index, log.block_hash)) {
+                debug!(
+                    block_id = log.block_number,
+                    tx_index = log.tx_index,
+                    log_index = %log.log_index,
+                    "skipping log already marked as processed"
+                );
+                continue;
+            }
             if log.removed || !logs_handler.should_process_log(&log) {
                 debug!(
                     block_id = log.block_number,
@@ -916,7 +1003,9 @@ where
         // if we made it this far, no errors occurred and we can update checksums and indexer state
         if !finalize_block {
             #[cfg(all(feature = "telemetry", not(test)))]
-            METRIC_INDEXER_CURRENT_BLOCK.set(block_id as f64);
+            if let Some(metric) = METRIC_INDEXER_CURRENT_BLOCK.as_ref() {
+                metric.set(block_id as f64);
+            }
 
             debug!(
                 block_id,
@@ -945,7 +1034,9 @@ where
                     #[cfg(all(feature = "telemetry", not(test)))]
                     {
                         if let Ok(checksum_hash) = Hash::from_hex(checksum.as_str()) {
-                            METRIC_INDEXER_CHECKSUM.set(checksum_low_32_bits(&checksum_hash).into());
+                            if let Some(metric) = METRIC_INDEXER_CHECKSUM.as_ref() {
+                                metric.set(checksum_low_32_bits(&checksum_hash).into());
+                            }
                         } else {
                             error!("Invalid checksum generated from logs");
                         }
@@ -954,7 +1045,9 @@ where
                 match db.set_indexer_state_info(None, block_id_u32).await {
                     Ok(_) => {
                         #[cfg(all(feature = "telemetry", not(test)))]
-                        METRIC_INDEXER_CURRENT_BLOCK.set(block_id as f64);
+                        if let Some(metric) = METRIC_INDEXER_CURRENT_BLOCK.as_ref() {
+                            metric.set(block_id as f64);
+                        }
                         trace!(block_id, "updated indexer state info");
                     }
                     Err(error) => error!(block_id, %error, "failed to update indexer state info"),
@@ -1566,6 +1659,150 @@ mod tests {
                 .processed,
             Some(true)
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_block_skips_log_already_marked_processed() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let handler = DispatchTrackingLogHandler::default();
+        let log = SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: vec![Hash::create(&[b"my topic"]).into()],
+            data: vec![1, 2, 3],
+            tx_hash: Hash::create(&[b"my tx hash"]).into(),
+            block_hash: Hash::create(&[b"my block hash"]).into(),
+            tx_index: 1,
+            block_number: 100,
+            log_index: 2,
+            ..Default::default()
+        };
+        db.store_log(log.clone()).await?;
+        db.set_log_processed(log.clone()).await?;
+
+        // Blocks are re-delivered routinely - an interrupted historical run re-streams its whole
+        // range - and a log applied twice re-runs handler writes that are not all idempotent.
+        let result = Indexer::<MockHoprIndexerOps, DispatchTrackingLogHandler, BlokliDb>::process_block(
+            &db,
+            &handler,
+            BlockWithLogs {
+                block_id: log.block_number,
+                logs: BTreeSet::from([log.clone()]),
+            },
+            false,
+            false,
+            &IndexerState::default(),
+            false,
+        )
+        .await;
+
+        assert!(result.is_some());
+        assert!(!handler.collect_called.load(StdOrdering::SeqCst));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_block_dispatches_reorg_replacement_at_a_processed_position() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let handler = DispatchTrackingLogHandler::default();
+        let orphaned = SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: vec![Hash::create(&[b"my topic"]).into()],
+            data: vec![1, 2, 3],
+            tx_hash: Hash::create(&[b"my tx hash"]).into(),
+            block_hash: Hash::create(&[b"orphaned block"]).into(),
+            tx_index: 1,
+            block_number: 100,
+            log_index: 2,
+            ..Default::default()
+        };
+        db.store_log(orphaned.clone()).await?;
+        db.set_log_processed(orphaned.clone()).await?;
+
+        // A reorganisation can put a different log at the same position, so keying the skip on the
+        // position alone would drop the canonical event and never apply it.
+        let canonical = SerializableLog {
+            block_hash: Hash::create(&[b"canonical block"]).into(),
+            ..orphaned
+        };
+        db.store_log(canonical.clone()).await?;
+
+        let block = BlockWithLogs {
+            block_id: canonical.block_number,
+            logs: BTreeSet::from([canonical]),
+        };
+
+        let result = Indexer::<MockHoprIndexerOps, DispatchTrackingLogHandler, BlokliDb>::process_block(
+            &db,
+            &handler,
+            block.clone(),
+            false,
+            false,
+            &IndexerState::default(),
+            false,
+        )
+        .await;
+
+        assert!(result.is_some());
+        assert!(handler.collect_called.load(StdOrdering::SeqCst));
+
+        // ...and once applied, the canonical log is a replay like any other: storing it replaced the
+        // orphaned row, so the processed identity now carries the canonical hash and matches.
+        handler.collect_called.store(false, StdOrdering::SeqCst);
+
+        let result = Indexer::<MockHoprIndexerOps, DispatchTrackingLogHandler, BlokliDb>::process_block(
+            &db,
+            &handler,
+            block,
+            false,
+            false,
+            &IndexerState::default(),
+            false,
+        )
+        .await;
+
+        assert!(result.is_some());
+        assert!(!handler.collect_called.load(StdOrdering::SeqCst));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_block_dispatches_log_that_was_never_stored() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let handler = DispatchTrackingLogHandler::default();
+        let log = SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: vec![Hash::create(&[b"my topic"]).into()],
+            data: vec![1, 2, 3],
+            tx_hash: Hash::create(&[b"my tx hash"]).into(),
+            block_hash: Hash::create(&[b"my block hash"]).into(),
+            tx_index: 1,
+            block_number: 100,
+            log_index: 2,
+            ..Default::default()
+        };
+
+        // Token logs are filtered out of the logs DB, so a log with no stored status must still be
+        // dispatched rather than mistaken for one that was already processed.
+        let result = Indexer::<MockHoprIndexerOps, DispatchTrackingLogHandler, BlokliDb>::process_block(
+            &db,
+            &handler,
+            BlockWithLogs {
+                block_id: log.block_number,
+                logs: BTreeSet::from([log.clone()]),
+            },
+            false,
+            false,
+            &IndexerState::default(),
+            false,
+        )
+        .await;
+
+        assert!(result.is_some());
+        assert!(handler.collect_called.load(StdOrdering::SeqCst));
 
         Ok(())
     }

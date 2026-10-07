@@ -56,18 +56,36 @@ impl<T> HttpWrapper<T> {
     }
 }
 
-impl<T: Clone> From<Http<T>> for HttpWrapper<T> {
-    fn from(value: Http<T>) -> Self {
-        Self {
+/// Converts an alloy [`Http`] transport into an [`HttpWrapper`].
+///
+/// # Migration
+///
+/// This replaces the former infallible `From<Http<T>>` implementation, which parsed the
+/// transport URL with an `expect`. Callers that used `.into()` or `HttpWrapper::from(..)` must
+/// now use `.try_into()` or [`HttpWrapper::try_from`] and handle [`url::ParseError`].
+impl<T: Clone> TryFrom<Http<T>> for HttpWrapper<T> {
+    type Error = url::ParseError;
+
+    fn try_from(value: Http<T>) -> Result<Self, Self::Error> {
+        Ok(Self {
             client: value.client().clone(),
-            url: Url::parse(value.url()).unwrap(),
-        }
+            url: Url::parse(value.url())?,
+        })
     }
 }
 
-impl<T: Clone> From<HttpWrapper<T>> for Http<T> {
-    fn from(value: HttpWrapper<T>) -> Self {
-        Self::with_client(value.client().clone(), Url::parse(value.url()).unwrap())
+/// Converts an [`HttpWrapper`] back into an alloy [`Http`] transport.
+///
+/// # Migration
+///
+/// This replaces the former infallible `From<HttpWrapper<T>>` implementation. Callers that used
+/// `.into()` or `Http::from(..)` must now use `.try_into()` or [`Http::try_from`] and handle
+/// [`url::ParseError`].
+impl<T: Clone> TryFrom<HttpWrapper<T>> for Http<T> {
+    type Error = url::ParseError;
+
+    fn try_from(value: HttpWrapper<T>) -> Result<Self, Self::Error> {
+        Ok(Self::with_client(value.client().clone(), Url::parse(value.url())?))
     }
 }
 

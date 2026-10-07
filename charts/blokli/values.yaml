@@ -98,6 +98,20 @@ ingress:
   ## @param ingress.tls Enable TLS configuration for ingress. It will reference a secret named <hostname>-tls. Where hostname dots are replaced with dashes.
   ##
   tls: true
+networkPolicy:
+  ## @param networkPolicy.enabled Create a NetworkPolicy allowing ingress to the GraphQL API port from namespaces opted in via networkPolicy.allowedNamespaceLabel
+  ##
+  enabled: true
+  ## @param networkPolicy.allowedNamespaceLabel Namespace label (set to "true") that grants a namespace ingress access to blokli. New consumer namespaces opt in by adding this label to their own namespace instead of this chart's NetworkPolicy being edited per consumer
+  ##
+  allowedNamespaceLabel: "network-access.hoprnet.org/blokli"
+  ## @param networkPolicy.ingressNginxNamespace Namespace the ingress controller runs in. Only used (as a namespaceSelector on the built-in, apiserver-managed kubernetes.io/metadata.name label) when ingress.enabled is true, so the controller's own pod-to-pod traffic into the GraphQL API isn't cut off by the default-deny baseline
+  ##
+  ingressNginxNamespace: "ingress-nginx"
+  ingressPrometheus:
+    ## @param networkPolicy.ingressPrometheus.enabled Label the Deployment with network-policy.hoprnet.org/prometheus-scrape-port (set to service.port, since metrics are served on the same port as the GraphQL API - see monitoring.serviceMonitor) so Kyverno's generate-allow-prometheus-scrape-networkpolicy ClusterPolicy generates the matching NetworkPolicy
+    ##
+    enabled: true
 ## @param resources Resource requests and limits
 ##
 # Sizing guidance:

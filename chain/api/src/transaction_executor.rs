@@ -16,6 +16,7 @@ use tracing::{error, warn};
 use uuid::Uuid;
 
 use crate::{
+    hopr_policy::{AdmittedAction, HoprPolicy, HoprPolicyConfig, PolicyDecision, SubmissionMode, ValidationReason},
     metrics::{
         STATUS_CONFIRMED, STATUS_REVERTED, STATUS_SUBMISSION_FAILED, STATUS_TIMEOUT, STATUS_VALIDATION_FAILED,
         record_transaction_status,
@@ -38,6 +39,41 @@ pub enum TransactionExecutorError {
     Timeout(String),
     #[error("Transaction execution failed: {0}")]
     ExecutionFailed(String),
+    #[error("Transaction submission is temporarily overloaded")]
+    OverloadedError,
+    /// A supported HOPR action was refused by the deterministic preflight.
+    ///
+    /// No reachable chain state would have made the call succeed, so the transaction was
+    /// never broadcast.
+    #[error("HOPR {operation} rejected before broadcast: {reason}")]
+    HoprActionRejected {
+        /// Decoded HOPR operation.
+        operation: &'static str,
+        /// Why the action was refused.
+        reason: ValidationReason,
+    },
+    /// An equivalent logical HOPR action is already being tracked.
+    ///
+    /// This is a non-failure outcome carried as an error because, like
+    /// [`TransactionExecutorError::OverloadedError`], it means nothing was broadcast. Callers
+    /// resolve `existing` and report that transaction's identity and status instead.
+    #[error("an equivalent HOPR {operation} is already tracked as {existing}")]
+    DuplicateHoprAction {
+        /// Decoded HOPR operation.
+        operation: &'static str,
+        /// Identity of the transaction already carrying this logical action.
+        existing: Uuid,
+    },
+    /// The signer is on cooldown after repeated deterministically invalid submissions.
+    #[error("HOPR {operation} suppressed for {}s: {reason}", retry_after.as_secs())]
+    HoprActionThrottled {
+        /// Decoded HOPR operation.
+        operation: &'static str,
+        /// Reason of the most recent rejection that led to the cooldown.
+        reason: ValidationReason,
+        /// How long until this signer may submit this operation again.
+        retry_after: Duration,
+    },
 }
 
 /// Terminal outcome of waiting for a submitted transaction's confirmation.
@@ -82,6 +118,26 @@ pub struct RawTransactionExecutorConfig {
     pub default_confirmations: u64,
     /// Maximum time to wait for confirmations
     pub confirmation_timeout: Duration,
+    /// Global number of transactions awaiting receipt monitoring. `0` means unbounded.
+    ///
+    /// Only the asynchronous submission mode is bounded by this: it is the only
+    /// mode that leaves transactions in `Submitted` status for the background
+    /// receipt monitor. Sync mode waits inline and stores a terminal record,
+    /// and fire-and-forget mode does not track transactions at all.
+    pub max_submitted_transactions: usize,
+    /// Per-signer limit for transactions awaiting receipt monitoring. `0` means unbounded.
+    ///
+    /// The signer is recovered from the transaction signature, so one client
+    /// cannot consume the global capacity by spreading submissions across
+    /// contract targets.
+    pub max_submitted_transactions_per_identity: usize,
+    /// Enable optional Safe revert-reason tracing in synchronous transaction execution.
+    pub enable_revert_reason_tracing: bool,
+    /// HOPR-aware policy applied to supported HOPR node-management transactions.
+    ///
+    /// Transactions the policy does not recognise keep generic Blokli behaviour regardless
+    /// of this setting.
+    pub hopr_policy: HoprPolicyConfig,
 }
 
 impl Default for RawTransactionExecutorConfig {
@@ -89,6 +145,10 @@ impl Default for RawTransactionExecutorConfig {
         Self {
             default_confirmations: 3,
             confirmation_timeout: Duration::from_secs(60),
+            max_submitted_transactions: 1_024,
+            max_submitted_transactions_per_identity: 64,
+            enable_revert_reason_tracing: true,
+            hopr_policy: HoprPolicyConfig::default(),
         }
     }
 }
@@ -108,6 +168,9 @@ pub struct RawTransactionExecutor<R: RpcClient> {
     receipt_provider: Option<Arc<dyn ReceiptProvider>>,
     /// Safe address checker for Safe enrichment in sync mode
     safe_checker: Option<Arc<dyn SafeAddressChecker>>,
+    /// Optional HOPR-aware policy applied before broadcasting. When unset, every transaction
+    /// keeps generic Blokli behaviour.
+    hopr_policy: Option<Arc<HoprPolicy>>,
 }
 
 impl<R: RpcClient> std::fmt::Debug for RawTransactionExecutor<R> {
@@ -133,6 +196,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             config,
             receipt_provider: None,
             safe_checker: None,
+            hopr_policy: None,
         }
     }
 
@@ -153,6 +217,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             config,
             receipt_provider: None,
             safe_checker: None,
+            hopr_policy: None,
         }
     }
 
@@ -170,6 +235,50 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         self
     }
 
+    /// Apply the HOPR-aware policy to supported HOPR node-management transactions.
+    ///
+    /// Transactions the policy does not recognise are unaffected, so enabling it never
+    /// changes behaviour for unsupported contracts or functions.
+    pub fn with_hopr_policy(mut self, policy: Arc<HoprPolicy>) -> Self {
+        self.hopr_policy = Some(policy);
+        self
+    }
+
+    /// Run the HOPR-aware policy, if one is configured.
+    ///
+    /// Returns the admitted action to register after a successful broadcast, or `None` when
+    /// the policy does not apply to this transaction.
+    async fn apply_hopr_policy(
+        &self,
+        raw_tx: &[u8],
+        mode: SubmissionMode,
+    ) -> Result<Option<AdmittedAction>, TransactionExecutorError> {
+        let Some(policy) = self.hopr_policy.as_ref() else {
+            return Ok(None);
+        };
+
+        match policy.evaluate(raw_tx, mode).await {
+            PolicyDecision::NotApplicable => Ok(None),
+            PolicyDecision::Admit(action) => Ok(Some(action)),
+            PolicyDecision::Rejected { operation, reason } => {
+                record_transaction_status(STATUS_VALIDATION_FAILED);
+                Err(TransactionExecutorError::HoprActionRejected { operation, reason })
+            }
+            PolicyDecision::Duplicate { operation, existing } => {
+                Err(TransactionExecutorError::DuplicateHoprAction { operation, existing })
+            }
+            PolicyDecision::Throttled {
+                operation,
+                reason,
+                retry_after,
+            } => Err(TransactionExecutorError::HoprActionThrottled {
+                operation,
+                reason,
+                retry_after,
+            }),
+        }
+    }
+
     /// Fire-and-forget mode: Submit transaction and return hash immediately
     ///
     /// This mode:
@@ -185,6 +294,10 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             record_transaction_status(STATUS_VALIDATION_FAILED);
             return Err(e.into());
         }
+
+        // Fire-and-forget leaves no tracked record, so deduplication cannot return an
+        // identity here; preflight and invalid-action suppression still apply.
+        self.apply_hopr_policy(&raw_tx, SubmissionMode::Untracked).await?;
 
         // Submit to RPC
         let tx_hash = match self.rpc_client.send_raw_transaction(raw_tx).await {
@@ -214,6 +327,26 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             return Err(e.into());
         }
 
+        // The HOPR-aware policy runs before admission control: a deterministically invalid or
+        // duplicated action should never consume monitoring capacity in the first place.
+        let admitted = self.apply_hopr_policy(&raw_tx, SubmissionMode::Tracked).await?;
+
+        // Admission control applies to this mode only: async submissions are the
+        // only ones that occupy receipt-monitoring capacity. The slot is reserved
+        // before broadcasting so concurrent submissions cannot overshoot the limits
+        // while they wait on the RPC; returning early drops and releases it.
+        let Some(reservation) = self.transaction_store.try_reserve_submission(
+            &raw_tx,
+            self.config.max_submitted_transactions,
+            self.config.max_submitted_transactions_per_identity,
+        ) else {
+            warn!(
+                submitted = self.transaction_store.submitted_count(),
+                "Rejecting raw transaction before broadcast because submission capacity is exhausted"
+            );
+            return Err(TransactionExecutorError::OverloadedError);
+        };
+
         // Submit to RPC first to get transaction hash
         let tx_hash = match self.rpc_client.send_raw_transaction(raw_tx.clone()).await {
             Ok(hash) => hash,
@@ -236,10 +369,17 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             safe_execution: None,
         };
 
-        if let Err(e) = self.transaction_store.insert(record) {
+        if let Err(e) = self.transaction_store.insert_reserved(record, reservation) {
             error!(id = %id, tx_hash = %tx_hash, error = %e, "Failed to store submitted transaction");
             return Err(e.into());
         }
+
+        // Bind the logical action to this identity only once it is actually tracked, so a
+        // failed submission never suppresses the retry that follows it.
+        if let Some(action) = admitted {
+            action.register(id);
+        }
+
         Ok(id)
     }
 
@@ -261,6 +401,10 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             record_transaction_status(STATUS_VALIDATION_FAILED);
             return Err(e.into());
         }
+
+        // Sync mode stores a terminal record rather than a tracked one, so deduplication has
+        // no identity to return; preflight and invalid-action suppression still apply.
+        self.apply_hopr_policy(&raw_tx, SubmissionMode::Untracked).await?;
 
         let confirmations = confirmations.unwrap_or(self.config.default_confirmations);
         let submitted_at = Utc::now();
@@ -301,8 +445,13 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         if let (Some(receipt_provider), Some(safe_checker)) =
             (self.receipt_provider.as_ref(), self.safe_checker.as_ref())
         {
-            record.safe_execution =
-                enrich_safe_execution(&record, receipt_provider.as_ref(), safe_checker.as_ref()).await;
+            record.safe_execution = enrich_safe_execution(
+                &record,
+                receipt_provider.as_ref(),
+                safe_checker.as_ref(),
+                self.config.enable_revert_reason_tracing,
+            )
+            .await;
         }
 
         if let Err(e) = self.transaction_store.insert(record.clone()) {
@@ -464,6 +613,83 @@ mod tests {
         assert_eq!(record.id, uuid);
         assert_eq!(record.status, TransactionStatus::Submitted);
         assert_eq!(record.transaction_hash, test_tx_hash());
+    }
+
+    #[tokio::test]
+    async fn test_async_overload_is_rejected_before_broadcast() {
+        let executor = RawTransactionExecutor::new(
+            MockRpcClient::new(),
+            TransactionStore::new(),
+            TransactionValidator::new(),
+            RawTransactionExecutorConfig {
+                max_submitted_transactions: 1,
+                ..Default::default()
+            },
+        );
+
+        // The first submission fills the single monitoring slot.
+        assert!(executor.send_raw_transaction_async(vec![0x01]).await.is_ok());
+
+        let result = executor.send_raw_transaction_async(vec![0x02]).await;
+        assert!(matches!(result, Err(TransactionExecutorError::OverloadedError)));
+    }
+
+    #[tokio::test]
+    async fn test_async_rpc_failure_releases_reserved_capacity() {
+        let executor = RawTransactionExecutor::new(
+            MockRpcClient::with_failure(),
+            TransactionStore::new(),
+            TransactionValidator::new(),
+            RawTransactionExecutorConfig {
+                max_submitted_transactions: 1,
+                ..Default::default()
+            },
+        );
+
+        // Both attempts reach the RPC: the first failure must not keep holding the only slot.
+        for raw_tx in [vec![0x01], vec![0x02]] {
+            let result = executor.send_raw_transaction_async(raw_tx).await;
+            assert!(matches!(result, Err(TransactionExecutorError::RpcError(_))));
+        }
+        assert_eq!(executor.transaction_store().submitted_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_async_zero_limits_mean_unbounded() {
+        let executor = RawTransactionExecutor::new(
+            MockRpcClient::new(),
+            TransactionStore::new(),
+            TransactionValidator::new(),
+            RawTransactionExecutorConfig {
+                max_submitted_transactions: 0,
+                max_submitted_transactions_per_identity: 0,
+                ..Default::default()
+            },
+        );
+
+        for _ in 0..8 {
+            assert!(executor.send_raw_transaction_async(vec![0x01]).await.is_ok());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_async_per_identity_limit_is_rejected_before_broadcast() {
+        let executor = RawTransactionExecutor::new(
+            MockRpcClient::new(),
+            TransactionStore::new(),
+            TransactionValidator::new(),
+            RawTransactionExecutorConfig {
+                max_submitted_transactions: 0,
+                max_submitted_transactions_per_identity: 1,
+                ..Default::default()
+            },
+        );
+
+        // Both envelopes are undecodable, so they share the same identity bucket.
+        assert!(executor.send_raw_transaction_async(vec![0x01]).await.is_ok());
+
+        let result = executor.send_raw_transaction_async(vec![0x02]).await;
+        assert!(matches!(result, Err(TransactionExecutorError::OverloadedError)));
     }
 
     #[tokio::test]

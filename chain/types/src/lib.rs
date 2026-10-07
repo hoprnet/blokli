@@ -70,7 +70,8 @@ impl AlloyAddressExt for AlloyAddress {
     }
 
     fn from_hopr_address(addr: Address) -> Self {
-        AlloyAddress::from(<[u8; 20]>::try_from(addr.as_ref()).expect("Address is 20 bytes"))
+        let address_bytes = <[u8; 20]>::try_from(addr.as_ref()).unwrap_or_default();
+        AlloyAddress::from(address_bytes)
     }
 }
 
@@ -148,6 +149,13 @@ pub struct ContractAddresses {
     #[serde_as(as = "DisplayFromStr")]
     #[serde(default)]
     pub curvy_portal_factory: Address,
+    /// Curvy shield router, through which a node's Safe shields with one ERC-777 `send`.
+    ///
+    /// Never configured: it lives at `curvy_bindings::config::shield_router_address()` on every chain, and is
+    /// resolved at startup only if code is there. The zero address means it is not deployed on this network.
+    #[serde_as(as = "DisplayFromStr")]
+    #[serde(default)]
+    pub curvy_shield_router: Address,
     /// Service registry contract.
     ///
     /// The zero address means the registry is not deployed on this network and consumers must skip the contract
@@ -179,6 +187,7 @@ impl ContractAddresses {
             curvy_aggregator,
             curvy_vault,
             curvy_portal_factory,
+            curvy_shield_router: Address::default(),
             service_registry: hopr.service_registry.to_hopr_address(),
         }
     }
@@ -392,6 +401,7 @@ where
             curvy_aggregator: Address::default(),
             curvy_vault: Address::default(),
             curvy_portal_factory: Address::default(),
+            curvy_shield_router: Address::default(),
             service_registry: instances.service_registry.address().to_hopr_address(),
         }
     }
