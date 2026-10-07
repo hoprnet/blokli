@@ -10,7 +10,7 @@ use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use chrono::Utc;
-use hopr_types::crypto::types::Hash;
+use hopr_types::{crypto::types::Hash, primitive::prelude::Address};
 use thiserror::Error;
 use tracing::{error, warn};
 use uuid::Uuid;
@@ -21,8 +21,11 @@ use crate::{
         STATUS_CONFIRMED, STATUS_REVERTED, STATUS_SUBMISSION_FAILED, STATUS_TIMEOUT, STATUS_VALIDATION_FAILED,
         record_transaction_status,
     },
+    safe_execution::decode_transaction_summary,
     transaction_monitor::{ReceiptProvider, SafeAddressChecker, enrich_safe_execution},
-    transaction_store::{TransactionRecord, TransactionStatus, TransactionStore, TransactionStoreError},
+    transaction_store::{
+        SubmissionLimit, TransactionRecord, TransactionStatus, TransactionStore, TransactionStoreError,
+    },
     transaction_validator::{TransactionValidator, ValidationError},
 };
 
@@ -335,16 +338,33 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         // only ones that occupy receipt-monitoring capacity. The slot is reserved
         // before broadcasting so concurrent submissions cannot overshoot the limits
         // while they wait on the RPC; returning early drops and releases it.
-        let Some(reservation) = self.transaction_store.try_reserve_submission(
+        let reservation = match self.transaction_store.try_reserve_submission(
             &raw_tx,
             self.config.max_submitted_transactions,
             self.config.max_submitted_transactions_per_identity,
-        ) else {
-            warn!(
-                submitted = self.transaction_store.submitted_count(),
-                "Rejecting raw transaction before broadcast because submission capacity is exhausted"
-            );
-            return Err(TransactionExecutorError::OverloadedError);
+        ) {
+            Ok(reservation) => reservation,
+            Err(exhausted) => {
+                let (limit, max) = match exhausted.limit {
+                    SubmissionLimit::Global(max) => ("global", max),
+                    SubmissionLimit::PerIdentity(max) => ("per_identity", max),
+                };
+                let summary = decode_transaction_summary(&raw_tx);
+                warn!(
+                    limit,
+                    max,
+                    submitted = exhausted.submitted_total,
+                    submitted_for_signer = exhausted.submitted_for_identity,
+                    signer = ?exhausted.identity.map(Address::from),
+                    tx_hash = ?summary.map(|tx| tx.transaction_hash),
+                    nonce = ?summary.map(|tx| tx.nonce),
+                    to = ?summary.and_then(|tx| tx.to),
+                    max_fee_per_gas = ?summary.map(|tx| tx.max_fee_per_gas),
+                    max_priority_fee_per_gas = ?summary.and_then(|tx| tx.max_priority_fee_per_gas),
+                    "Rejecting raw transaction before broadcast because submission capacity is exhausted"
+                );
+                return Err(TransactionExecutorError::OverloadedError);
+            }
         };
 
         // Submit to RPC first to get transaction hash
