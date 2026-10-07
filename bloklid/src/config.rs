@@ -336,6 +336,14 @@ impl Config {
         output.push_str(&format!("  api.bind_address: {}\n", self.api.bind_address));
         output.push_str(&format!("  api.playground_enabled: {}\n", self.api.playground_enabled));
         output.push_str(&format!("  api.gas_multiplier: {}\n", self.api.gas_multiplier));
+        output.push_str(&format!(
+            "  api.min_priority_fee_per_gas: {}\n",
+            self.api.min_priority_fee_per_gas
+        ));
+        output.push_str(&format!(
+            "  api.min_max_fee_per_gas: {}\n",
+            self.api.min_max_fee_per_gas
+        ));
         output.push_str(&format!("  api.max_query_depth: {}\n", self.api.max_query_depth));
         output.push_str(&format!(
             "  api.max_query_complexity: {}\n",
@@ -493,6 +501,14 @@ pub struct ApiConfig {
     #[serde(default = "default_api_gas_multiplier")]
     pub gas_multiplier: f64,
 
+    #[default(blokli_api::config::DEFAULT_MIN_PRIORITY_FEE_PER_GAS)]
+    #[serde(default = "default_api_min_priority_fee_per_gas")]
+    pub min_priority_fee_per_gas: u64,
+
+    #[default(blokli_api::config::DEFAULT_MIN_MAX_FEE_PER_GAS)]
+    #[serde(default = "default_api_min_max_fee_per_gas")]
+    pub min_max_fee_per_gas: u64,
+
     #[serde(default)]
     pub sse_keepalive: SseKeepAliveConfig,
 
@@ -640,6 +656,14 @@ fn default_sse_keepalive_enabled() -> bool {
 
 fn default_api_gas_multiplier() -> f64 {
     1.0
+}
+
+fn default_api_min_priority_fee_per_gas() -> u64 {
+    blokli_api::config::DEFAULT_MIN_PRIORITY_FEE_PER_GAS
+}
+
+fn default_api_min_max_fee_per_gas() -> u64 {
+    blokli_api::config::DEFAULT_MIN_MAX_FEE_PER_GAS
 }
 
 fn default_sse_keepalive_interval() -> Duration {
@@ -1086,6 +1110,8 @@ mod tests {
         assert!(!cfg.api.playground_enabled); // Default
         assert_eq!(cfg.api.bind_address.to_string(), "127.0.0.1:8080"); // Default
         assert_eq!(cfg.api.gas_multiplier, 1.0); // Default
+        assert_eq!(cfg.api.min_priority_fee_per_gas, 10_000_000); // Default
+        assert_eq!(cfg.api.min_max_fee_per_gas, 50_000_000); // Default
         assert_eq!(cfg.api.health.max_indexer_lag, 10); // Default
         assert_eq!(cfg.api.health.timeout, Duration::from_millis(5000)); // Default
         assert!(cfg.database.is_some()); // Database was provided
@@ -1103,6 +1129,22 @@ mod tests {
      "#;
         let cfg: Config = toml::from_str(config).expect("Failed to parse config");
         assert_eq!(cfg.api.gas_multiplier, 1.5);
+    }
+
+    #[test]
+    fn test_api_gas_fee_floors_override() {
+        let config = r#"
+         [api]
+         min_priority_fee_per_gas = 100000000
+         min_max_fee_per_gas = 1000000000
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
+        let cfg: Config = toml::from_str(config).expect("Failed to parse config");
+        assert_eq!(cfg.api.min_priority_fee_per_gas, 100_000_000);
+        assert_eq!(cfg.api.min_max_fee_per_gas, 1_000_000_000);
     }
 
     #[test]
