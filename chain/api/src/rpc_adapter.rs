@@ -13,7 +13,7 @@ use hopr_bindings::exports::alloy::{
     providers::Provider,
 };
 use hopr_types::{crypto::types::Hash, primitive::prelude::Address};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     broadcast_error::{BroadcastRejection, classify_broadcast_error},
@@ -66,14 +66,40 @@ impl<R: HttpRequestor + 'static + Clone> RpcClient for RpcAdapter<R> {
                 let summary = decode_transaction_summary(&bytes);
 
                 // The node already holds this exact transaction, e.g. from an earlier attempt
-                // whose response was lost: it is in the mempool, so track it like a fresh one.
+                // whose response was lost: track it like a fresh one. Nodes may also answer
+                // "already known" from a hash cache that includes rejected transactions, so
+                // only trust the claim once the node actually returns the transaction.
                 if let (Some(BroadcastRejection::AlreadyKnown), Some(summary)) = (rejection, summary) {
-                    info!(
-                        tx_hash = %summary.transaction_hash,
-                        nonce = summary.nonce,
-                        "transaction already known to the RPC node, treating it as submitted"
-                    );
-                    return Ok(summary.transaction_hash);
+                    match self.is_transaction_known(summary.transaction_hash).await {
+                        Ok(true) => {
+                            info!(
+                                tx_hash = %summary.transaction_hash,
+                                nonce = summary.nonce,
+                                "transaction already known to the RPC node, treating it as submitted"
+                            );
+                            return Ok(summary.transaction_hash);
+                        }
+                        Ok(false) => {
+                            warn!(
+                                tx_hash = %summary.transaction_hash,
+                                nonce = summary.nonce,
+                                error = %e,
+                                "RPC node reported the transaction as already known but holds no record of it"
+                            );
+                            return Err(format!(
+                                "RPC error: the node reported the transaction as known but holds no record of it, so \
+                                 an earlier submission was likely rejected (tx hash {})",
+                                summary.transaction_hash
+                            ));
+                        }
+                        Err(lookup_error) => {
+                            warn!(
+                                tx_hash = %summary.transaction_hash,
+                                error = %lookup_error,
+                                "could not verify an already-known transaction, reporting the rejection"
+                            );
+                        }
+                    }
                 }
 
                 error!(

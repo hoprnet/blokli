@@ -36,7 +36,9 @@ impl BroadcastRejection {
     }
 }
 
-/// Patterns matched against the error message, lowercased and stripped of spaces, `_` and `-`.
+/// Patterns matched against the error message, lowercased and reduced to ASCII letters and
+/// digits. A pattern only matches where a word starts, so "known transaction" does not match
+/// inside "unknown transaction".
 ///
 /// Order matters: replacement errors also contain "underpriced", so they are checked before the
 /// generic fee patterns.
@@ -67,15 +69,26 @@ const PATTERNS: &[(&str, BroadcastRejection)] = &[
 ///
 /// Returns `None` for transport failures and for errors that do not match a known reason.
 pub fn classify_broadcast_error(message: &str) -> Option<BroadcastRejection> {
-    let normalized: String = message
-        .chars()
-        .filter(|c| !matches!(c, ' ' | '_' | '-'))
-        .flat_map(char::to_lowercase)
-        .collect();
+    // Only ASCII alphanumerics are kept, so byte offsets in `normalized` index `word_starts`.
+    let mut normalized = String::with_capacity(message.len());
+    let mut word_starts = Vec::with_capacity(message.len());
+    let mut previous: Option<char> = None;
+    for c in message.chars() {
+        if c.is_ascii_alphanumeric() {
+            // A word starts after a separator or at a camelCase boundary ("AlreadyKnown").
+            let word_start = match previous {
+                None => true,
+                Some(p) => !p.is_ascii_alphanumeric() || (p.is_ascii_lowercase() && c.is_ascii_uppercase()),
+            };
+            normalized.push(c.to_ascii_lowercase());
+            word_starts.push(word_start);
+        }
+        previous = Some(c);
+    }
 
     PATTERNS
         .iter()
-        .find(|(pattern, _)| normalized.contains(pattern))
+        .find(|(pattern, _)| normalized.match_indices(pattern).any(|(index, _)| word_starts[index]))
         .map(|(_, rejection)| *rejection)
 }
 
@@ -147,6 +160,8 @@ mod tests {
     fn leaves_unknown_and_transport_errors_unclassified() {
         assert_eq!(classify_broadcast_error("error sending request for url"), None);
         assert_eq!(classify_broadcast_error("intrinsic gas too low"), None);
+        assert_eq!(classify_broadcast_error("unknown transaction"), None);
+        assert_eq!(classify_broadcast_error("UnknownTransaction"), None);
         assert_eq!(classify_broadcast_error(""), None);
     }
 }
