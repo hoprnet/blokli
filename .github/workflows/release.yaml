@@ -109,7 +109,7 @@ jobs:
   deploy-staging:
     name: Deploy Gnosis Staging
     runs-on: depot-ubuntu-24.04-2
-    if: ${{ inputs.deploy }}
+    if: ${{ inputs.deploy && (github.ref_name == 'main' || github.ref_name == vars.MAINTENANCE_BRANCH) }}
     needs:
       - build-binaries
       - build-docker
