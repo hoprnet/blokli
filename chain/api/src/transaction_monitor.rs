@@ -81,6 +81,10 @@ pub trait ReceiptProvider: Send + Sync {
     /// Number of transactions mined from `address` as of the latest block, i.e. the
     /// next nonce the account can use.
     async fn get_mined_nonce(&self, address: [u8; 20]) -> Result<u64, String>;
+
+    /// Next nonce of `address` counting the transactions the node holds as executable
+    /// in its mempool, i.e. the first nonce missing after the contiguous pending run.
+    async fn get_pending_nonce(&self, address: [u8; 20]) -> Result<u64, String>;
 }
 
 /// Why a submitted transaction has not been mined by the time it times out.
@@ -90,9 +94,11 @@ enum UnminedDiagnosis {
     Replaced,
     /// The node no longer knows the transaction and its nonce is still unused.
     Dropped,
-    /// The node holds the transaction, but earlier nonces of the signer are missing.
-    NonceGap { nonce: u64, next_nonce: u64 },
-    /// The node holds the transaction and nothing blocks it: most likely underpriced.
+    /// The node holds the transaction, but an earlier nonce of the signer is neither mined
+    /// nor pending.
+    NonceGap { nonce: u64, missing_nonce: u64 },
+    /// The node holds the transaction and every earlier nonce is mined or pending: it is
+    /// underpriced or queued behind earlier pending transactions.
     Pending,
     /// The transaction was mined after the receipt lookup; the next poll confirms it.
     MinedSinceCheck,
@@ -120,9 +126,9 @@ impl UnminedDiagnosis {
             UnminedDiagnosis::Dropped => {
                 "Transaction was not mined: the RPC node no longer knows it (dropped from the mempool)".to_string()
             }
-            UnminedDiagnosis::NonceGap { nonce, next_nonce } => format!(
-                "Transaction was not mined: its nonce {nonce} is ahead of the signer's next nonce {next_nonce} (nonce \
-                 gap)"
+            UnminedDiagnosis::NonceGap { nonce, missing_nonce } => format!(
+                "Transaction was not mined: its nonce {nonce} waits for the signer's nonce {missing_nonce}, which is \
+                 neither mined nor pending (nonce gap)"
             ),
             UnminedDiagnosis::Pending => "Transaction timed out waiting for confirmation: still pending in the \
                                           mempool (possibly underpriced)"
@@ -135,11 +141,18 @@ impl UnminedDiagnosis {
 }
 
 /// Classify an unmined transaction from whether the node still knows it and how its nonce
-/// compares to the signer's next nonce.
-fn classify_unmined(known: bool, nonce: u64, next_nonce: u64) -> UnminedDiagnosis {
-    match (known, nonce < next_nonce) {
+/// compares to the signer's mined and pending next nonces.
+///
+/// A nonce ahead of the mined one is only a gap when the pending run does not reach it:
+/// with nonce 5 mined and 5, 6, 7 pending, nonce 7 is merely queued behind 5 and 6.
+fn classify_unmined(known: bool, nonce: u64, mined_nonce: u64, pending_nonce: u64) -> UnminedDiagnosis {
+    // Some nodes answer the pending count from the latest block only; never go below it.
+    let missing_nonce = pending_nonce.max(mined_nonce);
+    match (known, nonce < mined_nonce) {
         (true, true) => UnminedDiagnosis::MinedSinceCheck,
-        (true, false) if nonce > next_nonce => UnminedDiagnosis::NonceGap { nonce, next_nonce },
+        (true, false) if nonce > mined_nonce && nonce >= missing_nonce => {
+            UnminedDiagnosis::NonceGap { nonce, missing_nonce }
+        }
         (true, false) => UnminedDiagnosis::Pending,
         (false, true) => UnminedDiagnosis::Replaced,
         (false, false) => UnminedDiagnosis::Dropped,
@@ -185,6 +198,10 @@ impl ReceiptProvider for NoSafeEnrichment {
     }
 
     async fn get_mined_nonce(&self, _address: [u8; 20]) -> Result<u64, String> {
+        unreachable!("NoSafeEnrichment is behind Option::None")
+    }
+
+    async fn get_pending_nonce(&self, _address: [u8; 20]) -> Result<u64, String> {
         unreachable!("NoSafeEnrichment is behind Option::None")
     }
 }
@@ -546,19 +563,26 @@ impl<R: ReceiptProvider + 'static, S: SafeAddressChecker> TransactionMonitor<R, 
             self.config.request_timeout,
             self.receipt_provider.is_transaction_known(record.transaction_hash),
         );
-        let next_nonce = timeout(
+        let mined_nonce = timeout(
             self.config.request_timeout,
             self.receipt_provider.get_mined_nonce(signer),
         );
+        let pending_nonce = timeout(
+            self.config.request_timeout,
+            self.receipt_provider.get_pending_nonce(signer),
+        );
 
-        match tokio::join!(known, next_nonce) {
-            (Ok(Ok(known)), Ok(Ok(next_nonce))) => classify_unmined(known, nonce, next_nonce),
-            (known, next_nonce) => {
+        match tokio::join!(known, mined_nonce, pending_nonce) {
+            (Ok(Ok(known)), Ok(Ok(mined_nonce)), Ok(Ok(pending_nonce))) => {
+                classify_unmined(known, nonce, mined_nonce, pending_nonce)
+            }
+            (known, mined_nonce, pending_nonce) => {
                 debug!(
                     id = %record.id,
                     tx_hash = %record.transaction_hash,
                     ?known,
-                    ?next_nonce,
+                    ?mined_nonce,
+                    ?pending_nonce,
                     "Could not diagnose why the transaction was not mined"
                 );
                 UnminedDiagnosis::Unknown
@@ -737,6 +761,8 @@ mod tests {
         known_transactions: Arc<DashMap<Hash, ()>>,
         // Next nonce per signer (absent = 0)
         mined_nonces: Arc<DashMap<[u8; 20], u64>>,
+        // Next nonce per signer including the mempool (absent = mined nonce)
+        pending_nonces: Arc<DashMap<[u8; 20], u64>>,
         receipt_calls: Arc<AtomicUsize>,
     }
 
@@ -750,6 +776,7 @@ mod tests {
                 hanging_statuses: Arc::new(DashMap::new()),
                 known_transactions: Arc::new(DashMap::new()),
                 mined_nonces: Arc::new(DashMap::new()),
+                pending_nonces: Arc::new(DashMap::new()),
                 receipt_calls: Arc::new(AtomicUsize::new(0)),
             }
         }
@@ -760,6 +787,10 @@ mod tests {
 
         fn set_mined_nonce(&self, address: [u8; 20], nonce: u64) {
             self.mined_nonces.insert(address, nonce);
+        }
+
+        fn set_pending_nonce(&self, address: [u8; 20], nonce: u64) {
+            self.pending_nonces.insert(address, nonce);
         }
 
         fn set_status(&self, tx_hash: Hash, status: Option<bool>) {
@@ -834,6 +865,13 @@ mod tests {
         async fn get_mined_nonce(&self, address: [u8; 20]) -> Result<u64, String> {
             Ok(self.mined_nonces.get(&address).map(|entry| *entry.value()).unwrap_or(0))
         }
+
+        async fn get_pending_nonce(&self, address: [u8; 20]) -> Result<u64, String> {
+            match self.pending_nonces.get(&address) {
+                Some(entry) => Ok(*entry.value()),
+                None => self.get_mined_nonce(address).await,
+            }
+        }
     }
 
     // Mock Safe address checker for testing.
@@ -887,10 +925,15 @@ mod tests {
 
     /// Create a raw signed transaction targeting a specific address
     async fn create_raw_tx_to(target: &[u8; 20]) -> Vec<u8> {
+        create_raw_tx_with_nonce(target, 0).await
+    }
+
+    /// Create a raw signed transaction targeting a specific address with a given nonce
+    async fn create_raw_tx_with_nonce(target: &[u8; 20], nonce: u64) -> Vec<u8> {
         let signer = PrivateKeySigner::random();
         let tx = TxLegacy {
             chain_id: Some(1),
-            nonce: 0,
+            nonce,
             gas_price: 1_000_000_000,
             gas_limit: 21_000,
             to: TxKind::Call(AlloyAddress::from_slice(target)),
@@ -1080,18 +1123,30 @@ mod tests {
 
     #[test]
     fn test_classify_unmined() {
-        assert_eq!(classify_unmined(false, 4, 5), UnminedDiagnosis::Replaced);
-        assert_eq!(classify_unmined(false, 5, 5), UnminedDiagnosis::Dropped);
-        assert_eq!(classify_unmined(false, 7, 5), UnminedDiagnosis::Dropped);
-        assert_eq!(classify_unmined(true, 5, 5), UnminedDiagnosis::Pending);
+        assert_eq!(classify_unmined(false, 4, 5, 5), UnminedDiagnosis::Replaced);
+        assert_eq!(classify_unmined(false, 5, 5, 5), UnminedDiagnosis::Dropped);
+        assert_eq!(classify_unmined(false, 7, 5, 5), UnminedDiagnosis::Dropped);
+        assert_eq!(classify_unmined(true, 5, 5, 6), UnminedDiagnosis::Pending);
+        // Nonces 5, 6 and 7 are all pending: 7 is queued, not gapped.
+        assert_eq!(classify_unmined(true, 7, 5, 8), UnminedDiagnosis::Pending);
+        // Node not reporting mempool nonces: pending equals mined.
+        assert_eq!(classify_unmined(true, 5, 5, 5), UnminedDiagnosis::Pending);
         assert_eq!(
-            classify_unmined(true, 7, 5),
+            classify_unmined(true, 7, 5, 5),
             UnminedDiagnosis::NonceGap {
                 nonce: 7,
-                next_nonce: 5
+                missing_nonce: 5
             }
         );
-        assert_eq!(classify_unmined(true, 4, 5), UnminedDiagnosis::MinedSinceCheck);
+        // Nonce 5 is pending but 6 is missing.
+        assert_eq!(
+            classify_unmined(true, 7, 5, 6),
+            UnminedDiagnosis::NonceGap {
+                nonce: 7,
+                missing_nonce: 6
+            }
+        );
+        assert_eq!(classify_unmined(true, 4, 5, 5), UnminedDiagnosis::MinedSinceCheck);
     }
 
     /// Insert a submitted record for `raw_tx` that is already past the monitor timeout.
@@ -1160,6 +1215,57 @@ mod tests {
         let updated = store.get(TEST_UUID).unwrap();
         assert_eq!(updated.status, TransactionStatus::Timeout);
         assert_eq!(updated.error_message, Some(UnminedDiagnosis::Pending.message()));
+    }
+
+    #[tokio::test]
+    async fn test_monitor_timeout_reports_queued_transaction_as_pending() {
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        // Nonces 5, 6 and 7 are all pending; 7 is queued behind the others.
+        let raw_tx = create_raw_tx_with_nonce(&[0x11; 20], 7).await;
+        let (signer, _) = decode_transaction_signer_and_nonce(&raw_tx).unwrap();
+        provider.set_known(test_tx_hash());
+        provider.set_mined_nonce(signer, 5);
+        provider.set_pending_nonce(signer, 8);
+        insert_expired_record(&store, raw_tx);
+
+        let monitor = create_monitor(store.clone(), provider);
+        monitor.poll_once().await.unwrap();
+
+        let updated = store.get(TEST_UUID).unwrap();
+        assert_eq!(updated.status, TransactionStatus::Timeout);
+        assert_eq!(updated.error_message, Some(UnminedDiagnosis::Pending.message()));
+    }
+
+    #[tokio::test]
+    async fn test_monitor_timeout_reports_nonce_gap() {
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        // Nonce 5 is pending but 6 is missing, so 7 cannot be mined.
+        let raw_tx = create_raw_tx_with_nonce(&[0x11; 20], 7).await;
+        let (signer, _) = decode_transaction_signer_and_nonce(&raw_tx).unwrap();
+        provider.set_known(test_tx_hash());
+        provider.set_mined_nonce(signer, 5);
+        provider.set_pending_nonce(signer, 6);
+        insert_expired_record(&store, raw_tx);
+
+        let monitor = create_monitor(store.clone(), provider);
+        monitor.poll_once().await.unwrap();
+
+        let updated = store.get(TEST_UUID).unwrap();
+        assert_eq!(updated.status, TransactionStatus::Timeout);
+        assert_eq!(
+            updated.error_message,
+            Some(
+                UnminedDiagnosis::NonceGap {
+                    nonce: 7,
+                    missing_nonce: 6
+                }
+                .message()
+            )
+        );
     }
 
     #[tokio::test]

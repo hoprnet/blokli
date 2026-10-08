@@ -232,6 +232,15 @@ impl<R: HttpRequestor + 'static + Clone> ReceiptProvider for RpcAdapter<R> {
             .await
             .map_err(|e| format!("Nonce lookup error: {e}"))
     }
+
+    async fn get_pending_nonce(&self, address: [u8; 20]) -> Result<u64, String> {
+        self.rpc
+            .provider
+            .get_transaction_count(AlloyAddress::from(address))
+            .pending()
+            .await
+            .map_err(|e| format!("Pending nonce lookup error: {e}"))
+    }
 }
 
 #[cfg(test)]
