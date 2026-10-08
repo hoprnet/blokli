@@ -9,7 +9,7 @@ use alloy_sol_types::{SolEvent, sol};
 use async_trait::async_trait;
 use blokli_db::BlokliDbAllOperations;
 use hopr_bindings::exports::alloy::{
-    consensus::{Transaction, TxEnvelope},
+    consensus::{Transaction, TxEnvelope, transaction::SignerRecoverable},
     eips::eip2718::Decodable2718,
 };
 use hopr_types::{crypto::types::Hash, primitive::prelude::Address};
@@ -35,6 +35,20 @@ pub fn decode_transaction_to_address(raw_tx: &[u8]) -> Option<[u8; 20]> {
     let envelope = TxEnvelope::decode_2718(&mut &raw_tx[..]).ok()?;
     let to_addr = envelope.to()?;
     Some(to_addr.into_array())
+}
+
+/// Recover the signer address of a raw signed transaction.
+///
+/// The signer is recovered from the transaction signature, so it identifies the
+/// account that authorised and pays for the transaction. Unlike the `to`
+/// address it cannot be chosen freely by a client, which makes it the correct
+/// identity for per-client fairness accounting.
+///
+/// Returns `None` if the envelope cannot be decoded or the signature does not
+/// recover to an address.
+pub fn decode_transaction_signer(raw_tx: &[u8]) -> Option<[u8; 20]> {
+    let envelope = TxEnvelope::decode_2718(&mut &raw_tx[..]).ok()?;
+    envelope.recover_signer().ok().map(|signer| signer.into_array())
 }
 
 /// Check receipt logs for Safe `ExecutionSuccess`/`ExecutionFailure` events.

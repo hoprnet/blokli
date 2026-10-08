@@ -1,5 +1,6 @@
 {{- if .Values.monitoring.prometheusRule.enabled }}
 {{- $fullname := include "blokli.fullname" . }}
+{{- $appName := include "blokli.name" . }}
 {{- $network := .Values.config.network }}
 {{- $namespace := .Release.Namespace }}
 {{- $r := .Values.monitoring.prometheusRule.rules }}
@@ -84,14 +85,15 @@ spec:
           sustained for over {{ .for }}.
         runbook_url: https://github.com/hoprnet/blokli/blob/main/runbooks/blokli-indexer-checksum-stalled.md
       expr: |-
-        changes(max(blokli_indexer_checksum{job="{{ $fullname }}"})[{{ .windowMinutes }}m:1m]) == 0
-        and
+        changes(max by (job) (blokli_indexer_checksum{job="{{ $fullname }}"})[{{ .windowMinutes }}m:1m]) == 0
+        and on (job)
         delta(blokli_indexer_block_number{job="{{ $fullname }}"}[{{ .windowMinutes }}m]) > 0
       for: {{ .for }}
       labels:
         severity: warning
         network: {{ $network }}
         namespace: {{ $namespace }}
+        app_kubernetes_io_name: {{ $appName }}
     {{- end }}
     {{- end }}
     {{- with $r.unhealthy }}
@@ -154,6 +156,7 @@ spec:
         severity: warning
         network: {{ $network }}
         namespace: {{ $namespace }}
+        app_kubernetes_io_name: {{ $appName }}
     {{- end }}
     {{- end }}
     {{- with $r.transactionFailedLong }}
@@ -182,6 +185,7 @@ spec:
         severity: warning
         network: {{ $network }}
         namespace: {{ $namespace }}
+        app_kubernetes_io_name: {{ $appName }}
     {{- end }}
     {{- end }}
     {{- with $r.transactionValidationFailed }}
@@ -206,6 +210,7 @@ spec:
         severity: warning
         network: {{ $network }}
         namespace: {{ $namespace }}
+        app_kubernetes_io_name: {{ $appName }}
     {{- end }}
     {{- end }}
     {{- with $r.rpcFailureRateHigh }}
@@ -225,6 +230,7 @@ spec:
         severity: warning
         network: {{ $network }}
         namespace: {{ $namespace }}
+        app_kubernetes_io_name: {{ $appName }}
     {{- end }}
     {{- end }}
     {{- with $r.rpcCallLatencyHigh }}
@@ -246,6 +252,7 @@ spec:
         severity: info
         network: {{ $network }}
         namespace: {{ $namespace }}
+        app_kubernetes_io_name: {{ $appName }}
     {{- end }}
     {{- end }}
     {{- with $r.rpcRetriesHigh }}
@@ -265,6 +272,7 @@ spec:
         severity: warning
         network: {{ $network }}
         namespace: {{ $namespace }}
+        app_kubernetes_io_name: {{ $appName }}
     {{- end }}
     {{- end }}
     {{- with $r.graphqlErrorRateHigh }}
@@ -311,6 +319,7 @@ spec:
         severity: warning
         network: {{ $network }}
         namespace: {{ $namespace }}
+        app_kubernetes_io_name: {{ $appName }}
     {{- end }}
     {{- end }}
     {{- with $r.graphqlLatencyHigh }}
@@ -330,6 +339,7 @@ spec:
         severity: warning
         network: {{ $network }}
         namespace: {{ $namespace }}
+        app_kubernetes_io_name: {{ $appName }}
     {{- end }}
     {{- end }}
 {{- end }}

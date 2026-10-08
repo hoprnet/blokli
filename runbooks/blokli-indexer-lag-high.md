@@ -25,7 +25,8 @@ The GraphQL API continues to serve data, but it reflects a chain state that is i
   `fast_sync`, `Continuous`) — a lag during a historical backfill phase is expected and self-resolving; a lag during `Continuous` phase is
   not.
 - Check `blokli_rpc_call_time_sec` and `blokli_rpc_call_count{result="failure"}` for signs the RPC provider is slow or failing (see
-  [RPC Call Latency High](blokli-rpc-call-latency-high.md) and [RPC Failure Rate High](blokli-rpc-failure-rate-high.md)).
+  [RPC Call Latency High](blokli-rpc-call-latency-high.md) and [RPC Failure Rate High](blokli-rpc-failure-rate-high.md)), and check
+  [Tenderly's status page](https://tenderly.co/status) for an ongoing incident.
 - Check pod CPU/memory pressure and database latency — a saturated PostgreSQL instance can slow down block processing.
 - Check container logs for repeated RPC retries or DB write errors:
   - `kubectl -n blokli logs deployment/blokli-<networkName> -f | grep -i -E "retry|error|lag"`

@@ -60,8 +60,6 @@ jobs:
           private-key: ${{ secrets.GH_APP_HOPRNET_BOT_PRIVATE_KEY }}
           owner: hoprnet
           repositories: blokli
-          permission-contents: write
-          permission-workflows: write
 
       - name: Create release branch
         env:
@@ -70,8 +68,25 @@ jobs:
           BRANCH: ${{ steps.resolve.outputs.branch }}
           COMMIT_SHA: ${{ steps.resolve.outputs.commit_sha }}
         run: |
-          gh api "repos/${GITHUB_REPOSITORY}/git/refs" \
-            -f ref="refs/heads/${BRANCH}" \
-            -f sha="${COMMIT_SHA}"
+          if existing_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${BRANCH}" --jq '.object.sha' 2>/dev/null)"; then
+            if [[ "$existing_sha" != "$COMMIT_SHA" ]]; then
+              echo "::error::Branch '${BRANCH}' already exists at ${existing_sha}, expected ${COMMIT_SHA} from tag '${TAG}'."
+              exit 1
+            fi
+            echo "Branch \`${BRANCH}\` already exists at ${COMMIT_SHA}, skipping creation." >> "$GITHUB_STEP_SUMMARY"
+          else
+            gh api "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/heads/${BRANCH}" \
+              -f sha="${COMMIT_SHA}"
 
-          echo "Created branch \`${BRANCH}\` from tag \`${TAG}\` (${COMMIT_SHA})." >> "$GITHUB_STEP_SUMMARY"
+            echo "Created branch \`${BRANCH}\` from tag \`${TAG}\` (${COMMIT_SHA})." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Store latest maintenance branch
+        env:
+          GH_TOKEN: ${{ steps.bot-token.outputs.token }}
+          BRANCH: ${{ steps.resolve.outputs.branch }}
+        run: |
+          gh variable set MAINTENANCE_BRANCH --repo "${GITHUB_REPOSITORY}" --body "${BRANCH}"
+
+          echo "Set \`MAINTENANCE_BRANCH\` to \`${BRANCH}\`." >> "$GITHUB_STEP_SUMMARY"

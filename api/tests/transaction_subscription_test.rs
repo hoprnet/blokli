@@ -8,8 +8,6 @@
 //! - Multiple concurrent subscriptions
 //! - Subscription lifecycle
 
-mod common;
-
 use std::{sync::Arc, time::Duration};
 
 use anyhow::Result;
@@ -35,55 +33,32 @@ use hopr_types::crypto::{
     keypairs::{ChainKeypair, Keypair},
     types::Hash,
 };
-use tokio::task::AbortHandle;
 
 /// Test context for subscription tests
 struct TestContext {
     chain_key: ChainKeypair,
     store: Arc<TransactionStore>,
     schema: Schema<QueryRoot, EmptyMutation, SubscriptionRoot>,
-    _monitor_handle: Option<AbortHandle>,
 }
 
-impl Drop for TestContext {
-    fn drop(&mut self) {
-        // Stop the monitor if it's running
-        if let Some(handle) = self._monitor_handle.take() {
-            handle.abort();
-        }
-    }
-}
-
-/// Set up test environment with subscription support
+/// Set up the store-backed subscription schema without a blockchain node.
+///
+/// Transaction subscriptions consume only `TransactionStore` events. A local
+/// signing key is sufficient for the synthetic transaction payloads used by
+/// these tests, so Anvil deployment and transaction-monitor startup are not
+/// part of this coverage.
 async fn setup_test_environment() -> Result<TestContext> {
-    // Use common transaction test helper with faster polling for subscriptions
-    let tx_ctx = common::setup_transaction_test_environment(
-        Duration::from_secs(1),    // block_time
-        Duration::from_millis(50), // poll_interval (faster for subscription tests)
-        2,                         // finality
-        None,                      // executor_config (use default)
-    )
-    .await?;
+    let chain_key = ChainKeypair::from_secret([1_u8; 32].as_ref())?;
+    let store = Arc::new(TransactionStore::new());
 
-    // Create in-memory database
-    let db = BlokliDb::new_in_memory().await?;
-
-    // Build GraphQL schema with SubscriptionRoot (EmptyMutation variant)
     let schema = Schema::build(QueryRoot, EmptyMutation, SubscriptionRoot)
-        .data(db.conn(TargetDb::Index).clone())
-        .data(ChainId(31337)) // Anvil chain ID
-        .data(NetworkName("test".to_string()))
-        .data(ContractAddresses::default())
-        .data(tx_ctx.executor.clone())
-        .data(tx_ctx.store.clone())
-        .data(blokli_api::schema::GasMultiplier(1.0))
+        .data(store.clone())
         .finish();
 
     Ok(TestContext {
-        chain_key: tx_ctx.chain_key.clone(),
-        store: tx_ctx.store.clone(),
+        chain_key,
+        store,
         schema,
-        _monitor_handle: tx_ctx.monitor_handle.clone(),
     })
 }
 

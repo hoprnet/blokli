@@ -188,6 +188,7 @@ pub(crate) mod test_helpers {
                 curvy_aggregator: Default::default(),
                 curvy_vault: Default::default(),
                 curvy_portal_factory: Default::default(),
+                curvy_shield_router: Default::default(),
                 service_registry: *SERVICE_REGISTRY_ADDR,
             },
             db,
