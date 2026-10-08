@@ -13,7 +13,7 @@ use blokli_tx::FilterError;
 use chrono::Utc;
 use hopr_types::crypto::types::Hash;
 use thiserror::Error;
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -280,6 +280,32 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         }
     }
 
+    /// Check a raw transaction against the policy, logging what was authorized or rejected.
+    ///
+    /// # Errors
+    /// Returns [`TransactionExecutorError::ValidationFailed`] when the policy rejects it.
+    fn authorize(&self, raw_tx: &[u8]) -> Result<(), TransactionExecutorError> {
+        match self.policy.check(raw_tx) {
+            Ok(Some(filtered)) => {
+                let calls = filtered.calls.iter().map(ToString::to_string).collect::<Vec<_>>();
+                debug!(
+                    sender = %filtered.sender,
+                    calls = %calls.join(", "),
+                    via_module = filtered.via_module,
+                    "Transaction authorized"
+                );
+                Ok(())
+            }
+            // `AllowAll` decodes nothing, so there is nothing to record.
+            Ok(None) => Ok(()),
+            Err(e) => {
+                warn!(error = %e, "Transaction validation failed");
+                record_transaction_status(STATUS_VALIDATION_FAILED);
+                Err(e.into())
+            }
+        }
+    }
+
     /// Fire-and-forget mode: Submit transaction and return hash immediately
     ///
     /// This mode:
@@ -289,12 +315,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
     /// - Does NOT track in database
     /// - Does NOT wait for confirmation
     pub async fn send_raw_transaction(&self, raw_tx: Vec<u8>) -> Result<Hash, TransactionExecutorError> {
-        // Validate transaction
-        if let Err(e) = self.policy.check(&raw_tx) {
-            warn!(error = %e, "Transaction validation failed");
-            record_transaction_status(STATUS_VALIDATION_FAILED);
-            return Err(e.into());
-        }
+        self.authorize(&raw_tx)?;
 
         // Fire-and-forget leaves no tracked record, so deduplication cannot return an
         // identity here; preflight and invalid-action suppression still apply.
@@ -321,12 +342,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
     /// - Returns UUID for later querying
     /// - Background monitor handles confirmation tracking
     pub async fn send_raw_transaction_async(&self, raw_tx: Vec<u8>) -> Result<Uuid, TransactionExecutorError> {
-        // Validate transaction
-        if let Err(e) = self.policy.check(&raw_tx) {
-            warn!(error = %e, "Transaction validation failed");
-            record_transaction_status(STATUS_VALIDATION_FAILED);
-            return Err(e.into());
-        }
+        self.authorize(&raw_tx)?;
 
         // The HOPR-aware policy runs before admission control: a deterministically invalid or
         // duplicated action should never consume monitoring capacity in the first place.
@@ -396,12 +412,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         raw_tx: Vec<u8>,
         confirmations: Option<u64>,
     ) -> Result<TransactionRecord, TransactionExecutorError> {
-        // Validate transaction
-        if let Err(e) = self.policy.check(&raw_tx) {
-            warn!(error = %e, "Transaction validation failed");
-            record_transaction_status(STATUS_VALIDATION_FAILED);
-            return Err(e.into());
-        }
+        self.authorize(&raw_tx)?;
 
         // Sync mode stores a terminal record rather than a tracked one, so deduplication has
         // no identity to return; preflight and invalid-action suppression still apply.

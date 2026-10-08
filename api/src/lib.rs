@@ -25,7 +25,7 @@ use axum::serve;
 use blokli_chain_api::{
     rpc_adapter::RpcAdapter,
     transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
-    transaction_policy::TransactionPolicy,
+    transaction_policy::{TransactionPolicy, network_transaction_filter},
     transaction_store::TransactionStore,
 };
 use blokli_chain_rpc::{
@@ -33,10 +33,12 @@ use blokli_chain_rpc::{
     rpc::{RpcOperations, RpcOperationsConfig},
     transport::ReqwestClient,
 };
+use blokli_chain_types::ContractAddresses;
 use blokli_db::{
     db::{BlokliDbConfig, build_connect_options},
     utils::redact_database_url,
 };
+use blokli_tx::TransactionFilter;
 use config::ApiConfig;
 use errors::{ApiError, ApiResult};
 use hopr_bindings::exports::alloy::{
@@ -76,6 +78,20 @@ fn redact_url(url: &str) -> String {
     }
 }
 
+/// Build the transaction policy for a standalone API server.
+///
+/// Derives the same allow-set bloklid does, from the configured contract addresses. With none
+/// configured there is nothing to derive, so the empty allow-set refuses everything: the executor
+/// here is fully functional, and failing open would make it an unrestricted relay.
+fn standalone_transaction_policy(contracts: &ContractAddresses) -> TransactionPolicy {
+    if contracts == &ContractAddresses::default() {
+        warn!("No contract addresses configured - transaction relaying is disabled");
+        return TransactionPolicy::Whitelist(TransactionFilter::default());
+    }
+
+    TransactionPolicy::Whitelist(network_transaction_filter(contracts))
+}
+
 /// Start the API server
 pub async fn start_server(network: String, finality: u16, config: ApiConfig) -> ApiResult<()> {
     // Initialize tracing
@@ -94,16 +110,10 @@ pub async fn start_server(network: String, finality: u16, config: ApiConfig) -> 
     // Use small buffer sizes since no events will flow through in standalone mode
     let indexer_state = blokli_chain_indexer::IndexerState::new(16, 16);
 
-    // Create stub transaction components for standalone mode
-    // These are required for the GraphQL schema but won't be used since mutations
-    // are typically called through bloklid, not standalone API
-    warn!("Running in standalone mode - transaction mutations will not work without bloklid");
+    info!("Running in standalone mode - transaction mutations are gated by the configured contract addresses");
 
     let transaction_store = Arc::new(TransactionStore::new());
-    // Standalone mode is a development/ops path, not a production relay: the network allow-set is
-    // enforced by bloklid, which builds it from the resolved contract addresses. Whitelisting here
-    // would reject everything whenever `contract_addresses` is left at its (zero) default.
-    let transaction_policy = Arc::new(TransactionPolicy::AllowAll);
+    let transaction_policy = Arc::new(standalone_transaction_policy(&config.contract_addresses));
 
     // Create RPC connection for balance queries
     info!("Connecting to RPC: {}", redact_url(&config.rpc_url));
@@ -189,4 +199,92 @@ pub async fn start_server(network: String, finality: u16, config: ApiConfig) -> 
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use blokli_chain_types::ContractAddresses;
+    use blokli_tx::FilterError;
+    use hopr_bindings::{
+        exports::alloy::{
+            consensus::{SignableTransaction, TxEip1559},
+            eips::eip2718::Encodable2718,
+            primitives::{Address as AlloyAddress, Bytes, TxKind, U256},
+            signers::{SignerSync, local::PrivateKeySigner},
+            sol_types::SolCall,
+        },
+        hopr_token::HoprToken::approveCall,
+    };
+    use hopr_types::primitive::prelude::Address;
+
+    use crate::standalone_transaction_policy;
+
+    const KEY: &str = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+    const TOKEN: [u8; 20] = [0x11; 20];
+
+    fn configured_contracts() -> ContractAddresses {
+        ContractAddresses {
+            token: Address::from(TOKEN),
+            ..Default::default()
+        }
+    }
+
+    /// A signed `approve` on the token contract, the simplest relayable HOPR operation.
+    fn signed_token_approve() -> Vec<u8> {
+        let mut input = approveCall::SELECTOR.to_vec();
+        input.extend_from_slice(&[0u8; 64]);
+
+        let tx = TxEip1559 {
+            chain_id: 1,
+            nonce: 0,
+            gas_limit: 21_000,
+            max_fee_per_gas: 1_000_000_000,
+            max_priority_fee_per_gas: 1_000_000_000,
+            to: TxKind::Call(AlloyAddress::from(TOKEN)),
+            value: U256::ZERO,
+            access_list: Default::default(),
+            input: Bytes::from(input),
+        };
+        let signer: PrivateKeySigner = KEY.parse().expect("valid private key");
+        let signature = signer.sign_hash_sync(&tx.signature_hash()).expect("sign tx");
+
+        let mut raw = Vec::new();
+        tx.into_signed(signature).encode_2718(&mut raw);
+        raw
+    }
+
+    #[test]
+    fn standalone_policy_enforces_the_network_allow_set_when_contracts_are_configured() {
+        let policy = standalone_transaction_policy(&configured_contracts());
+        assert!(policy.check(&signed_token_approve()).is_ok());
+    }
+
+    #[test]
+    fn standalone_policy_rejects_calls_outside_the_network_allow_set() {
+        let policy = standalone_transaction_policy(&configured_contracts());
+        let raw = signed_token_approve();
+        // Same calldata, a contract the network does not deploy.
+        let unknown = ContractAddresses {
+            token: Address::from([0x99u8; 20]),
+            ..Default::default()
+        };
+
+        assert!(matches!(
+            standalone_transaction_policy(&unknown).check(&raw),
+            Err(FilterError::ContractNotAllowed { .. })
+        ));
+        assert!(policy.check(&raw).is_ok());
+    }
+
+    #[test]
+    fn standalone_policy_relays_nothing_when_no_contracts_are_configured() {
+        // Failing open here would make the standalone server an open relay for any signed
+        // transaction, contract creation included.
+        let policy = standalone_transaction_policy(&ContractAddresses::default());
+
+        assert!(matches!(
+            policy.check(&signed_token_approve()),
+            Err(FilterError::ContractNotAllowed { .. })
+        ));
+    }
 }
