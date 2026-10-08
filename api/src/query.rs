@@ -3030,21 +3030,21 @@ mod tests {
     }
 
     const FLOORS: GasFeeFloors = GasFeeFloors {
-        min_priority_fee_per_gas: 10_000_000,
-        min_max_fee_per_gas: 50_000_000,
+        min_priority_fee_per_gas: 100,
+        min_max_fee_per_gas: 5_000_000,
     };
 
     #[test]
     fn test_gas_fee_floors_lift_floor_level_estimate() {
         // Typical Gnosis estimate: 1 wei tip, 2 × 10 wei base fee headroom
-        assert_eq!(apply_gas_fee_floors(21, 1, FLOORS), (50_000_000, 10_000_000));
+        assert_eq!(apply_gas_fee_floors(21, 1, FLOORS), (5_000_000, 100));
     }
 
     #[test]
     fn test_gas_fee_floors_keep_base_fee_headroom() {
         // Base fee spike: 2 × 450_000 wei headroom must survive the priority fee lift
-        assert_eq!(apply_gas_fee_floors(900_001, 1, FLOORS), (50_000_000, 10_000_000));
-        assert_eq!(apply_gas_fee_floors(80_000_001, 1, FLOORS), (90_000_000, 10_000_000));
+        assert_eq!(apply_gas_fee_floors(900_001, 1, FLOORS), (5_000_000, 100));
+        assert_eq!(apply_gas_fee_floors(80_000_001, 1, FLOORS), (80_000_100, 100));
     }
 
     #[test]

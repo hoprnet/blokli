@@ -1110,8 +1110,8 @@ mod tests {
         assert!(!cfg.api.playground_enabled); // Default
         assert_eq!(cfg.api.bind_address.to_string(), "127.0.0.1:8080"); // Default
         assert_eq!(cfg.api.gas_multiplier, 1.0); // Default
-        assert_eq!(cfg.api.min_priority_fee_per_gas, 10_000_000); // Default
-        assert_eq!(cfg.api.min_max_fee_per_gas, 50_000_000); // Default
+        assert_eq!(cfg.api.min_priority_fee_per_gas, 100); // Default
+        assert_eq!(cfg.api.min_max_fee_per_gas, 5_000_000); // Default
         assert_eq!(cfg.api.health.max_indexer_lag, 10); // Default
         assert_eq!(cfg.api.health.timeout, Duration::from_millis(5000)); // Default
         assert!(cfg.database.is_some()); // Database was provided

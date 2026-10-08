@@ -240,11 +240,11 @@ fn default_gas_multiplier() -> f64 {
     1.0
 }
 
-/// 0.01 gwei
-pub const DEFAULT_MIN_PRIORITY_FEE_PER_GAS: u64 = 10_000_000;
+/// 100 wei: just above the 1-2 wei tips Gnosis estimates usually return, at negligible cost
+pub const DEFAULT_MIN_PRIORITY_FEE_PER_GAS: u64 = 100;
 
-/// 0.05 gwei: with the 10M gas limit nodes sign with, the upfront balance stays at 0.0005 xDAI
-pub const DEFAULT_MIN_MAX_FEE_PER_GAS: u64 = 50_000_000;
+/// 0.005 gwei: with the 10M gas limit nodes sign with, the upfront balance stays at 0.00005 xDAI
+pub const DEFAULT_MIN_MAX_FEE_PER_GAS: u64 = 5_000_000;
 
 fn default_min_priority_fee_per_gas() -> u64 {
     DEFAULT_MIN_PRIORITY_FEE_PER_GAS
@@ -278,8 +278,8 @@ mod tests {
         assert_eq!(
             config.gas_fee_floors(),
             GasFeeFloors {
-                min_priority_fee_per_gas: 10_000_000,
-                min_max_fee_per_gas: 50_000_000,
+                min_priority_fee_per_gas: 100,
+                min_max_fee_per_gas: 5_000_000,
             }
         );
     }
