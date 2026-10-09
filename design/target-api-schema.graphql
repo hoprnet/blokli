@@ -697,9 +697,10 @@ type QueryRoot {
   Retrieve transaction count for any Ethereum address
 
   This query returns the transaction count for any address type:
-  - For EOAs (Externally Owned Accounts): Returns the transaction count via eth_getTransactionCount
+  - For EOAs (Externally Owned Accounts): Returns the transaction count via eth_getTransactionCount at the
+    pending block, i.e. including transactions still in the mempool: the next nonce to sign with
   - For Safe contracts: Returns the Safe's internal nonce via nonce() function
-  - For other contracts: Attempts nonce() call, falls back to eth_getTransactionCount
+  - For other contracts: Attempts nonce() call, falls back to eth_getTransactionCount at the pending block
 
   The transaction count increments with each transaction sent or executed by the address.
 

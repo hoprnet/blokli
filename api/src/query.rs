@@ -960,9 +960,10 @@ impl QueryRoot {
     /// `TransactionCountResult` that indicates success, an invalid address error, or a query failure.
     ///
     /// This method supports multiple address types:
-    /// - **EOAs (Externally Owned Accounts)**: Returns the transaction count via `eth_getTransactionCount`
+    /// - **EOAs (Externally Owned Accounts)**: Returns the transaction count via `eth_getTransactionCount` at the
+    ///   `pending` block, i.e. including transactions still in the mempool: the next nonce to sign with
     /// - **Safe contracts**: Returns the Safe's internal nonce via `nonce()` function
-    /// - **Other contracts**: Attempts `nonce()` call, falls back to `eth_getTransactionCount`
+    /// - **Other contracts**: Attempts `nonce()` call, falls back to `eth_getTransactionCount` at the `pending` block
     ///
     /// # Returns
     ///

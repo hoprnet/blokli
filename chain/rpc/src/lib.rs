@@ -424,9 +424,11 @@ pub trait HoprIndexerRpcOperations {
     /// Retrieves the transaction count for any Ethereum address with smart detection.
     ///
     /// This method supports multiple address types:
-    /// - **EOAs (Externally Owned Accounts)**: Returns the transaction count via `eth_getTransactionCount`
+    /// - **EOAs (Externally Owned Accounts)**: Returns the transaction count via `eth_getTransactionCount` at the
+    ///   `pending` block, i.e. including transactions still in the mempool
     /// - **Safe contracts**: Returns the Safe's internal nonce via `nonce()` function
-    /// - **Other contracts**: Attempts `nonce()` call first, falls back to `eth_getTransactionCount` if it fails
+    /// - **Other contracts**: Attempts `nonce()` call first, falls back to `eth_getTransactionCount` at the `pending`
+    ///   block if it fails
     ///
     /// # Arguments
     /// * `address` - The Ethereum address (EOA or contract)
