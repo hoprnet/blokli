@@ -18,7 +18,7 @@ use crate::{
         ContractEventHandlers,
         test_utils::test_helpers::{
             CHANNELS_ADDR, ClonableMockOperations, MockIndexerRpcOperations, SAFE_INSTANCE_ADDR, TOKEN_ADDR,
-            XHOPR_TOKEN_ADDR, event_to_log, init_handlers_with_events,
+            XHOPR_TOKEN_ADDR, event_to_log, event_to_log_at_block, init_handlers_with_events,
         },
     },
     state::IndexerEvent,
@@ -115,11 +115,23 @@ async fn approval_reorg_signals_shutdown_and_skips_removed_logs() -> anyhow::Res
     let mut shutdown = state.subscribe_to_shutdown();
     let mut removed = event_to_log(approval(U256::MAX), *TOKEN_ADDR);
     removed.removed = true;
-    let mut replacement = event_to_log(approval(U256::ZERO), *TOKEN_ADDR);
-    replacement.block_number = 11;
+    let removed_block = BlockWithLogs {
+        block_id: removed.block_number,
+        logs: BTreeSet::from([removed]),
+    };
+    TestIndexer::store_block_logs(&db, &handlers, &removed_block).await?;
+    assert!(
+        TestIndexer::process_block(&db, &handlers, removed_block, false, true, &state, true)
+            .await
+            .is_some()
+    );
+    assert!(shutdown.try_recv().is_ok());
+    assert!(receiver.try_recv().is_err(), "removed Approval must not be published");
+
+    let replacement = event_to_log_at_block(approval(U256::ZERO), *TOKEN_ADDR, 11, 0, 0);
     let block = BlockWithLogs {
-        block_id: 11,
-        logs: BTreeSet::from([removed, replacement]),
+        block_id: replacement.block_number,
+        logs: BTreeSet::from([replacement]),
     };
     TestIndexer::store_block_logs(&db, &handlers, &block).await?;
     assert!(
@@ -128,7 +140,10 @@ async fn approval_reorg_signals_shutdown_and_skips_removed_logs() -> anyhow::Res
             .is_some()
     );
 
-    assert!(shutdown.try_recv().is_ok());
+    assert!(
+        shutdown.try_recv().is_err(),
+        "replacement must not signal another reorg"
+    );
     match receiver.try_recv()? {
         IndexerEvent::HoprApprovalUpdated { allowance, .. } => assert_eq!(allowance.amount().to_string(), "0"),
         event => panic!("Expected replacement Approval update, got {event:?}"),
