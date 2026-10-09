@@ -197,6 +197,28 @@ impl Drop for SubmissionReservation {
     }
 }
 
+/// Submission limit that refused a reservation, with its configured maximum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubmissionLimit {
+    /// `max_submitted_transactions` across all signers.
+    Global(usize),
+    /// `max_submitted_transactions_per_identity` for the transaction signer.
+    PerIdentity(usize),
+}
+
+/// Why [`TransactionStore::try_reserve_submission`] refused a reservation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SubmissionCapacityExhausted {
+    /// The limit that was reached.
+    pub limit: SubmissionLimit,
+    /// Recovered signer of the refused transaction, `None` if it could not be recovered.
+    pub identity: Option<[u8; 20]>,
+    /// Capacity in use across all signers.
+    pub submitted_total: usize,
+    /// Capacity in use by the refused transaction's signer.
+    pub submitted_for_identity: usize,
+}
+
 /// Thread-safe in-memory store for transaction records
 #[derive(Clone)]
 pub struct TransactionStore {
@@ -552,27 +574,37 @@ impl TransactionStore {
     /// a limit while they wait on the RPC. The cost is independent of how many
     /// transactions the store holds.
     ///
-    /// A limit of `0` means unbounded. Returns `None` when either limit is
-    /// reached; otherwise the capacity is held until the returned reservation is
-    /// dropped or passed to [`Self::insert_reserved`].
+    /// A limit of `0` means unbounded. Returns [`SubmissionCapacityExhausted`]
+    /// describing the limit that was reached; otherwise the capacity is held
+    /// until the returned reservation is dropped or passed to
+    /// [`Self::insert_reserved`].
     pub fn try_reserve_submission(
         &self,
         raw_transaction: &[u8],
         max_submitted: usize,
         max_per_identity: usize,
-    ) -> Option<SubmissionReservation> {
+    ) -> Result<SubmissionReservation, SubmissionCapacityExhausted> {
         // Recover the signer before locking so the critical section stays short.
         let identity = transaction_identity(raw_transaction);
         let mut counts = self.counts();
-        if max_submitted > 0 && counts.total >= max_submitted {
-            return None;
-        }
         let submitted_for_identity = counts.per_identity.get(&identity).copied().unwrap_or(0);
-        if max_per_identity > 0 && submitted_for_identity >= max_per_identity {
-            return None;
+        let limit = if max_submitted > 0 && counts.total >= max_submitted {
+            Some(SubmissionLimit::Global(max_submitted))
+        } else if max_per_identity > 0 && submitted_for_identity >= max_per_identity {
+            Some(SubmissionLimit::PerIdentity(max_per_identity))
+        } else {
+            None
+        };
+        if let Some(limit) = limit {
+            return Err(SubmissionCapacityExhausted {
+                limit,
+                identity,
+                submitted_total: counts.total,
+                submitted_for_identity,
+            });
         }
         counts.acquire(identity);
-        Some(SubmissionReservation {
+        Ok(SubmissionReservation {
             counts: self.submission_counts.clone(),
             identity,
             held: true,
@@ -1128,9 +1160,9 @@ mod tests {
             .insert(submitted_record(id, signed_raw_tx(&first, [0x11; 20], 0).await))
             .expect("insert failed");
         assert!(
-            !store
+            store
                 .try_reserve_submission(&signed_raw_tx(&first, [0x11; 20], 1).await, 0, 1)
-                .is_some()
+                .is_err()
         );
 
         // Replace the tracked record with one signed by somebody else. The count must follow
@@ -1143,13 +1175,13 @@ mod tests {
         assert!(
             store
                 .try_reserve_submission(&signed_raw_tx(&first, [0x11; 20], 2).await, 0, 1)
-                .is_some(),
+                .is_ok(),
             "the previous signer should no longer be charged"
         );
         assert!(
-            !store
+            store
                 .try_reserve_submission(&signed_raw_tx(&second, [0x11; 20], 1).await, 0, 1)
-                .is_some(),
+                .is_err(),
             "the replacement signer should now be charged"
         );
     }
@@ -1179,11 +1211,11 @@ mod tests {
         // A second transaction from the same signer to a different contract
         // still counts against that signer's quota.
         let second = signed_raw_tx(&signer, [0x22; 20], 1).await;
-        assert!(!store.try_reserve_submission(&second, 0, 1).is_some());
+        assert!(store.try_reserve_submission(&second, 0, 1).is_err());
 
         // A different signer is unaffected by the first signer's usage.
         let other = signed_raw_tx(&PrivateKeySigner::random(), [0x11; 20], 0).await;
-        assert!(store.try_reserve_submission(&other, 0, 1).is_some());
+        assert!(store.try_reserve_submission(&other, 0, 1).is_ok());
     }
 
     #[tokio::test]
@@ -1197,7 +1229,7 @@ mod tests {
         }
 
         let next = signed_raw_tx(&signer, [0x11; 20], 4).await;
-        assert!(store.try_reserve_submission(&next, 0, 0).is_some());
+        assert!(store.try_reserve_submission(&next, 0, 0).is_ok());
     }
 
     #[tokio::test]
@@ -1209,11 +1241,11 @@ mod tests {
 
         store.insert(submitted_record(id, raw.clone())).unwrap();
         assert_eq!(store.submitted_count(), 1);
-        assert!(!store.try_reserve_submission(&raw, 1, 1).is_some());
+        assert!(store.try_reserve_submission(&raw, 1, 1).is_err());
 
         store.update_status(id, TransactionStatus::Confirmed, None).unwrap();
         assert_eq!(store.submitted_count(), 0);
-        assert!(store.try_reserve_submission(&raw, 1, 1).is_some());
+        assert!(store.try_reserve_submission(&raw, 1, 1).is_ok());
 
         // The per-identity bucket is dropped once it reaches zero.
         assert!(store.counts().per_identity.is_empty());
@@ -1252,12 +1284,12 @@ mod tests {
         // An in-flight reservation counts against both limits, so a concurrent submission
         // cannot slip through while the first one is still being broadcast.
         let reservation = store.try_reserve_submission(&first, 1, 0).expect("capacity available");
-        assert!(store.try_reserve_submission(&second, 1, 0).is_none());
-        assert!(store.try_reserve_submission(&second, 0, 1).is_none());
+        assert!(store.try_reserve_submission(&second, 1, 0).is_err());
+        assert!(store.try_reserve_submission(&second, 0, 1).is_err());
 
         // A failed broadcast drops the reservation and gives the slot back.
         drop(reservation);
-        assert!(store.try_reserve_submission(&second, 1, 1).is_some());
+        assert!(store.try_reserve_submission(&second, 1, 1).is_ok());
         assert!(store.counts().per_identity.is_empty());
     }
 
@@ -1304,7 +1336,7 @@ mod tests {
 
         // A second undecodable envelope lands in the same `None` bucket rather
         // than creating an unbounded number of identities.
-        assert!(!store.try_reserve_submission(&[0xfe], 0, 1).is_some());
+        assert!(store.try_reserve_submission(&[0xfe], 0, 1).is_err());
         assert_eq!(store.counts().per_identity.len(), 1);
     }
 

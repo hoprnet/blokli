@@ -27,6 +27,15 @@ pub struct Finality(pub u16);
 #[derive(Debug, Clone, Copy)]
 pub struct GasMultiplier(pub f64);
 
+/// Lower bounds, in wei, for the EIP-1559 fee estimates exposed by chainInfo
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GasFeeFloors {
+    /// Minimum `maxPriorityFeePerGas`
+    pub min_priority_fee_per_gas: u128,
+    /// Minimum `maxFeePerGas`
+    pub min_max_fee_per_gas: u128,
+}
+
 /// Wrapper type for chain ID to avoid type confusion in context
 #[derive(Debug, Clone, Copy)]
 pub struct ChainId(pub u64);
@@ -58,6 +67,7 @@ pub fn build_version_registry<R: HttpRequestor + 'static + Clone>(
     expected_block_time: u64,
     finality: u16,
     gas_multiplier: f64,
+    gas_fee_floors: GasFeeFloors,
     indexer_state: IndexerState,
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
@@ -74,6 +84,7 @@ pub fn build_version_registry<R: HttpRequestor + 'static + Clone>(
         expected_block_time,
         finality,
         gas_multiplier,
+        gas_fee_floors,
         indexer_state,
         transaction_executor,
         transaction_store,
@@ -184,6 +195,7 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
     expected_block_time: u64,
     finality: u16,
     gas_multiplier: f64,
+    gas_fee_floors: GasFeeFloors,
     indexer_state: IndexerState,
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
@@ -201,6 +213,7 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
         .data(ExpectedBlockTime(expected_block_time))
         .data(Finality(finality))
         .data(GasMultiplier(gas_multiplier))
+        .data(gas_fee_floors)
         .data(indexer_state)
         .data(transaction_executor)
         .data(transaction_store)
@@ -288,6 +301,7 @@ pub fn export_schema_sdl<R: HttpRequestor + 'static + Clone>(
         5,   // Placeholder expected block time
         8,   // Placeholder finality
         1.0, // Placeholder gas multiplier
+        GasFeeFloors::default(),
         indexer_state,
         transaction_executor,
         transaction_store,
