@@ -132,6 +132,8 @@ impl Args {
             ("BLOKLI_API_BIND_ADDRESS", "api.bind_address"),
             ("BLOKLI_API_PLAYGROUND_ENABLED", "api.playground_enabled"),
             ("BLOKLI_API_GAS_MULTIPLIER", "api.gas_multiplier"),
+            ("BLOKLI_API_MIN_PRIORITY_FEE_PER_GAS", "api.min_priority_fee_per_gas"),
+            ("BLOKLI_API_MIN_MAX_FEE_PER_GAS", "api.min_max_fee_per_gas"),
             (
                 "BLOKLI_API_TRANSACTIONS_MAX_SUBMITTED_TRANSACTIONS",
                 "api.transactions.max_submitted_transactions",
@@ -246,6 +248,13 @@ impl Args {
         if !config.api.gas_multiplier.is_finite() || config.api.gas_multiplier < 1.0 {
             return Err(ConfigError::Parse(
                 "api.gas_multiplier must be a finite number greater than or equal to 1".to_string(),
+            )
+            .into());
+        }
+
+        if config.api.min_max_fee_per_gas < config.api.min_priority_fee_per_gas {
+            return Err(ConfigError::Parse(
+                "api.min_max_fee_per_gas must be greater than or equal to api.min_priority_fee_per_gas".to_string(),
             )
             .into());
         }
@@ -1001,6 +1010,49 @@ mod tests {
                 "unexpected error: {error}"
             );
         });
+    }
+
+    #[test]
+    fn test_max_fee_floor_below_priority_fee_floor_rejected() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "jura-dev"
+            rpc_url = "http://localhost:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+            [api]
+            min_priority_fee_per_gas = 2000
+            min_max_fee_per_gas = 1000
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        temp_env::with_vars(
+            [
+                ("BLOKLI_API_MIN_PRIORITY_FEE_PER_GAS", None::<&str>),
+                ("BLOKLI_API_MIN_MAX_FEE_PER_GAS", None::<&str>),
+            ],
+            || {
+                let args = Args {
+                    verbose: 0,
+                    config: Some(path),
+                    command: None,
+                };
+                let error = args
+                    .load_config(false)
+                    .expect_err("a max fee floor below the priority fee floor should be invalid");
+                assert!(
+                    error.to_string().contains(
+                        "api.min_max_fee_per_gas must be greater than or equal to api.min_priority_fee_per_gas"
+                    ),
+                    "unexpected error: {error}"
+                );
+            },
+        );
     }
 
     #[test]

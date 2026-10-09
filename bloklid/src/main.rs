@@ -352,6 +352,8 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 contract_addresses: contracts,
                 expected_block_time,
                 gas_multiplier: api_config.gas_multiplier,
+                min_priority_fee_per_gas: api_config.min_priority_fee_per_gas,
+                min_max_fee_per_gas: api_config.min_max_fee_per_gas,
                 sse_keepalive: blokli_api::config::SseKeepAliveConfig {
                     enabled: api_config.sse_keepalive.enabled,
                     interval: api_config.sse_keepalive.interval,
