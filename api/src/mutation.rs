@@ -176,7 +176,7 @@ fn executor_error_to_send_result(error: TransactionExecutorError) -> SendTransac
         TransactionExecutorError::ValidationFailed(_) => {
             SendTransactionResult::RpcError(errors::rpc_validation_failed(&error))
         }
-        TransactionExecutorError::RpcError(msg) => SendTransactionResult::RpcError(errors::rpc_error_with_message(msg)),
+        TransactionExecutorError::RpcError(msg) => SendTransactionResult::RpcError(errors::rpc_broadcast_error(msg)),
         _ => SendTransactionResult::RpcError(errors::rpc_internal_error(&error)),
     }
 }
@@ -194,7 +194,7 @@ fn executor_error_to_async_result(error: TransactionExecutorError) -> SendTransa
             SendTransactionAsyncResult::RpcError(errors::rpc_validation_failed(&error))
         }
         TransactionExecutorError::RpcError(msg) => {
-            SendTransactionAsyncResult::RpcError(errors::rpc_error_with_message(msg))
+            SendTransactionAsyncResult::RpcError(errors::rpc_broadcast_error(msg))
         }
         TransactionExecutorError::OverloadedError => {
             SendTransactionAsyncResult::Overloaded(errors::submission_capacity_exceeded())
@@ -216,7 +216,7 @@ fn executor_error_to_sync_result(error: TransactionExecutorError) -> SendTransac
             SendTransactionSyncResult::RpcError(errors::rpc_validation_failed(&error))
         }
         TransactionExecutorError::RpcError(msg) => {
-            SendTransactionSyncResult::RpcError(errors::rpc_error_with_message(msg))
+            SendTransactionSyncResult::RpcError(errors::rpc_broadcast_error(msg))
         }
         TransactionExecutorError::Timeout(msg) => SendTransactionSyncResult::Timeout(errors::timeout_error(msg)),
         _ => SendTransactionSyncResult::RpcError(errors::rpc_internal_error(&error)),

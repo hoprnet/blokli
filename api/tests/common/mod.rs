@@ -20,7 +20,7 @@ use blokli_api::{
     mutation::MutationRoot,
     query::QueryRoot,
     readiness::ReadinessChecker,
-    schema::build_schema,
+    schema::{GasFeeFloors, build_schema},
     server::build_app,
     subscription::SubscriptionRoot,
 };
@@ -146,6 +146,7 @@ fn build_subscription_test_schema(
         1,
         3,
         1.0,
+        GasFeeFloors::default(),
         indexer_state,
         transaction_executor,
         transaction_store,
@@ -289,6 +290,7 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
         config.expected_block_time.as_secs(),
         3, // Test finality value
         1.0,
+        GasFeeFloors::default(),
         indexer_state,
         transaction_executor.clone(),
         transaction_store.clone(),

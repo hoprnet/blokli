@@ -42,7 +42,8 @@ use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, Quer
 use tracing::warn;
 
 use crate::{
-    conversions::transaction_from_record, errors, mutation::TransactionResult, validation::validate_eth_address,
+    conversions::transaction_from_record, errors, mutation::TransactionResult, schema::GasFeeFloors,
+    validation::validate_eth_address,
 };
 
 /// Result type for HOPR balance queries
@@ -202,6 +203,19 @@ fn scale_wei_by_multiplier(value: u128, multiplier: f64) -> u128 {
         .saturating_mul(numerator)
         .saturating_add(denominator.saturating_sub(1))
         / denominator
+}
+
+/// Raise `(max_fee_per_gas, max_priority_fee_per_gas)` to the configured floors.
+///
+/// The estimate's headroom for base fee growth (`max_fee - priority_fee`) is kept on top of
+/// the raised priority fee, so lifting the priority fee never eats into it.
+fn apply_gas_fee_floors(max_fee_per_gas: u128, max_priority_fee_per_gas: u128, floors: GasFeeFloors) -> (u128, u128) {
+    let base_fee_headroom = max_fee_per_gas.saturating_sub(max_priority_fee_per_gas);
+    let priority_fee = max_priority_fee_per_gas.max(floors.min_priority_fee_per_gas);
+    let max_fee = priority_fee
+        .saturating_add(base_fee_headroom)
+        .max(floors.min_max_fee_per_gas);
+    (max_fee, priority_fee)
 }
 
 fn safe_from_current_row(
@@ -946,9 +960,10 @@ impl QueryRoot {
     /// `TransactionCountResult` that indicates success, an invalid address error, or a query failure.
     ///
     /// This method supports multiple address types:
-    /// - **EOAs (Externally Owned Accounts)**: Returns the transaction count via `eth_getTransactionCount`
+    /// - **EOAs (Externally Owned Accounts)**: Returns the transaction count via `eth_getTransactionCount` at the
+    ///   `pending` block, i.e. including transactions still in the mempool: the next nonce to sign with
     /// - **Safe contracts**: Returns the Safe's internal nonce via `nonce()` function
-    /// - **Other contracts**: Attempts `nonce()` call, falls back to `eth_getTransactionCount`
+    /// - **Other contracts**: Attempts `nonce()` call, falls back to `eth_getTransactionCount` at the `pending` block
     ///
     /// # Returns
     ///
@@ -1280,7 +1295,8 @@ impl QueryRoot {
     /// The returned `ChainInfo` contains the last indexed block number, the configured chain ID
     /// and network name, human-readable token values for ticket price and key binding fee,
     /// live gas fee estimates from RPC (`gasPrice`, `maxFeePerGas`, `maxPriorityFeePerGas`) in wei,
-    /// where `maxFeePerGas` and `maxPriorityFeePerGas` are scaled by `api.gas_multiplier`,
+    /// where `maxFeePerGas` and `maxPriorityFeePerGas` are scaled by `api.gas_multiplier` and then
+    /// raised to `api.min_max_fee_per_gas` and `api.min_priority_fee_per_gas`,
     /// minimum incoming ticket winning probability, optional 32-byte domain separator hashes
     /// for channels/ledger/safe registry as `Hex32`, a map of contract addresses, and an optional
     /// channel closure grace period in seconds.
@@ -1338,6 +1354,8 @@ impl QueryRoot {
                 return ChainInfoResult::QueryFailed(errors::context_error("gas multiplier", format!("{:?}", e)));
             }
         };
+        // Absent in schemas built without floors, such as some tests: no floor applies then.
+        let gas_fee_floors = ctx.data_opt::<GasFeeFloors>().copied().unwrap_or_default();
 
         // Fetch chain_info from database (assuming single row with id=1)
         let chain_info = match chain_info::Entity::find_by_id(1).one(db).await {
@@ -1405,9 +1423,13 @@ impl QueryRoot {
 
             match eip1559_result {
                 Ok(fees) => {
-                    max_fee_per_gas = Some(scale_wei_by_multiplier(fees.max_fee_per_gas, gas_multiplier).to_string());
-                    max_priority_fee_per_gas =
-                        Some(scale_wei_by_multiplier(fees.max_priority_fee_per_gas, gas_multiplier).to_string());
+                    let (max_fee, priority_fee) = apply_gas_fee_floors(
+                        scale_wei_by_multiplier(fees.max_fee_per_gas, gas_multiplier),
+                        scale_wei_by_multiplier(fees.max_priority_fee_per_gas, gas_multiplier),
+                        gas_fee_floors,
+                    );
+                    max_fee_per_gas = Some(max_fee.to_string());
+                    max_priority_fee_per_gas = Some(priority_fee.to_string());
                 }
                 Err(e) => {
                     warn!(error = %e, "failed to fetch eip1559 fee estimate for chain_info");
@@ -1719,12 +1741,12 @@ mod tests {
     };
 
     use super::{
-        QueryRoot, SAFES_BALANCE_MAX_SAFES, check_safes_balance_cap, owners_for_safe, safe_from_current_row,
-        scale_wei_by_multiplier,
+        QueryRoot, SAFES_BALANCE_MAX_SAFES, apply_gas_fee_floors, check_safes_balance_cap, owners_for_safe,
+        safe_from_current_row, scale_wei_by_multiplier,
     };
     use crate::{
         errors,
-        schema::{ChainId, GasMultiplier, NetworkName},
+        schema::{ChainId, GasFeeFloors, GasMultiplier, NetworkName},
     };
 
     fn random_address() -> Address {
@@ -1759,6 +1781,37 @@ mod tests {
     #[test]
     fn test_scale_wei_by_multiplier_rounds_up() {
         assert_eq!(scale_wei_by_multiplier(3, 1.5), 5);
+    }
+
+    const FLOORS: GasFeeFloors = GasFeeFloors {
+        min_priority_fee_per_gas: 100,
+        min_max_fee_per_gas: 5_000_000,
+    };
+
+    #[test]
+    fn test_gas_fee_floors_lift_floor_level_estimate() {
+        // Typical Gnosis estimate: 1 wei tip, 2 × 10 wei base fee headroom
+        assert_eq!(apply_gas_fee_floors(21, 1, FLOORS), (5_000_000, 100));
+    }
+
+    #[test]
+    fn test_gas_fee_floors_keep_base_fee_headroom() {
+        // Base fee spike: 2 × 450_000 wei headroom must survive the priority fee lift
+        assert_eq!(apply_gas_fee_floors(900_001, 1, FLOORS), (5_000_000, 100));
+        assert_eq!(apply_gas_fee_floors(80_000_001, 1, FLOORS), (80_000_100, 100));
+    }
+
+    #[test]
+    fn test_gas_fee_floors_leave_higher_estimates_unchanged() {
+        assert_eq!(
+            apply_gas_fee_floors(3_000_000_000, 1_000_000_000, FLOORS),
+            (3_000_000_000, 1_000_000_000)
+        );
+    }
+
+    #[test]
+    fn test_gas_fee_floors_default_is_a_no_op() {
+        assert_eq!(apply_gas_fee_floors(21, 1, GasFeeFloors::default()), (21, 1));
     }
 
     #[test]
