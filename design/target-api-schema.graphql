@@ -2043,6 +2043,24 @@ Result type for Safe HOPR allowance queries
 union SafeHoprAllowanceResult = SafeHoprAllowance | InvalidAddressError | QueryFailedError
 
 """
+A Safe's absolute wxHOPR allowance to the configured Channels contract.
+"""
+type SafeHoprApproval {
+	"""
+	Safe contract address that owns the tokens (0x-prefixed hexadecimal).
+	"""
+	owner: String!
+	"""
+	Configured Channels contract address (0x-prefixed hexadecimal).
+	"""
+	spender: String!
+	"""
+	Absolute allowance, using the same lossless token string as safeHoprAllowance (for example, "1 wxHOPR").
+	"""
+	allowance: TokenValueString!
+}
+
+"""
 Result type for deprecated single-safe queries (`safe`, `safeByChainKey`, `safeByRegisteredNode`).
 """
 union SafeResult = Safe | InvalidAddressError | QueryFailedError
@@ -2356,6 +2374,24 @@ Result type for the services list query
 union ServicesResult = ServicesList | MissingFilterError | QueryFailedError
 
 type SubscriptionRoot {
+	"""
+	Subscribe to a Safe's wxHOPR allowance to the configured Channels contract.
+	
+	Registers event receivers before reading the current allowance through RPC, then emits
+	that snapshot followed by matching committed Approval updates from the configured token.
+	Buffered updates may overlap with or predate the snapshot because RPC state can be ahead
+	of finalized indexing. Every value is an absolute allowance; re-read safeHoprAllowance
+	before submitting a transaction rather than treating an event as authoritative current state.
+	
+	RPC failure is reported as an error. Lag reports SUBSCRIPTION_LAGGED and ends the stream;
+	reorganization or channel closure also ends it. Reconnect to receive a fresh snapshot.
+	"""
+	safeHoprApproval(
+		"""
+		Safe contract address (hexadecimal, with or without 0x prefix)
+		"""
+		address: String!
+	): SafeHoprApproval!
 	"""
 	Stream indexed Curvy `PendingNotes` entries with an optional historical phase.
 	"""

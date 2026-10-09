@@ -262,6 +262,11 @@ pub mod messages {
         format!("{stream} lagged and missed {missed} events; reconnect to resume from a persisted position")
     }
 
+    /// Lag error for subscriptions that resynchronize with a fresh snapshot.
+    pub fn subscription_snapshot_lagged(stream: &str, missed: impl std::fmt::Display) -> String {
+        format!("{stream} lagged and missed {missed} events; reconnect to receive a fresh snapshot")
+    }
+
     /// Resource limit exceeded message
     pub fn limit_exceeded(resource: &str, actual: impl std::fmt::Display, max: impl std::fmt::Display) -> String {
         format!(
@@ -657,6 +662,15 @@ pub fn graphql_error(error: QueryFailedError) -> async_graphql::Error {
 /// Creates a top-level error when a subscription cannot guarantee lossless delivery.
 pub fn graphql_subscription_lagged_error(stream: &str, missed: impl std::fmt::Display) -> async_graphql::Error {
     async_graphql::Error::new(messages::subscription_lagged(stream, missed))
+        .extend_with(|_, extensions| extensions.set("code", codes::SUBSCRIPTION_LAGGED))
+}
+
+/// Creates a lag error for a stream that resumes with a fresh snapshot rather than a persisted position.
+pub fn graphql_subscription_snapshot_lagged_error(
+    stream: &str,
+    missed: impl std::fmt::Display,
+) -> async_graphql::Error {
+    async_graphql::Error::new(messages::subscription_snapshot_lagged(stream, missed))
         .extend_with(|_, extensions| extensions.set("code", codes::SUBSCRIPTION_LAGGED))
 }
 

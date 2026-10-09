@@ -912,6 +912,17 @@ pub struct SafeHoprAllowance {
     pub allowance: TokenValueString,
 }
 
+/// A Safe's absolute wxHOPR allowance to the configured Channels contract.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct SafeHoprApproval {
+    /// Safe contract address that owns the tokens (0x-prefixed hexadecimal).
+    pub owner: String,
+    /// Configured Channels contract address (0x-prefixed hexadecimal).
+    pub spender: String,
+    /// Absolute allowance, using the same lossless token string as safeHoprAllowance (for example, "1 wxHOPR").
+    pub allowance: TokenValueString,
+}
+
 /// Filter for ticket redemption stats queries.
 ///
 /// At least one field must be provided. Providing both fields restricts the result
