@@ -9,7 +9,7 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use blokli_chain_rpc::{rpc::RpcOperations, transport::HttpRequestor};
 use hopr_bindings::exports::alloy::{
-    primitives::{B256, Bytes},
+    primitives::{Address as AlloyAddress, B256, Bytes},
     providers::Provider,
 };
 use hopr_types::crypto::types::Hash;
@@ -212,6 +212,34 @@ impl<R: HttpRequestor + 'static + Clone> ReceiptProvider for RpcAdapter<R> {
             // successful trace without a decodable reason; confirmation never waits on it.
             Err(e) => Err(format!("debug_traceTransaction failed: {e}")),
         }
+    }
+
+    async fn is_transaction_known(&self, tx_hash: Hash) -> Result<bool, String> {
+        let b256_hash = B256::from_slice(tx_hash.as_ref());
+        self.rpc
+            .provider
+            .get_transaction_by_hash(b256_hash)
+            .await
+            .map(|transaction| transaction.is_some())
+            .map_err(|e| format!("Transaction lookup error: {e}"))
+    }
+
+    async fn get_mined_nonce(&self, address: [u8; 20]) -> Result<u64, String> {
+        self.rpc
+            .provider
+            .get_transaction_count(AlloyAddress::from(address))
+            .latest()
+            .await
+            .map_err(|e| format!("Nonce lookup error: {e}"))
+    }
+
+    async fn get_pending_nonce(&self, address: [u8; 20]) -> Result<u64, String> {
+        self.rpc
+            .provider
+            .get_transaction_count(AlloyAddress::from(address))
+            .pending()
+            .await
+            .map_err(|e| format!("Pending nonce lookup error: {e}"))
     }
 }
 
