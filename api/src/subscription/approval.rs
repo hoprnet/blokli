@@ -11,6 +11,9 @@ use tracing::{info, warn};
 
 use crate::errors;
 
+#[cfg(test)]
+mod tests;
+
 fn approval(owner: Address, spender: Address, allowance: HoprBalance) -> SafeHoprApproval {
     SafeHoprApproval {
         owner: owner.to_hex(),
