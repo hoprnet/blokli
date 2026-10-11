@@ -9,13 +9,15 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use blokli_chain_rpc::{rpc::RpcOperations, transport::HttpRequestor};
 use hopr_bindings::exports::alloy::{
-    primitives::{B256, Bytes},
+    primitives::{Address as AlloyAddress, B256, Bytes},
     providers::Provider,
 };
-use hopr_types::crypto::types::Hash;
-use tracing::{debug, error};
+use hopr_types::{crypto::types::Hash, primitive::prelude::Address};
+use tracing::{debug, error, info, warn};
 
 use crate::{
+    broadcast_error::{BroadcastRejection, classify_broadcast_error},
+    safe_execution::{decode_transaction_signer, decode_transaction_summary},
     transaction_executor::{ConfirmationError, RpcClient},
     transaction_monitor::{ReceiptLog, ReceiptProvider, TransactionReceipt},
 };
@@ -60,7 +62,58 @@ impl<R: HttpRequestor + 'static + Clone> RpcClient for RpcAdapter<R> {
                 Ok(hash)
             }
             Err(e) => {
-                error!(raw_tx_len, error = %e, "failed to send raw transaction");
+                let rejection = classify_broadcast_error(&e.to_string());
+                let summary = decode_transaction_summary(&bytes);
+
+                // The node already holds this exact transaction, e.g. from an earlier attempt
+                // whose response was lost: track it like a fresh one. Nodes may also answer
+                // "already known" from a hash cache that includes rejected transactions, so
+                // only trust the claim once the node actually returns the transaction.
+                if let (Some(BroadcastRejection::AlreadyKnown), Some(summary)) = (rejection, summary) {
+                    match self.is_transaction_known(summary.transaction_hash).await {
+                        Ok(true) => {
+                            info!(
+                                tx_hash = %summary.transaction_hash,
+                                nonce = summary.nonce,
+                                "transaction already known to the RPC node, treating it as submitted"
+                            );
+                            return Ok(summary.transaction_hash);
+                        }
+                        Ok(false) => {
+                            warn!(
+                                tx_hash = %summary.transaction_hash,
+                                nonce = summary.nonce,
+                                error = %e,
+                                "RPC node reported the transaction as already known but holds no record of it"
+                            );
+                            return Err(format!(
+                                "RPC error: the node reported the transaction as known but holds no record of it, so \
+                                 an earlier submission was likely rejected (tx hash {})",
+                                summary.transaction_hash
+                            ));
+                        }
+                        Err(lookup_error) => {
+                            warn!(
+                                tx_hash = %summary.transaction_hash,
+                                error = %lookup_error,
+                                "could not verify an already-known transaction, reporting the rejection"
+                            );
+                        }
+                    }
+                }
+
+                error!(
+                    raw_tx_len,
+                    rejection = rejection.map_or("unclassified", BroadcastRejection::label),
+                    signer = ?decode_transaction_signer(&bytes).map(Address::from),
+                    tx_hash = ?summary.map(|tx| tx.transaction_hash),
+                    nonce = ?summary.map(|tx| tx.nonce),
+                    to = ?summary.and_then(|tx| tx.to),
+                    max_fee_per_gas = ?summary.map(|tx| tx.max_fee_per_gas),
+                    max_priority_fee_per_gas = ?summary.and_then(|tx| tx.max_priority_fee_per_gas),
+                    error = %e,
+                    "failed to send raw transaction"
+                );
                 Err(format!("RPC error: {}", e))
             }
         }
@@ -212,6 +265,34 @@ impl<R: HttpRequestor + 'static + Clone> ReceiptProvider for RpcAdapter<R> {
             // successful trace without a decodable reason; confirmation never waits on it.
             Err(e) => Err(format!("debug_traceTransaction failed: {e}")),
         }
+    }
+
+    async fn is_transaction_known(&self, tx_hash: Hash) -> Result<bool, String> {
+        let b256_hash = B256::from_slice(tx_hash.as_ref());
+        self.rpc
+            .provider
+            .get_transaction_by_hash(b256_hash)
+            .await
+            .map(|transaction| transaction.is_some())
+            .map_err(|e| format!("Transaction lookup error: {e}"))
+    }
+
+    async fn get_mined_nonce(&self, address: [u8; 20]) -> Result<u64, String> {
+        self.rpc
+            .provider
+            .get_transaction_count(AlloyAddress::from(address))
+            .latest()
+            .await
+            .map_err(|e| format!("Nonce lookup error: {e}"))
+    }
+
+    async fn get_pending_nonce(&self, address: [u8; 20]) -> Result<u64, String> {
+        self.rpc
+            .provider
+            .get_transaction_count(AlloyAddress::from(address))
+            .pending()
+            .await
+            .map_err(|e| format!("Pending nonce lookup error: {e}"))
     }
 }
 

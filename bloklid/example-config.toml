@@ -157,6 +157,17 @@ playground_enabled = false
 # Must be greater than or equal to 1.
 gas_multiplier = 1.0
 
+# Lower bounds, in wei, for the EIP-1559 fees exposed by chainInfo, applied after
+# gas_multiplier. On Gnosis the RPC estimate is often a 1 wei priority fee with a
+# max fee of only twice the (tiny) base fee, which leaves transactions stuck when
+# blocks fill up. Raising the priority fee keeps the estimate's base fee headroom.
+# Nodes must hold gas_limit x maxFeePerGas upfront (10M gas when signed by hoprd),
+# so keep min_max_fee_per_gas low: 0.005 gwei needs 0.00005 xDAI. The max fee
+# floor only caps the price: transactions pay base fee + priority fee.
+# min_max_fee_per_gas must be greater than or equal to min_priority_fee_per_gas.
+min_max_fee_per_gas      = 5000000 # 0.005 gwei
+min_priority_fee_per_gas = 100     # 100 wei
+
 # Maximum GraphQL query nesting depth. Queries exceeding this are rejected.
 # Real queries reach depth ~4; the default of 8 gives ample headroom.
 max_query_depth = 8

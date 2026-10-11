@@ -23,7 +23,7 @@ use crate::{
         record_safe_execution, record_safe_inspection_retry, record_trace_failure, record_trace_queue_saturated,
         record_trace_timeout,
     },
-    safe_execution::{decode_transaction_to_address, inspect_safe_execution_logs},
+    safe_execution::{decode_transaction_signer_and_nonce, decode_transaction_to_address, inspect_safe_execution_logs},
     transaction_store::{SafeExecutionResult, TransactionStatus, TransactionStore},
 };
 
@@ -71,6 +71,92 @@ pub trait ReceiptProvider: Send + Sync {
     /// Returns `Ok(Some(reason))` if extracted, `Ok(None)` if tracing
     /// succeeded but no decodable reason was found, or `Err` on RPC failure.
     async fn get_revert_reason(&self, tx_hash: Hash) -> Result<Option<String>, String>;
+
+    /// Whether the RPC node still knows the transaction, mined or pending.
+    ///
+    /// Returns `Ok(false)` when the node has no record of it, which for an unmined
+    /// transaction means it was dropped from the mempool or replaced.
+    async fn is_transaction_known(&self, tx_hash: Hash) -> Result<bool, String>;
+
+    /// Number of transactions mined from `address` as of the latest block, i.e. the
+    /// next nonce the account can use.
+    async fn get_mined_nonce(&self, address: [u8; 20]) -> Result<u64, String>;
+
+    /// Next nonce of `address` counting the transactions the node holds as executable
+    /// in its mempool, i.e. the first nonce missing after the contiguous pending run.
+    async fn get_pending_nonce(&self, address: [u8; 20]) -> Result<u64, String>;
+}
+
+/// Why a submitted transaction has not been mined by the time it times out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnminedDiagnosis {
+    /// The node no longer knows the transaction and its nonce was consumed by another one.
+    Replaced,
+    /// The node no longer knows the transaction and its nonce is still unused.
+    Dropped,
+    /// The node holds the transaction, but an earlier nonce of the signer is neither mined
+    /// nor pending.
+    NonceGap { nonce: u64, missing_nonce: u64 },
+    /// The node holds the transaction and every earlier nonce is mined or pending: it is
+    /// underpriced or queued behind earlier pending transactions.
+    Pending,
+    /// The transaction was mined after the receipt lookup; the next poll confirms it.
+    MinedSinceCheck,
+    /// The diagnosis could not be established.
+    Unknown,
+}
+
+impl UnminedDiagnosis {
+    fn label(self) -> &'static str {
+        match self {
+            UnminedDiagnosis::Replaced => "replaced",
+            UnminedDiagnosis::Dropped => "dropped",
+            UnminedDiagnosis::NonceGap { .. } => "nonce_gap",
+            UnminedDiagnosis::Pending => "pending",
+            UnminedDiagnosis::MinedSinceCheck => "mined_since_check",
+            UnminedDiagnosis::Unknown => "unknown",
+        }
+    }
+
+    fn message(self) -> String {
+        match self {
+            UnminedDiagnosis::Replaced => "Transaction was not mined: another transaction with the same nonce from \
+                                           the same signer was mined instead (replaced)"
+                .to_string(),
+            UnminedDiagnosis::Dropped => {
+                "Transaction was not mined: the RPC node no longer knows it (dropped from the mempool)".to_string()
+            }
+            UnminedDiagnosis::NonceGap { nonce, missing_nonce } => format!(
+                "Transaction was not mined: its nonce {nonce} waits for the signer's nonce {missing_nonce}, which is \
+                 neither mined nor pending (nonce gap)"
+            ),
+            UnminedDiagnosis::Pending => "Transaction timed out waiting for confirmation: still pending in the \
+                                          mempool (possibly underpriced)"
+                .to_string(),
+            UnminedDiagnosis::MinedSinceCheck | UnminedDiagnosis::Unknown => {
+                "Transaction timed out waiting for confirmation".to_string()
+            }
+        }
+    }
+}
+
+/// Classify an unmined transaction from whether the node still knows it and how its nonce
+/// compares to the signer's mined and pending next nonces.
+///
+/// A nonce ahead of the mined one is only a gap when the pending run does not reach it:
+/// with nonce 5 mined and 5, 6, 7 pending, nonce 7 is merely queued behind 5 and 6.
+fn classify_unmined(known: bool, nonce: u64, mined_nonce: u64, pending_nonce: u64) -> UnminedDiagnosis {
+    // Some nodes answer the pending count from the latest block only; never go below it.
+    let missing_nonce = pending_nonce.max(mined_nonce);
+    match (known, nonce < mined_nonce) {
+        (true, true) => UnminedDiagnosis::MinedSinceCheck,
+        (true, false) if nonce > mined_nonce && nonce >= missing_nonce => {
+            UnminedDiagnosis::NonceGap { nonce, missing_nonce }
+        }
+        (true, false) => UnminedDiagnosis::Pending,
+        (false, true) => UnminedDiagnosis::Replaced,
+        (false, false) => UnminedDiagnosis::Dropped,
+    }
 }
 
 /// Trait for resolving a transaction target address to a Safe contract address.
@@ -104,6 +190,18 @@ impl ReceiptProvider for NoSafeEnrichment {
     }
 
     async fn get_revert_reason(&self, _tx_hash: Hash) -> Result<Option<String>, String> {
+        unreachable!("NoSafeEnrichment is behind Option::None")
+    }
+
+    async fn is_transaction_known(&self, _tx_hash: Hash) -> Result<bool, String> {
+        unreachable!("NoSafeEnrichment is behind Option::None")
+    }
+
+    async fn get_mined_nonce(&self, _address: [u8; 20]) -> Result<u64, String> {
+        unreachable!("NoSafeEnrichment is behind Option::None")
+    }
+
+    async fn get_pending_nonce(&self, _address: [u8; 20]) -> Result<u64, String> {
         unreachable!("NoSafeEnrichment is behind Option::None")
     }
 }
@@ -398,11 +496,22 @@ impl<R: ReceiptProvider + 'static, S: SafeAddressChecker> TransactionMonitor<R, 
             Ok(Ok(None)) => {
                 let elapsed = chrono::Utc::now().signed_duration_since(record.submitted_at);
                 if elapsed.to_std().ok() > Some(self.config.timeout) {
-                    warn!(id = %record.id, tx_hash = %tx_hash, "Transaction timed out");
+                    let diagnosis = self.diagnose_unmined(&record).await;
+                    if diagnosis == UnminedDiagnosis::MinedSinceCheck {
+                        debug!(id = %record.id, tx_hash = %tx_hash, "Transaction mined since the receipt lookup");
+                        return;
+                    }
+                    warn!(
+                        id = %record.id,
+                        tx_hash = %tx_hash,
+                        diagnosis = diagnosis.label(),
+                        "Transaction timed out: {}",
+                        diagnosis.message()
+                    );
                     if let Err(e) = self.transaction_store.update_status(
                         record.id,
                         TransactionStatus::Timeout,
-                        Some("Transaction timed out waiting for confirmation".to_string()),
+                        Some(diagnosis.message()),
                     ) {
                         error!(
                             id = %record.id,
@@ -441,6 +550,44 @@ impl<R: ReceiptProvider + 'static, S: SafeAddressChecker> TransactionMonitor<R, 
             return Ok(None);
         };
         inspect_safe_execution_logs_for_record(record, safe_checker.as_ref(), logs).await
+    }
+
+    /// Explain why a timed-out transaction was not mined, from the node's view of the
+    /// transaction and of the signer's nonce. Any lookup failure yields `Unknown`.
+    async fn diagnose_unmined(&self, record: &crate::transaction_store::TransactionRecord) -> UnminedDiagnosis {
+        let Some((signer, nonce)) = decode_transaction_signer_and_nonce(&record.raw_transaction) else {
+            return UnminedDiagnosis::Unknown;
+        };
+
+        let known = timeout(
+            self.config.request_timeout,
+            self.receipt_provider.is_transaction_known(record.transaction_hash),
+        );
+        let mined_nonce = timeout(
+            self.config.request_timeout,
+            self.receipt_provider.get_mined_nonce(signer),
+        );
+        let pending_nonce = timeout(
+            self.config.request_timeout,
+            self.receipt_provider.get_pending_nonce(signer),
+        );
+
+        match tokio::join!(known, mined_nonce, pending_nonce) {
+            (Ok(Ok(known)), Ok(Ok(mined_nonce)), Ok(Ok(pending_nonce))) => {
+                classify_unmined(known, nonce, mined_nonce, pending_nonce)
+            }
+            (known, mined_nonce, pending_nonce) => {
+                debug!(
+                    id = %record.id,
+                    tx_hash = %record.transaction_hash,
+                    ?known,
+                    ?mined_nonce,
+                    ?pending_nonce,
+                    "Could not diagnose why the transaction was not mined"
+                );
+                UnminedDiagnosis::Unknown
+            }
+        }
     }
 
     #[cfg(test)]
@@ -610,6 +757,12 @@ mod tests {
         hanging_revert_reasons: Arc<DashMap<Hash, ()>>,
         // Transactions whose receipt lookup never completes
         hanging_statuses: Arc<DashMap<Hash, ()>>,
+        // Transactions the node still knows (absent = unknown to the node)
+        known_transactions: Arc<DashMap<Hash, ()>>,
+        // Next nonce per signer (absent = 0)
+        mined_nonces: Arc<DashMap<[u8; 20], u64>>,
+        // Next nonce per signer including the mempool (absent = mined nonce)
+        pending_nonces: Arc<DashMap<[u8; 20], u64>>,
         receipt_calls: Arc<AtomicUsize>,
     }
 
@@ -621,8 +774,23 @@ mod tests {
                 revert_reasons: Arc::new(DashMap::new()),
                 hanging_revert_reasons: Arc::new(DashMap::new()),
                 hanging_statuses: Arc::new(DashMap::new()),
+                known_transactions: Arc::new(DashMap::new()),
+                mined_nonces: Arc::new(DashMap::new()),
+                pending_nonces: Arc::new(DashMap::new()),
                 receipt_calls: Arc::new(AtomicUsize::new(0)),
             }
+        }
+
+        fn set_known(&self, tx_hash: Hash) {
+            self.known_transactions.insert(tx_hash, ());
+        }
+
+        fn set_mined_nonce(&self, address: [u8; 20], nonce: u64) {
+            self.mined_nonces.insert(address, nonce);
+        }
+
+        fn set_pending_nonce(&self, address: [u8; 20], nonce: u64) {
+            self.pending_nonces.insert(address, nonce);
         }
 
         fn set_status(&self, tx_hash: Hash, status: Option<bool>) {
@@ -689,6 +857,21 @@ mod tests {
                 None => Ok(None),
             }
         }
+
+        async fn is_transaction_known(&self, tx_hash: Hash) -> Result<bool, String> {
+            Ok(self.known_transactions.contains_key(&tx_hash))
+        }
+
+        async fn get_mined_nonce(&self, address: [u8; 20]) -> Result<u64, String> {
+            Ok(self.mined_nonces.get(&address).map(|entry| *entry.value()).unwrap_or(0))
+        }
+
+        async fn get_pending_nonce(&self, address: [u8; 20]) -> Result<u64, String> {
+            match self.pending_nonces.get(&address) {
+                Some(entry) => Ok(*entry.value()),
+                None => self.get_mined_nonce(address).await,
+            }
+        }
     }
 
     // Mock Safe address checker for testing.
@@ -742,10 +925,15 @@ mod tests {
 
     /// Create a raw signed transaction targeting a specific address
     async fn create_raw_tx_to(target: &[u8; 20]) -> Vec<u8> {
+        create_raw_tx_with_nonce(target, 0).await
+    }
+
+    /// Create a raw signed transaction targeting a specific address with a given nonce
+    async fn create_raw_tx_with_nonce(target: &[u8; 20], nonce: u64) -> Vec<u8> {
         let signer = PrivateKeySigner::random();
         let tx = TxLegacy {
             chain_id: Some(1),
-            nonce: 0,
+            nonce,
             gas_price: 1_000_000_000,
             gas_limit: 21_000,
             to: TxKind::Call(AlloyAddress::from_slice(target)),
@@ -931,6 +1119,170 @@ mod tests {
         let updated = store.get(id).unwrap();
         assert_eq!(updated.status, TransactionStatus::Timeout);
         assert!(updated.error_message.is_some());
+    }
+
+    #[test]
+    fn test_classify_unmined() {
+        assert_eq!(classify_unmined(false, 4, 5, 5), UnminedDiagnosis::Replaced);
+        assert_eq!(classify_unmined(false, 5, 5, 5), UnminedDiagnosis::Dropped);
+        assert_eq!(classify_unmined(false, 7, 5, 5), UnminedDiagnosis::Dropped);
+        assert_eq!(classify_unmined(true, 5, 5, 6), UnminedDiagnosis::Pending);
+        // Nonces 5, 6 and 7 are all pending: 7 is queued, not gapped.
+        assert_eq!(classify_unmined(true, 7, 5, 8), UnminedDiagnosis::Pending);
+        // Node not reporting mempool nonces: pending equals mined.
+        assert_eq!(classify_unmined(true, 5, 5, 5), UnminedDiagnosis::Pending);
+        assert_eq!(
+            classify_unmined(true, 7, 5, 5),
+            UnminedDiagnosis::NonceGap {
+                nonce: 7,
+                missing_nonce: 5
+            }
+        );
+        // Nonce 5 is pending but 6 is missing.
+        assert_eq!(
+            classify_unmined(true, 7, 5, 6),
+            UnminedDiagnosis::NonceGap {
+                nonce: 7,
+                missing_nonce: 6
+            }
+        );
+        assert_eq!(classify_unmined(true, 4, 5, 5), UnminedDiagnosis::MinedSinceCheck);
+    }
+
+    /// Insert a submitted record for `raw_tx` that is already past the monitor timeout.
+    fn insert_expired_record(store: &TransactionStore, raw_tx: Vec<u8>) -> Hash {
+        let tx_hash = test_tx_hash();
+        store
+            .insert(TransactionRecord {
+                id: TEST_UUID,
+                raw_transaction: raw_tx,
+                transaction_hash: tx_hash,
+                status: TransactionStatus::Submitted,
+                submitted_at: chrono::Utc::now() - chrono::Duration::try_seconds(400).unwrap(),
+                confirmed_at: None,
+                error_message: None,
+                safe_execution: None,
+            })
+            .unwrap();
+        tx_hash
+    }
+
+    #[tokio::test]
+    async fn test_monitor_timeout_reports_replaced_transaction() {
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        let raw_tx = create_raw_tx_to(&[0x11; 20]).await;
+        let (signer, nonce) = decode_transaction_signer_and_nonce(&raw_tx).unwrap();
+        provider.set_mined_nonce(signer, nonce + 1);
+        insert_expired_record(&store, raw_tx);
+
+        let monitor = create_monitor(store.clone(), provider);
+        monitor.poll_once().await.unwrap();
+
+        let updated = store.get(TEST_UUID).unwrap();
+        assert_eq!(updated.status, TransactionStatus::Timeout);
+        assert_eq!(updated.error_message, Some(UnminedDiagnosis::Replaced.message()));
+    }
+
+    #[tokio::test]
+    async fn test_monitor_timeout_reports_dropped_transaction() {
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        insert_expired_record(&store, create_raw_tx_to(&[0x11; 20]).await);
+
+        let monitor = create_monitor(store.clone(), provider);
+        monitor.poll_once().await.unwrap();
+
+        let updated = store.get(TEST_UUID).unwrap();
+        assert_eq!(updated.status, TransactionStatus::Timeout);
+        assert_eq!(updated.error_message, Some(UnminedDiagnosis::Dropped.message()));
+    }
+
+    #[tokio::test]
+    async fn test_monitor_timeout_reports_pending_transaction() {
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        let tx_hash = test_tx_hash();
+        provider.set_known(tx_hash);
+        insert_expired_record(&store, create_raw_tx_to(&[0x11; 20]).await);
+
+        let monitor = create_monitor(store.clone(), provider);
+        monitor.poll_once().await.unwrap();
+
+        let updated = store.get(TEST_UUID).unwrap();
+        assert_eq!(updated.status, TransactionStatus::Timeout);
+        assert_eq!(updated.error_message, Some(UnminedDiagnosis::Pending.message()));
+    }
+
+    #[tokio::test]
+    async fn test_monitor_timeout_reports_queued_transaction_as_pending() {
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        // Nonces 5, 6 and 7 are all pending; 7 is queued behind the others.
+        let raw_tx = create_raw_tx_with_nonce(&[0x11; 20], 7).await;
+        let (signer, _) = decode_transaction_signer_and_nonce(&raw_tx).unwrap();
+        provider.set_known(test_tx_hash());
+        provider.set_mined_nonce(signer, 5);
+        provider.set_pending_nonce(signer, 8);
+        insert_expired_record(&store, raw_tx);
+
+        let monitor = create_monitor(store.clone(), provider);
+        monitor.poll_once().await.unwrap();
+
+        let updated = store.get(TEST_UUID).unwrap();
+        assert_eq!(updated.status, TransactionStatus::Timeout);
+        assert_eq!(updated.error_message, Some(UnminedDiagnosis::Pending.message()));
+    }
+
+    #[tokio::test]
+    async fn test_monitor_timeout_reports_nonce_gap() {
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        // Nonce 5 is pending but 6 is missing, so 7 cannot be mined.
+        let raw_tx = create_raw_tx_with_nonce(&[0x11; 20], 7).await;
+        let (signer, _) = decode_transaction_signer_and_nonce(&raw_tx).unwrap();
+        provider.set_known(test_tx_hash());
+        provider.set_mined_nonce(signer, 5);
+        provider.set_pending_nonce(signer, 6);
+        insert_expired_record(&store, raw_tx);
+
+        let monitor = create_monitor(store.clone(), provider);
+        monitor.poll_once().await.unwrap();
+
+        let updated = store.get(TEST_UUID).unwrap();
+        assert_eq!(updated.status, TransactionStatus::Timeout);
+        assert_eq!(
+            updated.error_message,
+            Some(
+                UnminedDiagnosis::NonceGap {
+                    nonce: 7,
+                    missing_nonce: 6
+                }
+                .message()
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn test_monitor_timeout_skips_transaction_mined_since_check() {
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        let raw_tx = create_raw_tx_to(&[0x11; 20]).await;
+        let (signer, nonce) = decode_transaction_signer_and_nonce(&raw_tx).unwrap();
+        provider.set_known(test_tx_hash());
+        provider.set_mined_nonce(signer, nonce + 1);
+        insert_expired_record(&store, raw_tx);
+
+        let monitor = create_monitor(store.clone(), provider);
+        monitor.poll_once().await.unwrap();
+
+        assert_eq!(store.get(TEST_UUID).unwrap().status, TransactionStatus::Submitted);
     }
 
     #[tokio::test]
