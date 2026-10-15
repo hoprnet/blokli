@@ -17,7 +17,7 @@ use blokli_api_types::{
     Account, ChannelUpdate, CurvyCommittedNote, CurvyCommittedNullifier, CurvyPendingNote, RedeemTicketDetails,
     RedemptionResult, ServiceTypeUpdate, ServiceUpdate, TicketParameters, TokenValueString, UInt64,
 };
-use hopr_types::primitive::prelude::Address;
+use hopr_types::primitive::prelude::{Address, HoprBalance};
 use tokio::sync::RwLock;
 
 /// Internal event payload for a ticket redemption observed on-chain.
@@ -72,9 +72,9 @@ impl From<RedeemTicketDetailsInfo> for RedeemTicketDetails {
 
 /// Event type for the subscription event bus
 ///
-/// Represents changes to accounts, channels, and protocol parameters that should be broadcast to subscribers.
-/// Events contain complete GraphQL data to avoid additional database queries per subscriber
-/// and to ensure temporal consistency.
+/// Represents contract updates that should be broadcast to subscribers.
+/// Events contain observed contract values or complete GraphQL data to avoid
+/// additional database queries per subscriber and to ensure temporal consistency.
 #[derive(Clone, Debug)]
 pub enum IndexerEvent {
     /// An account was updated (balance change, announcement, safe registration, etc.)
@@ -92,6 +92,20 @@ pub enum IndexerEvent {
 
     /// A new safe was deployed
     SafeDeployed(Address),
+
+    /// An Approval was observed on the configured wxHOPR token.
+    ///
+    /// The allowance is the absolute uint256 value, including reductions and zero.
+    /// Consumers must filter the owner and spender and re-read the current allowance
+    /// before acting, since a buffered event may already have been superseded.
+    HoprApprovalUpdated {
+        /// Token holder that granted the allowance.
+        owner: Address,
+        /// Address authorized to spend the owner's tokens.
+        spender: Address,
+        /// Absolute allowance in wxHOPR base units.
+        allowance: HoprBalance,
+    },
 
     /// Ticket parameters (price or winning probability) were updated
     ///
