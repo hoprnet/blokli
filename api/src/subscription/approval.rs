@@ -54,6 +54,7 @@ where
             result = initial => result.map(Some),
         }?;
         let Some(allowance) = allowance else { return; };
+        let mut last_allowance = allowance;
         yield approval(owner, spender, allowance);
 
         loop {
@@ -81,7 +82,9 @@ where
                 owner: event_owner, spender: event_spender, allowance,
             } = event
                 && event_owner == owner && event_spender == spender
+                && allowance != last_allowance
             {
+                last_allowance = allowance;
                 yield approval(owner, spender, allowance);
             }
         }
