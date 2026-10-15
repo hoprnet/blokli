@@ -65,16 +65,19 @@ async fn snapshot_preserves_full_precision_and_normalizes_addresses() {
 #[tokio::test]
 async fn buffers_overlapping_updates_and_filters_owner_and_spender() {
     let (snapshot, initial) = oneshot::channel();
-    let (events, _shutdown, mut stream) = stream(async move { Ok(initial.await.unwrap()) }, 5);
+    let (events, _shutdown, mut stream) = stream(async move { Ok(initial.await.unwrap()) }, 9);
     assert!(poll!(stream.next()).is_pending());
     events.try_broadcast(IndexerEvent::SafeDeployed(*OWNER)).unwrap();
-    events.try_broadcast(update(*OTHER, *SPENDER, 1)).unwrap();
-    events.try_broadcast(update(*OWNER, *OTHER, 2)).unwrap();
+    events.try_broadcast(update(*OTHER, *SPENDER, 3)).unwrap();
+    events.try_broadcast(update(*OWNER, *OTHER, 3)).unwrap();
     // Finalized events can be older than the current RPC snapshot, or be replayed.
-    events.try_broadcast(update(*OWNER, *SPENDER, 3)).unwrap();
-    events.try_broadcast(update(*OWNER, *SPENDER, 3)).unwrap();
+    // Skip snapshot-equal and consecutive duplicate values, but preserve later changes
+    // back to a previously emitted value and revocation to zero.
+    for amount in [10, 3, 3, 10, 0, 0] {
+        events.try_broadcast(update(*OWNER, *SPENDER, amount)).unwrap();
+    }
     snapshot.send(HoprBalance::new_base(10)).unwrap();
-    for expected in [10, 3, 3] {
+    for expected in [10, 3, 10, 0] {
         let item = next(&mut stream).await.unwrap().unwrap();
         assert_eq!(item.allowance.0, HoprBalance::new_base(expected).to_string());
     }
