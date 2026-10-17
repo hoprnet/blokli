@@ -173,7 +173,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_on_stake_factory_event_creates_safe() -> anyhow::Result<()> {
+    async fn test_on_historical_stake_factory_event_creates_safe() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let mut rpc_operations = MockIndexerRpcOperations::new();
 
@@ -192,7 +192,9 @@ mod tests {
             inner: Arc::new(rpc_operations),
         };
 
+        let historical_factory = random_address();
         let (handlers, _indexer_state, mut event_rx) = init_handlers_with_events(clonable_rpc_operations, db.clone());
+        let handlers = handlers.with_additional_node_stake_factories(vec![historical_factory]);
 
         // Create event
         let safe_address = random_address();
@@ -204,7 +206,7 @@ mod tests {
 
         let encoded_data = event.encode_log_data();
         let log = SerializableLog {
-            address: handlers.addresses.node_stake_factory,
+            address: historical_factory,
             topics: encoded_data.topics().iter().map(|t| t.0).collect(),
             data: encoded_data.data.to_vec(),
             tx_hash: tx_hash.into(),
