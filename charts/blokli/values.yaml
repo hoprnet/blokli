@@ -38,7 +38,7 @@ serviceAccount:
 ## @param deploymentAnnotations Annotations to add to the deployment
 deploymentAnnotations: {}
 ## @param updateStrategy.type Deployment update strategy. Recreate stops the running pod before starting the new one
-## The indexer has no single-writer guard yet, so two pods must never run against the same database:
+## @param updateStrategy.type Deployment update strategy. Recreate stops the running pod before starting the new one
 ## RollingUpdate would start the new pod (and its indexer) while the old one is still writing.
 ##
 updateStrategy:
