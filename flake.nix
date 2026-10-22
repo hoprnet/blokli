@@ -35,7 +35,7 @@
     nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     # HOPR Nix Library (provides flake-utils and reusable build functions)
-    nix-lib.url = "github:hoprnet/nix-lib/v1.3.0";
+    nix-lib.url = "github:hoprnet/nix-lib?ref=fix/emsign-g3-cacert";
 
     # Rust build system
     crane.url = "github:ipetkov/crane";
@@ -232,10 +232,6 @@
               builtins.readFile ./docker/blokli-anvil-entrypoint.sh
             );
 
-          # CA bundle without the compromised emSign ECC Root CA - G3 (GHSA-6q48-6c7w-9gw2).
-          cacertWithoutEmsignG3 =
-            pkgs: pkgs.cacert.override { blacklist = [ "emSign ECC Root CA - G3" ]; };
-
           # Helper: build a standard bloklid Docker image for a target platform.
           # variant is null (release), "dev", or "profile".
           mkBloklidDocker =
@@ -250,7 +246,6 @@
               name = dockerName;
               Entrypoint = [ "/bin/bloklid" ];
               pkgsLinux = platformPkgs;
-              env = [ "SSL_CERT_FILE=${cacertWithoutEmsignG3 platformPkgs}/etc/ssl/certs/ca-bundle.crt" ];
               extraContents = [
                 binary
                 (mkStaticEntrypoint {
@@ -274,7 +269,6 @@
               Entrypoint = [ "/bin/blokli-anvil-entrypoint" ];
               pkgsLinux = platformPkgs;
               env = [
-                "SSL_CERT_FILE=${cacertWithoutEmsignG3 platformPkgs}/etc/ssl/certs/ca-bundle.crt"
                 "BLOKLI_DEPLOY_CURVY=true"
               ];
               extraContents = [
