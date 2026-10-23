@@ -184,6 +184,8 @@ ignored = ["humantime-serde"]
 cast_possible_truncation = "deny"
 cast_possible_wrap       = "deny"
 cast_sign_loss           = "deny"
+# New in Rust 1.99; the flagged attributes duplicate type-level must_use
+double_must_use = "allow"
 
 # faster insta test runs
 [profile.dev.package]
