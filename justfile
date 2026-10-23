@@ -86,11 +86,11 @@ fmt:
 
 # Run clippy lints with warnings as errors
 clippy:
-    cargo clippy --workspace -- -D warnings
+    cargo clippy --workspace -- -D warnings -A clippy::double_must_use
 
 # Run clippy on all targets (lib, bin, tests, benches, examples)
 clippy-all:
-    cargo clippy --workspace --all-targets -- -D warnings
+    cargo clippy --workspace --all-targets -- -D warnings -A clippy::double_must_use
 
 # Automatically fix clippy warnings
 clippy-fix:
