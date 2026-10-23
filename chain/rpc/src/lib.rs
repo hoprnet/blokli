@@ -8,7 +8,6 @@
 //! Both of these traits implemented and realized via the [RpcOperations](rpc::RpcOperations) type,
 //! so this represents the main entry point to all RPC related operations.
 
-
 // `#[must_use]` on trait methods is redundant with the return types; flagged by
 // clippy::double_must_use in Rust 1.99.
 #![allow(clippy::double_must_use)]
