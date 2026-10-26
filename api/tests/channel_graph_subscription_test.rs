@@ -7,6 +7,7 @@
 //! - Account information is included for all channel participants
 //! - Initial snapshots include only OPEN channels; later updates may include CLOSED removal signals
 //! - Each emission contains one channel with its source and destination accounts
+//! - The subscription ends when it falls behind the event bus, so the client reconnects and gets a fresh snapshot
 
 mod common;
 
@@ -818,4 +819,71 @@ async fn test_opened_channel_graph_subscription_emits_pending_to_close_update() 
 #[tokio::test]
 async fn test_opened_channel_graph_subscription_emits_closed_update() {
     assert_opened_channel_graph_subscription_emits_status_update(ChannelStatus::Closed, "CLOSED").await;
+}
+
+#[tokio::test]
+async fn test_opened_channel_graph_subscription_ends_when_event_bus_overflows() {
+    let db = BlokliDb::new_in_memory().await.unwrap();
+
+    let keypair1 = random_keypair();
+    let keypair2 = random_keypair();
+    let offchain1 = random_offchain_keypair();
+    let offchain2 = random_offchain_keypair();
+    let addr1 = keypair1.public().to_address();
+    let addr2 = keypair2.public().to_address();
+
+    db.upsert_account(None, 1, addr1, *offchain1.public(), None, 100, 0, 0)
+        .await
+        .unwrap();
+    db.upsert_account(None, 2, addr2, *offchain2.public(), None, 101, 0, 0)
+        .await
+        .unwrap();
+
+    let balance = HoprBalance::from_str("1000 wxHOPR").unwrap();
+    let open_channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
+    let channel_id = open_channel.get_id().to_hex();
+    db.upsert_channel(None, open_channel, 100, 0, 0).await.unwrap();
+
+    update_watermark(&db, 1000, 0, 0).await;
+
+    // The event bus keeps a single event, so a second one published before the subscription reads makes it fall
+    // behind.
+    let (schema, indexer_state) = common::create_test_schema_with_event_bus_capacity(&db, 1);
+    let query = r#"
+        subscription {
+            openedChannelGraphUpdated {
+                channel {
+                    status
+                }
+            }
+        }
+    "#;
+
+    let mut stream = schema.execute_stream(query).boxed();
+
+    let initial = tokio::time::timeout(Duration::from_secs(2), stream.next())
+        .await
+        .expect("snapshot entry within timeout")
+        .expect("snapshot entry");
+    assert!(initial.errors.is_empty(), "unexpected errors: {:?}", initial.errors);
+
+    let pending_channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::PendingToClose(UNIX_EPOCH), 1);
+    db.upsert_channel(None, pending_channel, 110, 0, 0).await.unwrap();
+    let pending_update = create_channel_update_event(&db, &channel_id).await.unwrap();
+
+    let closed_channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Closed, 1);
+    db.upsert_channel(None, closed_channel, 120, 0, 0).await.unwrap();
+    let closed_update = create_channel_update_event(&db, &channel_id).await.unwrap();
+
+    indexer_state.publish_event(IndexerEvent::ChannelUpdated(Box::new(pending_update)));
+    indexer_state.publish_event(IndexerEvent::ChannelUpdated(Box::new(closed_update)));
+
+    // Without ending, the subscription would skip the PendingToClose update and carry on as if nothing was lost.
+    let next = tokio::time::timeout(Duration::from_secs(2), stream.next())
+        .await
+        .expect("subscription must end, not hang");
+    assert!(
+        next.is_none(),
+        "subscription must end after the event bus overflowed, got {next:?}"
+    );
 }
