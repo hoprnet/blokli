@@ -37,6 +37,12 @@ serviceAccount:
   name: ""
 ## @param deploymentAnnotations Annotations to add to the deployment
 deploymentAnnotations: {}
+## @param updateStrategy.type Deployment update strategy. Recreate stops the running pod before starting the new one
+## @param updateStrategy.type Deployment update strategy. Recreate stops the running pod before starting the new one
+## RollingUpdate would start the new pod (and its indexer) while the old one is still writing.
+##
+updateStrategy:
+  type: Recreate
 ## @param podAnnotations Annotations to add to the pod
 podAnnotations: {}
 podSecurityContext:

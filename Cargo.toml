@@ -85,7 +85,7 @@ regex = "1.12.3"
 reqwest = { version = "0.13.4", features = ["json"] }
 rstest = "0.26.1"
 rust-stream-ext-concurrent = "2.0.0"
-rustls = { version = "0.23.40", default-features = false, features = ["std"] }
+rustls = { version = "0.23.46", default-features = false, features = ["std"] }
 sea-orm = { version = "2.0.1", default-features = false, features = [
   "debug-print",
   "macros",
@@ -109,7 +109,7 @@ semver = "1.0.28"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 serde_with = { version = "3.21.0" }
-serde_yaml = "0.9.34"
+serde_yaml = { package = "yaml_serde", version = "0.10.7" }
 smart-default = "0.7.1"
 sqlx = { version = "0.9.0", default-features = false, features = [
   "postgres",
@@ -121,7 +121,7 @@ temp-env = "0.3.6"
 tempfile = "3.27.0"
 test-log = { version = "0.2.21", features = ["trace"] }
 thiserror = "2.0.18"
-tokio = { version = "1.52.3", features = [
+tokio = { version = "1.53.1", features = [
   "fs",
   "macros",
   "rt-multi-thread",
