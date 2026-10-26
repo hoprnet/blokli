@@ -946,8 +946,12 @@ impl SubscriptionRoot {
                                 return;
                             }
                             Err(async_broadcast::RecvError::Overflowed(n)) => {
-                                warn!("Event bus overflowed ({}); channelUpdated may miss events - client should reconnect", n);
-                                // Continue but log warning - client may need to reconnect
+                                warn!(
+                                    subscription = "channelUpdated",
+                                    missed = n,
+                                    "event bus overflowed, ending subscription so the client reconnects"
+                                );
+                                return;
                             }
                         }
                     }
@@ -1078,8 +1082,12 @@ impl SubscriptionRoot {
                                 return;
                             }
                             Err(async_broadcast::RecvError::Overflowed(n)) => {
-                                warn!("Event bus overflowed, missed {} events - consider increasing buffer", n);
-                                // Continue but log warning - client may need to reconnect
+                                warn!(
+                                    subscription = "openedChannelGraphUpdated",
+                                    missed = n,
+                                    "event bus overflowed, ending subscription so the client reconnects"
+                                );
+                                return;
                             }
                         }
                     }
@@ -1171,7 +1179,12 @@ impl SubscriptionRoot {
                                 return;
                             }
                             Err(async_broadcast::RecvError::Overflowed(n)) => {
-                                warn!("Event bus overflowed ({}); accountUpdated may miss events", n);
+                                warn!(
+                                    subscription = "accountUpdated",
+                                    missed = n,
+                                    "event bus overflowed, ending subscription so the client reconnects"
+                                );
+                                return;
                             }
                         }
                     }
@@ -1512,7 +1525,12 @@ impl SubscriptionRoot {
                                 return;
                             }
                             Err(async_broadcast::RecvError::Overflowed(n)) => {
-                                warn!("Event bus overflowed ({}); ticketParametersUpdated may miss events", n);
+                                warn!(
+                                    subscription = "ticketParametersUpdated",
+                                    missed = n,
+                                    "event bus overflowed, ending subscription so the client reconnects"
+                                );
+                                return;
                             }
                         }
                     }
@@ -1623,7 +1641,12 @@ impl SubscriptionRoot {
                                 return;
                             }
                             Err(async_broadcast::RecvError::Overflowed(n)) => {
-                                warn!("Event bus overflowed ({}); keyBindingFeeUpdated may miss events", n);
+                                warn!(
+                                    subscription = "keyBindingFeeUpdated",
+                                    missed = n,
+                                    "event bus overflowed, ending subscription so the client reconnects"
+                                );
+                                return;
                             }
                         }
                     }
@@ -1769,8 +1792,12 @@ impl SubscriptionRoot {
                                 return;
                             }
                             Err(async_broadcast::RecvError::Overflowed(n)) => {
-                                warn!("Event bus overflowed, missed {} events - consider increasing buffer", n);
-                                // Continue but log warning - client may need to reconnect
+                                warn!(
+                                    subscription = "safeDeployed",
+                                    missed = n,
+                                    "event bus overflowed, ending subscription so the client reconnects"
+                                );
+                                return;
                             }
                         }
                     }
@@ -1964,7 +1991,12 @@ impl SubscriptionRoot {
                                 return;
                             }
                             Err(async_broadcast::RecvError::Overflowed(n)) => {
-                                warn!("Event bus overflowed ({}); ticketRedeemed may miss events", n);
+                                warn!(
+                                    subscription = "ticketRedeemed",
+                                    missed = n,
+                                    "event bus overflowed, ending subscription so the client reconnects"
+                                );
+                                return;
                             }
                         }
                     }
