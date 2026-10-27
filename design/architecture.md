@@ -346,10 +346,10 @@ changes. Broadcast overflow ends the server stream; the client reconnects and re
 deterministic resynchronization.
 
 The opened channel graph subscription is resumable. Every entry it sends after the snapshot, and the last snapshot entry, carries a cursor:
-the chain position of the channel state it describes. A client that reconnects passes its last cursor and receives, instead of the
-snapshot of open channels, the latest state of every channel that changed after that position, closed channels included and oldest change
-first, followed by live changes. Channel state history is append-only (reorganizations add correcting states at a later position), so a
-cursor stays valid. This keeps a client from missing a closure while it was disconnected, which a snapshot of open channels cannot show.
+the chain position of the channel state it describes. A client that reconnects passes its last cursor and receives, instead of the snapshot
+of open channels, the latest state of every channel that changed after that position, closed channels included and oldest change first,
+followed by live changes. Channel state history is append-only (reorganizations add correcting states at a later position), so a cursor
+stays valid. This keeps a client from missing a closure while it was disconnected, which a snapshot of open channels cannot show.
 
 **Error Handling**: Uses GraphQL union types to return domain-specific error types (InvalidAddressError, ContractNotAllowedError, etc.)
 alongside success types, providing structured error responses with codes and context.

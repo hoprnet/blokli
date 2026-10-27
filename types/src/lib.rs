@@ -689,8 +689,8 @@ impl From<ChannelStatePosition> for ChannelStateCursor {
 /// **Structure:**
 /// - Each entry contains exactly one channel with its source and destination accounts
 /// - If multiple channels exist between the same account pair, each is emitted as a separate entry
-/// - The initial snapshot holds only open and pending-to-close channels; later updates and a resumed subscription
-///   also carry closed channels
+/// - The initial snapshot holds only open and pending-to-close channels; later updates and a resumed subscription also
+///   carry closed channels
 ///
 /// **Usage in subscriptions:**
 /// The `openedChannelGraphUpdated` subscription streams these entries one at a time.
