@@ -136,6 +136,11 @@ async fn create_channel_update_event(
         channel: channel_gql,
         source: source_gql,
         destination: dest_gql,
+        position: Some(blokli_api_types::ChannelStatePosition::from_published(
+            state.published_block,
+            state.published_tx_index,
+            state.published_log_index,
+        )?),
     })
 }
 

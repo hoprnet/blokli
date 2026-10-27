@@ -162,6 +162,46 @@ type Channel {
 }
 
 """
+Exclusive resume cursor for the `openedChannelGraphUpdated` subscription.
+
+Pass the `cursor` of the last entry received to get every channel change after it.
+"""
+input ChannelStateCursor {
+	"""
+	Block number containing the log.
+	"""
+	block: UInt64!
+	"""
+	Zero-based transaction index inside the block.
+	"""
+	transactionIndex: UInt64!
+	"""
+	Zero-based log index inside the transaction receipt.
+	"""
+	logIndex: UInt64!
+}
+
+"""
+Position of a channel state change in the indexed chain: the log that produced it.
+
+Positions are ordered by block, then transaction index, then log index.
+"""
+type ChannelStatePosition {
+	"""
+	Block number containing the log.
+	"""
+	block: UInt64!
+	"""
+	Zero-based transaction index inside the block.
+	"""
+	transactionIndex: UInt64!
+	"""
+	Zero-based log index inside the transaction receipt.
+	"""
+	logIndex: UInt64!
+}
+
+"""
 Aggregated channel statistics: count and total balance
 """
 type ChannelStats {
@@ -1050,7 +1090,8 @@ directions (A→B and B→A), these are emitted as separate entries.
 **Structure:**
 - Each entry contains exactly one channel with its source and destination accounts
 - If multiple channels exist between the same account pair, each is emitted as a separate entry
-- The channel is always open (closed channels are not included)
+- The initial snapshot holds only open and pending-to-close channels; later updates and a resumed subscription
+also carry closed channels
 
 **Usage in subscriptions:**
 The `openedChannelGraphUpdated` subscription streams these entries one at a time.
@@ -1070,6 +1111,13 @@ type OpenedChannelsGraphEntry {
 	Destination account (recipient end of the directed edge)
 	"""
 	destination: Account!
+	"""
+	Where to resume the subscription after this entry: pass it as `after` when reconnecting.
+	
+	Set on every live update and on every resumed entry. In the initial snapshot only the last entry has it, so
+	that a client cut off in the middle of the snapshot starts over instead of skipping channels.
+	"""
+	cursor: ChannelStatePosition
 }
 
 """
@@ -2474,8 +2522,19 @@ type SubscriptionRoot {
 	
 	**Note:** This is a directed graph. Bidirectional communication requires
 	channels in both directions, each emitted as a separate entry.
+	
+	**Resuming:**
+	Entries carry a `cursor` (every live update, and the last snapshot entry). A client that reconnects passes
+	the last cursor it received as `after`. Instead of the snapshot, it then receives the latest state of every
+	channel that changed after that cursor, closed channels included and oldest change first, followed by live
+	updates. No change is lost while the client was disconnected.
 	"""
-	openedChannelGraphUpdated: OpenedChannelsGraphEntry!
+	openedChannelGraphUpdated(
+		"""
+		Cursor of the last entry received; resumes with every channel change after it
+		"""
+		after: ChannelStateCursor
+	): OpenedChannelsGraphEntry!
 	"""
 	Subscribe to real-time updates of account information
 	

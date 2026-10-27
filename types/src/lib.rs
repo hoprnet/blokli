@@ -621,6 +621,63 @@ pub struct ChannelUpdate {
     pub source: Account,
     /// Destination account of the channel
     pub destination: Account,
+    /// Position of the channel state this update carries. Not part of the API; the graph subscription turns it
+    /// into the resume cursor of an entry.
+    #[graphql(skip)]
+    pub position: Option<ChannelStatePosition>,
+}
+
+/// Position of a channel state change in the indexed chain: the log that produced it.
+///
+/// Positions are ordered by block, then transaction index, then log index.
+#[derive(SimpleObject, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChannelStatePosition {
+    /// Block number containing the log.
+    pub block: UInt64,
+    /// Zero-based transaction index inside the block.
+    #[graphql(name = "transactionIndex")]
+    pub transaction_index: UInt64,
+    /// Zero-based log index inside the transaction receipt.
+    #[graphql(name = "logIndex")]
+    pub log_index: UInt64,
+}
+
+/// Exclusive resume cursor for the `openedChannelGraphUpdated` subscription.
+///
+/// Pass the `cursor` of the last entry received to get every channel change after it.
+#[derive(InputObject, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChannelStateCursor {
+    /// Block number containing the log.
+    pub block: UInt64,
+    /// Zero-based transaction index inside the block.
+    #[graphql(name = "transactionIndex")]
+    pub transaction_index: UInt64,
+    /// Zero-based log index inside the transaction receipt.
+    #[graphql(name = "logIndex")]
+    pub log_index: UInt64,
+}
+
+impl ChannelStatePosition {
+    /// Builds a position from the `published_*` columns of a channel state row.
+    ///
+    /// Fails if a value is negative, which the database never stores.
+    pub fn from_published(block: i64, tx_index: i64, log_index: i64) -> Result<Self, std::num::TryFromIntError> {
+        Ok(Self {
+            block: UInt64(u64::try_from(block)?),
+            transaction_index: UInt64(u64::try_from(tx_index)?),
+            log_index: UInt64(u64::try_from(log_index)?),
+        })
+    }
+}
+
+impl From<ChannelStatePosition> for ChannelStateCursor {
+    fn from(position: ChannelStatePosition) -> Self {
+        Self {
+            block: position.block,
+            transaction_index: position.transaction_index,
+            log_index: position.log_index,
+        }
+    }
 }
 
 /// A single edge in the opened payment channels graph
@@ -632,7 +689,8 @@ pub struct ChannelUpdate {
 /// **Structure:**
 /// - Each entry contains exactly one channel with its source and destination accounts
 /// - If multiple channels exist between the same account pair, each is emitted as a separate entry
-/// - The channel is always open (closed channels are not included)
+/// - The initial snapshot holds only open and pending-to-close channels; later updates and a resumed subscription
+///   also carry closed channels
 ///
 /// **Usage in subscriptions:**
 /// The `openedChannelGraphUpdated` subscription streams these entries one at a time.
@@ -646,6 +704,11 @@ pub struct OpenedChannelsGraphEntry {
     pub source: Account,
     /// Destination account (recipient end of the directed edge)
     pub destination: Account,
+    /// Where to resume the subscription after this entry: pass it as `after` when reconnecting.
+    ///
+    /// Set on every live update and on every resumed entry. In the initial snapshot only the last entry has it, so
+    /// that a client cut off in the middle of the snapshot starts over instead of skipping channels.
+    pub cursor: Option<ChannelStatePosition>,
 }
 
 /// HOPR token balance information for a specific address

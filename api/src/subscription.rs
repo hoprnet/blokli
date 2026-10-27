@@ -6,9 +6,10 @@ use async_broadcast::Receiver;
 use async_graphql::{Context, ID, Result, Subscription};
 use async_stream::{stream, try_stream};
 use blokli_api_types::{
-    Account, Channel, ChannelUpdate, CurvyCommittedNote, CurvyCommittedNullifier, CurvyEventPosition, CurvyPendingNote,
-    OpenedChannelsGraphEntry, RedeemTicketDetails, Safe, ServiceRegistryConfig, ServiceTypeUpdate,
-    ServiceTypeUpdateKind, ServiceUpdate, ServiceUpdateKind, TicketParameters, TokenValueString, Transaction, UInt64,
+    Account, Channel, ChannelStateCursor, ChannelStatePosition, ChannelUpdate, CurvyCommittedNote,
+    CurvyCommittedNullifier, CurvyEventPosition, CurvyPendingNote, OpenedChannelsGraphEntry, RedeemTicketDetails, Safe,
+    ServiceRegistryConfig, ServiceTypeUpdate, ServiceTypeUpdateKind, ServiceUpdate, ServiceUpdateKind,
+    TicketParameters, TokenValueString, Transaction, UInt64,
 };
 use blokli_chain_api::transaction_store::{
     TransactionEvent, TransactionStatus as StoreTransactionStatus, TransactionStore,
@@ -265,19 +266,86 @@ async fn query_channels_at_watermark(
     }
 
     // Filter out CLOSED channels (status != 0)
-    let non_closed_channels: Vec<_> = channels
+    let non_closed: Vec<_> = channels
         .into_iter()
-        .filter(|c| state_map.get(&c.id).map(|s| s.status != 0).unwrap_or(false))
+        .filter_map(|channel| {
+            state_map
+                .remove(&channel.id)
+                .filter(|state| state.status != 0)
+                .map(|state| (channel, state))
+        })
         .collect();
 
-    if non_closed_channels.is_empty() {
+    channel_updates_from_states(db, non_closed).await
+}
+
+/// Queries the latest state of every channel that changed after `after`, up to the watermark
+///
+/// This is phase 1 of a resumed graph subscription. Unlike the snapshot, closed channels are included: a client
+/// that resumes must also learn about channels that closed while it was disconnected.
+///
+/// The result is ordered by the position of each channel's latest state, oldest first, so a client cut off part
+/// way can resume from the cursor of the last entry it received without skipping any channel.
+async fn query_channel_changes_after(
+    db: &DatabaseConnection,
+    after: &Watermark,
+    watermark: &Watermark,
+) -> Result<Vec<ChannelUpdate>> {
+    let changed_states = channel_state::Entity::find()
+        .filter(position_after_condition(after))
+        .filter(watermark_condition(watermark))
+        .order_by_desc(channel_state::Column::PublishedBlock)
+        .order_by_desc(channel_state::Column::PublishedTxIndex)
+        .order_by_desc(channel_state::Column::PublishedLogIndex)
+        .all(db)
+        .await
+        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("channel_state query", e)))?;
+
+    // Latest changed state per channel (first occurrence due to ordering)
+    let mut state_map: HashMap<i64, channel_state::Model> = HashMap::new();
+    for state in changed_states {
+        state_map.entry(state.channel_id).or_insert(state);
+    }
+    if state_map.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let channels = channel::Entity::find()
+        .filter(channel::Column::Id.is_in(state_map.keys().copied().collect::<Vec<_>>()))
+        .all(db)
+        .await
+        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("channels query", e)))?;
+
+    let mut changed: Vec<_> = channels
+        .into_iter()
+        .filter_map(|channel| state_map.remove(&channel.id).map(|state| (channel, state)))
+        .collect();
+    changed.sort_by_key(|(_, state)| {
+        (
+            state.published_block,
+            state.published_tx_index,
+            state.published_log_index,
+        )
+    });
+
+    channel_updates_from_states(db, changed).await
+}
+
+/// Builds the [`ChannelUpdate`] of each channel and state, fetching all their accounts in one batch
+///
+/// The order of `channels` is kept.
+async fn channel_updates_from_states(
+    db: &DatabaseConnection,
+    channels: Vec<(channel::Model, channel_state::Model)>,
+) -> Result<Vec<ChannelUpdate>> {
+    if channels.is_empty() {
         return Ok(Vec::new());
     }
 
     // Collect all unique account IDs we need to fetch
-    let mut account_ids: Vec<i64> = non_closed_channels
+    let mut account_ids: Vec<i64> = channels
         .iter()
-        .flat_map(|c| vec![c.source, c.destination])
+        .flat_map(|(c, _)| vec![c.source, c.destination])
         .collect();
     account_ids.sort_unstable();
     account_ids.dedup();
@@ -291,25 +359,30 @@ async fn query_channels_at_watermark(
     let account_map: HashMap<_, _> = accounts_result.into_iter().map(|a| (a.keyid, a)).collect();
 
     // Build ChannelUpdate objects
-    let mut results = Vec::new();
-    for channel in non_closed_channels {
-        let state = match state_map.get(&channel.id) {
-            Some(s) => s,
-            None => {
-                error!(
-                    "Channel {} missing state after filtering - data inconsistency",
-                    channel.id
-                );
-                continue; // Skip this channel instead of panicking
-            }
-        };
-
+    let mut results = Vec::with_capacity(channels.len());
+    for (channel, state) in channels {
         let source_account = account_map
             .get(&channel.source)
             .ok_or_else(|| async_graphql::Error::new(errors::messages::not_found("Source account", channel.source)))?;
 
         let dest_account = account_map.get(&channel.destination).ok_or_else(|| {
             async_graphql::Error::new(errors::messages::not_found("Destination account", channel.destination))
+        })?;
+
+        let position = ChannelStatePosition::from_published(
+            state.published_block,
+            state.published_tx_index,
+            state.published_log_index,
+        )
+        .map_err(|e| {
+            async_graphql::Error::new(errors::messages::conversion_error(
+                "i64",
+                "u64",
+                format!(
+                    "channel state position ({}, {}, {}) ({})",
+                    state.published_block, state.published_tx_index, state.published_log_index, e
+                ),
+            ))
         })?;
 
         // Convert to GraphQL types
@@ -356,6 +429,7 @@ async fn query_channels_at_watermark(
             channel: channel_gql,
             source: source_gql,
             destination: dest_gql,
+            position: Some(position),
         });
     }
 
@@ -494,6 +568,42 @@ async fn query_channels_at_watermark_with_filters(
 /// block-level granularity is sufficient.
 fn watermark_condition(watermark: &Watermark) -> Condition {
     Condition::all().add(channel_state::Column::PublishedBlock.lte(watermark.block))
+}
+
+/// Selects channel states published strictly after `after`, ordered by block, then transaction, then log
+fn position_after_condition(after: &Watermark) -> Condition {
+    Condition::any()
+        .add(channel_state::Column::PublishedBlock.gt(after.block))
+        .add(
+            Condition::all()
+                .add(channel_state::Column::PublishedBlock.eq(after.block))
+                .add(channel_state::Column::PublishedTxIndex.gt(after.tx_index)),
+        )
+        .add(
+            Condition::all()
+                .add(channel_state::Column::PublishedBlock.eq(after.block))
+                .add(channel_state::Column::PublishedTxIndex.eq(after.tx_index))
+                .add(channel_state::Column::PublishedLogIndex.gt(after.log_index)),
+        )
+}
+
+/// Turns a resume cursor from a client into a database position
+fn cursor_to_watermark(cursor: ChannelStateCursor) -> Result<Watermark> {
+    let convert = |value: UInt64| {
+        i64::try_from(value.0).map_err(|_| {
+            errors::graphql_error(errors::invalid_pagination("after exceeds the supported database range"))
+        })
+    };
+    Ok(Watermark {
+        block: convert(cursor.block)?,
+        tx_index: convert(cursor.transaction_index)?,
+        log_index: convert(cursor.log_index)?,
+    })
+}
+
+/// The cursor of the last snapshot entry: everything up to the watermark has been sent
+fn watermark_position(watermark: &Watermark) -> Option<ChannelStatePosition> {
+    ChannelStatePosition::from_published(watermark.block, watermark.tx_index, watermark.log_index).ok()
 }
 
 trait CurvyPositioned {
@@ -993,10 +1103,18 @@ impl SubscriptionRoot {
     ///
     /// **Note:** This is a directed graph. Bidirectional communication requires
     /// channels in both directions, each emitted as a separate entry.
+    ///
+    /// **Resuming:**
+    /// Entries carry a `cursor` (every live update, and the last snapshot entry). A client that reconnects passes
+    /// the last cursor it received as `after`. Instead of the snapshot, it then receives the latest state of every
+    /// channel that changed after that cursor, closed channels included and oldest change first, followed by live
+    /// updates. No change is lost while the client was disconnected.
     #[graphql(name = "openedChannelGraphUpdated")]
     async fn opened_channel_graph_updated(
         &self,
         ctx: &Context<'_>,
+        #[graphql(desc = "Cursor of the last entry received; resumes with every channel change after it")]
+        after: Option<ChannelStateCursor>,
     ) -> Result<impl Stream<Item = OpenedChannelsGraphEntry>> {
         // Get dependencies from context
         let db = ctx.data::<DatabaseConnection>()?.clone();
@@ -1004,6 +1122,8 @@ impl SubscriptionRoot {
             .data::<IndexerState>()
             .map_err(|e| async_graphql::Error::new(errors::messages::context_error("IndexerState", e.message)))?
             .clone();
+
+        let after = after.map(cursor_to_watermark).transpose()?;
 
         // Capture watermark and subscribe to event bus (synchronized)
         let (watermark, mut event_receiver, mut shutdown_receiver) =
@@ -1013,18 +1133,37 @@ impl SubscriptionRoot {
         const BATCH_SIZE: usize = 100;
 
         Ok(stream! {
-            // Phase 1: Stream historical snapshot of all non-closed channels at watermark
-            match query_channels_at_watermark(&db, &watermark, BATCH_SIZE).await {
-                Ok(mut historical_channels) => {
-                    historical_channels.shuffle(&mut rand::rng());
-                    for channel_update in historical_channels {
-                        yield channel_update_to_graph_entry(channel_update);
+            match after {
+                // Phase 1, resumed: every channel that changed after the client's cursor, closed ones included
+                Some(after) => match query_channel_changes_after(&db, &after, &watermark).await {
+                    Ok(changed_channels) => {
+                        for channel_update in changed_channels {
+                            let cursor = channel_update.position;
+                            yield channel_update_to_graph_entry(channel_update, cursor);
+                        }
                     }
-                }
-                Err(e) => {
-                    error!(error = ?e, "failed to query historical channels");
-                    return; // Terminate subscription on error
-                }
+                    Err(e) => {
+                        error!(error = ?e, "failed to query channel changes to resume from");
+                        return; // Terminate subscription on error
+                    }
+                },
+                // Phase 1: Stream historical snapshot of all non-closed channels at watermark
+                None => match query_channels_at_watermark(&db, &watermark, BATCH_SIZE).await {
+                    Ok(mut historical_channels) => {
+                        historical_channels.shuffle(&mut rand::rng());
+                        // Only the last entry carries a cursor: a client cut off earlier has not seen the whole
+                        // snapshot, so it must start over rather than resume.
+                        let last = historical_channels.len().saturating_sub(1);
+                        for (index, channel_update) in historical_channels.into_iter().enumerate() {
+                            let cursor = (index == last).then(|| watermark_position(&watermark)).flatten();
+                            yield channel_update_to_graph_entry(channel_update, cursor);
+                        }
+                    }
+                    Err(e) => {
+                        error!(error = ?e, "failed to query historical channels");
+                        return; // Terminate subscription on error
+                    }
+                },
             }
 
             // Phase 2: Stream real-time updates from event bus
@@ -1055,7 +1194,8 @@ impl SubscriptionRoot {
                         match event_result {
                             Ok(IndexerEvent::ChannelUpdated(channel_update)) => {
                                 // Convert from ChannelUpdate (internal) to OpenedChannelsGraphEntry (API)
-                                yield channel_update_to_graph_entry(*channel_update);
+                                let cursor = channel_update.position;
+                                yield channel_update_to_graph_entry(*channel_update, cursor);
                             }
                             Ok(IndexerEvent::AccountUpdated(_)) => {
                                 // Account updates don't affect this subscription
@@ -2007,11 +2147,15 @@ impl SubscriptionRoot {
 }
 
 /// Convert ChannelUpdate (from events) to OpenedChannelsGraphEntry (for GraphQL)
-fn channel_update_to_graph_entry(update: ChannelUpdate) -> OpenedChannelsGraphEntry {
+fn channel_update_to_graph_entry(
+    update: ChannelUpdate,
+    cursor: Option<ChannelStatePosition>,
+) -> OpenedChannelsGraphEntry {
     OpenedChannelsGraphEntry {
         channel: update.channel,
         source: update.source,
         destination: update.destination,
+        cursor,
     }
 }
 
