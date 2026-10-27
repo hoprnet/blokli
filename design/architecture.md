@@ -1028,8 +1028,9 @@ buffered in the channel.
 
 **Overflow Handling**:
 
-Event channels use `async-broadcast` with bounded capacity. Slow subscribers that can't keep up will receive `RecvError::Lagged(n)` and skip
-old messages. This prevents fast producers from being blocked by slow consumers.
+Event channels use `async-broadcast` with bounded capacity so slow consumers do not block producers. When a subscriber falls behind, the
+server ends its stream. The client reconnects to receive a fresh snapshot or resume from its last processed position, avoiding silent loss
+of updates.
 
 **Reorg Safety**:
 
