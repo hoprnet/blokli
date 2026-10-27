@@ -1999,7 +1999,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-api"
-version = "0.23.6"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -2051,7 +2051,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-api-types"
-version = "0.13.1"
+version = "0.14.0"
 dependencies = [
  "async-graphql",
  "blokli-chain-types",
