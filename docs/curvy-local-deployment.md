@@ -19,14 +19,13 @@ Both Curvy crates come from crates.io and are pinned exactly, so a routine
 `cargo update` cannot move them:
 
 ```toml
-curvy-bindings = "=0.1.0-rc.8"
+curvy-bindings = "=0.1.0"
 curvy-core = "=0.1.0-rc.6"
 ```
 
 `curvy-bindings` supplies the contract bindings and development deployer;
-`curvy-core` supplies the notes-tree primitives. Both are release candidates.
-When Curvy publishes stable releases, bump the pins together and refresh
-`Cargo.lock`:
+`curvy-core` supplies the notes-tree primitives and is a release candidate.
+When Curvy publishes new releases, bump the pins and refresh `Cargo.lock`:
 
 ```bash
 cargo update -p curvy-bindings -p curvy-core

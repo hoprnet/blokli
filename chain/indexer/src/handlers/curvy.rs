@@ -250,7 +250,13 @@ where
             CurvyAggregatorAlphaV2Events::CommittedNullifiers(event) => {
                 self.on_curvy_committed_nullifiers(tx, log, event).await
             }
-            CurvyAggregatorAlphaV2Events::CommitmentGasFeeRootUpdated(_)
+            CurvyAggregatorAlphaV2Events::CircuitVerifiersSet(_)
+            | CurvyAggregatorAlphaV2Events::CircuitVersionReleased(_)
+            | CurvyAggregatorAlphaV2Events::CircuitVersionExpirySet(_)
+            | CurvyAggregatorAlphaV2Events::CommitmentGasFeeRootUpdated(_)
+            | CurvyAggregatorAlphaV2Events::CommitmentGasFeeRootSuperseded(_)
+            | CurvyAggregatorAlphaV2Events::CommitmentFeeRootGracePeriodUpdated(_)
+            | CurvyAggregatorAlphaV2Events::PreviousCommitmentFeeRootExpired(_)
             | CurvyAggregatorAlphaV2Events::DirectShieldEnabledUpdated(_)
             | CurvyAggregatorAlphaV2Events::Initialized(_)
             | CurvyAggregatorAlphaV2Events::OwnershipTransferred(_)

@@ -2945,9 +2945,9 @@ dependencies = [
 
 [[package]]
 name = "curvy-bindings"
-version = "0.1.0-rc.8"
+version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eac22efead5ba6b1120e2b71d468ee29daf07f95fce6c6587a07523a51450691"
+checksum = "31e33ae9eaded6c55e73dbbaab4aad056031e6a86cfebc7d3dc20f8427c9efb3"
 dependencies = [
  "alloy",
  "anyhow",
