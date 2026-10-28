@@ -289,11 +289,11 @@ async fn query_channels_at_watermark(
 async fn query_channel_changes_after(
     db: &DatabaseConnection,
     after: &Watermark,
-    watermark: &Watermark,
+    until: &Watermark,
 ) -> Result<Vec<ChannelUpdate>> {
     let changed_states = channel_state::Entity::find()
         .filter(position_after_condition(after))
-        .filter(watermark_condition(watermark))
+        .filter(watermark_condition(until))
         .order_by_desc(channel_state::Column::PublishedBlock)
         .order_by_desc(channel_state::Column::PublishedTxIndex)
         .order_by_desc(channel_state::Column::PublishedLogIndex)
