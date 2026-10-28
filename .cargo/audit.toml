@@ -25,13 +25,6 @@ ignore = [
   # Review by: 2026-06-30
   "RUSTSEC-2026-0173",
 
-  # RUSTSEC-2026-0235
-  # Crate: rkyv 0.7.46
-  # Transitive: sea-orm -> rust_decimal
-  # Status: Insufficient archive validation can cause out-of-bounds reads in archives containing Rc/Arc
-  # Review by: 2026-06-30
-  "RUSTSEC-2026-0235",
-
   # RUSTSEC-2026-0253
   # Crate: lru 0.16.4
   # Transitive: async-graphql -> lru
@@ -45,4 +38,11 @@ ignore = [
   # Status: smartstring is unmaintained
   # Review by: 2026-06-30
   "RUSTSEC-2026-0249",
+
+  # RUSTSEC-2026-0387
+  # Crate: crypto-bigint 0.5.5 (0.7.x is patched and updated in Cargo.lock)
+  # Transitive: alloy-signer -> k256/elliptic-curve 0.13 -> crypto-bigint 0.5
+  # Status: Timing variability in constant-time operations; no fix released for the 0.5 line. Blocked on alloy moving to elliptic-curve 0.14.
+  # Review by: 2026-12-31
+  "RUSTSEC-2026-0387",
 ]

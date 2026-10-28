@@ -35,7 +35,7 @@
     nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     # HOPR Nix Library (provides flake-utils and reusable build functions)
-    nix-lib.url = "github:hoprnet/nix-lib/v1.3.0";
+    nix-lib.url = "github:hoprnet/nix-lib/v2.0.0";
 
     # Rust build system
     crane.url = "github:ipetkov/crane";
@@ -246,7 +246,6 @@
               name = dockerName;
               Entrypoint = [ "/bin/bloklid" ];
               pkgsLinux = platformPkgs;
-              env = [ "SSL_CERT_FILE=${platformPkgs.cacert}/etc/ssl/certs/ca-bundle.crt" ];
               extraContents = [
                 binary
                 (mkStaticEntrypoint {
@@ -270,7 +269,6 @@
               Entrypoint = [ "/bin/blokli-anvil-entrypoint" ];
               pkgsLinux = platformPkgs;
               env = [
-                "SSL_CERT_FILE=${platformPkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
                 "BLOKLI_DEPLOY_CURVY=true"
               ];
               extraContents = [
