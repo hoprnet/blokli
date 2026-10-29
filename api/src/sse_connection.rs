@@ -1,9 +1,9 @@
 //! Log lines for the life of one SSE subscription connection.
 //!
 //! A connection logs one line when it opens and one when it closes, with how long it lasted, how
-//! many events it carried and why it ended (hoprnet/hopr-integration-tests#45). The close line is
-//! logged when the connection's event stream is dropped, so it is written however the connection
-//! ends.
+//! many events it carried, how many of them were errors, and why it ended
+//! (hoprnet/hopr-integration-tests#45). The close line is logged when the connection's event stream
+//! is dropped, so it is written however the connection ends.
 
 use std::{convert::Infallible, time::Instant};
 
@@ -22,8 +22,8 @@ pub(crate) enum CloseReason {
     /// The client went away (it closed the connection, or writing to it failed) while the
     /// subscription was still running. Clients reconnect, so this is routine.
     ClientGone,
-    /// The subscription stream ended on the server. The client gets no further events until it
-    /// reconnects, so this is worth seeing at INFO.
+    /// The subscription stream ended on the server, including normal completion after a
+    /// transaction reaches a terminal status. Logged at DEBUG unless it carried GraphQL errors.
     StreamEnded,
 }
 
@@ -42,6 +42,8 @@ pub(crate) struct SseConnectionLog {
     subscription: String,
     opened: Instant,
     events: u64,
+    /// Events that carried GraphQL errors.
+    errors: u64,
     stream_ended: bool,
 }
 
@@ -54,6 +56,7 @@ impl SseConnectionLog {
             subscription: subscription.to_owned(),
             opened: Instant::now(),
             events: 0,
+            errors: 0,
             stream_ended: false,
         }
     }
@@ -71,23 +74,28 @@ impl Drop for SseConnectionLog {
     fn drop(&mut self) {
         let reason = self.close_reason();
         let duration_ms = u64::try_from(self.opened.elapsed().as_millis()).unwrap_or(u64::MAX);
-        match reason {
-            CloseReason::StreamEnded => info!(
+        // Only connections that carried GraphQL errors need an INFO summary. Stream completion
+        // is routine for transaction subscriptions.
+        if self.errors > 0 {
+            info!(
                 connection = %self.connection_id,
                 subscription = %self.subscription,
                 reason = reason.as_str(),
                 duration_ms,
                 events = self.events,
+                errors = self.errors,
                 "SSE connection closed"
-            ),
-            CloseReason::ClientGone => debug!(
+            );
+        } else {
+            debug!(
                 connection = %self.connection_id,
                 subscription = %self.subscription,
                 reason = reason.as_str(),
                 duration_ms,
                 events = self.events,
+                errors = self.errors,
                 "SSE connection closed"
-            ),
+            );
         }
     }
 }
@@ -107,6 +115,7 @@ pub(crate) fn subscription_events(
         while let Some(response) = responses.next().await {
             if !response.errors.is_empty() {
                 metrics::increment_errors(request_type);
+                connection.errors += 1;
             }
             let json = serde_json::to_string(&response)
                 .unwrap_or_else(|_| r#"{"errors":[{"message":"Failed to serialize response"}]}"#.to_string());
@@ -124,6 +133,7 @@ mod tests {
         sync::{Arc, Mutex},
     };
 
+    use async_graphql::ServerError;
     use futures::stream;
     use tracing_subscriber::fmt::MakeWriter;
 
@@ -203,7 +213,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_subscription_stream_that_ends_is_logged_at_info() {
+    async fn a_subscription_stream_that_ends_without_errors_is_logged_at_debug() {
         let (logs, _guard) = capture();
 
         let connection = SseConnectionLog::open(Uuid::new_v4(), "safe-deployed");
@@ -213,9 +223,30 @@ mod tests {
         assert_eq!(events.len(), 2);
 
         let line = close_line(&logs);
-        assert!(line.contains(" INFO "), "{line}");
+        assert!(line.contains("DEBUG"), "{line}");
         assert!(line.contains("reason=\"stream_ended\""), "{line}");
         assert!(line.contains("events=2"), "{line}");
+        assert!(line.contains("errors=0"), "{line}");
+    }
+
+    #[tokio::test]
+    async fn a_connection_that_carried_errors_is_logged_at_info() {
+        let (logs, _guard) = capture();
+
+        let connection = SseConnectionLog::open(Uuid::new_v4(), "channel-updated");
+        let failed = GraphQlResponse::from_errors(vec![ServerError::new("resolver failed", None)]);
+        let mut events = Box::pin(subscription_events(
+            stream::iter([failed]).chain(stream::pending()),
+            connection,
+            "subscription",
+        ));
+        let _ = events.next().await;
+        drop(events);
+
+        let line = close_line(&logs);
+        assert!(line.contains(" INFO "), "{line}");
+        assert!(line.contains("reason=\"client_gone\""), "{line}");
+        assert!(line.contains("errors=1"), "{line}");
     }
 
     #[tokio::test]

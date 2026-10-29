@@ -79,8 +79,10 @@ sending blokli malformed traffic; subscription errors mean live/streamed data is
 
 **`reason="subscription_error_count"`**
 
-- Identify which subscription is affected — subscription names are logged on connection establishment (`api/src/server.rs:487-491`, look for
-  `"SSE connection established"`).
+- Identify which subscription is affected — every connection that carried errors logs one `"SSE connection closed"` line at INFO with
+  `subscription`, `errors`, `events`, `reason` and `duration_ms` (`api/src/sse_connection.rs`). The `"SSE connection established"` line is
+  logged at DEBUG only. Connections without GraphQL errors log their close line at DEBUG, including normal transaction subscription
+  completion. Error summaries appear only when the connection closes.
 - Check whether the errors correlate with [Blokli Unhealthy](blokli-unhealthy.md) or [Blokli Indexer Lag High](blokli-indexer-lag-high.md) —
   long-lived subscriptions surface the same underlying resolver errors as queries do, just repeatedly over the connection's lifetime.
 - Check for client-side reconnect storms: a client that repeatedly opens and drops subscriptions can inflate this count without there being
