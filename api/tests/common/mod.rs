@@ -104,6 +104,19 @@ pub fn create_test_schema(db: &BlokliDb) -> (Schema<QueryRoot, MutationRoot, Sub
     (schema, indexer_state)
 }
 
+/// Like [`create_test_schema`], but with an event bus that holds only `event_bus_capacity` events, so tests can make
+/// a subscription fall behind.
+#[allow(unused)]
+pub fn create_test_schema_with_event_bus_capacity(
+    db: &BlokliDb,
+    event_bus_capacity: usize,
+) -> (Schema<QueryRoot, MutationRoot, SubscriptionRoot>, IndexerState) {
+    let indexer_state = IndexerState::new(event_bus_capacity, 100);
+    let schema = build_subscription_test_schema(db, indexer_state.clone());
+
+    (schema, indexer_state)
+}
+
 fn build_subscription_test_schema(
     db: &BlokliDb,
     indexer_state: IndexerState,
