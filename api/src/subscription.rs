@@ -42,7 +42,10 @@ use hopr_types::{
     },
 };
 use rand::seq::SliceRandom;
-use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Select};
+use sea_orm::{
+    ColumnTrait, Condition, DatabaseConnection, EntityTrait, ExprTrait, QueryFilter, QueryOrder, Select,
+    sea_query::{Alias, Expr, Order, Query},
+};
 use tokio::time::{MissedTickBehavior, interval};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -252,7 +255,8 @@ async fn query_channels_at_watermark(
         .filter(watermark_condition(watermark))
         .order_by_desc(channel_state::Column::PublishedBlock)
         .order_by_desc(channel_state::Column::PublishedTxIndex)
-        .order_by_desc(channel_state::Column::PublishedLogIndex);
+        .order_by_desc(channel_state::Column::PublishedLogIndex)
+        .order_by_desc(channel_state::Column::Id);
 
     let channel_states = channel_states_query
         .all(db)
@@ -291,21 +295,41 @@ async fn query_channel_changes_after(
     after: &Watermark,
     until: &Watermark,
 ) -> Result<Vec<ChannelUpdate>> {
+    // A correlated top-one query works on both PostgreSQL and SQLite. Apply the watermark inside it so
+    // a newer state committed during phase 1 cannot hide the state that belongs to this resume window.
+    let latest = Alias::new("latest_channel_state");
+    let latest_state_id = Query::select()
+        .column((latest.clone(), channel_state::Column::Id))
+        .from_as(channel_state::Entity, latest.clone())
+        .and_where(
+            Expr::col((latest.clone(), channel_state::Column::ChannelId))
+                .equals((channel_state::Entity, channel_state::Column::ChannelId)),
+        )
+        .and_where(Expr::col((latest.clone(), channel_state::Column::PublishedBlock)).lte(until.block))
+        .order_by((latest.clone(), channel_state::Column::PublishedBlock), Order::Desc)
+        .order_by((latest.clone(), channel_state::Column::PublishedTxIndex), Order::Desc)
+        .order_by((latest.clone(), channel_state::Column::PublishedLogIndex), Order::Desc)
+        .order_by((latest, channel_state::Column::Id), Order::Desc)
+        .limit(1)
+        .to_owned();
+
     let changed_states = channel_state::Entity::find()
+        .filter(channel_state::Column::Id.in_subquery(latest_state_id))
         .filter(position_after_condition(after))
         .filter(watermark_condition(until))
         .order_by_desc(channel_state::Column::PublishedBlock)
         .order_by_desc(channel_state::Column::PublishedTxIndex)
         .order_by_desc(channel_state::Column::PublishedLogIndex)
+        .order_by_desc(channel_state::Column::Id)
         .all(db)
         .await
         .map_err(|e| async_graphql::Error::new(errors::messages::query_error("channel_state query", e)))?;
 
-    // Latest changed state per channel (first occurrence due to ordering)
-    let mut state_map: HashMap<i64, channel_state::Model> = HashMap::new();
-    for state in changed_states {
-        state_map.entry(state.channel_id).or_insert(state);
-    }
+    // The database returns at most one state per channel; index them for the identity lookup.
+    let mut state_map: HashMap<i64, channel_state::Model> = changed_states
+        .into_iter()
+        .map(|state| (state.channel_id, state))
+        .collect();
     if state_map.is_empty() {
         return Ok(Vec::new());
     }
@@ -325,6 +349,7 @@ async fn query_channel_changes_after(
             state.published_block,
             state.published_tx_index,
             state.published_log_index,
+            state.id,
         )
     });
 
@@ -502,7 +527,8 @@ async fn query_channels_at_watermark_with_filters(
         .filter(watermark_condition(watermark))
         .order_by_desc(channel_state::Column::PublishedBlock)
         .order_by_desc(channel_state::Column::PublishedTxIndex)
-        .order_by_desc(channel_state::Column::PublishedLogIndex);
+        .order_by_desc(channel_state::Column::PublishedLogIndex)
+        .order_by_desc(channel_state::Column::Id);
 
     let channel_states = channel_states_query
         .all(db)
@@ -603,7 +629,9 @@ fn cursor_to_watermark(cursor: ChannelStateCursor) -> Result<Watermark> {
 
 /// The cursor of the last snapshot entry: everything up to the watermark has been sent
 fn watermark_position(watermark: &Watermark) -> Option<ChannelStatePosition> {
-    ChannelStatePosition::from_published(watermark.block, watermark.tx_index, watermark.log_index).ok()
+    ChannelStatePosition::from_published(watermark.block, watermark.tx_index, watermark.log_index)
+        .inspect_err(|error| warn!(?watermark, %error, "failed to convert channel graph watermark to cursor"))
+        .ok()
 }
 
 trait CurvyPositioned {
