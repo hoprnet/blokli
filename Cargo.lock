@@ -17,6 +17,7 @@ dependencies = [
  "cipher",
  "cpubits",
  "cpufeatures 0.3.1",
+ "zeroize",
 ]
 
 [[package]]
@@ -1995,6 +1996,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa"
 dependencies = [
  "hybrid-array",
+ "zeroize",
 ]
 
 [[package]]
@@ -2469,6 +2471,7 @@ dependencies = [
  "block-buffer 0.12.1",
  "crypto-common 0.2.2",
  "inout",
+ "zeroize",
 ]
 
 [[package]]
@@ -2940,9 +2943,9 @@ dependencies = [
 
 [[package]]
 name = "curvy-bindings"
-version = "0.1.0-rc.8"
+version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eac22efead5ba6b1120e2b71d468ee29daf07f95fce6c6587a07523a51450691"
+checksum = "31e33ae9eaded6c55e73dbbaab4aad056031e6a86cfebc7d3dc20f8427c9efb3"
 dependencies = [
  "alloy",
  "anyhow",
@@ -2955,15 +2958,16 @@ dependencies = [
 
 [[package]]
 name = "curvy-core"
-version = "0.1.0-rc.6"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c3fc4ddb515fb093c886aaffb0b03eb88d0c2d17d362c3aa03d0baefbf95f12"
+checksum = "ff91eb5c647d11ab9d4fb4eed504cbf36ee47375ad2a749e47f471b92b57ea38"
 dependencies = [
  "aes",
  "ark-bn254 0.6.0",
  "ark-ec 0.6.0",
  "ark-ff 0.6.0",
  "ark-secp256k1",
+ "crypto-bigint 0.7.10",
  "ctr",
  "getrandom 0.2.17",
  "hkdf 0.13.0",
@@ -2972,6 +2976,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.1",
+ "sha3 0.12.0",
  "zeroize",
 ]
 
@@ -3286,6 +3291,7 @@ dependencies = [
  "const-oid 0.10.2",
  "crypto-common 0.2.2",
  "ctutils",
+ "zeroize",
 ]
 
 [[package]]
