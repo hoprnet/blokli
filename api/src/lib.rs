@@ -15,6 +15,7 @@ pub mod query_v2;
 pub mod readiness;
 pub mod schema;
 pub mod server;
+mod sse_connection;
 pub mod subscription;
 pub mod tls;
 pub mod validation;
