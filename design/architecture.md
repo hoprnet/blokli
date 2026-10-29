@@ -334,7 +334,7 @@ The schema is organized into three root types following GraphQL best practices:
 - Account updates: Real-time changes to account balances and Safe linking
 - Channel updates: Real-time changes to payment channel states
 - Safe deployments: Real-time notifications when new Safe contracts are deployed
-- Network topology: Opened channel graph updates for routing decisions
+- Network topology: Opened channel graph updates for routing decisions, resumable from a cursor
 - Service registry updates: snapshot-first streams of entries, service types and registry-wide configuration followed by live changes
 - Transaction updates: Status changes for submitted transactions
 - Curvy events: Historical-to-live streams for pending notes, committed notes, and committed nullifiers
@@ -344,6 +344,12 @@ subscriptions capture that same kind of watermark while registering their event 
 and then stream later changes. Service-type and registry-wide configuration subscriptions likewise emit complete current state before live
 changes. Broadcast overflow ends the server stream; the client reconnects and receives a fresh snapshot, turning possible silent loss into a
 deterministic resynchronization.
+
+The opened channel graph subscription is resumable. Every entry it sends after the snapshot, and the last snapshot entry, carries a cursor:
+the chain position of the channel state it describes. A client that reconnects passes its last cursor and receives, instead of the snapshot
+of open channels, the latest state of every channel that changed after that position, closed channels included and oldest change first,
+followed by live changes. Channel state history is append-only (reorganizations add correcting states at a later position), so a cursor
+stays valid. This keeps a client from missing a closure while it was disconnected, which a snapshot of open channels cannot show.
 
 **Error Handling**: Uses GraphQL union types to return domain-specific error types (InvalidAddressError, ContractNotAllowedError, etc.)
 alongside success types, providing structured error responses with codes and context.
