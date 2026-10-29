@@ -1078,3 +1078,136 @@ async fn test_opened_channel_graph_resume_sends_oldest_change_first_and_respects
     assert_eq!(next_graph_entry(&mut stream).await["channel"]["source"], 2);
     assert_eq!(next_graph_entry(&mut stream).await["channel"]["source"], 1);
 }
+
+#[tokio::test]
+async fn test_opened_channel_graph_resume_selects_latest_state_within_watermark() {
+    let db = BlokliDb::new_in_memory().await.unwrap();
+    let (addr1, addr2, balance) = open_channel_fixture(&db).await;
+    // Many historical states must collapse to one result in the database.
+    for block in 101..120 {
+        let open = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
+        db.upsert_channel(None, open, block, 0, 0).await.unwrap();
+    }
+    let closing = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::PendingToClose(UNIX_EPOCH), 1);
+    db.upsert_channel(None, closing, 120, 2, 3).await.unwrap();
+    // Simulate a state committed after the captured watermark, before the history query runs.
+    let closed = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Closed, 1);
+    db.upsert_channel(None, closed, 121, 0, 0).await.unwrap();
+    update_watermark(&db, 120, 2, 3).await;
+
+    let (schema, _indexer_state) = common::create_test_schema(&db);
+    let query = format!(
+        r#"subscription {{
+            openedChannelGraphUpdated(after: {{ block: "0", transactionIndex: "0", logIndex: "0" }}) {{
+                {RESUMABLE_GRAPH_FIELDS}
+            }}
+        }}"#
+    );
+    let mut stream = schema.execute_stream(query).boxed();
+    insta::assert_yaml_snapshot!(next_graph_entry(&mut stream).await, @r#"
+    channel:
+      destination: 2
+      source: 1
+      status: PENDINGTOCLOSE
+    cursor:
+      block: "120"
+      logIndex: "3"
+      transactionIndex: "2"
+    "#);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), stream.next())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn test_opened_channel_graph_resume_accepts_cursor_past_watermark() {
+    let db = BlokliDb::new_in_memory().await.unwrap();
+    let (addr1, addr2, balance) = open_channel_fixture(&db).await;
+    update_watermark(&db, 100, 0, 0).await;
+    let (schema, indexer_state) = common::create_test_schema(&db);
+    let query = format!(
+        r#"subscription {{
+            openedChannelGraphUpdated(after: {{ block: "200", transactionIndex: "0", logIndex: "0" }}) {{
+                {RESUMABLE_GRAPH_FIELDS}
+            }}
+        }}"#
+    );
+    let mut stream = schema.execute_stream(query).boxed();
+    // Poll setup to completion and verify that no history or error is emitted.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), stream.next())
+            .await
+            .is_err()
+    );
+
+    let closing = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::PendingToClose(UNIX_EPOCH), 1);
+    let channel_id = closing.get_id().to_hex();
+    db.upsert_channel(None, closing, 201, 1, 2).await.unwrap();
+    let update = create_channel_update_event(&db, &channel_id).await.unwrap();
+    indexer_state.publish_event(IndexerEvent::ChannelUpdated(Box::new(update)));
+    insta::assert_yaml_snapshot!(next_graph_entry(&mut stream).await, @r#"
+    channel:
+      destination: 2
+      source: 1
+      status: PENDINGTOCLOSE
+    cursor:
+      block: "201"
+      logIndex: "2"
+      transactionIndex: "1"
+    "#);
+}
+
+#[tokio::test]
+async fn test_opened_channel_graph_resume_hands_off_to_live_with_increasing_cursors() {
+    let db = BlokliDb::new_in_memory().await.unwrap();
+    let (addr1, addr2, balance) = open_channel_fixture(&db).await;
+    let reverse = build_channel_entry(addr2, addr1, balance, 0, ChannelStatus::Open, 1);
+    db.upsert_channel(None, reverse, 110, 1, 0).await.unwrap();
+    update_watermark(&db, 110, 1, 0).await;
+    let (schema, indexer_state) = common::create_test_schema(&db);
+    let query = format!(
+        r#"subscription {{
+            openedChannelGraphUpdated(after: {{ block: "0", transactionIndex: "0", logIndex: "0" }}) {{
+                {RESUMABLE_GRAPH_FIELDS}
+            }}
+        }}"#
+    );
+    let mut stream = schema.execute_stream(query).boxed();
+    let first = next_graph_entry(&mut stream).await;
+    // Publish during replay: the registered receiver must retain this until phase 2.
+    let closed = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Closed, 1);
+    let channel_id = closed.get_id().to_hex();
+    db.upsert_channel(None, closed, 111, 0, 0).await.unwrap();
+    let update = create_channel_update_event(&db, &channel_id).await.unwrap();
+    indexer_state.publish_event(IndexerEvent::ChannelUpdated(Box::new(update)));
+    let second = next_graph_entry(&mut stream).await;
+    let live = next_graph_entry(&mut stream).await;
+    insta::assert_yaml_snapshot!(vec![first, second, live], @r#"
+    - channel:
+        destination: 2
+        source: 1
+        status: OPEN
+      cursor:
+        block: "100"
+        logIndex: "0"
+        transactionIndex: "0"
+    - channel:
+        destination: 1
+        source: 2
+        status: OPEN
+      cursor:
+        block: "110"
+        logIndex: "0"
+        transactionIndex: "1"
+    - channel:
+        destination: 2
+        source: 1
+        status: CLOSED
+      cursor:
+        block: "111"
+        logIndex: "0"
+        transactionIndex: "0"
+    "#);
+}
