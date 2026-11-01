@@ -69,7 +69,7 @@ use crate::{
 async fn capture_service_registry_config_synchronized(
     indexer_state: &IndexerState,
     db: &DatabaseConnection,
-) -> Result<(ServiceRegistryConfig, Receiver<IndexerEvent>, Receiver<()>)> {
+) -> Result<(ServiceRegistryConfig, Receiver<Arc<IndexerEvent>>, Receiver<()>)> {
     let _lock = indexer_state.acquire_watermark_lock().await;
 
     let model = ServiceRegistryConfigEntity::find()
@@ -122,7 +122,7 @@ async fn capture_service_types_synchronized(
     indexer_state: &IndexerState,
     db: &DatabaseConnection,
     service_type: Option<&ServiceType>,
-) -> Result<(Vec<ServiceTypeUpdate>, Receiver<IndexerEvent>, Receiver<()>)> {
+) -> Result<(Vec<ServiceTypeUpdate>, Receiver<Arc<IndexerEvent>>, Receiver<()>)> {
     let _lock = indexer_state.acquire_watermark_lock().await;
     let aggregates = match service_type {
         Some(service_type) => fetch_service_types_by_id(db, &[service_type.as_ref().to_vec()]).await,
@@ -188,7 +188,7 @@ pub struct Watermark {
 async fn capture_watermark_synchronized(
     indexer_state: &IndexerState,
     db: &DatabaseConnection,
-) -> Result<(Watermark, Receiver<IndexerEvent>, Receiver<()>)> {
+) -> Result<(Watermark, Receiver<Arc<IndexerEvent>>, Receiver<()>)> {
     // Acquire read lock - this waits for any in-progress block processing to complete
     let _lock = indexer_state.acquire_watermark_lock().await;
 
@@ -675,7 +675,7 @@ where
 
 fn curvy_event_stream<T, H, F>(
     historical: H,
-    mut event_receiver: Receiver<IndexerEvent>,
+    mut event_receiver: Receiver<Arc<IndexerEvent>>,
     mut shutdown_receiver: Receiver<()>,
     start_block: Option<u64>,
     select: F,
@@ -683,7 +683,7 @@ fn curvy_event_stream<T, H, F>(
 where
     T: CurvyPositioned + Send + 'static,
     H: Stream<Item = Result<T>> + Send + 'static,
-    F: Fn(IndexerEvent) -> Option<T> + Send + Sync + 'static,
+    F: Fn(&IndexerEvent) -> Option<T> + Send + Sync + 'static,
 {
     try_stream! {
         pin_mut!(historical);
@@ -735,7 +735,7 @@ where
                     }
                 }
             }?;
-            if let Some(event) = select(event)
+            if let Some(event) = select(&event)
                 && start_block.is_none_or(|start_block| event.position().block.0 >= start_block)
             {
                 yield event;
@@ -808,7 +808,7 @@ impl SubscriptionRoot {
             shutdown_receiver,
             start_block.map(|start_block| start_block.api),
             |event| match event {
-                IndexerEvent::CurvyPendingNote(event) => Some(event),
+                IndexerEvent::CurvyPendingNote(event) => Some(event.clone()),
                 _ => None,
             },
         ))
@@ -851,7 +851,7 @@ impl SubscriptionRoot {
             shutdown_receiver,
             start_block.map(|start_block| start_block.api),
             |event| match event {
-                IndexerEvent::CurvyCommittedNote(event) => Some(event),
+                IndexerEvent::CurvyCommittedNote(event) => Some(event.clone()),
                 _ => None,
             },
         ))
@@ -894,7 +894,7 @@ impl SubscriptionRoot {
             shutdown_receiver,
             start_block.map(|start_block| start_block.api),
             |event| match event {
-                IndexerEvent::CurvyCommittedNullifier(event) => Some(event),
+                IndexerEvent::CurvyCommittedNullifier(event) => Some(event.clone()),
                 _ => None,
             },
         ))
@@ -1037,7 +1037,7 @@ impl SubscriptionRoot {
 
                     // Receive event from event bus
                     event_result = event_receiver.recv() => {
-                        match event_result {
+                        match event_result.as_deref() {
                             Ok(IndexerEvent::ChannelUpdated(channel_update)) => {
                                 // Extract channel from event
                                 let channel = &channel_update.channel;
@@ -1212,11 +1212,11 @@ impl SubscriptionRoot {
 
                     // Receive event from event bus
                     event_result = event_receiver.recv() => {
-                        match event_result {
+                        match event_result.as_deref() {
                             Ok(IndexerEvent::ChannelUpdated(channel_update)) => {
                                 // Convert from ChannelUpdate (internal) to OpenedChannelsGraphEntry (API)
                                 let cursor = channel_update.position;
-                                yield channel_update_to_graph_entry(*channel_update, cursor);
+                                yield channel_update_to_graph_entry(ChannelUpdate::clone(channel_update), cursor);
                             }
                             Ok(IndexerEvent::AccountUpdated(_)) => {
                                 // Account updates don't affect this subscription
@@ -1325,11 +1325,11 @@ impl SubscriptionRoot {
                         }
                     }
                     event_result = event_receiver.recv() => {
-                        match event_result {
+                        match event_result.as_deref() {
                             Ok(IndexerEvent::AccountUpdated(account)) => {
                                 // Apply filters
-                                if matches_account_filters(&account, keyid, packet_key.as_deref(), chain_key.as_deref()) {
-                                    yield account;
+                                if matches_account_filters(account, keyid, packet_key.as_deref(), chain_key.as_deref()) {
+                                    yield account.clone();
                                 }
                             }
                             Ok(_) => {
@@ -1428,10 +1428,10 @@ impl SubscriptionRoot {
                         }
                     }
                     event_result = event_receiver.recv() => {
-                        match event_result {
+                        match event_result.as_deref() {
                             Ok(IndexerEvent::ServiceEntryUpdated(update)) => {
-                                if matches_service_filters(&update, service_type_filter.as_deref(), node_filter.as_deref()) {
-                                    yield update;
+                                if matches_service_filters(update, service_type_filter.as_deref(), node_filter.as_deref()) {
+                                    yield update.clone();
                                 }
                             }
                             Ok(_) => {
@@ -1506,10 +1506,10 @@ impl SubscriptionRoot {
                         }
                     }
                     event_result = event_receiver.recv() => {
-                        match event_result {
+                        match event_result.as_deref() {
                             Ok(IndexerEvent::ServiceTypeUpdated(update)) => {
-                                if matches_service_type_filter(&update, service_type_filter.as_deref()) {
-                                    yield update;
+                                if matches_service_type_filter(update, service_type_filter.as_deref()) {
+                                    yield update.clone();
                                 }
                             }
                             Ok(_) => {
@@ -1572,10 +1572,10 @@ impl SubscriptionRoot {
                         }
                     }
                     event_result = event_receiver.recv() => {
-                        match event_result {
+                        match event_result.as_deref() {
                             Ok(IndexerEvent::ServiceTypeUpdated(update)) => {
-                                if let Some(config) = update.registry_config {
-                                    yield config;
+                                if let Some(config) = &update.registry_config {
+                                    yield config.clone();
                                 }
                             }
                             Ok(_) => {}
@@ -1655,12 +1655,12 @@ impl SubscriptionRoot {
                         }
                     }
                     event_result = event_receiver.recv() => {
-                        match event_result {
+                        match event_result.as_deref() {
                             Ok(IndexerEvent::TicketParametersUpdated(params)) => {
                                 // Only emit if value changed
-                                if last_params.as_ref() != Some(&params) {
+                                if last_params.as_ref() != Some(params) {
                                     last_params = Some(params.clone());
-                                    yield params;
+                                    yield params.clone();
                                 }
                             }
                             Ok(IndexerEvent::AccountUpdated(_)) => {
@@ -1772,11 +1772,11 @@ impl SubscriptionRoot {
                         }
                     }
                     event_result = event_receiver.recv() => {
-                        match event_result {
+                        match event_result.as_deref() {
                             Ok(IndexerEvent::KeyBindingFeeUpdated(fee)) => {
-                                if last_fee.as_ref() != Some(&fee) {
+                                if last_fee.as_ref() != Some(fee) {
                                     last_fee = Some(fee.clone());
-                                    yield fee;
+                                    yield fee.clone();
                                 }
                             }
                             Ok(IndexerEvent::AccountUpdated(_)) => {
@@ -1868,7 +1868,7 @@ impl SubscriptionRoot {
                     }
                     event_result = event_receiver.recv() => {
                         debug!(?event_result, "received an event in safe_deployed subscription");
-                        match event_result {
+                        match event_result.as_deref() {
                             Ok(IndexerEvent::SafeDeployed(safe_addr)) => {
                                 let safe_addr_bytes = safe_addr.as_ref().to_vec();
                                 debug!(?safe_addr_bytes, "safe address");
@@ -2138,10 +2138,10 @@ impl SubscriptionRoot {
                         }
                     }
                     event_result = event_receiver.recv() => {
-                        match event_result {
+                        match event_result.as_deref() {
                             Ok(IndexerEvent::TicketRedeemed(ticket_redeemed)) => {
-                                if match_ticket_filters(&ticket_redeemed, &channel_id, &issuer_address, &recipient_address) {
-                                yield ticket_redeemed.into();
+                                if match_ticket_filters(ticket_redeemed, &channel_id, &issuer_address, &recipient_address) {
+                                yield ticket_redeemed.clone().into();
                                 }
                             }
                             Ok(_) => {
@@ -2468,10 +2468,10 @@ mod tests {
         event_sender.set_overflow(true);
         let (_shutdown_sender, shutdown_receiver) = broadcast(1);
         event_sender
-            .try_broadcast(IndexerEvent::CurvyCommittedNote(curvy_committed_note(1)))
+            .try_broadcast(Arc::new(IndexerEvent::CurvyCommittedNote(curvy_committed_note(1))))
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         event_sender
-            .try_broadcast(IndexerEvent::CurvyCommittedNote(curvy_committed_note(2)))
+            .try_broadcast(Arc::new(IndexerEvent::CurvyCommittedNote(curvy_committed_note(2))))
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
 
         let events = curvy_event_stream(
@@ -2480,7 +2480,7 @@ mod tests {
             shutdown_receiver,
             None,
             |event| match event {
-                IndexerEvent::CurvyCommittedNote(event) => Some(event),
+                IndexerEvent::CurvyCommittedNote(event) => Some(event.clone()),
                 _ => None,
             },
         );
@@ -2510,7 +2510,7 @@ mod tests {
             shutdown_receiver,
             None,
             |event| match event {
-                IndexerEvent::CurvyCommittedNote(event) => Some(event),
+                IndexerEvent::CurvyCommittedNote(event) => Some(event.clone()),
                 _ => None,
             },
         );
@@ -2669,7 +2669,7 @@ mod tests {
 
         // Verify subscriber receives the event
         let received = event_rx.recv().await.unwrap();
-        assert!(matches!(received, IndexerEvent::AccountUpdated(_)));
+        assert!(matches!(*received, IndexerEvent::AccountUpdated(_)));
     }
 
     #[tokio::test]
