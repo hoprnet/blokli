@@ -173,7 +173,7 @@ impl std::fmt::Debug for IndexerState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("IndexerState")
             .field("coordination_lock", &"Arc<RwLock<()>>")
-            .field("event_bus", &"Sender<IndexerEvent>")
+            .field("event_bus", &"Sender<Arc<IndexerEvent>>")
             .field("shutdown_signal", &"Sender<()>")
             .field("_event_bus_rx", &"Arc<InactiveReceiver<Arc<IndexerEvent>>>")
             .field("_shutdown_rx", &"Arc<Receiver<()>>")
