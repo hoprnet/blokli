@@ -43,8 +43,8 @@ use hopr_types::{
 };
 use rand::seq::SliceRandom;
 use sea_orm::{
-    ColumnTrait, Condition, DatabaseConnection, EntityTrait, ExprTrait, QueryFilter, QueryOrder, Select,
-    sea_query::{Alias, Expr, Order, Query},
+    ColumnTrait, Condition, DatabaseConnection, EntityTrait, ExprTrait, QueryFilter, QueryOrder, QuerySelect, Select,
+    sea_query::{Alias, Expr, Order, Query, SubQueryStatement},
 };
 use tokio::time::{MissedTickBehavior, interval};
 use tracing::{debug, error, info, warn};
@@ -236,51 +236,80 @@ async fn query_channels_at_watermark(
     watermark: &Watermark,
     _batch_size: usize, // Reserved for future pagination implementation
 ) -> Result<Vec<ChannelUpdate>> {
-    // Query all channels (identity table has no temporal component)
-    let channels = channel::Entity::find()
-        .all(db)
-        .await
-        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("channels query", e)))?;
-
-    if channels.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let channel_ids: Vec<i64> = channels.iter().map(|c| c.id).collect();
-
-    // Query channel_state for all channels, filtered by watermark
-    // Only get states published at or before the watermark
-    let channel_states_query = channel_state::Entity::find()
-        .filter(channel_state::Column::ChannelId.is_in(channel_ids.clone()))
-        .filter(watermark_condition(watermark))
-        .order_by_desc(channel_state::Column::PublishedBlock)
-        .order_by_desc(channel_state::Column::PublishedTxIndex)
-        .order_by_desc(channel_state::Column::PublishedLogIndex)
-        .order_by_desc(channel_state::Column::Id);
-
-    let channel_states = channel_states_query
-        .all(db)
-        .await
-        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("channel_state query", e)))?;
-
-    // Build map of channel_id -> latest state (first occurrence due to ordering)
-    let mut state_map: HashMap<i64, channel_state::Model> = HashMap::new();
-    for state in channel_states {
-        state_map.entry(state.channel_id).or_insert(state);
-    }
-
-    // Filter out CLOSED channels (status != 0)
-    let non_closed: Vec<_> = channels
-        .into_iter()
-        .filter_map(|channel| {
-            state_map
-                .remove(&channel.id)
-                .filter(|state| state.status != 0)
-                .map(|state| (channel, state))
-        })
-        .collect();
+    // Only the latest state of each channel is read; CLOSED channels (status 0) are left out
+    let non_closed = latest_channel_states(
+        db,
+        watermark,
+        Condition::all(),
+        Condition::all().add(channel_state::Column::Status.ne(0)),
+    )
+    .await?;
 
     channel_updates_from_states(db, non_closed).await
+}
+
+/// Maximum number of channel state ids bound into one query, well below the bind parameter limits of
+/// PostgreSQL (65535) and SQLite (32766)
+const CHANNEL_STATE_ID_CHUNK: usize = 10_000;
+
+/// Reads the latest state, published up to `watermark`, of each channel matching `channels`, together
+/// with its channel, keeping the states that match `states`
+///
+/// The latest state ids are resolved first, with a correlated top-one subquery per channel served by
+/// `idx_channel_state_position`, and the states are then fetched by primary key. The cost therefore
+/// follows the number of channels rather than the length of their state history: in a single statement
+/// PostgreSQL hash-joins the ids against the whole `channel_state` table instead. A channel's states
+/// have unique positions, so the position alone orders them.
+async fn latest_channel_states(
+    db: &DatabaseConnection,
+    watermark: &Watermark,
+    channels: Condition,
+    states: Condition,
+) -> Result<Vec<(channel::Model, channel_state::Model)>> {
+    let latest = Alias::new("latest_channel_state");
+    let latest_state_id = Query::select()
+        .column((latest.clone(), channel_state::Column::Id))
+        .from_as(channel_state::Entity, latest.clone())
+        .and_where(
+            Expr::col((latest.clone(), channel_state::Column::ChannelId))
+                .equals((channel::Entity, channel::Column::Id)),
+        )
+        .and_where(Expr::col((latest.clone(), channel_state::Column::PublishedBlock)).lte(watermark.block))
+        .order_by((latest.clone(), channel_state::Column::PublishedBlock), Order::Desc)
+        .order_by((latest.clone(), channel_state::Column::PublishedTxIndex), Order::Desc)
+        .order_by((latest, channel_state::Column::PublishedLogIndex), Order::Desc)
+        .limit(1)
+        .to_owned();
+
+    // A channel without any state up to the watermark yields NULL
+    let latest_state_ids: Vec<i64> = channel::Entity::find()
+        .select_only()
+        .expr(Expr::from(SubQueryStatement::from(latest_state_id)))
+        .filter(channels)
+        .into_tuple::<Option<i64>>()
+        .all(db)
+        .await
+        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("channel_state id query", e)))?
+        .into_iter()
+        .flatten()
+        .collect();
+
+    let mut latest_states = Vec::with_capacity(latest_state_ids.len());
+    for ids in latest_state_ids.chunks(CHANNEL_STATE_ID_CHUNK) {
+        let rows = channel_state::Entity::find()
+            .filter(channel_state::Column::Id.is_in(ids.iter().copied()))
+            .filter(states.clone())
+            .find_also_related(channel::Entity)
+            .all(db)
+            .await
+            .map_err(|e| async_graphql::Error::new(errors::messages::query_error("channel_state query", e)))?;
+        latest_states.extend(
+            rows.into_iter()
+                .filter_map(|(state, channel)| channel.map(|channel| (channel, state))),
+        );
+    }
+
+    Ok(latest_states)
 }
 
 /// Queries the latest state of every channel that changed after `after`, up to the watermark
@@ -493,69 +522,33 @@ async fn query_channels_at_watermark_with_filters(
     // Convert GraphQL ChannelStatus to internal status code (i16)
     let status_code: Option<i16> = status.map(|s| s.into());
 
-    // Build query with filters
-    let mut query = channel::Entity::find();
+    // Select the channels to look at, then read only the latest state of each
+    let mut channels = Condition::all();
 
     if let Some(src) = source_i64 {
-        query = query.filter(channel::Column::Source.eq(src));
+        channels = channels.add(channel::Column::Source.eq(src));
     }
 
     if let Some(dst) = dest_i64 {
-        query = query.filter(channel::Column::Destination.eq(dst));
+        channels = channels.add(channel::Column::Destination.eq(dst));
     }
 
     if let Some(ch_id) = concrete_channel_id.as_ref() {
         // Normalize channel ID by stripping 0x prefix
         let normalized_id = ch_id.strip_prefix("0x").unwrap_or(ch_id);
-        query = query.filter(channel::Column::ConcreteChannelId.eq(normalized_id.to_string()));
+        channels = channels.add(channel::Column::ConcreteChannelId.eq(normalized_id.to_string()));
     }
 
-    let channels = query
-        .all(db)
-        .await
-        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("channels query", e)))?;
-
-    if channels.is_empty() {
-        return Ok(Vec::new());
+    let mut states = Condition::all();
+    if let Some(status_filter) = status_code {
+        states = states.add(channel_state::Column::Status.eq(status_filter));
     }
 
-    let channel_ids: Vec<i64> = channels.iter().map(|c| c.id).collect();
+    let channel_states = latest_channel_states(db, watermark, channels, states).await?;
 
-    // Query channel_state for all channels, filtered by watermark
-    let channel_states_query = channel_state::Entity::find()
-        .filter(channel_state::Column::ChannelId.is_in(channel_ids))
-        .filter(watermark_condition(watermark))
-        .order_by_desc(channel_state::Column::PublishedBlock)
-        .order_by_desc(channel_state::Column::PublishedTxIndex)
-        .order_by_desc(channel_state::Column::PublishedLogIndex)
-        .order_by_desc(channel_state::Column::Id);
-
-    let channel_states = channel_states_query
-        .all(db)
-        .await
-        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("channel_state query", e)))?;
-
-    // Build map of channel_id -> latest state
-    let mut state_map: HashMap<i64, channel_state::Model> = HashMap::new();
-    for state in channel_states {
-        state_map.entry(state.channel_id).or_insert(state);
-    }
-
-    // Filter channels by status and build result
-    let mut results = Vec::new();
-    for channel in channels {
-        let state = match state_map.get(&channel.id) {
-            Some(s) => s,
-            None => continue, // Skip channels without state
-        };
-
-        // Apply status filter if provided
-        if let Some(status_filter) = status_code
-            && state.status != status_filter
-        {
-            continue;
-        }
-
+    // Build result
+    let mut results = Vec::with_capacity(channel_states.len());
+    for (channel, state) in channel_states {
         // Convert to GraphQL Channel type
         let channel_gql = Channel {
             concrete_channel_id: channel.concrete_channel_id,
