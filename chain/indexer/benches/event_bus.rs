@@ -10,9 +10,11 @@
 
 use std::{
     alloc::{GlobalAlloc, Layout, System},
-    borrow::Borrow,
     hint::black_box,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering},
+    },
 };
 
 use blokli_api_types::{
@@ -26,20 +28,28 @@ use tokio::{
 };
 
 /// Counts heap allocations so the bench can report bytes allocated per delivered event.
+///
+/// Counting is switched on only while the memory report runs: shared counters updated on every
+/// allocation would contend across worker threads and distort the timings.
 struct CountingAllocator;
 
+static COUNTING: AtomicBool = AtomicBool::new(false);
 static ALLOCATED_BYTES: AtomicUsize = AtomicUsize::new(0);
-static LIVE_BYTES: AtomicUsize = AtomicUsize::new(0);
+static LIVE_BYTES: AtomicIsize = AtomicIsize::new(0);
 
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATED_BYTES.fetch_add(layout.size(), Ordering::Relaxed);
-        LIVE_BYTES.fetch_add(layout.size(), Ordering::Relaxed);
+        if COUNTING.load(Ordering::Relaxed) {
+            ALLOCATED_BYTES.fetch_add(layout.size(), Ordering::Relaxed);
+            LIVE_BYTES.fetch_add(layout.size().cast_signed(), Ordering::Relaxed);
+        }
         unsafe { System.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        LIVE_BYTES.fetch_sub(layout.size(), Ordering::Relaxed);
+        if COUNTING.load(Ordering::Relaxed) {
+            LIVE_BYTES.fetch_sub(layout.size().cast_signed(), Ordering::Relaxed);
+        }
         unsafe { System.dealloc(ptr, layout) }
     }
 }
@@ -98,16 +108,40 @@ fn channel_event(i: usize) -> IndexerEvent {
     }))
 }
 
-/// Mirrors the receive loop of a subscription: inspect the event, clone the payload it yields.
-fn handle<E: Borrow<IndexerEvent>>(event: E, interest: Interest) {
-    match (event.borrow(), interest) {
-        (IndexerEvent::ChannelUpdated(update), Interest::Consumes) => {
-            black_box(ChannelUpdate::clone(update));
+/// An event as a subscription receives it from the bus.
+///
+/// Mirrors the receive loop of a subscription: an owned event's payload is moved into the output, a
+/// shared event's payload is cloned. Implemented for both so the benchmark measures the loop as written
+/// for either form of the bus, without adding a clone the subscription does not make.
+trait Delivered {
+    fn handle(self, interest: Interest);
+}
+
+impl Delivered for IndexerEvent {
+    fn handle(self, interest: Interest) {
+        match (self, interest) {
+            (IndexerEvent::ChannelUpdated(update), Interest::Consumes) => {
+                black_box(*update);
+            }
+            (IndexerEvent::TicketParametersUpdated(params), _) => {
+                black_box(params);
+            }
+            _ => {}
         }
-        (IndexerEvent::TicketParametersUpdated(params), _) => {
-            black_box(TicketParameters::clone(params));
+    }
+}
+
+impl Delivered for Arc<IndexerEvent> {
+    fn handle(self, interest: Interest) {
+        match (&*self, interest) {
+            (IndexerEvent::ChannelUpdated(update), Interest::Consumes) => {
+                black_box(ChannelUpdate::clone(update));
+            }
+            (IndexerEvent::TicketParametersUpdated(params), _) => {
+                black_box(TicketParameters::clone(params));
+            }
+            _ => {}
         }
-        _ => {}
     }
 }
 
@@ -119,7 +153,11 @@ async fn deliver_burst(state: &IndexerState, subscribers: usize, interest: Inter
         let expected = events.len();
         tasks.spawn(async move {
             for _ in 0..expected {
-                handle(receiver.recv().await.expect("no overflow below capacity"), interest);
+                receiver
+                    .recv()
+                    .await
+                    .expect("no overflow below capacity")
+                    .handle(interest);
             }
         });
     }
@@ -141,12 +179,13 @@ fn runtime() -> Runtime {
 
 /// Prints heap figures that criterion's timings do not show.
 fn report_memory(rt: &Runtime, events: &[IndexerEvent]) {
+    COUNTING.store(true, Ordering::Relaxed);
     let before = LIVE_BYTES.load(Ordering::Relaxed);
     let state = IndexerState::new(BUS_CAPACITY, 10);
     for i in 0..BUS_CAPACITY {
         state.publish_event(channel_event(i));
     }
-    let retained = LIVE_BYTES.load(Ordering::Relaxed).saturating_sub(before);
+    let retained = (LIVE_BYTES.load(Ordering::Relaxed) - before).max(0);
     println!(
         "event_bus/retained_heap_without_subscribers: {} KiB after {BUS_CAPACITY} events",
         retained / 1024
@@ -169,6 +208,7 @@ fn report_memory(rt: &Runtime, events: &[IndexerEvent]) {
             );
         }
     }
+    COUNTING.store(false, Ordering::Relaxed);
 }
 
 fn bench_fan_out(c: &mut Criterion, rt: &Runtime, events: &[IndexerEvent]) {

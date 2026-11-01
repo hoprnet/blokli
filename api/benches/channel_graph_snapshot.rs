@@ -19,7 +19,7 @@ mod common;
 
 use std::{
     alloc::{GlobalAlloc, Layout, System},
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, AtomicIsize, Ordering},
     time::Duration,
 };
 
@@ -36,20 +36,29 @@ use tokio::runtime::{Builder, Runtime};
 use url::Url;
 
 /// Tracks live and peak heap so the bench can report the memory one snapshot needs.
+///
+/// Tracking is switched on only for that measurement: shared counters updated on every allocation
+/// would contend across worker threads and distort the timings.
 struct PeakAllocator;
 
-static LIVE_BYTES: AtomicUsize = AtomicUsize::new(0);
-static PEAK_BYTES: AtomicUsize = AtomicUsize::new(0);
+static TRACKING: AtomicBool = AtomicBool::new(false);
+static LIVE_BYTES: AtomicIsize = AtomicIsize::new(0);
+static PEAK_BYTES: AtomicIsize = AtomicIsize::new(0);
 
 unsafe impl GlobalAlloc for PeakAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let live = LIVE_BYTES.fetch_add(layout.size(), Ordering::Relaxed) + layout.size();
-        PEAK_BYTES.fetch_max(live, Ordering::Relaxed);
+        if TRACKING.load(Ordering::Relaxed) {
+            let size = layout.size().cast_signed();
+            let live = LIVE_BYTES.fetch_add(size, Ordering::Relaxed) + size;
+            PEAK_BYTES.fetch_max(live, Ordering::Relaxed);
+        }
         unsafe { System.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        LIVE_BYTES.fetch_sub(layout.size(), Ordering::Relaxed);
+        if TRACKING.load(Ordering::Relaxed) {
+            LIVE_BYTES.fetch_sub(layout.size().cast_signed(), Ordering::Relaxed);
+        }
         unsafe { System.dealloc(ptr, layout) }
     }
 }
@@ -157,10 +166,12 @@ fn bench_snapshot(c: &mut Criterion, rt: &Runtime, admin_url: &str) {
         let label = format!("{channels}ch_x_{states}states");
 
         // Peak heap of one snapshot, measured outside criterion.
-        let baseline = LIVE_BYTES.load(Ordering::Relaxed);
-        PEAK_BYTES.store(baseline, Ordering::Relaxed);
+        LIVE_BYTES.store(0, Ordering::Relaxed);
+        PEAK_BYTES.store(0, Ordering::Relaxed);
+        TRACKING.store(true, Ordering::Relaxed);
         assert_eq!(rt.block_on(read_snapshot(&schema, expected)), expected);
-        let peak = PEAK_BYTES.load(Ordering::Relaxed).saturating_sub(baseline);
+        TRACKING.store(false, Ordering::Relaxed);
+        let peak = PEAK_BYTES.load(Ordering::Relaxed);
         println!("channel_graph_snapshot/peak_heap/{label}: {} KiB", peak / 1024);
 
         group.bench_with_input(BenchmarkId::new("one_client", &label), &schema, |b, schema| {
@@ -168,11 +179,16 @@ fn bench_snapshot(c: &mut Criterion, rt: &Runtime, admin_url: &str) {
         });
         // A reconnect wave: many nodes open the subscription at once.
         group.bench_with_input(BenchmarkId::new("16_clients", &label), &schema, |b, schema| {
-            b.to_async(rt).iter(|| {
-                join_all((0..16).map(|_| {
+            b.to_async(rt).iter(|| async {
+                let clients = join_all((0..16).map(|_| {
                     let schema = schema.clone();
                     tokio::spawn(async move { read_snapshot(&schema, expected).await })
                 }))
+                .await;
+                // A failed client must fail the benchmark rather than shorten the measured time
+                for received in clients {
+                    assert_eq!(received.expect("snapshot client failed"), expected);
+                }
             });
         });
     }

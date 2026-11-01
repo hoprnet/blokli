@@ -171,6 +171,8 @@ fn bench_safe_lookup(c: &mut Criterion, rt: &Runtime, admin_url: &str) {
             .expect("lookup")
             .expect("seeded safe exists");
         assert_eq!(found.threshold.as_deref(), Some("3"), "latest threshold is returned");
+        let by_key = rt.block_on(fetch_safes_by_chain_key(conn, &chain_key)).expect("lookup");
+        assert_eq!(by_key.len(), 1, "seeded safe is found by chain key");
 
         group.bench_with_input(BenchmarkId::new("by_address", safes), &safe_address, |b, address| {
             b.to_async(rt)
