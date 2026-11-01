@@ -94,6 +94,7 @@ lazy_static = { workspace = true, optional = true }
 [dev-dependencies]
 base64ct            = { workspace = true, features = ["alloc"] }
 blokli-db-migration = { path = "../db/migration" }
+criterion           = { workspace = true }
 curvy-bindings      = { workspace = true }
 env_logger          = { workspace = true }
 hopr-types          = { workspace = true, features = ["internal"] }
@@ -107,6 +108,9 @@ tempfile            = { workspace = true }
 test-log            = { workspace = true }
 tower               = { workspace = true, features = ["util"] }
 
+[[bench]]
+harness = false
+name    = "channel_graph_snapshot"
 
 [package.metadata.cargo-machete]
 ignored = ["humantime-serde"]

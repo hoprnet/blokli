@@ -59,6 +59,7 @@ hopr-types = { workspace = true, features = [
 
 [dev-dependencies]
 anyhow          = { workspace = true }
+criterion       = { workspace = true }
 hex-literal     = { workspace = true }
 insta           = { workspace = true, features = ["yaml"] }
 mockall         = { workspace = true }
@@ -77,3 +78,7 @@ hopr-types = { workspace = true, features = [
   "random",
   "use-bindings",
 ] }
+
+[[bench]]
+harness = false
+name    = "event_bus"

@@ -50,6 +50,7 @@ hopr-types = { workspace = true, features = [
 
 [dev-dependencies]
 anyhow      = { workspace = true }
+criterion   = { workspace = true }
 hex-literal = { workspace = true }
 lazy_static = { workspace = true }
 rand        = { workspace = true }
@@ -63,6 +64,10 @@ hopr-types = { workspace = true, features = [
   "primitive",
   "random",
 ] }
+
+[[bench]]
+harness = false
+name    = "db_hotpaths"
 
 [package.metadata.cargo-machete]
 ignored = ["blokli-db-migration"]
