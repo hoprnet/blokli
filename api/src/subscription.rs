@@ -2959,6 +2959,65 @@ mod tests {
         assert_eq!(result[0].channel.balance.0, "0.000000000000000002 wxHOPR");
     }
 
+    /// Creates a channel whose states are `(block, status)`, each with the block number as balance
+    async fn channel_with_states(db: &DatabaseConnection, states: &[(i64, i16)]) -> i64 {
+        let source_id = create_test_account(db, vec![1; 20], "peer1").await.unwrap();
+        let dest_id = create_test_account(db, vec![2; 20], "peer2").await.unwrap();
+        let channel_id = create_test_channel(db, source_id, dest_id, "abc123").await.unwrap();
+        for &(block, status) in states {
+            let mut balance = vec![0u8; 12];
+            balance[11] = u8::try_from(block).unwrap();
+            insert_channel_state(db, channel_id, block, 0, 0, balance, status)
+                .await
+                .unwrap();
+        }
+        channel_id
+    }
+
+    #[tokio::test]
+    async fn test_query_channels_at_watermark_ignores_states_after_the_watermark() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+        let conn = db.conn(blokli_db::TargetDb::Index);
+        // Open at block 50, closed at block 150: at block 100 the channel is still open
+        channel_with_states(conn, &[(50, 1), (150, 0)]).await;
+
+        let watermark = Watermark {
+            block: 100,
+            tx_index: 0,
+            log_index: 0,
+        };
+        let result = query_channels_at_watermark(conn, &watermark, 100).await.unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].channel.balance.0, "0.00000000000000005 wxHOPR");
+    }
+
+    #[tokio::test]
+    async fn test_query_channels_at_watermark_with_filters_filters_on_the_latest_state_only() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+        let conn = db.conn(blokli_db::TargetDb::Index);
+        // Open at block 50, closed at block 75: an older OPEN state must not match an OPEN filter
+        channel_with_states(conn, &[(50, 1), (75, 0)]).await;
+
+        let watermark = Watermark {
+            block: 100,
+            tx_index: 0,
+            log_index: 0,
+        };
+        let result = query_channels_at_watermark_with_filters(
+            conn,
+            &watermark,
+            None,
+            None,
+            None,
+            Some(blokli_api_types::ChannelStatus::Open),
+        )
+        .await
+        .unwrap();
+
+        assert!(result.is_empty());
+    }
+
     #[tokio::test]
     async fn test_query_channels_at_watermark_returns_all_channels() {
         let db = BlokliDb::new_in_memory().await.unwrap();
