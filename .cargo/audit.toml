@@ -45,4 +45,12 @@ ignore = [
   # Status: smartstring is unmaintained
   # Review by: 2026-06-30
   "RUSTSEC-2026-0249",
+  # RUSTSEC-2026-0387: crypto-bigint timing variability
+  # Crate: crypto-bigint 0.5.5
+  # Transitive: elliptic-curve 0.13.8 -> k256 -> alloy
+  # Status: The advisory is patched only in crypto-bigint >= 0.7.6; elliptic-curve 0.13
+  # keeps the 0.5.x line, so no patched 0.5 version exists.
+  # Remove when: elliptic-curve 0.13 is replaced by a release on the 0.14 line.
+  # Tracked by: hoprnet/blokli#579
+  "RUSTSEC-2026-0387",
 ]
