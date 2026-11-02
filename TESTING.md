@@ -101,6 +101,25 @@ just test-postgres-schema
 
 When you add an entity, list it in `all_entities` in that test; the test fails if a table or view has no entity.
 
+### Benchmarks
+
+Criterion benchmarks cover the paths whose cost must not grow with load or history:
+
+- `chain/indexer/benches/event_bus.rs`: delivering events to many subscriptions, with heap allocated per delivery
+- `db/core/benches/db_hotpaths.rs`: the per-block log checksum pass and single-safe lookups, on a large seeded history
+- `api/benches/channel_graph_snapshot.rs`: the `openedChannelGraphUpdated` snapshot for one and 16 clients, with peak heap
+
+The database benchmarks need a PostgreSQL server whose user may create databases; they skip themselves otherwise. Compare a change against a
+saved baseline:
+
+```bash
+export BLOKLI_BENCH_POSTGRES_URL=postgres://postgres@127.0.0.1:5432/postgres
+benches="-p blokli-chain-indexer -p blokli-db -p blokli-api --bench event_bus --bench db_hotpaths --bench channel_graph_snapshot"
+cargo bench --profile candidate $benches -- --save-baseline before
+# apply the change, then
+cargo bench --profile candidate $benches -- --baseline before
+```
+
 ## Writing New Tests
 
 ### Test Structure
