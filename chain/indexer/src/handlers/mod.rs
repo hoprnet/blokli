@@ -505,7 +505,7 @@ mod tests {
                 .expect("Channel shouldn't be closed");
 
             // Look for AccountUpdated event (since we removed SafeDeployed)
-            match event {
+            match &*event {
                 IndexerEvent::AccountUpdated(account) => {
                     assert_eq!(account.chain_key, node_addr.to_hex());
                 }
