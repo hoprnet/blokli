@@ -45,4 +45,13 @@ ignore = [
   # Status: unsound: Potential use-after-free due to lack of panic safety in `LruCache::pop()`
   # Review by: 2026-06-30
   "RUSTSEC-2026-0253",
+
+  # RUSTSEC-2026-0387
+  # Crate: crypto-bigint 0.5.5
+  # Transitive: alloy-signer -> k256/elliptic-curve 0.13 -> crypto-bigint 0.5
+  # Status: Timing variability in constant-time operations. The 0.7 line is patched and already in
+  # Cargo.lock; the 0.5 line has no fix and only leaves the tree when alloy moves to
+  # elliptic-curve 0.14. Tracked in hoprnet/blokli#579.
+  # Review by: 2026-12-31
+  "RUSTSEC-2026-0387",
 ]
