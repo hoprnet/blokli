@@ -402,11 +402,13 @@ fn get_available_disk_space(dir: &Path) -> SnapshotResult<u64> {
     let target_path = dir.canonicalize().map_err(SnapshotError::Io)?;
 
     // Find the disk with the longest matching mount point
-    let disks = Disks::new_with_refreshed_list();
+    let disks = Disks::new_with_refreshed_list().map_err(|error| {
+        SnapshotError::InvalidData(format!("Could not enumerate system disks: {error}"))
+    })?;
 
     // Filter out disks with non matching mount points
     let mut usable_disks = disks
-        .iter()
+        .into_iter()
         .filter(|d| target_path.starts_with(d.mount_point()))
         .collect::<Vec<_>>();
 
