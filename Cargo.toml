@@ -48,6 +48,7 @@ blokli-db-migration = { path = "db/migration" }
 chrono = "0.4.45"
 clap = { version = "4.6.1", features = ["derive", "env", "string"] }
 config = "0.15.23"
+criterion = { version = "0.8.2", features = ["async_tokio"] }
 # Exact pins.
 curvy-bindings = { version = "=0.1.0" }
 curvy-core = "=0.1.4"

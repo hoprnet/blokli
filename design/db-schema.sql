@@ -607,7 +607,13 @@ CREATE INDEX "idx_log_status_block_number_processed" ON "log_status" ("block_num
 
 CREATE UNIQUE INDEX "idx_log_status_composite" ON "log_status" ("block_number", "tx_index", "log_index");
 
+CREATE INDEX "idx_log_status_unchecksummed" ON "log_status" ("block_number", "tx_index", "log_index")
+WHERE
+    "checksum" IS NULL;
+
 CREATE INDEX "idx_native_balance_last_changed_block" ON "native_balance" ("last_changed_block");
+
+CREATE INDEX "idx_safe_contract_state_chain_key" ON "hopr_safe_contract_state" ("chain_key");
 
 CREATE INDEX "idx_safe_contract_state_position" ON "hopr_safe_contract_state" ("hopr_safe_contract_id", "published_block" DESC, "published_tx_index" DESC, "published_log_index" DESC);
 

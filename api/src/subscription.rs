@@ -43,8 +43,8 @@ use hopr_types::{
 };
 use rand::seq::SliceRandom;
 use sea_orm::{
-    ColumnTrait, Condition, DatabaseConnection, EntityTrait, ExprTrait, QueryFilter, QueryOrder, Select,
-    sea_query::{Alias, Expr, Order, Query},
+    ColumnTrait, Condition, DatabaseConnection, EntityTrait, ExprTrait, QueryFilter, QueryOrder, QuerySelect, Select,
+    sea_query::{Alias, Expr, Order, Query, SubQueryStatement},
 };
 use tokio::time::{MissedTickBehavior, interval};
 use tracing::{debug, error, info, warn};
@@ -69,7 +69,7 @@ use crate::{
 async fn capture_service_registry_config_synchronized(
     indexer_state: &IndexerState,
     db: &DatabaseConnection,
-) -> Result<(ServiceRegistryConfig, Receiver<IndexerEvent>, Receiver<()>)> {
+) -> Result<(ServiceRegistryConfig, Receiver<Arc<IndexerEvent>>, Receiver<()>)> {
     let _lock = indexer_state.acquire_watermark_lock().await;
 
     let model = ServiceRegistryConfigEntity::find()
@@ -122,7 +122,7 @@ async fn capture_service_types_synchronized(
     indexer_state: &IndexerState,
     db: &DatabaseConnection,
     service_type: Option<&ServiceType>,
-) -> Result<(Vec<ServiceTypeUpdate>, Receiver<IndexerEvent>, Receiver<()>)> {
+) -> Result<(Vec<ServiceTypeUpdate>, Receiver<Arc<IndexerEvent>>, Receiver<()>)> {
     let _lock = indexer_state.acquire_watermark_lock().await;
     let aggregates = match service_type {
         Some(service_type) => fetch_service_types_by_id(db, &[service_type.as_ref().to_vec()]).await,
@@ -188,7 +188,7 @@ pub struct Watermark {
 async fn capture_watermark_synchronized(
     indexer_state: &IndexerState,
     db: &DatabaseConnection,
-) -> Result<(Watermark, Receiver<IndexerEvent>, Receiver<()>)> {
+) -> Result<(Watermark, Receiver<Arc<IndexerEvent>>, Receiver<()>)> {
     // Acquire read lock - this waits for any in-progress block processing to complete
     let _lock = indexer_state.acquire_watermark_lock().await;
 
@@ -236,51 +236,80 @@ async fn query_channels_at_watermark(
     watermark: &Watermark,
     _batch_size: usize, // Reserved for future pagination implementation
 ) -> Result<Vec<ChannelUpdate>> {
-    // Query all channels (identity table has no temporal component)
-    let channels = channel::Entity::find()
-        .all(db)
-        .await
-        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("channels query", e)))?;
-
-    if channels.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let channel_ids: Vec<i64> = channels.iter().map(|c| c.id).collect();
-
-    // Query channel_state for all channels, filtered by watermark
-    // Only get states published at or before the watermark
-    let channel_states_query = channel_state::Entity::find()
-        .filter(channel_state::Column::ChannelId.is_in(channel_ids.clone()))
-        .filter(watermark_condition(watermark))
-        .order_by_desc(channel_state::Column::PublishedBlock)
-        .order_by_desc(channel_state::Column::PublishedTxIndex)
-        .order_by_desc(channel_state::Column::PublishedLogIndex)
-        .order_by_desc(channel_state::Column::Id);
-
-    let channel_states = channel_states_query
-        .all(db)
-        .await
-        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("channel_state query", e)))?;
-
-    // Build map of channel_id -> latest state (first occurrence due to ordering)
-    let mut state_map: HashMap<i64, channel_state::Model> = HashMap::new();
-    for state in channel_states {
-        state_map.entry(state.channel_id).or_insert(state);
-    }
-
-    // Filter out CLOSED channels (status != 0)
-    let non_closed: Vec<_> = channels
-        .into_iter()
-        .filter_map(|channel| {
-            state_map
-                .remove(&channel.id)
-                .filter(|state| state.status != 0)
-                .map(|state| (channel, state))
-        })
-        .collect();
+    // Only the latest state of each channel is read; CLOSED channels (status 0) are left out
+    let non_closed = latest_channel_states(
+        db,
+        watermark,
+        Condition::all(),
+        Condition::all().add(channel_state::Column::Status.ne(0)),
+    )
+    .await?;
 
     channel_updates_from_states(db, non_closed).await
+}
+
+/// Maximum number of channel state ids bound into one query, well below the bind parameter limits of
+/// PostgreSQL (65535) and SQLite (32766)
+const CHANNEL_STATE_ID_CHUNK: usize = 10_000;
+
+/// Reads the latest state, published up to `watermark`, of each channel matching `channels`, together
+/// with its channel, keeping the states that match `states`
+///
+/// The latest state ids are resolved first, with a correlated top-one subquery per channel served by
+/// `idx_channel_state_position`, and the states are then fetched by primary key. The cost therefore
+/// follows the number of channels rather than the length of their state history: in a single statement
+/// PostgreSQL hash-joins the ids against the whole `channel_state` table instead. A channel's states
+/// have unique positions, so the position alone orders them.
+async fn latest_channel_states(
+    db: &DatabaseConnection,
+    watermark: &Watermark,
+    channels: Condition,
+    states: Condition,
+) -> Result<Vec<(channel::Model, channel_state::Model)>> {
+    let latest = Alias::new("latest_channel_state");
+    let latest_state_id = Query::select()
+        .column((latest.clone(), channel_state::Column::Id))
+        .from_as(channel_state::Entity, latest.clone())
+        .and_where(
+            Expr::col((latest.clone(), channel_state::Column::ChannelId))
+                .equals((channel::Entity, channel::Column::Id)),
+        )
+        .and_where(Expr::col((latest.clone(), channel_state::Column::PublishedBlock)).lte(watermark.block))
+        .order_by((latest.clone(), channel_state::Column::PublishedBlock), Order::Desc)
+        .order_by((latest.clone(), channel_state::Column::PublishedTxIndex), Order::Desc)
+        .order_by((latest, channel_state::Column::PublishedLogIndex), Order::Desc)
+        .limit(1)
+        .to_owned();
+
+    // A channel without any state up to the watermark yields NULL
+    let latest_state_ids: Vec<i64> = channel::Entity::find()
+        .select_only()
+        .expr(Expr::from(SubQueryStatement::from(latest_state_id)))
+        .filter(channels)
+        .into_tuple::<Option<i64>>()
+        .all(db)
+        .await
+        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("channel_state id query", e)))?
+        .into_iter()
+        .flatten()
+        .collect();
+
+    let mut latest_states = Vec::with_capacity(latest_state_ids.len());
+    for ids in latest_state_ids.chunks(CHANNEL_STATE_ID_CHUNK) {
+        let rows = channel_state::Entity::find()
+            .filter(channel_state::Column::Id.is_in(ids.iter().copied()))
+            .filter(states.clone())
+            .find_also_related(channel::Entity)
+            .all(db)
+            .await
+            .map_err(|e| async_graphql::Error::new(errors::messages::query_error("channel_state query", e)))?;
+        latest_states.extend(
+            rows.into_iter()
+                .filter_map(|(state, channel)| channel.map(|channel| (channel, state))),
+        );
+    }
+
+    Ok(latest_states)
 }
 
 /// Queries the latest state of every channel that changed after `after`, up to the watermark
@@ -493,69 +522,33 @@ async fn query_channels_at_watermark_with_filters(
     // Convert GraphQL ChannelStatus to internal status code (i16)
     let status_code: Option<i16> = status.map(|s| s.into());
 
-    // Build query with filters
-    let mut query = channel::Entity::find();
+    // Select the channels to look at, then read only the latest state of each
+    let mut channels = Condition::all();
 
     if let Some(src) = source_i64 {
-        query = query.filter(channel::Column::Source.eq(src));
+        channels = channels.add(channel::Column::Source.eq(src));
     }
 
     if let Some(dst) = dest_i64 {
-        query = query.filter(channel::Column::Destination.eq(dst));
+        channels = channels.add(channel::Column::Destination.eq(dst));
     }
 
     if let Some(ch_id) = concrete_channel_id.as_ref() {
         // Normalize channel ID by stripping 0x prefix
         let normalized_id = ch_id.strip_prefix("0x").unwrap_or(ch_id);
-        query = query.filter(channel::Column::ConcreteChannelId.eq(normalized_id.to_string()));
+        channels = channels.add(channel::Column::ConcreteChannelId.eq(normalized_id.to_string()));
     }
 
-    let channels = query
-        .all(db)
-        .await
-        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("channels query", e)))?;
-
-    if channels.is_empty() {
-        return Ok(Vec::new());
+    let mut states = Condition::all();
+    if let Some(status_filter) = status_code {
+        states = states.add(channel_state::Column::Status.eq(status_filter));
     }
 
-    let channel_ids: Vec<i64> = channels.iter().map(|c| c.id).collect();
+    let channel_states = latest_channel_states(db, watermark, channels, states).await?;
 
-    // Query channel_state for all channels, filtered by watermark
-    let channel_states_query = channel_state::Entity::find()
-        .filter(channel_state::Column::ChannelId.is_in(channel_ids))
-        .filter(watermark_condition(watermark))
-        .order_by_desc(channel_state::Column::PublishedBlock)
-        .order_by_desc(channel_state::Column::PublishedTxIndex)
-        .order_by_desc(channel_state::Column::PublishedLogIndex)
-        .order_by_desc(channel_state::Column::Id);
-
-    let channel_states = channel_states_query
-        .all(db)
-        .await
-        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("channel_state query", e)))?;
-
-    // Build map of channel_id -> latest state
-    let mut state_map: HashMap<i64, channel_state::Model> = HashMap::new();
-    for state in channel_states {
-        state_map.entry(state.channel_id).or_insert(state);
-    }
-
-    // Filter channels by status and build result
-    let mut results = Vec::new();
-    for channel in channels {
-        let state = match state_map.get(&channel.id) {
-            Some(s) => s,
-            None => continue, // Skip channels without state
-        };
-
-        // Apply status filter if provided
-        if let Some(status_filter) = status_code
-            && state.status != status_filter
-        {
-            continue;
-        }
-
+    // Build result
+    let mut results = Vec::with_capacity(channel_states.len());
+    for (channel, state) in channel_states {
         // Convert to GraphQL Channel type
         let channel_gql = Channel {
             concrete_channel_id: channel.concrete_channel_id,
@@ -682,7 +675,7 @@ where
 
 fn curvy_event_stream<T, H, F>(
     historical: H,
-    mut event_receiver: Receiver<IndexerEvent>,
+    mut event_receiver: Receiver<Arc<IndexerEvent>>,
     mut shutdown_receiver: Receiver<()>,
     start_block: Option<u64>,
     select: F,
@@ -690,7 +683,7 @@ fn curvy_event_stream<T, H, F>(
 where
     T: CurvyPositioned + Send + 'static,
     H: Stream<Item = Result<T>> + Send + 'static,
-    F: Fn(IndexerEvent) -> Option<T> + Send + Sync + 'static,
+    F: Fn(&IndexerEvent) -> Option<T> + Send + Sync + 'static,
 {
     try_stream! {
         pin_mut!(historical);
@@ -742,7 +735,7 @@ where
                     }
                 }
             }?;
-            if let Some(event) = select(event)
+            if let Some(event) = select(&event)
                 && start_block.is_none_or(|start_block| event.position().block.0 >= start_block)
             {
                 yield event;
@@ -815,7 +808,7 @@ impl SubscriptionRoot {
             shutdown_receiver,
             start_block.map(|start_block| start_block.api),
             |event| match event {
-                IndexerEvent::CurvyPendingNote(event) => Some(event),
+                IndexerEvent::CurvyPendingNote(event) => Some(event.clone()),
                 _ => None,
             },
         ))
@@ -858,7 +851,7 @@ impl SubscriptionRoot {
             shutdown_receiver,
             start_block.map(|start_block| start_block.api),
             |event| match event {
-                IndexerEvent::CurvyCommittedNote(event) => Some(event),
+                IndexerEvent::CurvyCommittedNote(event) => Some(event.clone()),
                 _ => None,
             },
         ))
@@ -901,7 +894,7 @@ impl SubscriptionRoot {
             shutdown_receiver,
             start_block.map(|start_block| start_block.api),
             |event| match event {
-                IndexerEvent::CurvyCommittedNullifier(event) => Some(event),
+                IndexerEvent::CurvyCommittedNullifier(event) => Some(event.clone()),
                 _ => None,
             },
         ))
@@ -1044,7 +1037,7 @@ impl SubscriptionRoot {
 
                     // Receive event from event bus
                     event_result = event_receiver.recv() => {
-                        match event_result {
+                        match event_result.as_deref() {
                             Ok(IndexerEvent::ChannelUpdated(channel_update)) => {
                                 // Extract channel from event
                                 let channel = &channel_update.channel;
@@ -1219,11 +1212,11 @@ impl SubscriptionRoot {
 
                     // Receive event from event bus
                     event_result = event_receiver.recv() => {
-                        match event_result {
+                        match event_result.as_deref() {
                             Ok(IndexerEvent::ChannelUpdated(channel_update)) => {
                                 // Convert from ChannelUpdate (internal) to OpenedChannelsGraphEntry (API)
                                 let cursor = channel_update.position;
-                                yield channel_update_to_graph_entry(*channel_update, cursor);
+                                yield channel_update_to_graph_entry(ChannelUpdate::clone(channel_update), cursor);
                             }
                             Ok(IndexerEvent::AccountUpdated(_)) => {
                                 // Account updates don't affect this subscription
@@ -1332,11 +1325,11 @@ impl SubscriptionRoot {
                         }
                     }
                     event_result = event_receiver.recv() => {
-                        match event_result {
+                        match event_result.as_deref() {
                             Ok(IndexerEvent::AccountUpdated(account)) => {
                                 // Apply filters
-                                if matches_account_filters(&account, keyid, packet_key.as_deref(), chain_key.as_deref()) {
-                                    yield account;
+                                if matches_account_filters(account, keyid, packet_key.as_deref(), chain_key.as_deref()) {
+                                    yield account.clone();
                                 }
                             }
                             Ok(_) => {
@@ -1435,10 +1428,10 @@ impl SubscriptionRoot {
                         }
                     }
                     event_result = event_receiver.recv() => {
-                        match event_result {
+                        match event_result.as_deref() {
                             Ok(IndexerEvent::ServiceEntryUpdated(update)) => {
-                                if matches_service_filters(&update, service_type_filter.as_deref(), node_filter.as_deref()) {
-                                    yield update;
+                                if matches_service_filters(update, service_type_filter.as_deref(), node_filter.as_deref()) {
+                                    yield update.clone();
                                 }
                             }
                             Ok(_) => {
@@ -1513,10 +1506,10 @@ impl SubscriptionRoot {
                         }
                     }
                     event_result = event_receiver.recv() => {
-                        match event_result {
+                        match event_result.as_deref() {
                             Ok(IndexerEvent::ServiceTypeUpdated(update)) => {
-                                if matches_service_type_filter(&update, service_type_filter.as_deref()) {
-                                    yield update;
+                                if matches_service_type_filter(update, service_type_filter.as_deref()) {
+                                    yield update.clone();
                                 }
                             }
                             Ok(_) => {
@@ -1579,10 +1572,10 @@ impl SubscriptionRoot {
                         }
                     }
                     event_result = event_receiver.recv() => {
-                        match event_result {
+                        match event_result.as_deref() {
                             Ok(IndexerEvent::ServiceTypeUpdated(update)) => {
-                                if let Some(config) = update.registry_config {
-                                    yield config;
+                                if let Some(config) = &update.registry_config {
+                                    yield config.clone();
                                 }
                             }
                             Ok(_) => {}
@@ -1662,12 +1655,12 @@ impl SubscriptionRoot {
                         }
                     }
                     event_result = event_receiver.recv() => {
-                        match event_result {
+                        match event_result.as_deref() {
                             Ok(IndexerEvent::TicketParametersUpdated(params)) => {
                                 // Only emit if value changed
-                                if last_params.as_ref() != Some(&params) {
+                                if last_params.as_ref() != Some(params) {
                                     last_params = Some(params.clone());
-                                    yield params;
+                                    yield params.clone();
                                 }
                             }
                             Ok(IndexerEvent::AccountUpdated(_)) => {
@@ -1779,11 +1772,11 @@ impl SubscriptionRoot {
                         }
                     }
                     event_result = event_receiver.recv() => {
-                        match event_result {
+                        match event_result.as_deref() {
                             Ok(IndexerEvent::KeyBindingFeeUpdated(fee)) => {
-                                if last_fee.as_ref() != Some(&fee) {
+                                if last_fee.as_ref() != Some(fee) {
                                     last_fee = Some(fee.clone());
-                                    yield fee;
+                                    yield fee.clone();
                                 }
                             }
                             Ok(IndexerEvent::AccountUpdated(_)) => {
@@ -1875,7 +1868,7 @@ impl SubscriptionRoot {
                     }
                     event_result = event_receiver.recv() => {
                         debug!(?event_result, "received an event in safe_deployed subscription");
-                        match event_result {
+                        match event_result.as_deref() {
                             Ok(IndexerEvent::SafeDeployed(safe_addr)) => {
                                 let safe_addr_bytes = safe_addr.as_ref().to_vec();
                                 debug!(?safe_addr_bytes, "safe address");
@@ -2145,10 +2138,10 @@ impl SubscriptionRoot {
                         }
                     }
                     event_result = event_receiver.recv() => {
-                        match event_result {
+                        match event_result.as_deref() {
                             Ok(IndexerEvent::TicketRedeemed(ticket_redeemed)) => {
-                                if match_ticket_filters(&ticket_redeemed, &channel_id, &issuer_address, &recipient_address) {
-                                yield ticket_redeemed.into();
+                                if match_ticket_filters(ticket_redeemed, &channel_id, &issuer_address, &recipient_address) {
+                                yield ticket_redeemed.clone().into();
                                 }
                             }
                             Ok(_) => {
@@ -2475,10 +2468,10 @@ mod tests {
         event_sender.set_overflow(true);
         let (_shutdown_sender, shutdown_receiver) = broadcast(1);
         event_sender
-            .try_broadcast(IndexerEvent::CurvyCommittedNote(curvy_committed_note(1)))
+            .try_broadcast(Arc::new(IndexerEvent::CurvyCommittedNote(curvy_committed_note(1))))
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         event_sender
-            .try_broadcast(IndexerEvent::CurvyCommittedNote(curvy_committed_note(2)))
+            .try_broadcast(Arc::new(IndexerEvent::CurvyCommittedNote(curvy_committed_note(2))))
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
 
         let events = curvy_event_stream(
@@ -2487,7 +2480,7 @@ mod tests {
             shutdown_receiver,
             None,
             |event| match event {
-                IndexerEvent::CurvyCommittedNote(event) => Some(event),
+                IndexerEvent::CurvyCommittedNote(event) => Some(event.clone()),
                 _ => None,
             },
         );
@@ -2517,7 +2510,7 @@ mod tests {
             shutdown_receiver,
             None,
             |event| match event {
-                IndexerEvent::CurvyCommittedNote(event) => Some(event),
+                IndexerEvent::CurvyCommittedNote(event) => Some(event.clone()),
                 _ => None,
             },
         );
@@ -2676,7 +2669,7 @@ mod tests {
 
         // Verify subscriber receives the event
         let received = event_rx.recv().await.unwrap();
-        assert!(matches!(received, IndexerEvent::AccountUpdated(_)));
+        assert!(matches!(*received, IndexerEvent::AccountUpdated(_)));
     }
 
     #[tokio::test]
@@ -2964,6 +2957,65 @@ mod tests {
         assert_eq!(result.len(), 1);
         // Balance is 2 wei with token identifier
         assert_eq!(result[0].channel.balance.0, "0.000000000000000002 wxHOPR");
+    }
+
+    /// Creates a channel whose states are `(block, status)`, each with the block number as balance
+    async fn channel_with_states(db: &DatabaseConnection, states: &[(i64, i16)]) -> i64 {
+        let source_id = create_test_account(db, vec![1; 20], "peer1").await.unwrap();
+        let dest_id = create_test_account(db, vec![2; 20], "peer2").await.unwrap();
+        let channel_id = create_test_channel(db, source_id, dest_id, "abc123").await.unwrap();
+        for &(block, status) in states {
+            let mut balance = vec![0u8; 12];
+            balance[11] = u8::try_from(block).unwrap();
+            insert_channel_state(db, channel_id, block, 0, 0, balance, status)
+                .await
+                .unwrap();
+        }
+        channel_id
+    }
+
+    #[tokio::test]
+    async fn test_query_channels_at_watermark_ignores_states_after_the_watermark() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+        let conn = db.conn(blokli_db::TargetDb::Index);
+        // Open at block 50, closed at block 150: at block 100 the channel is still open
+        channel_with_states(conn, &[(50, 1), (150, 0)]).await;
+
+        let watermark = Watermark {
+            block: 100,
+            tx_index: 0,
+            log_index: 0,
+        };
+        let result = query_channels_at_watermark(conn, &watermark, 100).await.unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].channel.balance.0, "0.00000000000000005 wxHOPR");
+    }
+
+    #[tokio::test]
+    async fn test_query_channels_at_watermark_with_filters_filters_on_the_latest_state_only() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+        let conn = db.conn(blokli_db::TargetDb::Index);
+        // Open at block 50, closed at block 75: an older OPEN state must not match an OPEN filter
+        channel_with_states(conn, &[(50, 1), (75, 0)]).await;
+
+        let watermark = Watermark {
+            block: 100,
+            tx_index: 0,
+            log_index: 0,
+        };
+        let result = query_channels_at_watermark_with_filters(
+            conn,
+            &watermark,
+            None,
+            None,
+            None,
+            Some(blokli_api_types::ChannelStatus::Open),
+        )
+        .await
+        .unwrap();
+
+        assert!(result.is_empty());
     }
 
     #[tokio::test]

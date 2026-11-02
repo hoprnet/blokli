@@ -12,7 +12,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-use async_broadcast::{Receiver, Sender, broadcast};
+use async_broadcast::{InactiveReceiver, Receiver, Sender, TrySendError, broadcast};
 use blokli_api_types::{
     Account, ChannelUpdate, CurvyCommittedNote, CurvyCommittedNullifier, CurvyPendingNote, RedeemTicketDetails,
     RedemptionResult, ServiceTypeUpdate, ServiceUpdate, TicketParameters, TokenValueString, UInt64,
@@ -75,6 +75,9 @@ impl From<RedeemTicketDetailsInfo> for RedeemTicketDetails {
 /// Represents changes to accounts, channels, and protocol parameters that should be broadcast to subscribers.
 /// Events contain complete GraphQL data to avoid additional database queries per subscriber
 /// and to ensure temporal consistency.
+///
+/// The bus carries each event as an [`Arc`], so delivering it to a subscriber is a reference count
+/// increment; a subscriber clones only the payload it actually yields.
 #[derive(Clone, Debug)]
 pub enum IndexerEvent {
     /// An account was updated (balance change, announcement, safe registration, etc.)
@@ -144,7 +147,7 @@ pub struct IndexerState {
     ///
     /// Block processing publishes events here after completing each block.
     /// Subscriptions receive events via receivers cloned from this sender.
-    event_bus: Sender<IndexerEvent>,
+    event_bus: Sender<Arc<IndexerEvent>>,
 
     /// Shutdown signal sender for reorg handling
     ///
@@ -154,9 +157,10 @@ pub struct IndexerState {
 
     /// Initial receiver kept alive to maintain channel state
     ///
-    /// This receiver is never used but must be kept alive to prevent the
-    /// async_broadcast channel from entering a closed state.
-    _event_bus_rx: Arc<Receiver<IndexerEvent>>,
+    /// Kept inactive so the channel stays open without counting as a subscriber: an active receiver
+    /// that is never read would keep the whole buffer of events alive, and would force every
+    /// subscriber to clone each event instead of taking the last copy.
+    _event_bus_rx: Arc<InactiveReceiver<Arc<IndexerEvent>>>,
 
     /// Initial shutdown receiver kept alive to maintain channel state
     _shutdown_rx: Arc<Receiver<()>>,
@@ -169,9 +173,9 @@ impl std::fmt::Debug for IndexerState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("IndexerState")
             .field("coordination_lock", &"Arc<RwLock<()>>")
-            .field("event_bus", &"Sender<IndexerEvent>")
+            .field("event_bus", &"Sender<Arc<IndexerEvent>>")
             .field("shutdown_signal", &"Sender<()>")
-            .field("_event_bus_rx", &"Arc<Receiver<IndexerEvent>>")
+            .field("_event_bus_rx", &"Arc<InactiveReceiver<Arc<IndexerEvent>>>")
             .field("_shutdown_rx", &"Arc<Receiver<()>>")
             .field("safe_filter_epoch", &"Arc<AtomicU64>")
             .finish()
@@ -202,7 +206,7 @@ impl IndexerState {
             coordination_lock: Arc::new(RwLock::new(())),
             event_bus,
             shutdown_signal,
-            _event_bus_rx: Arc::new(event_bus_rx),
+            _event_bus_rx: Arc::new(event_bus_rx.deactivate()),
             _shutdown_rx: Arc::new(shutdown_rx),
             safe_filter_epoch: Arc::new(AtomicU64::new(0)),
         }
@@ -243,9 +247,12 @@ impl IndexerState {
     ///
     /// # Returns
     ///
-    /// `true` if the event was broadcast successfully, `false` if the channel is closed
+    /// `true` if the event was broadcast or nobody is subscribed, `false` if the channel is closed
     pub fn publish_event(&self, event: IndexerEvent) -> bool {
-        self.event_bus.try_broadcast(event).is_ok()
+        !matches!(
+            self.event_bus.try_broadcast(Arc::new(event)),
+            Err(TrySendError::Closed(_))
+        )
     }
 
     /// Subscribes to the event bus
@@ -257,7 +264,7 @@ impl IndexerState {
     /// # Returns
     ///
     /// A receiver for indexer events
-    pub fn subscribe_to_events(&self) -> Receiver<IndexerEvent> {
+    pub fn subscribe_to_events(&self) -> Receiver<Arc<IndexerEvent>> {
         // Get a fresh receiver from the sender to avoid inheriting backlog
         self.event_bus.new_receiver()
     }
@@ -345,7 +352,7 @@ mod tests {
 
         // Receive the event
         let received = receiver.recv().await.unwrap();
-        match received {
+        match &*received {
             IndexerEvent::AccountUpdated(account) => assert_eq!(account.keyid, 42),
             _ => panic!("Expected AccountUpdated event"),
         }
@@ -387,12 +394,12 @@ mod tests {
         assert!(state.publish_event(event));
 
         // Verify both received the event
-        match receiver1.recv().await.unwrap() {
+        match &*receiver1.recv().await.unwrap() {
             IndexerEvent::AccountUpdated(account) => assert_eq!(account.keyid, 123),
             _ => panic!("Expected AccountUpdated event"),
         }
 
-        match receiver2.recv().await.unwrap() {
+        match &*receiver2.recv().await.unwrap() {
             IndexerEvent::AccountUpdated(account) => assert_eq!(account.keyid, 123),
             _ => panic!("Expected AccountUpdated event"),
         }
