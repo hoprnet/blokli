@@ -112,7 +112,7 @@ jobs:
     steps:
       - name: Generate GitHub App token
         id: bot-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ secrets.GH_APP_GNOSISVPN_CLIENT_ID }}
           private-key: ${{ secrets.GH_APP_GNOSISVPN_BOT_PRIVATE_KEY }}
@@ -142,7 +142,7 @@ jobs:
     runs-on: depot-ubuntu-24.04-2
     steps:
       - name: Notify failed merge pipeline
-        uses: zulip/github-actions-zulip/send-message@bd8ec52de371d139ae8313661b7d8318c19266aa # v2.0.1
+        uses: zulip/github-actions-zulip/send-message@f675f2b4eb2a95fae974215476dcb7ad8dfeff6b # v2.0.2
         with:
           api-key: ${{ secrets.ZULIP_API_KEY }}
           email: ${{ secrets.ZULIP_EMAIL }}
