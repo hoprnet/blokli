@@ -61,7 +61,7 @@ futures-util = "0.3.34"
 hex = "0.4.3"
 hex-literal = "1.1.0"
 hopr-bindings = { version = "5.2.0" }
-hopr-types = { version = "4.1.0" }
+hopr-types = { version = "5.0.0" }
 http = "1.5.0"
 humantime-serde = "1.1.1"
 insta = { version = "1.49.0", features = ["yaml"] }
