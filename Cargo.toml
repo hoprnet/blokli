@@ -66,7 +66,7 @@ http = "1.5.0"
 humantime-serde = "1.1.1"
 insta = { version = "1.49.0", features = ["yaml"] }
 lazy_static = "1.5.1"
-libp2p-identity = { version = "0.3.1", features = [
+libp2p-identity = { version = "0.2.14", features = [
   "ed25519",
   "peerid",
   "rand",
@@ -74,7 +74,7 @@ libp2p-identity = { version = "0.3.1", features = [
 mockall = "0.15.0"
 mockito = "1.7.2"
 moka = { version = "0.12.16", features = ["future"] }
-multiaddr = "0.19.1"
+multiaddr = "0.18.2"
 opentelemetry = "0.33.1"
 opentelemetry-otlp = { version = "0.33.1", default-features = false }
 opentelemetry-prometheus-text-exporter = "0.4.0"

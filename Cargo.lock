@@ -2033,7 +2033,7 @@ dependencies = [
  "humantime-serde",
  "insta",
  "lazy_static",
- "multiaddr 0.19.1",
+ "multiaddr",
  "pem-rfc7468",
  "rand 0.10.3",
  "regex",
@@ -2127,7 +2127,7 @@ dependencies = [
  "lazy_static",
  "mockall",
  "mockito",
- "multiaddr 0.19.1",
+ "multiaddr",
  "primitive-types 0.14.0",
  "reqwest",
  "sea-orm",
@@ -2188,8 +2188,8 @@ dependencies = [
  "hopr-bindings",
  "hopr-types",
  "lazy_static",
- "libp2p-identity 0.3.1",
- "multiaddr 0.19.1",
+ "libp2p-identity",
+ "multiaddr",
  "serde",
  "serde_with",
  "strum 0.28.0",
@@ -2213,7 +2213,7 @@ dependencies = [
  "hex-literal",
  "hopr-types",
  "lazy_static",
- "multiaddr 0.19.1",
+ "multiaddr",
  "rand 0.10.3",
  "sea-orm",
  "sea-query",
@@ -4348,8 +4348,8 @@ dependencies = [
  "hybrid-array",
  "k256 0.14.0",
  "lazy_static",
- "libp2p-identity 0.2.14",
- "multiaddr 0.18.2",
+ "libp2p-identity",
+ "multiaddr",
  "num_enum",
  "opentelemetry 0.32.0",
  "opentelemetry-prometheus-text-exporter 0.3.0",
@@ -5130,24 +5130,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "libp2p-identity"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4af6ad75465f6bf26a1001ddbf6f2b6b84a4673bf6de289f68cdbb1430098627"
-dependencies = [
- "bs58",
- "ed25519-dalek 3.0.0",
- "hkdf 0.13.0",
- "multihash",
- "prost",
- "rand 0.10.3",
- "sha2 0.11.0",
- "thiserror",
- "tracing",
- "zeroize",
-]
-
-[[package]]
 name = "libsqlite3-sys"
 version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5396,26 +5378,7 @@ dependencies = [
  "arrayref",
  "byteorder",
  "data-encoding",
- "libp2p-identity 0.2.14",
- "multibase",
- "multihash",
- "percent-encoding",
- "serde",
- "static_assertions",
- "unsigned-varint",
- "url",
-]
-
-[[package]]
-name = "multiaddr"
-version = "0.19.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd707c05eadfb37577f01cbec206726feeecf0b9edea259aee6fc9bc541ee253"
-dependencies = [
- "byteorder",
- "bytes",
- "data-encoding",
- "libp2p-identity 0.3.1",
+ "libp2p-identity",
  "multibase",
  "multihash",
  "percent-encoding",
