@@ -61,6 +61,17 @@ unsafe impl GlobalAlloc for PeakAllocator {
         }
         unsafe { System.dealloc(ptr, layout) }
     }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        // Resize in place like production does, instead of the default allocate, copy and free
+        let new_ptr = unsafe { System.realloc(ptr, layout, new_size) };
+        if !new_ptr.is_null() && TRACKING.load(Ordering::Relaxed) {
+            let delta = new_size.cast_signed() - layout.size().cast_signed();
+            let live = LIVE_BYTES.fetch_add(delta, Ordering::Relaxed) + delta;
+            PEAK_BYTES.fetch_max(live, Ordering::Relaxed);
+        }
+        new_ptr
+    }
 }
 
 #[global_allocator]
