@@ -406,6 +406,7 @@ fn get_available_disk_space(dir: &Path) -> SnapshotResult<u64> {
 
     // Filter out disks with non matching mount points
     let mut usable_disks = disks
+        .list()
         .iter()
         .filter(|d| target_path.starts_with(d.mount_point()))
         .collect::<Vec<_>>();
