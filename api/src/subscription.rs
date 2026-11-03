@@ -43,8 +43,8 @@ use hopr_types::{
 };
 use rand::seq::SliceRandom;
 use sea_orm::{
-    ColumnTrait, Condition, DatabaseConnection, EntityTrait, ExprTrait, QueryFilter, QueryOrder, Select,
-    sea_query::{Alias, Expr, Order, Query},
+    ColumnTrait, Condition, DatabaseConnection, EntityTrait, ExprTrait, QueryFilter, QueryOrder, QuerySelect, Select,
+    sea_query::{Alias, Expr, Order, Query, SubQueryStatement},
 };
 use tokio::time::{MissedTickBehavior, interval};
 use tracing::{debug, error, info, warn};
@@ -349,73 +349,6 @@ async fn query_channel_changes_after(
         .order_by_desc(channel_state::Column::PublishedBlock)
         .order_by_desc(channel_state::Column::PublishedTxIndex)
         .order_by_desc(channel_state::Column::PublishedLogIndex)
-        .order_by_desc(channel_state::Column::Id);
-
-    let channel_states = channel_states_query
-        .all(db)
-        .await
-        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("channel_state query", e)))?;
-
-    // The database returns at most one state per channel; index them for the identity lookup.
-    let mut state_map: HashMap<i64, channel_state::Model> = changed_states
-        .into_iter()
-        .map(|state| (state.channel_id, state))
-        .collect();
-    if state_map.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // Filter out CLOSED channels (status != 0)
-    let non_closed: Vec<_> = channels
-        .into_iter()
-        .filter_map(|channel| {
-            state_map
-                .remove(&channel.id)
-                .filter(|state| state.status != 0)
-                .map(|state| (channel, state))
-        })
-        .collect();
-
-    channel_updates_from_states(db, non_closed).await
-}
-
-/// Queries the latest state of every channel that changed after `after`, up to the watermark
-///
-/// This is phase 1 of a resumed graph subscription. Unlike the snapshot, closed channels are included: a client
-/// that resumes must also learn about channels that closed while it was disconnected.
-///
-/// The result is ordered by the position of each channel's latest state, oldest first, so a client cut off part
-/// way can resume from the cursor of the last entry it received without skipping any channel.
-async fn query_channel_changes_after(
-    db: &DatabaseConnection,
-    after: &Watermark,
-    until: &Watermark,
-) -> Result<Vec<ChannelUpdate>> {
-    // A correlated top-one query works on both PostgreSQL and SQLite. Apply the watermark inside it so
-    // a newer state committed during phase 1 cannot hide the state that belongs to this resume window.
-    let latest = Alias::new("latest_channel_state");
-    let latest_state_id = Query::select()
-        .column((latest.clone(), channel_state::Column::Id))
-        .from_as(channel_state::Entity, latest.clone())
-        .and_where(
-            Expr::col((latest.clone(), channel_state::Column::ChannelId))
-                .equals((channel_state::Entity, channel_state::Column::ChannelId)),
-        )
-        .and_where(Expr::col((latest.clone(), channel_state::Column::PublishedBlock)).lte(until.block))
-        .order_by((latest.clone(), channel_state::Column::PublishedBlock), Order::Desc)
-        .order_by((latest.clone(), channel_state::Column::PublishedTxIndex), Order::Desc)
-        .order_by((latest.clone(), channel_state::Column::PublishedLogIndex), Order::Desc)
-        .order_by((latest, channel_state::Column::Id), Order::Desc)
-        .limit(1)
-        .to_owned();
-
-    let changed_states = channel_state::Entity::find()
-        .filter(channel_state::Column::Id.in_subquery(latest_state_id))
-        .filter(position_after_condition(after))
-        .filter(watermark_condition(until))
-        .order_by_desc(channel_state::Column::PublishedBlock)
-        .order_by_desc(channel_state::Column::PublishedTxIndex)
-        .order_by_desc(channel_state::Column::PublishedLogIndex)
         .order_by_desc(channel_state::Column::Id)
         .all(db)
         .await
@@ -611,42 +544,7 @@ async fn query_channels_at_watermark_with_filters(
         states = states.add(channel_state::Column::Status.eq(status_filter));
     }
 
-    let channel_ids: Vec<i64> = channels.iter().map(|c| c.id).collect();
-
-    // Query channel_state for all channels, filtered by watermark
-    let channel_states_query = channel_state::Entity::find()
-        .filter(channel_state::Column::ChannelId.is_in(channel_ids))
-        .filter(watermark_condition(watermark))
-        .order_by_desc(channel_state::Column::PublishedBlock)
-        .order_by_desc(channel_state::Column::PublishedTxIndex)
-        .order_by_desc(channel_state::Column::PublishedLogIndex)
-        .order_by_desc(channel_state::Column::Id);
-
-    let channel_states = channel_states_query
-        .all(db)
-        .await
-        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("channel_state query", e)))?;
-
-    // Build map of channel_id -> latest state
-    let mut state_map: HashMap<i64, channel_state::Model> = HashMap::new();
-    for state in channel_states {
-        state_map.entry(state.channel_id).or_insert(state);
-    }
-
-    // Filter channels by status and build result
-    let mut results = Vec::new();
-    for channel in channels {
-        let state = match state_map.get(&channel.id) {
-            Some(s) => s,
-            None => continue, // Skip channels without state
-        };
-
-        // Apply status filter if provided
-        if let Some(status_filter) = status_code
-            && state.status != status_filter
-        {
-            continue;
-        }
+    let channel_states = latest_channel_states(db, watermark, channels, states).await?;
 
     // Build result
     let mut results = Vec::with_capacity(channel_states.len());
@@ -1318,7 +1216,7 @@ impl SubscriptionRoot {
                             Ok(IndexerEvent::ChannelUpdated(channel_update)) => {
                                 // Convert from ChannelUpdate (internal) to OpenedChannelsGraphEntry (API)
                                 let cursor = channel_update.position;
-                                yield channel_update_to_graph_entry(*channel_update, cursor);
+                                yield channel_update_to_graph_entry(ChannelUpdate::clone(channel_update), cursor);
                             }
                             Ok(IndexerEvent::AccountUpdated(_)) => {
                                 // Account updates don't affect this subscription
