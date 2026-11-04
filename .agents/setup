@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Orb base setup for hoprnet/blokli.
+#
+# Installs a pinned version of Determinate Nix.
+#
+# Determinism: pinning the nix-installer release tag also pins the bundled
+# Determinate Nix version, so every orb gets the same toolchain.
+#
+# Idempotence: an existing install with the matching installer version is
+# detected via /nix/receipt.json and left untouched; anything else (e.g. the
+# base image's plain single-user Nix) is replaced.
+
+log() { printf '[blokli-setup] %s\n' "$*" >&2; }
+
+readonly NIX_INSTALLER_TAG="v3.24.1"
+readonly NIX_PROFILE="/nix/var/nix/profiles/default"
+
+is_pinned_determinate_nix() {
+  # A receipt alone can remain after an interrupted install. Require the
+  # matching executable to run successfully before treating setup as complete.
+  [ -f /nix/receipt.json ] \
+    && grep -q "\"version\": \"${NIX_INSTALLER_TAG#v}\"" /nix/receipt.json \
+    && [ -x "${NIX_PROFILE}/bin/nix" ] \
+    && "${NIX_PROFILE}/bin/nix" --version | grep -Fq "Determinate Nix ${NIX_INSTALLER_TAG#v}"
+}
+
+install_determinate_nix() {
+  local installer
+  local previous_nix
+
+  log "Installing Determinate Nix (${NIX_INSTALLER_TAG})"
+  installer="$(mktemp)"
+  previous_nix="/nix.before-determinate-nix.$$"
+
+  # Download before replacing the base image's Nix store so a network failure
+  # never leaves the orb without a working Nix installation.
+  curl --proto '=https' --tlsv1.2 -sSf -L \
+    "https://install.determinate.systems/nix/tag/${NIX_INSTALLER_TAG}" \
+    -o "${installer}"
+
+  if [ -d /nix ]; then
+    sudo mv /nix "${previous_nix}"
+  fi
+
+  if ! sh "${installer}" install --no-confirm || ! is_pinned_determinate_nix; then
+    sudo rm -rf /nix
+    if [ -d "${previous_nix}" ]; then
+      sudo mv "${previous_nix}" /nix
+    fi
+    rm -f "${installer}"
+    log "Determinate Nix installation failed; restored the previous Nix store"
+    return 1
+  fi
+
+  sudo rm -rf "${previous_nix}"
+  rm -f "${installer}"
+
+  # The installer cannot update this running script's environment.
+  # shellcheck disable=SC1091
+  source "${NIX_PROFILE}/etc/profile.d/nix-daemon.sh"
+  log "Installed $(nix --version)"
+}
+
+expose_nix() {
+  # The installer intentionally relies on shell profiles. Amp commands run in
+  # non-interactive shells too, so expose the pinned executable on their PATH.
+  sudo ln -sfn "${NIX_PROFILE}/bin/nix" /usr/local/bin/nix
+}
+
+main() {
+  if is_pinned_determinate_nix; then
+    log "Determinate Nix ${NIX_INSTALLER_TAG} already installed; skipping install"
+  else
+    install_determinate_nix
+  fi
+
+  expose_nix
+
+  log "Setup complete"
+}
+
+main "$@"
