@@ -146,6 +146,14 @@ impl Args {
                 "api.transactions.max_submitted_transactions_per_identity",
             ),
             (
+                "BLOKLI_API_TRANSACTIONS_TERMINAL_TRANSACTION_TTL",
+                "api.transactions.terminal_transaction_ttl",
+            ),
+            (
+                "BLOKLI_API_TRANSACTIONS_MAX_TERMINAL_TRANSACTIONS",
+                "api.transactions.max_terminal_transactions",
+            ),
+            (
                 "BLOKLI_API_TRANSACTIONS_MAX_QUEUED_TRACE_JOBS",
                 "api.transactions.max_queued_trace_jobs",
             ),
