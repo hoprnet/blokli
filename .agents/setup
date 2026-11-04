@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# Prepares an Amp orb for blokli: realizes the Nix dev shell, fetches Cargo
+# dependencies, and activates the dev shell in login shells started in the repo.
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+step() {
+  local name="$1"
+  shift
+  local start=$SECONDS
+  echo "==> $name"
+  "$@"
+  echo "<== $name ($((SECONDS - start))s)"
+}
+
+nix_profile="$HOME/.nix-profile"
+if [[ ! -e "$nix_profile/etc/profile.d/nix.sh" ]]; then
+  echo "Nix is not installed; the orb base template is expected to provide it." >&2
+  exit 1
+fi
+# shellcheck disable=SC1091
+source "$nix_profile/etc/profile.d/nix.sh"
+
+# Public binary caches that CI pushes to (see cachix_cache_name in .github/workflows).
+configure_caches() {
+  local conf="$HOME/.config/nix/nix.conf"
+  local marker="# blokli binary caches"
+  mkdir -p "$(dirname "$conf")"
+  if ! grep -Fqx "$marker" "$conf" 2>/dev/null; then
+    cat >>"$conf" <<'EOF'
+# blokli binary caches
+extra-substituters = https://blokli.cachix.org https://hoprnet.cachix.org
+extra-trusted-public-keys = blokli.cachix.org-1:SmgBcB1qdG60qBo7wnRFQamn6kfFKgtldkceAztqXlY= hoprnet.cachix.org-1:FzIaDwgsZOy42i2h0qyQ/k9kkggzoeTWmoo/2ehEr90=
+EOF
+  fi
+}
+
+# Keep the dev shell alive across garbage collection and record its environment.
+build_dev_shell() {
+  mkdir -p "$HOME/.cache/blokli"
+  nix print-dev-env --profile "$HOME/.cache/blokli/devshell" >/dev/null
+}
+
+fetch_cargo_deps() {
+  nix develop --command cargo fetch --locked
+}
+
+# Pre-build dependencies so the first `just check` / `just quick` in an orb is incremental.
+check_workspace() {
+  nix develop --command just check
+}
+
+# Login shells started inside the repo get the dev shell environment, so Amp's
+# commands and supervised services see the same tools as `nix develop`.
+# The block is rewritten on every run so changes to it reach existing orbs.
+install_profile_hook() {
+  local begin="# >>> blokli Nix development shell >>>"
+  local end="# <<< blokli Nix development shell <<<"
+  touch "$HOME/.bash_profile"
+  sed -i "\|^$begin\$|,\|^$end\$|d" "$HOME/.bash_profile"
+  cat >>"$HOME/.bash_profile" <<EOF
+$begin
+if [[ -z "\${IN_NIX_SHELL:-}" && ( "\$PWD" == "$repo_root" || "\$PWD" == "$repo_root"/* ) ]]; then
+  # Drop the shell hook's banner and the dirty-tree warning from every command.
+  eval "\$("$nix_profile/bin/nix" print-dev-env --quiet --option warn-dirty false "$repo_root")" >/dev/null
+fi
+$end
+EOF
+}
+
+# Tell agents in the orb that the dev shell is already active.
+install_agent_notes() {
+  local notes="$HOME/.config/amp/AGENTS.md"
+  local marker="# blokli orb notes"
+  mkdir -p "$(dirname "$notes")"
+  if ! grep -Fqx "$marker" "$notes" 2>/dev/null; then
+    cat >>"$notes" <<'EOF'
+
+# blokli orb notes
+
+- Login shells inside the blokli checkout already load the Nix dev shell (`IN_NIX_SHELL` is set), so run `just`, `cargo`, `forge`, and
+  `psql` directly instead of wrapping them in `nix develop -c`.
+- After changing `flake.nix`, `flake.lock`, `nix/`, or `rust-toolchain.toml`, new shells pick up the change automatically; the first one
+  rebuilds the dev shell.
+EOF
+  fi
+}
+
+step "Configure Nix binary caches" configure_caches
+step "Build Nix dev shell" build_dev_shell
+step "Fetch Cargo dependencies" fetch_cargo_deps
+step "Check workspace" check_workspace
+step "Install login shell hook" install_profile_hook
+step "Install agent notes" install_agent_notes
