@@ -122,6 +122,8 @@ BlokliChain
 
 - **Indexer Process**: Continuous blockchain event ingestion with finality awareness
 - **TransactionMonitor Process**: Background transaction confirmation tracking and status updates
+  - Retains completed transaction results only for a bounded in-memory retention window, while preserving all pending transactions until
+    they reach a terminal outcome
 
 ### 3. Indexer - Blockchain Event Processing
 

@@ -5,8 +5,9 @@
 //! status and can be queried by UUID.
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{Arc, Mutex, MutexGuard, PoisonError},
+    time::Duration,
 };
 
 use async_broadcast::{InactiveReceiver, Receiver, Sender, TrySendError, broadcast};
@@ -20,7 +21,7 @@ use uuid::Uuid;
 use crate::{
     metrics::{
         STATUS_CONFIRMED, STATUS_REVERTED, STATUS_SUBMISSION_FAILED, STATUS_TIMEOUT, STATUS_VALIDATION_FAILED,
-        record_transaction_status,
+        record_transaction_status, set_transaction_store_size,
     },
     safe_execution::decode_transaction_signer,
 };
@@ -81,6 +82,11 @@ pub enum TransactionStatus {
 }
 
 impl TransactionStatus {
+    /// Whether this status is a terminal outcome that no longer needs receipt monitoring.
+    pub fn is_terminal(self) -> bool {
+        !matches!(self, TransactionStatus::Submitted)
+    }
+
     /// The `blokli_transaction_status_total` metric label for this status, or `None` for the
     /// non-terminal `Submitted` state.
     fn metric_label(self) -> Option<&'static str> {
@@ -223,6 +229,11 @@ pub struct SubmissionCapacityExhausted {
 #[derive(Clone)]
 pub struct TransactionStore {
     transactions: Arc<DashMap<Uuid, TransactionRecord>>,
+    /// Time at which a transaction entered a terminal status.
+    ///
+    /// This metadata is kept separately to avoid exposing an implementation-only timestamp
+    /// in the public transaction record and GraphQL schema.
+    terminal_timestamps: Arc<DashMap<Uuid, DateTime<Utc>>>,
     /// Identity of every transaction currently in `Submitted` status.
     ///
     /// Maintained alongside `transactions` so admission control never has to
@@ -276,13 +287,16 @@ impl TransactionStore {
         // Set overflow behavior to allow new receivers to miss old messages if they can't keep up
         event_bus.set_overflow(true);
 
-        Self {
+        let store = Self {
             transactions: Arc::new(DashMap::new()),
+            terminal_timestamps: Arc::new(DashMap::new()),
             submitted_identities: Arc::new(DashMap::new()),
             submission_counts: Arc::new(Mutex::new(SubmissionCounts::default())),
             event_bus,
             _inactive_event_bus_rx: Arc::new(inactive_event_bus_rx),
-        }
+        };
+        store.update_size_metric();
+        store
     }
 
     /// Insert a new transaction record into the store
@@ -296,9 +310,15 @@ impl TransactionStore {
                 let id = record.id;
                 let identity = submitted.then(|| transaction_identity(&record.raw_transaction));
                 entry.insert(record);
+                if submitted {
+                    self.clear_terminal_timestamp(id);
+                } else {
+                    self.mark_terminal(id);
+                }
                 if let Some(identity) = identity {
                     self.track_submitted(id, identity);
                 }
+                self.update_size_metric();
                 Ok(())
             }
             Entry::Occupied(entry) => Err(TransactionStoreError::AlreadyExists(*entry.key())),
@@ -323,11 +343,17 @@ impl TransactionStore {
                 let id = record.id;
                 let submitted = record.status == TransactionStatus::Submitted;
                 entry.insert(record);
+                if submitted {
+                    self.clear_terminal_timestamp(id);
+                } else {
+                    self.mark_terminal(id);
+                }
                 // The reservation already counted this record, so the index entry takes over
                 // that count instead of adding a second one.
                 if submitted && self.submitted_identities.insert(id, reservation.identity).is_none() {
                     reservation.held = false;
                 }
+                self.update_size_metric();
                 Ok(())
             }
             Entry::Occupied(entry) => Err(TransactionStoreError::AlreadyExists(*entry.key())),
@@ -350,6 +376,20 @@ impl TransactionStore {
         if let Some((_, identity)) = self.submitted_identities.remove(&id) {
             self.counts().release(identity);
         }
+    }
+
+    /// Record when a transaction first reached a terminal status.
+    fn mark_terminal(&self, id: Uuid) {
+        self.terminal_timestamps.entry(id).or_insert_with(Utc::now);
+    }
+
+    /// Remove terminal-retention metadata when a record becomes pending again.
+    fn clear_terminal_timestamp(&self, id: Uuid) {
+        self.terminal_timestamps.remove(&id);
+    }
+
+    fn update_size_metric(&self) {
+        set_transaction_store_size(self.transactions.len());
     }
 
     /// Reconcile the submitted-transaction indexes with a record's new state.
@@ -390,6 +430,36 @@ impl TransactionStore {
             .ok_or(TransactionStoreError::NotFound(id))
     }
 
+    /// Read a transaction's status without cloning its raw signed transaction bytes.
+    ///
+    /// This is intended for subscription reconciliation, where status is usually unchanged.
+    pub fn status(&self, id: Uuid) -> Result<TransactionStatus, TransactionStoreError> {
+        self.transactions
+            .get(&id)
+            .map(|entry| entry.value().status)
+            .ok_or(TransactionStoreError::NotFound(id))
+    }
+
+    /// Get a transaction record suitable for GraphQL output without copying the raw transaction.
+    pub fn get_public(&self, id: Uuid) -> Result<TransactionRecord, TransactionStoreError> {
+        self.transactions
+            .get(&id)
+            .map(|entry| {
+                let record = entry.value();
+                TransactionRecord {
+                    id: record.id,
+                    raw_transaction: Vec::new(),
+                    transaction_hash: record.transaction_hash,
+                    status: record.status,
+                    submitted_at: record.submitted_at,
+                    confirmed_at: record.confirmed_at,
+                    error_message: record.error_message.clone(),
+                    safe_execution: record.safe_execution.clone(),
+                }
+            })
+            .ok_or(TransactionStoreError::NotFound(id))
+    }
+
     /// Update an existing transaction record
     ///
     /// # Errors
@@ -407,6 +477,11 @@ impl TransactionStore {
                 entry.insert(record);
                 drop(entry);
                 self.sync_submitted_status(id, status, identity);
+                if status.is_terminal() {
+                    self.mark_terminal(id);
+                } else {
+                    self.clear_terminal_timestamp(id);
+                }
                 Ok(())
             }
             Entry::Vacant(_) => Err(TransactionStoreError::NotFound(record.id)),
@@ -451,6 +526,11 @@ impl TransactionStore {
             .ok_or(TransactionStoreError::NotFound(id))?;
 
         self.sync_submitted_status(id, status, identity);
+        if status.is_terminal() {
+            self.mark_terminal(id);
+        } else {
+            self.clear_terminal_timestamp(id);
+        }
 
         if let Some(label) = status.metric_label() {
             record_transaction_status(label);
@@ -495,6 +575,7 @@ impl TransactionStore {
             .ok_or(TransactionStoreError::NotFound(id))?;
 
         self.untrack_submitted(id);
+        self.mark_terminal(id);
 
         record_transaction_status(STATUS_CONFIRMED);
 
@@ -621,6 +702,72 @@ impl TransactionStore {
         self.transactions.len()
     }
 
+    /// Evict terminal records past `terminal_ttl` and, independently, the oldest terminal
+    /// records above `max_terminal_records`. A zero TTL or cap disables that limit.
+    ///
+    /// Submitted records are never evicted, so receipt monitoring and its admission counters
+    /// remain intact. Returns the number of records removed.
+    pub fn evict_terminal_records(&self, terminal_ttl: Duration, max_terminal_records: usize) -> usize {
+        let now = Utc::now();
+        let mut terminal_records = self
+            .transactions
+            .iter()
+            .filter_map(|entry| {
+                let record = entry.value();
+                if !record.status.is_terminal() {
+                    return None;
+                }
+                let id = *entry.key();
+                let terminal_at = match self.terminal_timestamps.get(&id) {
+                    Some(timestamp) => timestamp.value().to_owned(),
+                    None => {
+                        self.terminal_timestamps.insert(id, now);
+                        now
+                    }
+                };
+                Some((id, terminal_at))
+            })
+            .collect::<Vec<_>>();
+
+        terminal_records.sort_unstable_by_key(|(_, terminal_at)| terminal_at.to_owned());
+
+        let mut eviction_ids = HashSet::new();
+        if !terminal_ttl.is_zero() {
+            eviction_ids.extend(terminal_records.iter().filter_map(|(id, terminal_at)| {
+                now.signed_duration_since(terminal_at.to_owned())
+                    .to_std()
+                    .ok()
+                    .filter(|age| *age >= terminal_ttl)
+                    .map(|_| *id)
+            }));
+        }
+
+        if max_terminal_records != 0 {
+            let remaining = terminal_records
+                .iter()
+                .filter(|(id, _)| !eviction_ids.contains(id))
+                .collect::<Vec<_>>();
+            let overflow = remaining.len().saturating_sub(max_terminal_records);
+            eviction_ids.extend(remaining.into_iter().take(overflow).map(|(id, _)| *id));
+        }
+
+        let removed = eviction_ids
+            .into_iter()
+            .filter(|id| {
+                self.transactions
+                    .remove_if(id, |_, record| record.status.is_terminal())
+                    .is_some()
+            })
+            .collect::<Vec<_>>();
+        for id in &removed {
+            self.terminal_timestamps.remove(id);
+        }
+        if !removed.is_empty() {
+            self.update_size_metric();
+        }
+        removed.len()
+    }
+
     /// Subscribe to transaction status update events
     ///
     /// Creates a new receiver that will receive all future transaction status updates.
@@ -684,6 +831,7 @@ impl Default for TransactionStore {
 mod tests {
     use std::thread;
 
+    use chrono::Duration as ChronoDuration;
     use hopr_bindings::exports::alloy::{
         consensus::{SignableTransaction, TxLegacy},
         eips::eip2718::Encodable2718,
@@ -1272,6 +1420,74 @@ mod tests {
 
         store.insert(record).unwrap();
         assert_eq!(store.submitted_count(), 0);
+    }
+
+    #[test]
+    fn test_public_record_omits_raw_transaction() {
+        let store = TransactionStore::new();
+        store
+            .insert(submitted_record(TEST_UUID, vec![0x01, 0x02, 0x03]))
+            .unwrap();
+
+        assert_eq!(store.status(TEST_UUID), Ok(TransactionStatus::Submitted));
+        assert!(store.get_public(TEST_UUID).unwrap().raw_transaction.is_empty());
+        assert_eq!(store.get(TEST_UUID).unwrap().raw_transaction, vec![0x01, 0x02, 0x03]);
+    }
+
+    #[test]
+    fn test_terminal_ttl_evicts_only_terminal_records() {
+        let store = TransactionStore::new();
+        let submitted_id = Uuid::new_v4();
+        let expired_id = Uuid::new_v4();
+        let recent_id = Uuid::new_v4();
+
+        store.insert(submitted_record(submitted_id, vec![0x01])).unwrap();
+
+        let mut expired = submitted_record(expired_id, vec![0x02]);
+        expired.status = TransactionStatus::Timeout;
+        store.insert(expired).unwrap();
+        store
+            .terminal_timestamps
+            .insert(expired_id, Utc::now() - ChronoDuration::hours(2));
+
+        let mut recent = submitted_record(recent_id, vec![0x03]);
+        recent.status = TransactionStatus::Reverted;
+        store.insert(recent).unwrap();
+
+        assert_eq!(store.evict_terminal_records(Duration::from_secs(60 * 60), 0), 1);
+        assert!(store.get(submitted_id).is_ok());
+        assert!(matches!(store.get(expired_id), Err(TransactionStoreError::NotFound(_))));
+        assert!(store.get(recent_id).is_ok());
+        assert_eq!(store.submitted_count(), 1);
+    }
+
+    #[test]
+    fn test_terminal_cap_evicts_oldest_records_first() {
+        let store = TransactionStore::new();
+        let oldest_id = Uuid::new_v4();
+        let middle_id = Uuid::new_v4();
+        let newest_id = Uuid::new_v4();
+
+        for id in [oldest_id, middle_id, newest_id] {
+            let mut record = submitted_record(id, vec![0x01]);
+            record.status = TransactionStatus::Confirmed;
+            store.insert(record).unwrap();
+        }
+        let now = Utc::now();
+        store
+            .terminal_timestamps
+            .insert(oldest_id, now - ChronoDuration::minutes(3));
+        store
+            .terminal_timestamps
+            .insert(middle_id, now - ChronoDuration::minutes(2));
+        store
+            .terminal_timestamps
+            .insert(newest_id, now - ChronoDuration::minutes(1));
+
+        assert_eq!(store.evict_terminal_records(Duration::ZERO, 1), 2);
+        assert!(matches!(store.get(oldest_id), Err(TransactionStoreError::NotFound(_))));
+        assert!(matches!(store.get(middle_id), Err(TransactionStoreError::NotFound(_))));
+        assert!(store.get(newest_id).is_ok());
     }
 
     #[tokio::test]

@@ -1992,7 +1992,7 @@ impl SubscriptionRoot {
         // to avoid race condition where we miss an update
         let mut event_receiver = transaction_store.subscribe();
         let initial_record = transaction_store
-            .get(transaction_id)
+            .get_public(transaction_id)
             .map_err(|_| errors::transaction_not_found(transaction_id))?;
 
         Ok(stream! {
@@ -2009,7 +2009,6 @@ impl SubscriptionRoot {
 
             // Phase 1: Emit the state captured after subscribing to the event bus.
             let mut last_record = initial_record;
-            last_record.raw_transaction.clear();
             let is_terminal = is_terminal_status(&last_record.status);
 
             yield transaction_from_record(last_record.clone());
@@ -2025,7 +2024,7 @@ impl SubscriptionRoot {
             reconciliation.tick().await;
 
             loop {
-                let should_reconcile = tokio::select! {
+                let event_received = tokio::select! {
                     event = event_receiver.recv() => {
                         match event {
                             Ok(TransactionEvent::StatusUpdated { id, .. }) => id == transaction_id,
@@ -2040,15 +2039,18 @@ impl SubscriptionRoot {
                             }
                         }
                     }
-                    _ = reconciliation.tick() => true,
+                    _ = reconciliation.tick() => false,
                 };
 
-                if !should_reconcile {
+                let status = match transaction_store.status(transaction_id) {
+                    Ok(status) => status,
+                    Err(_) => break,
+                };
+                if !event_received && status == last_record.status {
                     continue;
                 }
 
-                if let Ok(mut record) = transaction_store.get(transaction_id) {
-                    record.raw_transaction.clear();
+                if let Ok(record) = transaction_store.get_public(transaction_id) {
 
                     if record == last_record {
                         continue;

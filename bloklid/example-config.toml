@@ -185,6 +185,11 @@ max_query_complexity = 500
 max_submitted_transactions              = 1024
 max_submitted_transactions_per_identity = 64
 
+# Retain completed transaction results for 24 hours, while capping retained terminal
+# records at 10,000. Set the TTL to "0s" or the cap to 0 to disable that eviction limit.
+max_terminal_transactions = 10000
+terminal_transaction_ttl  = "24h"
+
 # Bounds optional debug_traceTransaction enrichment for failed Safe executions.
 # Set either to 0 for unbounded. Defaults: queue 128 jobs and run 2 concurrently.
 max_concurrent_trace_jobs = 2
