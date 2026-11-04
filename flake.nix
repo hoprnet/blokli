@@ -14,8 +14,9 @@
     # HOPR Nix library: Rust builders, dev shells, Docker images, and treefmt
     nix-lib.url = "github:hoprnet/nix-lib/v2.0.0";
 
-    # Only used to pin the versions nix-lib builds with (see follows below)
+    # Only used to pin the crane version nix-lib builds with (see follows below)
     crane.url = "github:ipetkov/crane";
+    # Rust toolchains (rust-bin) for this flake's dev shells; nix-lib follows it too
     rust-overlay.url = "github:oxalica/rust-overlay";
 
     pre-commit.url = "github:cachix/git-hooks.nix";
