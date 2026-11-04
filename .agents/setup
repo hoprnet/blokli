@@ -58,7 +58,17 @@ check_workspace() {
 install_profile_hook() {
   local begin="# >>> blokli Nix development shell >>>"
   local end="# <<< blokli Nix development shell <<<"
-  touch "$HOME/.bash_profile"
+  if [[ ! -e "$HOME/.bash_profile" ]]; then
+    # Bash reads only the first of these files, so keep loading the one it used before.
+    local previous
+    for previous in .bash_login .profile; do
+      if [[ -e "$HOME/$previous" ]]; then
+        echo ". \"\$HOME/$previous\"" >"$HOME/.bash_profile"
+        break
+      fi
+    done
+    touch "$HOME/.bash_profile"
+  fi
   sed -i "\|^$begin\$|,\|^$end\$|d" "$HOME/.bash_profile"
   cat >>"$HOME/.bash_profile" <<EOF
 $begin
