@@ -1,3 +1,4 @@
+---
 name: Merge queue
 # Dispatches hoprnet/hopr-integration-tests and blocks on its verdict, so nothing reaches `main`
 # without the v5 throughput + PIX suites passing against that candidate.
@@ -28,7 +29,7 @@ jobs:
     # queue entries. Re-running the opt-in means re-applying the label.
     if: >-
       (github.event_name == 'merge_group' && github.event.merge_group.base_ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main' && github.event.action == 'labeled' && github.event.label.name == 'run-integration')
-    runs-on: depot-ubuntu-24.04
+    runs-on: depot-ubuntu-24.04-2
     # <=5 min of discovery plus 4 x 53 min of watching is ~217 min. The queue is ALLGREEN with one
     # entry built at a time, so there is no tail to wait for; entries are tested one by one.
     timeout-minutes: 350
@@ -40,7 +41,7 @@ jobs:
     steps:
       - name: Generate GitHub App token
         id: bot-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0 # zizmor: ignore[github-app]
         with:
           client-id: ${{ vars.GH_APP_HOPRNET_BOT_CLIENT_ID }}
           private-key: ${{ secrets.GH_APP_HOPRNET_BOT_PRIVATE_KEY }}
