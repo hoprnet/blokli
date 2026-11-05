@@ -23,12 +23,20 @@ fi
 # shellcheck disable=SC1091
 source "$nix_profile/etc/profile.d/nix.sh"
 
+# Appending to a file whose last line lacks a newline would join it to the first appended line.
+ensure_trailing_newline() {
+  if [[ -s "$1" && -n "$(tail -c1 "$1")" ]]; then
+    echo >>"$1"
+  fi
+}
+
 # Public binary caches that CI pushes to (see cachix_cache_name in .github/workflows).
 configure_caches() {
   local conf="$HOME/.config/nix/nix.conf"
   local marker="# blokli binary caches"
   mkdir -p "$(dirname "$conf")"
   if ! grep -Fqx "$marker" "$conf" 2>/dev/null; then
+    ensure_trailing_newline "$conf"
     cat >>"$conf" <<'EOF'
 # blokli binary caches
 extra-substituters = https://blokli.cachix.org https://hoprnet.cachix.org
@@ -69,12 +77,24 @@ install_profile_hook() {
     done
     touch "$HOME/.bash_profile"
   fi
+  # sed deletes from an unclosed begin marker to the end of the file, so stop instead.
+  if ! awk -v b="$begin" -v e="$end" \
+    '$0 == b { if (open) bad = 1; open = 1 } $0 == e { if (!open) bad = 1; open = 0 } END { exit bad || open }' \
+    "$HOME/.bash_profile"; then
+    echo "$HOME/.bash_profile has unpaired '$begin' / '$end' lines; fix them and rerun." >&2
+    return 1
+  fi
   sed -i "\|^$begin\$|,\|^$end\$|d" "$HOME/.bash_profile"
+  ensure_trailing_newline "$HOME/.bash_profile"
+  # Quote the paths for the shell that reads the hook, so no character in them is expanded.
+  local root nix
+  printf -v root '%q' "$repo_root"
+  printf -v nix '%q' "$nix_profile/bin/nix"
   cat >>"$HOME/.bash_profile" <<EOF
 $begin
-if [[ -z "\${IN_NIX_SHELL:-}" && ( "\$PWD" == "$repo_root" || "\$PWD" == "$repo_root"/* ) ]]; then
+if [[ -z "\${IN_NIX_SHELL:-}" && ( "\$PWD" == $root || "\$PWD" == $root/* ) ]]; then
   # Drop the shell hook's banner and the dirty-tree warning from every command.
-  eval "\$("$nix_profile/bin/nix" print-dev-env --quiet --option warn-dirty false "$repo_root")" >/dev/null
+  eval "\$($nix print-dev-env --quiet --option warn-dirty false $root)" >/dev/null
 fi
 $end
 EOF
@@ -92,8 +112,8 @@ install_agent_notes() {
 
 - Login shells inside the blokli checkout already load the Nix dev shell (`IN_NIX_SHELL` is set), so run `just`, `cargo`, `forge`, and
   `psql` directly instead of wrapping them in `nix develop -c`.
-- After changing `flake.nix`, `flake.lock`, `nix/`, or `rust-toolchain.toml`, new shells pick up the change automatically; the first one
-  rebuilds the dev shell.
+- After changing `flake.nix`, `flake.lock`, `nix/`, or `rust-toolchain.toml`, new commands pick up the change automatically; the first
+  one rebuilds the dev shell. A shell that already has the dev shell loaded, and any shell started from it, keeps the old one.
 EOF
   fi
 }
@@ -101,6 +121,6 @@ EOF
 step "Configure Nix binary caches" configure_caches
 step "Build Nix dev shell" build_dev_shell
 step "Fetch Cargo dependencies" fetch_cargo_deps
-step "Check workspace" check_workspace
 step "Install login shell hook" install_profile_hook
 step "Install agent notes" install_agent_notes
+step "Check workspace" check_workspace
