@@ -1438,7 +1438,10 @@ impl QueryRoot {
     /// against the on-chain
     /// NodeSafeRegistry (at most 16 RPC calls in flight). Its complexity grows
     /// with first, so a large page can exceed the query complexity budget.
-    #[graphql(complexity = "if live_only { (first.max(0) as usize).saturating_add(child_complexity) } else { child_complexity }")]
+    #[graphql(
+        complexity = "if live_only { (first.max(0) as usize).saturating_add(child_complexity) } else { \
+                      child_complexity }"
+    )]
     async fn services(
         &self,
         ctx: &Context<'_>,
