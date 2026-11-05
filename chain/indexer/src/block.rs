@@ -597,22 +597,8 @@ where
         Ok(())
     }
 
-    /// Generates specialized log filters for efficient blockchain event processing.
-    ///
-    /// This function creates a comprehensive set of log filters that optimize
-    /// indexer performance by categorizing filters based on contract types and
-    /// event relevance to the specific node.
-    ///
-    /// # Arguments
-    /// * `logs_handler` - Handler containing contract addresses and safe address
-    ///
     /// # Returns
     /// * `Vec<(Address, Hash)>` - Address-topic pairs used to validate/prime the logs DB origin metadata.
-    ///
-    /// # Filter Categories
-    /// * `all` - Complete set of filters for normal operation
-    /// * `token` - Token-specific Approval filters for tracked Safe owners
-    /// * `no_token` - Non-token contract filters for initial sync optimization
     fn generate_address_topics(logs_handler: &U) -> Vec<(Address, Hash)> {
         let static_addresses = logs_handler.contract_addresses();
         let mut address_topics = vec![];
@@ -633,6 +619,12 @@ where
         address_topics
     }
 
+    /// Generate log filters for the requested indexing phase.
+    ///
+    /// # Filter categories
+    /// * `all` contains every active filter.
+    /// * `token` contains owner-filtered token Approval filters.
+    /// * `no_token` contains non-token filters for historical discovery.
     async fn generate_log_filters(
         db: &Db,
         logs_handler: &U,
@@ -660,12 +652,8 @@ where
         let filter_base = Filter::new()
             .address(filter_base_addresses)
             .event_signature(filter_base_topics);
-        let safe_addresses = if enable_safe_indexing {
-            db.get_safe_contract_addresses(None).await?
-        } else {
-            Vec::new()
-        };
-        let safe_filter = (!safe_addresses.is_empty()).then(|| {
+        let safe_addresses = db.get_safe_contract_addresses(None).await?;
+        let safe_filter = (enable_safe_indexing && !safe_addresses.is_empty()).then(|| {
             Filter::new()
                 .address(
                     safe_addresses
@@ -1632,11 +1620,17 @@ mod tests {
             &db,
             &handler,
             LogFilterPhase::Continuous,
-            true,
+            false,
         )
         .await?;
 
         assert_eq!(filters.token.len(), 1);
+        assert!(
+            !filters
+                .no_token
+                .iter()
+                .any(|filter| filter.matches_address(AlloyAddress::from_hopr_address(safe_address)))
+        );
         let approval_filter = &filters.token[0];
         assert!(approval_filter.matches_address(AlloyAddress::from_hopr_address(token_address)));
         assert!(approval_filter.matches_topics(&[
