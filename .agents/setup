@@ -153,7 +153,8 @@ install_profile_hook() {
     echo "$HOME/.bash_profile has unpaired '$begin' / '$end' lines; fix them and rerun." >&2
     return 1
   fi
-  sed -i "\|^$begin\$|,\|^$end\$|d" "$HOME/.bash_profile"
+  # Edit the target of a symlinked profile instead of replacing the link.
+  sed -i --follow-symlinks "\|^$begin\$|,\|^$end\$|d" "$HOME/.bash_profile"
   ensure_trailing_newline "$HOME/.bash_profile"
   # Quote the paths for the shell that reads the hook, so no character in them is expanded.
   local root nix
