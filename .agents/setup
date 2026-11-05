@@ -65,8 +65,13 @@ install_determinate_nix() {
 
 expose_nix() {
   # The installer intentionally relies on shell profiles. Amp commands run in
-  # non-interactive shells too, so expose the pinned executable on their PATH.
-  sudo ln -sfn "${NIX_PROFILE}/bin/nix" /usr/local/bin/nix
+  # non-interactive shells too, so expose every pinned executable on their PATH:
+  # `nix develop` shell hooks call tools such as nix-store, not only nix. The
+  # links point into the profile, so they follow later profile upgrades.
+  local executable
+  for executable in "${NIX_PROFILE}"/bin/*; do
+    sudo ln -sfn "${executable}" "/usr/local/bin/${executable##*/}"
+  done
 }
 
 main() {
