@@ -1161,17 +1161,23 @@ mod tests {
         .unwrap();
         let path = file.path().to_path_buf();
 
-        temp_env::with_var("BLOKLI_MAX_BLOCK_RANGE", None::<&str>, || {
-            let args = Args {
-                verbose: 0,
-                config: Some(path),
-                command: None,
-            };
+        temp_env::with_vars(
+            [
+                ("BLOKLI_MAX_BLOCK_RANGE", None::<&str>),
+                ("BLOKLI_BLOCK_RANGE_REPROBE_INTERVAL", None::<&str>),
+            ],
+            || {
+                let args = Args {
+                    verbose: 0,
+                    config: Some(path),
+                    command: None,
+                };
 
-            let config = args.load_config(false).expect("Failed to load config");
-            assert_eq!(config.max_block_range, 10000, "max_block_range should default to 10000");
-            assert_eq!(config.block_range_reprobe_interval, 100);
-        });
+                let config = args.load_config(false).expect("Failed to load config");
+                assert_eq!(config.max_block_range, 10000, "max_block_range should default to 10000");
+                assert_eq!(config.block_range_reprobe_interval, 100);
+            },
+        );
     }
 
     #[test]

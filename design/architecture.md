@@ -387,13 +387,15 @@ block time for polling intervals, transaction polling configuration, finality de
 **Adaptive Log Range Discovery**: The configured log block range is a ceiling, not a fixed request size. The RPC layer treats real
 `eth_getLogs` requests as observations: it starts with the ceiling, records successful ranges, records rejected ranges, and uses binary
 search to converge on the largest working range. Endpoints report oversized ranges in many ways (dedicated error codes, HTTP 413, gateway
-timeouts, generic server errors), so any failed multi-block request is treated as a rejection and retried with a smaller range instead of
-failing the indexer; only single-block failures reach the indexer's failure handling. Once a stable range is found, it is reused
-continuously. If the endpoint later rejects that stable range, for example because a region of the chain contains many logs, the previous
-result is discarded and the same request-driven search moves downward again. A stable range below the configured ceiling is periodically
-probed upward again, keeping it as the known-good lower bound, so the range recovers after a dense region or a transient failure. If even
-single-block log requests are rejected with a range limit error, the RPC layer uses single-block mode until the next upward probe and
-surfaces the underlying RPC error while warning that this mode is very slow.
+timeouts, generic server errors), so a failed multi-block request that used the full current range is treated as a rejection and retried
+with a smaller range instead of failing the indexer. A failed smaller request, such as one near the chain head, keeps the range and reaches
+the indexer's failure handling, as does a failure that persists down to a single block; such an outage restarts the discovery from the
+ceiling instead of leaving the range at a single block. Once a stable range is found, it is reused continuously. If the endpoint later
+rejects that stable range, for example because a region of the chain contains many logs, the previous result is discarded and the same
+request-driven search moves downward again. A stable range below the configured ceiling is periodically probed upward again, keeping it as
+the known-good lower bound, so the range recovers after a dense region or a transient failure. If even single-block log requests are
+rejected with a range limit error, the RPC layer uses single-block mode until the next upward probe and surfaces the underlying RPC error
+while warning that this mode is very slow.
 
 **Retry Strategy**: Implements exponential backoff with jitter for transient failures, distinguishes between retryable errors (network, rate
 limit) and non-retryable errors (invalid transaction), and respects rate limits through request throttling.

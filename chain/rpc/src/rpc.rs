@@ -340,6 +340,32 @@ impl LogBlockRangeLimit {
             warn_single_block: false,
         }
     }
+
+    /// Records a failed request whose error is not a known range limit error. Such an error may be transient (a
+    /// timeout, a rate limit, an outage) or a range rejection the endpoint reports in an unrecognized way.
+    ///
+    /// Only a request that used the full current limit is treated as possibly too large. A smaller request, such as
+    /// one near the chain head, failed for another reason and must not shrink the range. Returns `None` when the
+    /// failure is not a range signal.
+    fn record_unrecognized_failure(
+        &mut self,
+        requested_span: u64,
+        attempted_limit: u64,
+    ) -> Option<LogBlockRangeFailureUpdate> {
+        self.stable_successes = 0;
+
+        if requested_span > 1 && requested_span == attempted_limit {
+            return Some(self.record_failure(requested_span));
+        }
+
+        if attempted_limit <= 1 {
+            // Even a single block failed, so the endpoint is failing rather than rejecting the range. Restart the
+            // discovery from the ceiling so that an outage does not leave the range at a single block.
+            *self = Self::new(self.cap, self.reprobe_interval);
+        }
+
+        None
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -727,16 +753,28 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
     /// Records a failed `eth_getLogs` request and returns whether it should be retried with a smaller block range.
     ///
     /// Endpoints report an oversized range in many ways (dedicated error codes, HTTP 413, gateway timeouts, plain
-    /// server errors), so any failure of a multi-block request is treated as a range signal. Retrying the same
-    /// range would only fail again until the indexer gives up. A failure of a single-block request only counts as a
-    /// range signal when the endpoint explicitly reports a range limit, since a smaller range does not exist.
-    pub(crate) fn record_log_block_range_failure(&self, requested_span: u64, error: &RpcError) -> bool {
+    /// server errors), so a failure of a multi-block request that used the full current limit is treated as a range
+    /// signal even when the error is not a known range limit error. Retrying the same range would only fail again
+    /// until the indexer gives up. Other failures are only range signals when the endpoint explicitly reports a range
+    /// limit.
+    pub(crate) fn record_log_block_range_failure(
+        &self,
+        requested_span: u64,
+        attempted_limit: u64,
+        error: &RpcError,
+    ) -> bool {
         let is_range_limit_error = is_log_block_range_limit_error(error);
-        if requested_span <= 1 && !is_range_limit_error {
-            return false;
-        }
+        let update = self.update_log_block_range_limit(|range_limit| {
+            if is_range_limit_error {
+                Some(range_limit.record_failure(requested_span))
+            } else {
+                range_limit.record_unrecognized_failure(requested_span, attempted_limit)
+            }
+        });
 
-        let update = self.update_log_block_range_limit(|range_limit| range_limit.record_failure(requested_span));
+        let Some(update) = update else {
+            return false;
+        };
 
         if update.warn_single_block {
             warn!(
@@ -1313,6 +1351,41 @@ mod tests {
             range_limit.record_success(1, 100);
         }
 
+        assert_eq!(range_limit.stable, Some(100));
+    }
+
+    #[test]
+    fn test_log_block_range_limit_ignores_unrecognized_failures_of_partial_spans() {
+        let mut range_limit = LogBlockRangeLimit::new(10_000, REPROBE_INTERVAL);
+        send_requests(&mut range_limit, 100, 100);
+        send_requests(&mut range_limit, 100, REPROBE_INTERVAL as usize - 1);
+
+        // A short request near the chain head fails transiently.
+        assert_eq!(range_limit.record_unrecognized_failure(2, 100), None);
+        assert_eq!(range_limit.current(), 100);
+
+        // The failure interrupts the consecutive successes, so the next success does not start an upward probe.
+        send_requests(&mut range_limit, 100, 1);
+        assert_eq!(range_limit.stable, Some(100));
+    }
+
+    #[test]
+    fn test_log_block_range_limit_restarts_from_ceiling_after_outage() {
+        let mut range_limit = LogBlockRangeLimit::new(10_000, REPROBE_INTERVAL);
+        send_requests(&mut range_limit, 100, 100);
+        assert_eq!(range_limit.stable, Some(100));
+
+        // Every request fails while the endpoint is down, down to a single block.
+        loop {
+            let candidate = range_limit.current();
+            match range_limit.record_unrecognized_failure(candidate, candidate) {
+                Some(update) => assert!(update.retry && update.next_limit < candidate),
+                None => break,
+            }
+        }
+
+        assert_eq!(range_limit.current(), 10_000);
+        send_requests(&mut range_limit, 100, 100);
         assert_eq!(range_limit.stable, Some(100));
     }
 

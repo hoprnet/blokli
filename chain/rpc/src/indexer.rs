@@ -188,7 +188,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
 
                 match find_log_fetch_error(&results) {
                     Some(error) => {
-                        if self.record_log_block_range_failure(subrange.requested_span, error) {
+                        if self.record_log_block_range_failure(subrange.requested_span, subrange.attempted_limit, error) {
                             continue;
                         }
                     }
@@ -429,7 +429,11 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
                 Err(error) => {
                     let rpc_error = RpcError::from(error);
 
-                    if self.record_log_block_range_failure(subrange.requested_span, &rpc_error) {
+                    if self.record_log_block_range_failure(
+                        subrange.requested_span,
+                        subrange.attempted_limit,
+                        &rpc_error,
+                    ) {
                         continue;
                     }
 
@@ -984,6 +988,23 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].as_ref().expect("log fetch should succeed").block_number, 6);
         assert_eq!(rpc.log_block_range_limit(), 3);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_stream_logs_keeps_block_range_on_failed_partial_span() -> anyhow::Result<()> {
+        let mut server = mockito::Server::new_async().await;
+        let rpc = create_test_rpc_operations_with_max_range(&server.url(), 8)?;
+
+        // Near the chain head only two new blocks are requested; a transient error says nothing about the range.
+        let gateway_timeout = mock_get_logs_range_with_status(&mut server, 0, 1, 504, "gateway timeout".into());
+
+        let results = rpc.stream_logs(vec![Filter::new()], 0, 1).collect::<Vec<_>>().await;
+
+        gateway_timeout.assert();
+        assert!(matches!(results.as_slice(), [Err(RpcError::AlloyRpcError(_))]));
+        assert_eq!(rpc.log_block_range_limit(), 8);
 
         Ok(())
     }
