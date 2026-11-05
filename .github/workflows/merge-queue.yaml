@@ -11,7 +11,6 @@ on:
       - opened
       - synchronize
       - reopened
-      - ready_for_review
       # So applying `run-integration` starts the opt-in run.
       - labeled
   merge_group:
@@ -20,7 +19,7 @@ permissions:
   contents: read
 concurrency:
   # Unrelated label events get their own group so they cannot cancel a watched opt-in run.
-  group: ${{ github.event.pull_request.head.ref || github.ref_name }}-merge-queue${{ github.event.action == 'labeled' && github.event.label.name != 'run-integration' && '-label' || '' }}
+  group: ${{ github.event.pull_request.number || github.ref_name }}-merge-queue${{ github.event.action == 'labeled' && github.event.label.name != 'run-integration' && '-label' || '' }}
   cancel-in-progress: true
 jobs:
   integration-throughput:
@@ -29,7 +28,7 @@ jobs:
     # re-dispatching on every push piles runs onto the single integration box and starves later
     # queue entries. Re-running the opt-in means re-applying the label.
     if: >-
-      (github.event_name == 'merge_group' && github.event.merge_group.base_ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main' && github.event.action == 'labeled' && github.event.label.name == 'run-integration')
+      (github.event_name == 'merge_group' && github.event.merge_group.base_ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main' && github.event.action == 'labeled' && github.event.label.name == 'run-integration' && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: depot-ubuntu-24.04-2
     # <=5 min of discovery plus 4 x 53 min of watching is ~217 min. The queue is ALLGREEN with one
     # entry built at a time, so there is no tail to wait for; entries are tested one by one.
@@ -105,9 +104,9 @@ jobs:
           # dispatch delivery, not the queue ahead of it.
           id=""
           for _ in $(seq 1 20); do
-            id=$(gh run list -R "${REPO}" --workflow=integration.yaml -L 40 \
+            id=$(gh run list -R "${REPO}" --workflow=integration.yaml --event repository_dispatch -L 100 \
                    --json databaseId,displayTitle \
-                   -q "[.[] | select(.displayTitle | contains(\"${MARKER}\")) | .databaseId] | first // empty")
+                   -q "[.[] | select(.displayTitle | contains(\"${MARKER}\")) | .databaseId] | first // empty" || true)
             [ -n "${id}" ] && break
             sleep 15
           done
@@ -139,26 +138,28 @@ jobs:
           RUN_ID: ${{ steps.find.outputs.id }}
         run: |
           set -euo pipefail
-          rc=0
-          timeout 3180 gh run watch "${RUN_ID}" -R "${REPO}" --interval 30 --exit-status || rc=$?
-          if [ "${rc}" -eq 0 ]; then
-            echo "done=true" >>"${GITHUB_OUTPUT}"
-            exit 0
-          fi
-          # `gh` exits 1 for a red run AND for its own API errors, so ask the run itself rather
-          # than trusting the exit code. `|| true` because this call can be the thing that 401s.
-          concl=$(gh run view "${RUN_ID}" -R "${REPO}" --json status,conclusion \
-                    -q 'select(.status == "completed") | .conclusion' 2>/dev/null || true)
-          if [ -n "${concl}" ]; then
-            echo "done=true" >>"${GITHUB_OUTPUT}"
-            [ "${concl}" = success ] && exit 0
-            echo "::error::integration run concluded ${concl}"
-            echo "::error::If this PR breaks the tests on purpose, adapt them in ${REPO} and add 'Requires: ${REPO}#<N>' on its own line to this PR's description"
-            exit 1
-          fi
-          # Still going. 124 is the planned hand-off at 53 min; anything else is a transient the
-          # next stage re-attaches to, so do not let it burn a stage instantly.
-          if [ "${rc}" -ne 124 ]; then sleep 60; fi
+          deadline=$((SECONDS + 3180))
+          while [ "${SECONDS}" -lt "${deadline}" ]; do
+            rc=0
+            timeout "$((deadline - SECONDS))" gh run watch "${RUN_ID}" -R "${REPO}" --interval 30 --exit-status || rc=$?
+            if [ "${rc}" -eq 0 ]; then
+              echo "done=true" >>"${GITHUB_OUTPUT}"
+              exit 0
+            fi
+            # `gh` exits 1 for a red run AND for its own API errors, so ask the run itself rather
+            # than trusting the exit code. `|| true` because this call can be the thing that 401s.
+            concl=$(gh run view "${RUN_ID}" -R "${REPO}" --json status,conclusion \
+                      -q 'select(.status == "completed") | .conclusion' 2>/dev/null || true)
+            if [ -n "${concl}" ]; then
+              echo "done=true" >>"${GITHUB_OUTPUT}"
+              [ "${concl}" = success ] && exit 0
+              echo "::error::integration run concluded ${concl}"
+              echo "::error::If this PR breaks the tests on purpose, adapt them in ${REPO} and add 'Requires: ${REPO}#<N>' on its own line to this PR's description"
+              exit 1
+            fi
+            # 124 is the planned hand-off at the deadline; anything else is a transient: retry.
+            [ "${rc}" -eq 124 ] || sleep 30
+          done
       - name: Refresh token (stage 2)
         id: bot-token-2
         if: steps.wait1.outputs.done != 'true'
@@ -176,22 +177,28 @@ jobs:
           RUN_ID: ${{ steps.find.outputs.id }}
         run: |
           set -euo pipefail
-          rc=0
-          timeout 3180 gh run watch "${RUN_ID}" -R "${REPO}" --interval 30 --exit-status || rc=$?
-          if [ "${rc}" -eq 0 ]; then
-            echo "done=true" >>"${GITHUB_OUTPUT}"
-            exit 0
-          fi
-          concl=$(gh run view "${RUN_ID}" -R "${REPO}" --json status,conclusion \
-                    -q 'select(.status == "completed") | .conclusion' 2>/dev/null || true)
-          if [ -n "${concl}" ]; then
-            echo "done=true" >>"${GITHUB_OUTPUT}"
-            [ "${concl}" = success ] && exit 0
-            echo "::error::integration run concluded ${concl}"
-            echo "::error::If this PR breaks the tests on purpose, adapt them in ${REPO} and add 'Requires: ${REPO}#<N>' on its own line to this PR's description"
-            exit 1
-          fi
-          if [ "${rc}" -ne 124 ]; then sleep 60; fi
+          deadline=$((SECONDS + 3180))
+          while [ "${SECONDS}" -lt "${deadline}" ]; do
+            rc=0
+            timeout "$((deadline - SECONDS))" gh run watch "${RUN_ID}" -R "${REPO}" --interval 30 --exit-status || rc=$?
+            if [ "${rc}" -eq 0 ]; then
+              echo "done=true" >>"${GITHUB_OUTPUT}"
+              exit 0
+            fi
+            # `gh` exits 1 for a red run AND for its own API errors, so ask the run itself rather
+            # than trusting the exit code. `|| true` because this call can be the thing that 401s.
+            concl=$(gh run view "${RUN_ID}" -R "${REPO}" --json status,conclusion \
+                      -q 'select(.status == "completed") | .conclusion' 2>/dev/null || true)
+            if [ -n "${concl}" ]; then
+              echo "done=true" >>"${GITHUB_OUTPUT}"
+              [ "${concl}" = success ] && exit 0
+              echo "::error::integration run concluded ${concl}"
+              echo "::error::If this PR breaks the tests on purpose, adapt them in ${REPO} and add 'Requires: ${REPO}#<N>' on its own line to this PR's description"
+              exit 1
+            fi
+            # 124 is the planned hand-off at the deadline; anything else is a transient: retry.
+            [ "${rc}" -eq 124 ] || sleep 30
+          done
       # Each `if:` chains EVERY prior stage: a skipped step's output is the empty string, not
       # 'true', so guarding only on the previous one would run this whenever that one was skipped.
       - name: Refresh token (stage 3)
@@ -211,22 +218,28 @@ jobs:
           RUN_ID: ${{ steps.find.outputs.id }}
         run: |
           set -euo pipefail
-          rc=0
-          timeout 3180 gh run watch "${RUN_ID}" -R "${REPO}" --interval 30 --exit-status || rc=$?
-          if [ "${rc}" -eq 0 ]; then
-            echo "done=true" >>"${GITHUB_OUTPUT}"
-            exit 0
-          fi
-          concl=$(gh run view "${RUN_ID}" -R "${REPO}" --json status,conclusion \
-                    -q 'select(.status == "completed") | .conclusion' 2>/dev/null || true)
-          if [ -n "${concl}" ]; then
-            echo "done=true" >>"${GITHUB_OUTPUT}"
-            [ "${concl}" = success ] && exit 0
-            echo "::error::integration run concluded ${concl}"
-            echo "::error::If this PR breaks the tests on purpose, adapt them in ${REPO} and add 'Requires: ${REPO}#<N>' on its own line to this PR's description"
-            exit 1
-          fi
-          if [ "${rc}" -ne 124 ]; then sleep 60; fi
+          deadline=$((SECONDS + 3180))
+          while [ "${SECONDS}" -lt "${deadline}" ]; do
+            rc=0
+            timeout "$((deadline - SECONDS))" gh run watch "${RUN_ID}" -R "${REPO}" --interval 30 --exit-status || rc=$?
+            if [ "${rc}" -eq 0 ]; then
+              echo "done=true" >>"${GITHUB_OUTPUT}"
+              exit 0
+            fi
+            # `gh` exits 1 for a red run AND for its own API errors, so ask the run itself rather
+            # than trusting the exit code. `|| true` because this call can be the thing that 401s.
+            concl=$(gh run view "${RUN_ID}" -R "${REPO}" --json status,conclusion \
+                      -q 'select(.status == "completed") | .conclusion' 2>/dev/null || true)
+            if [ -n "${concl}" ]; then
+              echo "done=true" >>"${GITHUB_OUTPUT}"
+              [ "${concl}" = success ] && exit 0
+              echo "::error::integration run concluded ${concl}"
+              echo "::error::If this PR breaks the tests on purpose, adapt them in ${REPO} and add 'Requires: ${REPO}#<N>' on its own line to this PR's description"
+              exit 1
+            fi
+            # 124 is the planned hand-off at the deadline; anything else is a transient: retry.
+            [ "${rc}" -eq 124 ] || sleep 30
+          done
       - name: Refresh token (stage 4)
         id: bot-token-4
         if: steps.wait1.outputs.done != 'true' && steps.wait2.outputs.done != 'true' && steps.wait3.outputs.done != 'true'
@@ -244,22 +257,28 @@ jobs:
           RUN_ID: ${{ steps.find.outputs.id }}
         run: |
           set -euo pipefail
-          rc=0
-          timeout 3180 gh run watch "${RUN_ID}" -R "${REPO}" --interval 30 --exit-status || rc=$?
-          if [ "${rc}" -eq 0 ]; then
-            echo "done=true" >>"${GITHUB_OUTPUT}"
-            exit 0
-          fi
-          concl=$(gh run view "${RUN_ID}" -R "${REPO}" --json status,conclusion \
-                    -q 'select(.status == "completed") | .conclusion' 2>/dev/null || true)
-          if [ -n "${concl}" ]; then
-            echo "done=true" >>"${GITHUB_OUTPUT}"
-            [ "${concl}" = success ] && exit 0
-            echo "::error::integration run concluded ${concl}"
-            echo "::error::If this PR breaks the tests on purpose, adapt them in ${REPO} and add 'Requires: ${REPO}#<N>' on its own line to this PR's description"
-            exit 1
-          fi
-          if [ "${rc}" -ne 124 ]; then sleep 60; fi
+          deadline=$((SECONDS + 3180))
+          while [ "${SECONDS}" -lt "${deadline}" ]; do
+            rc=0
+            timeout "$((deadline - SECONDS))" gh run watch "${RUN_ID}" -R "${REPO}" --interval 30 --exit-status || rc=$?
+            if [ "${rc}" -eq 0 ]; then
+              echo "done=true" >>"${GITHUB_OUTPUT}"
+              exit 0
+            fi
+            # `gh` exits 1 for a red run AND for its own API errors, so ask the run itself rather
+            # than trusting the exit code. `|| true` because this call can be the thing that 401s.
+            concl=$(gh run view "${RUN_ID}" -R "${REPO}" --json status,conclusion \
+                      -q 'select(.status == "completed") | .conclusion' 2>/dev/null || true)
+            if [ -n "${concl}" ]; then
+              echo "done=true" >>"${GITHUB_OUTPUT}"
+              [ "${concl}" = success ] && exit 0
+              echo "::error::integration run concluded ${concl}"
+              echo "::error::If this PR breaks the tests on purpose, adapt them in ${REPO} and add 'Requires: ${REPO}#<N>' on its own line to this PR's description"
+              exit 1
+            fi
+            # 124 is the planned hand-off at the deadline; anything else is a transient: retry.
+            [ "${rc}" -eq 124 ] || sleep 30
+          done
       - name: Fail if the integration test never concluded
         if: >-
           steps.wait1.outputs.done != 'true' && steps.wait2.outputs.done != 'true' && steps.wait3.outputs.done != 'true' && steps.wait4.outputs.done != 'true'
@@ -268,3 +287,21 @@ jobs:
         run: |
           echo "::error::integration run ${RUN_ID} still running after 212 min of watching" >&2
           exit 1
+      # A cancelled gate (a newer run in this concurrency group, or a dequeued entry) must free the
+      # shared integration slot: the dispatched run is never cancelled with it. Best effort, since
+      # it needs `actions: write` on the target repo and must not mask the cancellation.
+      - name: Refresh token (cancel)
+        id: bot-token-cancel
+        if: cancelled() && steps.find.outputs.id != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0 # zizmor: ignore[github-app]
+        with:
+          client-id: ${{ vars.GH_APP_HOPRNET_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_HOPRNET_BOT_PRIVATE_KEY }}
+          owner: hoprnet
+          repositories: hopr-integration-tests
+      - name: Cancel the dispatched integration run
+        if: cancelled() && steps.find.outputs.id != ''
+        env:
+          GH_TOKEN: ${{ steps.bot-token-cancel.outputs.token }}
+          RUN_ID: ${{ steps.find.outputs.id }}
+        run: gh run cancel "${RUN_ID}" -R "${REPO}" || echo "::warning::could not cancel ${REPO} run ${RUN_ID}"
