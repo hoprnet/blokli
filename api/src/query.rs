@@ -1434,9 +1434,8 @@ impl QueryRoot {
         CountResult::Count(blokli_api_types::Count { count })
     }
 
-    /// Retrieve a stable, paginated view of service registry entries.
-    ///
-    /// With liveOnly enabled, each entry is checked against the on-chain
+    /// Retrieve a stable, paginated view of service registry entries. With liveOnly enabled, each entry is checked
+    /// against the on-chain
     /// NodeSafeRegistry (at most 16 RPC calls in flight). Its complexity grows
     /// with first, so a large page can exceed the query complexity budget.
     #[graphql(complexity = "if live_only { (first.max(0) as usize).saturating_add(child_complexity) } else { child_complexity }")]
@@ -2862,9 +2861,7 @@ impl QueryRoot {
     /// Sum the wxHOPR token balances across indexed safe contracts.
     ///
     /// When `owner_address` is provided, restricts to safes whose indexed owner
-    /// set currently contains that address.
-    ///
-    /// This field has a fixed complexity cost of 500, which equals the default
+    /// set currently contains that address. This field has a fixed complexity cost of 500, which equals the default
     /// budget. It therefore cannot be combined with other top-level fields or
     /// aliases under the default configuration.
     #[graphql(name = "safesBalance", complexity = 500)]
@@ -3267,9 +3264,16 @@ mod tests {
         let safes_balance = schema
             .execute("{ first: safesBalance { __typename } second: safesBalance { __typename } }")
             .await;
+        let negative_page_size = schema
+            .execute(
+                "{ services(first: -1, liveOnly: true) { ... on ServicesList { services { node } } ... on \
+                 QueryFailedError { message } } }",
+            )
+            .await;
 
         assert_eq!(services.errors[0].message, "Query is too complex.");
         assert_eq!(safes_balance.errors[0].message, "Query is too complex.");
+        assert!(negative_page_size.errors.is_empty());
     }
 
     #[tokio::test]
