@@ -380,7 +380,14 @@ impl TransactionStore {
 
     /// Record when a transaction first reached a terminal status.
     fn mark_terminal(&self, id: Uuid) {
-        self.terminal_timestamps.entry(id).or_insert_with(Utc::now);
+        // Retain the record guard while inserting retention metadata. This keeps
+        // concurrent eviction from removing the record and timestamp between the
+        // two operations, which would otherwise leave an orphan timestamp.
+        if let Some(record) = self.transactions.get(&id) {
+            if record.status.is_terminal() {
+                self.terminal_timestamps.entry(id).or_insert_with(Utc::now);
+            }
+        }
     }
 
     /// Remove terminal-retention metadata when a record becomes pending again.

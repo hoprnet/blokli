@@ -2024,7 +2024,7 @@ impl SubscriptionRoot {
             reconciliation.tick().await;
 
             loop {
-                let event_received = tokio::select! {
+                let should_reconcile = tokio::select! {
                     event = event_receiver.recv() => {
                         match event {
                             Ok(TransactionEvent::StatusUpdated { id, .. }) => id == transaction_id,
@@ -2039,14 +2039,21 @@ impl SubscriptionRoot {
                             }
                         }
                     }
-                    _ = reconciliation.tick() => false,
+                    _ = reconciliation.tick() => true,
                 };
+
+                // Unrelated global-bus events cannot change this transaction. Avoid a
+                // store read for each one; periodic reconciliation still recovers a
+                // dropped notification.
+                if !should_reconcile {
+                    continue;
+                }
 
                 let status = match transaction_store.status(transaction_id) {
                     Ok(status) => status,
                     Err(_) => break,
                 };
-                if !event_received && status == last_record.status {
+                if status == last_record.status {
                     continue;
                 }
 
