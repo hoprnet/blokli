@@ -37,7 +37,7 @@ use async_trait::async_trait;
 use blokli_db::BlokliDbAllOperations;
 use hopr_types::{internal::channels::ChannelStatus, primitive::prelude::Address};
 use tokio::{sync::watch, time::timeout};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -506,7 +506,7 @@ impl HoprPolicy {
             Ok(Some(reason)) => {
                 self.record_failure(action.signer, operation, reason);
                 crate::metrics::record_hopr_validation(operation, reason.code());
-                debug!(
+                info!(
                     tx_hash = %action.transaction_hash, %source, signer = %action.signer,
                     operation, reason = reason.code(),
                     "rejecting HOPR action before broadcast"

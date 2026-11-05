@@ -1,5 +1,6 @@
 //! Crate containing the API object for chain operations used by the HOPRd node.
 
+pub mod broadcast_error;
 pub mod errors;
 pub mod hopr_action;
 pub mod hopr_policy;

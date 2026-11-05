@@ -1,53 +1,29 @@
 # flake.nix - HOPR blokli Nix flake configuration
 #
-# This is the main entry point for the Nix flake. It uses the HOPR nix-lib
-# for reusable Rust build functions and formatting configuration.
-#
 # Structure:
-# - nix/packages/: Package definitions (bloklid)
-# - nix/checks.nix: CI/CD quality checks
-# - nix-lib (external): Rust builders, Docker images, treefmt, and utilities
+# - nix/packages/: Package definitions (bloklid, pre-commit hooks)
+# - nix-lib (external): Rust builders, dev shells, Docker images, treefmt, and utilities
 
 {
   description = "HOPR blokli - the companion indexer and chain operator for the HOPR network";
 
-  # External dependencies - kept in main flake for Nix flake requirements
-  #
-  # INPUTS REFERENCE:
-  #
-  # Core Nix ecosystem dependencies:
-  # - flake-parts: Modular flake framework for better organization
-  # - nixpkgs: The main Nix package repository (using release 25.05 for stability)
-  # - nix-lib: HOPR Nix library with reusable Rust build functions
-  #
-  # Development tools and quality assurance:
-  # - pre-commit: Git hooks for code quality enforcement
-  # - treefmt-nix: Universal code formatter integration for Nix
-  # - flake-root: Utilities for finding flake root directory
-  #
-  # Input optimization strategy:
-  # All inputs follow nixpkgs where possible to reduce closure size and improve caching.
-  # This is achieved through the "follows" directive below.
   inputs = {
-    # Core Nix ecosystem dependencies
     flake-parts.url = "github:hercules-ci/flake-parts";
     nixpkgs.url = "github:NixOS/nixpkgs/release-26.05";
-    nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-    # HOPR Nix Library (provides flake-utils and reusable build functions)
-    nix-lib.url = "github:hoprnet/nix-lib/v1.3.0";
+    # HOPR Nix library: Rust builders, dev shells, Docker images, and treefmt
+    nix-lib.url = "github:hoprnet/nix-lib/v2.0.0";
 
-    # Rust build system
+    # Only used to pin the crane version nix-lib builds with (see follows below)
     crane.url = "github:ipetkov/crane";
+    # Rust toolchains (rust-bin) for this flake's dev shells; nix-lib follows it too
     rust-overlay.url = "github:oxalica/rust-overlay";
 
-    # Development tools and quality assurance
     pre-commit.url = "github:cachix/git-hooks.nix";
-    flake-root.url = "github:srid/flake-root";
     foundry.url = "github:shazow/foundry.nix";
     solc.url = "github:hellwolf/solc.nix";
 
-    # Input dependency optimization
+    # Share one nixpkgs (and crane/rust-overlay) to reduce closure size and improve caching
     flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs";
     pre-commit.inputs.nixpkgs.follows = "nixpkgs";
     nix-lib.inputs.nixpkgs.follows = "nixpkgs";
@@ -62,10 +38,8 @@
     {
       self,
       nixpkgs,
-      nixpkgs-unstable,
       flake-parts,
       nix-lib,
-      crane,
       rust-overlay,
       pre-commit,
       foundry,
@@ -73,14 +47,15 @@
       ...
     }@inputs:
     flake-parts.lib.mkFlake { inherit inputs; } {
-      # Import flake modules for additional functionality
-      imports = [
-        inputs.nix-lib.flakeModules.default
-        inputs.flake-root.flakeModule
+      imports = [ nix-lib.flakeModules.default ];
+
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "aarch64-darwin"
+        "x86_64-darwin"
       ];
 
-      # Per-system configuration
-      # Each system gets its own set of packages, shells, etc.
       perSystem =
         {
           config,
@@ -94,7 +69,6 @@
           buildVersionEnv = builtins.getEnv "BUILD_VERSION";
           buildVersion = if buildVersionEnv == "" then null else buildVersionEnv;
 
-          # Filesystem utilities for source filtering
           fs = lib.fileset;
 
           # Since the 2026-09-05 nightly, `forge` and `cast` link against
@@ -108,42 +82,28 @@
             });
           };
 
-          # Nixpkgs with rust-overlay, foundry overlay, and solc overlay
           overlays = [
             rust-overlay.overlays.default
             foundry.overlay
             foundryUdevOverlay
             solc.overlay
           ];
-          pkgs = import nixpkgs {
-            inherit system overlays;
-          };
-          pkgsUnstable = import nixpkgs-unstable {
-            inherit system overlays;
-          };
 
-          # Platform information
-          buildPlatform = pkgs.stdenv.buildPlatform;
+          # Nixpkgs for a given system; Docker images always need Linux packages,
+          # even when building on macOS.
+          pkgsFor =
+            targetSystem:
+            import nixpkgs {
+              system = targetSystem;
+              inherit overlays;
+            };
+          pkgs = pkgsFor system;
+          linuxPkgs = lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (
+            targetSystem: if targetSystem == system then pkgs else pkgsFor targetSystem
+          );
 
-          # Import nix-lib for this system
           nixLib = nix-lib.lib.${system};
 
-          # Crane library for Rust builds (for crate info extraction)
-          craneLib = (crane.mkLib pkgs).overrideToolchain (p: p.rust-bin.stable.latest.default);
-
-          # bloklid crate information
-          bloklidCrateInfoOriginal = craneLib.crateNameFromCargoToml {
-            cargoToml = ./bloklid/Cargo.toml;
-          };
-          bloklidCrateInfo = {
-            pname = "bloklid";
-            # Normalize version to major.minor.patch for consistent caching
-            version = pkgs.lib.strings.concatStringsSep "." (
-              pkgs.lib.lists.take 3 (builtins.splitVersion bloklidCrateInfoOriginal.version)
-            );
-          };
-
-          # Create source trees for different build contexts using nix-lib
           sources = {
             main = nixLib.mkSrc {
               inherit fs;
@@ -174,200 +134,62 @@
             };
           };
 
-          # Create all Rust builders for cross-compilation using nix-lib
           builders = nixLib.mkRustBuilders {
             rustToolchainFile = ./rust-toolchain.toml;
           };
 
-          # Import package definitions
           bloklidPackages = import ./nix/packages/bloklid.nix {
             inherit
               lib
               pkgs
               builders
               sources
-              bloklidCrateInfo
               buildVersion
               rev
-              buildPlatform
               nixLib
               ;
           };
 
-          # Import Docker configurations
-          # Docker images need Linux packages, even when building on macOS
-          pkgsLinux = import nixpkgs {
-            system = "x86_64-linux";
-            inherit overlays;
-          };
-
-          pkgsLinuxAarch64 = import nixpkgs {
-            system = "aarch64-linux";
-            inherit overlays;
-          };
-
-          # Map target platform string to the matching Linux nixpkgs instance.
-          platformPkgsMap = {
-            "x86_64-linux" = pkgsLinux;
-            "aarch64-linux" = pkgsLinuxAarch64;
-          };
-
-          # Helper: create a /bin symlink to a Nix store binary.
-          # The store path is part of the image closure so the symlink resolves inside the container.
-          mkStaticEntrypoint =
-            {
-              pkgs,
-              binary,
-              name,
-            }:
-            pkgs.runCommand "${name}-entrypoint" { } ''
-              mkdir -p $out/bin
-              ln -s ${binary}/bin/${name} $out/bin/${name}
-            '';
-
-          # Helper: build the anvil shell-script entrypoint for a given target platform.
-          mkBlokliAnvilEntrypoint =
-            targetPlatform:
-            platformPkgsMap.${targetPlatform}.writeShellScriptBin "blokli-anvil-entrypoint" (
-              builtins.readFile ./docker/blokli-anvil-entrypoint.sh
-            );
-
-          # Helper: build a standard bloklid Docker image for a target platform.
-          # variant is null (release), "dev", or "profile".
+          # Docker image for a target platform. variant is null (release) or "dev".
+          # nix-lib links each package's bin/ into the image's /bin, which makes
+          # the entrypoints available at stable paths.
           mkBloklidDocker =
             targetPlatform: variant:
             let
-              platformPkgs = platformPkgsMap.${targetPlatform};
-              binarySuffix = if variant == null then "" else "-${variant}";
-              dockerName = "bloklid${if variant == null then "" else "-${variant}"}";
-              binary = bloklidPackages."binary-bloklid-${targetPlatform}${binarySuffix}";
+              suffix = lib.optionalString (variant != null) "-${variant}";
             in
             nixLib.mkDockerImage {
-              name = dockerName;
+              name = "bloklid${suffix}";
               Entrypoint = [ "/bin/bloklid" ];
-              pkgsLinux = platformPkgs;
-              env = [ "SSL_CERT_FILE=${platformPkgs.cacert}/etc/ssl/certs/ca-bundle.crt" ];
-              extraContents = [
-                binary
-                (mkStaticEntrypoint {
-                  pkgs = platformPkgs;
-                  inherit binary;
-                  name = "bloklid";
-                })
-              ];
+              pkgsLinux = linuxPkgs.${targetPlatform};
+              extraContents = [ bloklidPackages."binary-bloklid-${targetPlatform}${suffix}" ];
             };
 
-          # Build the local Anvil image with HOPR and Curvy contracts deployed.
+          # Local Anvil image with HOPR and Curvy contracts deployed.
           mkBloklidAnvilDocker =
             targetPlatform:
             let
-              platformPkgs = platformPkgsMap.${targetPlatform};
-              binary = bloklidPackages."binary-bloklid-${targetPlatform}";
-              anvilEntrypoint = mkBlokliAnvilEntrypoint targetPlatform;
+              platformPkgs = linuxPkgs.${targetPlatform};
             in
             nixLib.mkDockerImage {
               name = "bloklid-anvil";
               Entrypoint = [ "/bin/blokli-anvil-entrypoint" ];
               pkgsLinux = platformPkgs;
-              env = [
-                "SSL_CERT_FILE=${platformPkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
-                "BLOKLI_DEPLOY_CURVY=true"
-              ];
+              env = [ "BLOKLI_DEPLOY_CURVY=true" ];
               extraContents = [
-                binary
+                bloklidPackages."binary-bloklid-${targetPlatform}"
                 platformPkgs.curl
                 # The Nixpkgs Foundry 1.7.1 package embeds vulnerable quinn-proto
                 # 0.11.14. The pinned foundry.nix nightly uses 0.11.16.
                 platformPkgs.foundry-bin
-                (mkStaticEntrypoint {
-                  pkgs = platformPkgs;
-                  binary = anvilEntrypoint;
-                  name = "blokli-anvil-entrypoint";
-                })
+                (platformPkgs.writeShellScriptBin "blokli-anvil-entrypoint" (
+                  builtins.readFile ./docker/blokli-anvil-entrypoint.sh
+                ))
               ];
             };
 
-          # Docker images using nix-lib
-          bloklidDocker = {
-            docker-bloklid-x86_64-linux = mkBloklidDocker "x86_64-linux" null;
-            docker-bloklid-x86_64-linux-dev = mkBloklidDocker "x86_64-linux" "dev";
-            docker-bloklid-anvil-x86_64-linux = mkBloklidAnvilDocker "x86_64-linux";
-            docker-bloklid-aarch64-linux = mkBloklidDocker "aarch64-linux" null;
-            docker-bloklid-aarch64-linux-dev = mkBloklidDocker "aarch64-linux" "dev";
-            docker-bloklid-anvil-aarch64-linux = mkBloklidAnvilDocker "aarch64-linux";
-          };
-
-          # Combine all packages
-          packages =
-            bloklidPackages
-            // bloklidDocker
-            // {
-              # Additional standalone packages
-
-              # Pre-commit hooks check
-              pre-commit-check = pkgs.callPackage ./nix/packages/pre-commit-check.nix {
-                inherit
-                  pre-commit
-                  system
-                  config
-                  stableToolchain
-                  ;
-              };
-
-              # Man pages
-              bloklid-man = nixLib.mkManPage {
-                pname = "bloklid";
-                binary = bloklidPackages.bloklid-dev;
-                description = "BLOKLID node executable";
-              };
-            };
-
-          utilityApps = {
-            update-github-labels = nixLib.mkUpdateGithubLabelsApp;
-            audit = nixLib.mkAuditApp { };
-            check = nixLib.mkCheckApp { inherit system; };
-            test = {
-              type = "app";
-              program = toString (
-                pkgs.writeShellScript "test" ''
-                  nix develop --command ${pkgs.just}/bin/just test
-                ''
-              );
-            };
-            nextest = {
-              type = "app";
-              program = toString (
-                pkgs.writeShellScript "nextest" ''
-                  export PATH="${pkgs.cargo-nextest}/bin:$PATH"
-                  nix develop --command ${pkgs.just}/bin/just nextest
-                ''
-              );
-            };
-          };
-
-          # Rust toolchains
-          stableToolchain =
-            (pkgs.pkgsBuildHost.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml).override
-              {
-                targets = [
-                  (
-                    if buildPlatform.config == "arm64-apple-darwin" then
-                      "aarch64-apple-darwin"
-                    else
-                      buildPlatform.config
-                  )
-                ];
-              };
-
-          nightlyToolchain = (pkgs.pkgsBuildHost.rust-bin.nightly.latest.default).override {
-            targets = [
-              (
-                if buildPlatform.config == "arm64-apple-darwin" then
-                  "aarch64-apple-darwin"
-                else
-                  buildPlatform.config
-              )
-            ];
+          stableToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+          nightlyToolchain = pkgs.rust-bin.nightly.latest.default.override {
             extensions = [
               "rust-src"
               "rust-analyzer"
@@ -376,82 +198,50 @@
             ];
           };
 
-          # Development shells using nix-lib
-          shellArgs = {
+          pre-commit-check = pkgs.callPackage ./nix/packages/pre-commit-check.nix {
+            inherit
+              pre-commit
+              system
+              config
+              stableToolchain
+              ;
+          };
+
+          treefmtArgs = {
             treefmtWrapper = config.treefmt.build.wrapper;
-            treefmtPrograms = pkgs.lib.attrValues config.treefmt.build.programs;
-            shellHook = ''
-              echo "Running pre-commit checks..."
-              _github_token="''${GITHUB_TOKEN:-''${GH_TOKEN:-$(gh auth token 2>/dev/null || true)}}"
-              if [ -n "$_github_token" ]; then
-                export GITHUB_TOKEN="$_github_token"
-              fi
-              unset _github_token
-              ${packages.pre-commit-check.shellHook}
-            '';
-            extraPackages = with pkgs; [
-              gh
-              bun
-              nodejs
-              ast-grep
-              foundry-bin
-              pkgs.solc
-              kubernetes-helm
-              cargo-insta
-              cargo-machete
-              cargo-release
-              cargo-shear
-              yq
-              uv
-              sqlite
-              pgformatter
-              postgresql
-            ];
+            treefmtPrograms = lib.attrValues config.treefmt.build.programs;
           };
-          shells = {
-            default = nixLib.mkDevShell (
-              {
-                rustToolchain = stableToolchain;
-                shellName = "Development";
+
+          mkDevShell =
+            args:
+            nixLib.mkDevShell (
+              treefmtArgs
+              // {
+                shellHook = pre-commit-check.shellHook;
+                extraPackages = with pkgs; [
+                  gh
+                  bun
+                  nodejs
+                  ast-grep
+                  foundry-bin
+                  pkgs.solc # `solc` alone would resolve to the flake input
+                  kubernetes-helm
+                  cargo-insta
+                  cargo-machete
+                  cargo-nextest
+                  cargo-release
+                  cargo-shear
+                  yq
+                  uv
+                  sqlite
+                  pgformatter
+                  postgresql
+                ];
               }
-              // shellArgs
+              // args
             );
-
-            experiment = nixLib.mkDevShell (
-              {
-                rustToolchain = nightlyToolchain;
-                shellName = "Experimental Nightly";
-              }
-              // shellArgs
-            );
-
-            ci = nixLib.mkDevShell {
-              rustToolchainFile = ./rust-toolchain.toml;
-              shellName = "blokli CI";
-              treefmtWrapper = config.treefmt.build.wrapper;
-              treefmtPrograms = pkgs.lib.attrValues config.treefmt.build.programs;
-              extraPackages = with pkgs; [
-                cargo-machete
-                cargo-release
-                cargo-shear
-                zizmor
-              ];
-            };
-            coverage = nixLib.mkDevShell {
-              rustToolchainFile = ./rust-toolchain.toml;
-              shellName = "Coverage";
-              withLlvmTools = true;
-            };
-          };
-
-          # Import checks
-          checks = import ./nix/checks.nix {
-            inherit pkgs bloklidCrateInfo;
-            packages = bloklidPackages;
-          };
         in
         {
-          # Configure treefmt using nix-lib options
           nix-lib.treefmt = {
             globalExcludes = [
               # Generated code - don't format to avoid churn
@@ -492,13 +282,10 @@
                 ".github/labeler.yml"
                 ".github/workflows/*.yaml"
               ];
-              # GraphQL formatter — uses prettier (nix-packaged) instead of bunx
               settings.formatter.format-graphql = {
                 command = pkgs.writeShellApplication {
                   name = "format-graphql";
-                  runtimeInputs = with pkgs; [
-                    prettier
-                  ];
+                  runtimeInputs = [ pkgs.prettier ];
                   text = ''
                     prettier --parser graphql --write "$@"
                   '';
@@ -515,7 +302,6 @@
                 };
                 includes = [ "design/*.graphql" ];
               };
-              # Markdown formatter
               settings.formatter.deno = {
                 command = pkgs.writeShellApplication {
                   name = "deno-fmt";
@@ -529,7 +315,6 @@
                   "*.md"
                 ];
               };
-              # GitHub Actions workflow linter
               settings.formatter.actionlint = {
                 command = pkgs.writeShellApplication {
                   name = "actionlint";
@@ -550,18 +335,19 @@
                   '';
                 };
                 includes = [ "**/*.rs" ];
-                excludes = [
-                  "db/entity/src/codegen/*.rs"
-                ];
+                excludes = [ "db/entity/src/codegen/*.rs" ];
               };
             };
           };
 
-          # Export checks for CI
-          inherit checks;
+          checks = {
+            inherit (bloklidPackages) bloklid-clippy;
+          };
 
-          # Export applications using nix-lib
-          apps = utilityApps // {
+          apps = {
+            update-github-labels = nixLib.mkUpdateGithubLabelsApp;
+            audit = nixLib.mkAuditApp { };
+            check = nixLib.mkCheckApp { inherit system; };
             coverage-unit = {
               type = "app";
               program = toString (
@@ -572,24 +358,51 @@
             };
           };
 
-          # Export packages
-          packages = packages // {
-            # Set default package
+          packages = bloklidPackages // {
             default = bloklidPackages.bloklid;
+
+            inherit pre-commit-check;
+
+            bloklid-man = nixLib.mkManPage {
+              pname = "bloklid";
+              binary = bloklidPackages.bloklid-dev;
+              description = "BLOKLID node executable";
+            };
+
+            docker-bloklid-x86_64-linux = mkBloklidDocker "x86_64-linux" null;
+            docker-bloklid-x86_64-linux-dev = mkBloklidDocker "x86_64-linux" "dev";
+            docker-bloklid-anvil-x86_64-linux = mkBloklidAnvilDocker "x86_64-linux";
+            docker-bloklid-aarch64-linux = mkBloklidDocker "aarch64-linux" null;
+            docker-bloklid-aarch64-linux-dev = mkBloklidDocker "aarch64-linux" "dev";
+            docker-bloklid-anvil-aarch64-linux = mkBloklidAnvilDocker "aarch64-linux";
           };
 
-          # Export development shells
-          devShells = shells;
+          devShells = {
+            default = mkDevShell {
+              rustToolchain = stableToolchain;
+              shellName = "Development";
+            };
 
-          # Formatter is automatically exported by nix-lib.flakeModules.default
+            experiment = mkDevShell {
+              rustToolchain = nightlyToolchain;
+              shellName = "Experimental Nightly";
+            };
+
+            # Used by the hopr-workflows dependency and zizmor checks
+            ci = nixLib.mkDevShell (
+              treefmtArgs
+              // {
+                rustToolchainFile = ./rust-toolchain.toml;
+                shellName = "blokli CI";
+                extraPackages = with pkgs; [
+                  cargo-machete
+                  cargo-release
+                  cargo-shear
+                  zizmor
+                ];
+              }
+            );
+          };
         };
-
-      # Supported systems for building
-      systems = [
-        "x86_64-linux"
-        "aarch64-linux"
-        "aarch64-darwin"
-        "x86_64-darwin"
-      ];
     };
 }

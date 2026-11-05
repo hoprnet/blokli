@@ -5,6 +5,8 @@ use std::{net::SocketAddr, path::PathBuf, time::Duration};
 use blokli_chain_types::ContractAddresses;
 use serde::{Deserialize, Serialize};
 
+use crate::schema::GasFeeFloors;
+
 /// API server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -49,6 +51,14 @@ pub struct ApiConfig {
     /// Multiplier applied to EIP-1559 gas estimates exposed by chainInfo
     #[serde(default = "default_gas_multiplier")]
     pub gas_multiplier: f64,
+
+    /// Minimum `maxPriorityFeePerGas` exposed by chainInfo, in wei
+    #[serde(default = "default_min_priority_fee_per_gas")]
+    pub min_priority_fee_per_gas: u64,
+
+    /// Minimum `maxFeePerGas` exposed by chainInfo, in wei
+    #[serde(default = "default_min_max_fee_per_gas")]
+    pub min_max_fee_per_gas: u64,
 
     #[serde(default)]
     pub sse_keepalive: SseKeepAliveConfig,
@@ -172,6 +182,8 @@ impl Default for ApiConfig {
             contract_addresses: default_contract_addresses(),
             expected_block_time: default_expected_block_time(),
             gas_multiplier: default_gas_multiplier(),
+            min_priority_fee_per_gas: default_min_priority_fee_per_gas(),
+            min_max_fee_per_gas: default_min_max_fee_per_gas(),
             sse_keepalive: SseKeepAliveConfig::default(),
             health: HealthConfig::default(),
             max_query_depth: default_max_query_depth(),
@@ -228,6 +240,30 @@ fn default_gas_multiplier() -> f64 {
     1.0
 }
 
+/// 100 wei: just above the 1-2 wei tips Gnosis estimates usually return, at negligible cost
+pub const DEFAULT_MIN_PRIORITY_FEE_PER_GAS: u64 = 100;
+
+/// 0.005 gwei: with the 10M gas limit nodes sign with, the upfront balance stays at 0.00005 xDAI
+pub const DEFAULT_MIN_MAX_FEE_PER_GAS: u64 = 5_000_000;
+
+fn default_min_priority_fee_per_gas() -> u64 {
+    DEFAULT_MIN_PRIORITY_FEE_PER_GAS
+}
+
+fn default_min_max_fee_per_gas() -> u64 {
+    DEFAULT_MIN_MAX_FEE_PER_GAS
+}
+
+impl ApiConfig {
+    /// Fee floors applied to the chainInfo EIP-1559 estimates
+    pub fn gas_fee_floors(&self) -> GasFeeFloors {
+        GasFeeFloors {
+            min_priority_fee_per_gas: u128::from(self.min_priority_fee_per_gas),
+            min_max_fee_per_gas: u128::from(self.min_max_fee_per_gas),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,6 +275,13 @@ mod tests {
         assert_eq!(config.sse_keepalive.interval, Duration::from_secs(15));
         assert_eq!(config.sse_keepalive.text, "keep-alive");
         assert_eq!(config.gas_multiplier, 1.0);
+        assert_eq!(
+            config.gas_fee_floors(),
+            GasFeeFloors {
+                min_priority_fee_per_gas: 100,
+                min_max_fee_per_gas: 5_000_000,
+            }
+        );
     }
 
     #[test]

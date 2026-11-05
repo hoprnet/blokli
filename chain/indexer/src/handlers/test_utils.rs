@@ -168,7 +168,7 @@ pub(super) mod test_helpers {
     ) -> (
         ContractEventHandlers<T, Db>,
         IndexerState,
-        async_broadcast::Receiver<IndexerEvent>,
+        async_broadcast::Receiver<Arc<IndexerEvent>>,
     ) {
         let indexer_state = IndexerState::default();
         let event_receiver = indexer_state.subscribe_to_events();
@@ -211,8 +211,8 @@ pub(super) mod test_helpers {
     }
 
     /// Helper to get published events (non-blocking check)
-    pub fn try_recv_event(receiver: &mut async_broadcast::Receiver<IndexerEvent>) -> Option<IndexerEvent> {
-        receiver.try_recv().ok()
+    pub fn try_recv_event(receiver: &mut async_broadcast::Receiver<Arc<IndexerEvent>>) -> Option<IndexerEvent> {
+        receiver.try_recv().ok().map(Arc::unwrap_or_clone)
     }
 
     pub fn test_log() -> SerializableLog {

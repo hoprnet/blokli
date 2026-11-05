@@ -27,11 +27,22 @@ fn current_safe_from_model(
     }
 }
 
-async fn fetch_thresholds_by_safe_address<C>(conn: &C) -> Result<HashMap<Vec<u8>, String>, sea_orm::DbErr>
+/// Fetches the current threshold of the given safes, or of every safe when `safe_addresses` is `None`.
+async fn fetch_thresholds_by_safe_address<C>(
+    conn: &C,
+    safe_addresses: Option<Vec<Vec<u8>>>,
+) -> Result<HashMap<Vec<u8>, String>, sea_orm::DbErr>
 where
     C: ConnectionTrait,
 {
-    Ok(safe_threshold_current::Entity::find()
+    let mut query = safe_threshold_current::Entity::find();
+    if let Some(safe_addresses) = safe_addresses {
+        if safe_addresses.is_empty() {
+            return Ok(HashMap::new());
+        }
+        query = query.filter(safe_threshold_current::Column::SafeAddress.is_in(safe_addresses));
+    }
+    Ok(query
         .all(conn)
         .await?
         .into_iter()
@@ -39,24 +50,38 @@ where
         .collect())
 }
 
+/// Attaches the current threshold to each of `safes`, fetching only their thresholds.
+async fn with_thresholds<C>(
+    conn: &C,
+    safes: Vec<safe_contract_current::Model>,
+) -> Result<Vec<CurrentSafe>, sea_orm::DbErr>
+where
+    C: ConnectionTrait,
+{
+    let addresses = safes.iter().map(|safe| safe.address.clone()).collect();
+    let thresholds_by_address = fetch_thresholds_by_safe_address(conn, Some(addresses)).await?;
+    Ok(safes
+        .into_iter()
+        .map(|safe| current_safe_from_model(safe, &thresholds_by_address))
+        .collect())
+}
+
 pub async fn fetch_safe_by_address<C>(conn: &C, safe_address: &[u8]) -> Result<Option<CurrentSafe>, sea_orm::DbErr>
 where
     C: ConnectionTrait,
 {
-    let thresholds_by_address = fetch_thresholds_by_safe_address(conn).await?;
-    let current_safe = safe_contract_current::Entity::find()
+    let safe = safe_contract_current::Entity::find()
         .filter(safe_contract_current::Column::Address.eq(safe_address.to_vec()))
         .one(conn)
         .await?;
 
-    Ok(current_safe.map(|safe| current_safe_from_model(safe, &thresholds_by_address)))
+    Ok(with_thresholds(conn, safe.into_iter().collect()).await?.pop())
 }
 
 pub async fn fetch_safes_by_owner<C>(conn: &C, owner_address: &[u8]) -> Result<Vec<CurrentSafe>, sea_orm::DbErr>
 where
     C: ConnectionTrait,
 {
-    let thresholds_by_address = fetch_thresholds_by_safe_address(conn).await?;
     let safe_addresses = safe_owner_current::Entity::find()
         .filter(safe_owner_current::Column::OwnerAddress.eq(owner_address.to_vec()))
         .order_by_asc(safe_owner_current::Column::SafeAddress)
@@ -70,29 +95,24 @@ where
         return Ok(Vec::new());
     }
 
-    Ok(safe_contract_current::Entity::find()
+    let safes = safe_contract_current::Entity::find()
         .filter(safe_contract_current::Column::Address.is_in(safe_addresses))
         .order_by_asc(safe_contract_current::Column::Address)
         .all(conn)
-        .await?
-        .into_iter()
-        .map(|safe| current_safe_from_model(safe, &thresholds_by_address))
-        .collect())
+        .await?;
+    with_thresholds(conn, safes).await
 }
 
 pub async fn fetch_safes_by_chain_key<C>(conn: &C, chain_key: &[u8]) -> Result<Vec<CurrentSafe>, sea_orm::DbErr>
 where
     C: ConnectionTrait,
 {
-    let thresholds_by_address = fetch_thresholds_by_safe_address(conn).await?;
-    Ok(safe_contract_current::Entity::find()
+    let safes = safe_contract_current::Entity::find()
         .filter(safe_contract_current::Column::ChainKey.eq(chain_key.to_vec()))
         .order_by_asc(safe_contract_current::Column::Address)
         .all(conn)
-        .await?
-        .into_iter()
-        .map(|safe| current_safe_from_model(safe, &thresholds_by_address))
-        .collect())
+        .await?;
+    with_thresholds(conn, safes).await
 }
 
 pub async fn fetch_safe_addresses<C>(conn: &C, owner_address: Option<&[u8]>) -> Result<Vec<Vec<u8>>, sea_orm::DbErr>
@@ -195,7 +215,7 @@ pub async fn fetch_all_current_safes<C>(conn: &C) -> Result<Vec<CurrentSafe>, se
 where
     C: ConnectionTrait,
 {
-    let thresholds_by_address = fetch_thresholds_by_safe_address(conn).await?;
+    let thresholds_by_address = fetch_thresholds_by_safe_address(conn, None).await?;
     Ok(safe_contract_current::Entity::find()
         .all(conn)
         .await?

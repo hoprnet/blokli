@@ -11,6 +11,7 @@ use blokli_api_types::{
     InvalidAddressError, InvalidTransactionIdError, MissingFilterError, OverloadedError, QueryFailedError, RpcError,
     TimeoutError,
 };
+use blokli_chain_api::broadcast_error::{BroadcastRejection, classify_broadcast_error};
 use thiserror::Error;
 
 // ============================================================================
@@ -82,6 +83,25 @@ pub mod codes {
 
     /// Blockchain RPC operation errors
     pub const RPC_ERROR: &str = "RPC_ERROR";
+
+    /// The RPC node already holds this exact transaction
+    pub const ALREADY_KNOWN: &str = "ALREADY_KNOWN";
+
+    /// The RPC node refused the transaction: another one with the same nonce is pending and
+    /// this one does not pay enough more to replace it
+    pub const REPLACEMENT_UNDERPRICED: &str = "REPLACEMENT_UNDERPRICED";
+
+    /// The RPC node refused the transaction: its nonce was already used
+    pub const NONCE_TOO_LOW: &str = "NONCE_TOO_LOW";
+
+    /// The RPC node refused the transaction: its nonce is ahead of the signer's next nonce
+    pub const NONCE_TOO_HIGH: &str = "NONCE_TOO_HIGH";
+
+    /// The RPC node refused the transaction: its fees are below the base fee or the node's minimum
+    pub const FEE_TOO_LOW: &str = "FEE_TOO_LOW";
+
+    /// The RPC node refused the transaction: the signer cannot pay for its gas
+    pub const INSUFFICIENT_FUNDS: &str = "INSUFFICIENT_FUNDS";
 
     /// Generic internal server errors
     pub const INTERNAL_ERROR: &str = "INTERNAL_ERROR";
@@ -581,6 +601,27 @@ pub fn rpc_error_with_message(message: impl Into<String>) -> RpcError {
     }
 }
 
+/// Creates an RpcError for a raw transaction the RPC node refused to accept
+///
+/// The code identifies the refusal reason when the node's message is recognised, and is
+/// `RPC_ERROR` otherwise (transport failures, unrecognised messages).
+pub fn rpc_broadcast_error(message: impl Into<String>) -> RpcError {
+    let message = message.into();
+    let code = match classify_broadcast_error(&message) {
+        Some(BroadcastRejection::AlreadyKnown) => codes::ALREADY_KNOWN,
+        Some(BroadcastRejection::ReplacementUnderpriced) => codes::REPLACEMENT_UNDERPRICED,
+        Some(BroadcastRejection::NonceTooLow) => codes::NONCE_TOO_LOW,
+        Some(BroadcastRejection::NonceTooHigh) => codes::NONCE_TOO_HIGH,
+        Some(BroadcastRejection::FeeTooLow) => codes::FEE_TOO_LOW,
+        Some(BroadcastRejection::InsufficientFunds) => codes::INSUFFICIENT_FUNDS,
+        None => codes::RPC_ERROR,
+    };
+    RpcError {
+        code: code.to_string(),
+        message,
+    }
+}
+
 /// Creates an Overloaded error for an exhausted transaction submission capacity
 /// This is a transient, retryable condition rather than an internal failure, so
 /// it carries its own code instead of `INTERNAL_ERROR`.
@@ -670,4 +711,34 @@ pub fn feature_disabled(feature: &str) -> async_graphql::Error {
 pub fn transaction_not_found(transaction_id: impl std::fmt::Display) -> async_graphql::Error {
     async_graphql::Error::new(messages::not_found("Transaction", transaction_id))
         .extend_with(|_, e| e.set("code", codes::NOT_FOUND))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rpc_broadcast_error_codes_recognised_refusals() {
+        let cases = [
+            ("RPC error: nonce too low", codes::NONCE_TOO_LOW),
+            (
+                "RPC error: replacement transaction underpriced",
+                codes::REPLACEMENT_UNDERPRICED,
+            ),
+            (
+                "RPC error: max fee per gas less than block base fee",
+                codes::FEE_TOO_LOW,
+            ),
+            (
+                "RPC error: insufficient funds for gas * price + value",
+                codes::INSUFFICIENT_FUNDS,
+            ),
+            ("RPC error: error sending request for url", codes::RPC_ERROR),
+        ];
+        for (message, code) in cases {
+            let error = rpc_broadcast_error(message);
+            assert_eq!(error.code, code, "{message}");
+            assert_eq!(error.message, message);
+        }
+    }
 }
