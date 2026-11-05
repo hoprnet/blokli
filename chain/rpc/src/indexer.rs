@@ -996,15 +996,39 @@ mod tests {
     async fn test_stream_logs_keeps_block_range_on_failed_partial_span() -> anyhow::Result<()> {
         let mut server = mockito::Server::new_async().await;
         let rpc = create_test_rpc_operations_with_max_range(&server.url(), 8)?;
+        let full_range = mock_get_logs_range(&mut server, 0, 7, empty_logs_response());
+        rpc.stream_logs(vec![Filter::new()], 0, 7).collect::<Vec<_>>().await;
+        full_range.assert();
 
         // Near the chain head only two new blocks are requested; a transient error says nothing about the range.
-        let gateway_timeout = mock_get_logs_range_with_status(&mut server, 0, 1, 504, "gateway timeout".into());
+        let gateway_timeout = mock_get_logs_range_with_status(&mut server, 8, 9, 504, "gateway timeout".into());
 
-        let results = rpc.stream_logs(vec![Filter::new()], 0, 1).collect::<Vec<_>>().await;
+        let results = rpc.stream_logs(vec![Filter::new()], 8, 9).collect::<Vec<_>>().await;
 
         gateway_timeout.assert();
         assert!(matches!(results.as_slice(), [Err(RpcError::AlloyRpcError(_))]));
         assert_eq!(rpc.log_block_range_limit(), 8);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_stream_logs_shrinks_failed_partial_span_beyond_proven_range() -> anyhow::Result<()> {
+        let mut server = mockito::Server::new_async().await;
+        let rpc = create_test_rpc_operations_with_max_range(&server.url(), 8)?;
+
+        // Only six blocks remain below the ceiling of eight, and that never-tested range is rejected.
+        let rejected = mock_get_logs_range(&mut server, 0, 5, unrecognized_range_error_response());
+        let first_half = mock_get_logs_range(&mut server, 0, 2, empty_logs_response());
+        let second_half = mock_get_logs_range(&mut server, 3, 5, single_log_response(4));
+
+        let results = rpc.stream_logs(vec![Filter::new()], 0, 5).collect::<Vec<_>>().await;
+
+        rejected.assert();
+        first_half.assert();
+        second_half.assert();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].as_ref().expect("log fetch should succeed").block_number, 4);
 
         Ok(())
     }
