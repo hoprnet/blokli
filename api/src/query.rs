@@ -1435,7 +1435,11 @@ impl QueryRoot {
     }
 
     /// Retrieve a stable, paginated view of service registry entries.
-    #[graphql(complexity = "if live_only { first as usize + child_complexity } else { child_complexity }")]
+    ///
+    /// With liveOnly enabled, each entry is checked against the on-chain
+    /// NodeSafeRegistry (at most 16 RPC calls in flight). Its complexity grows
+    /// with first, so a large page can exceed the query complexity budget.
+    #[graphql(complexity = "if live_only { (first.max(0) as usize).saturating_add(child_complexity) } else { child_complexity }")]
     async fn services(
         &self,
         ctx: &Context<'_>,
@@ -2859,6 +2863,10 @@ impl QueryRoot {
     ///
     /// When `owner_address` is provided, restricts to safes whose indexed owner
     /// set currently contains that address.
+    ///
+    /// This field has a fixed complexity cost of 500, which equals the default
+    /// budget. It therefore cannot be combined with other top-level fields or
+    /// aliases under the default configuration.
     #[graphql(name = "safesBalance", complexity = 500)]
     async fn safes_balance(
         &self,
