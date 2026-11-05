@@ -92,6 +92,7 @@ impl Args {
             ("BLOKLI_RPC_URL", "rpc_url"),
             ("BLOKLI_MAX_RPC_REQUESTS_PER_SEC", "max_rpc_requests_per_sec"),
             ("BLOKLI_MAX_BLOCK_RANGE", "max_block_range"),
+            ("BLOKLI_BLOCK_RANGE_REPROBE_INTERVAL", "block_range_reprobe_interval"),
             ("BLOKLI_CURVY_AGGREGATOR", "curvy_aggregator"),
             ("DATABASE_URL", "database.url"),
             ("PGHOST", "database.host"),
@@ -320,6 +321,7 @@ impl Args {
             tx_polling_interval: config.network.tx_polling_interval(),
             confirmations: config.network.confirmations(),
             max_block_range: config.max_block_range,
+            block_range_reprobe_interval: config.block_range_reprobe_interval,
             channel_contract_deploy_block: network_config.indexer_start_block_number,
             max_requests_per_sec: config.max_rpc_requests_per_sec,
             expected_block_time: config.network.expected_block_time(),
@@ -1167,16 +1169,23 @@ mod tests {
         .unwrap();
         let path = file.path().to_path_buf();
 
-        temp_env::with_var("BLOKLI_MAX_BLOCK_RANGE", None::<&str>, || {
-            let args = Args {
-                verbose: 0,
-                config: Some(path),
-                command: None,
-            };
+        temp_env::with_vars(
+            [
+                ("BLOKLI_MAX_BLOCK_RANGE", None::<&str>),
+                ("BLOKLI_BLOCK_RANGE_REPROBE_INTERVAL", None::<&str>),
+            ],
+            || {
+                let args = Args {
+                    verbose: 0,
+                    config: Some(path),
+                    command: None,
+                };
 
-            let config = args.load_config(false).expect("Failed to load config");
-            assert_eq!(config.max_block_range, 10000, "max_block_range should default to 10000");
-        });
+                let config = args.load_config(false).expect("Failed to load config");
+                assert_eq!(config.max_block_range, 10000, "max_block_range should default to 10000");
+                assert_eq!(config.block_range_reprobe_interval, 100);
+            },
+        );
     }
 
     #[test]
@@ -1240,6 +1249,39 @@ mod tests {
                 config.max_block_range, 2500,
                 "BLOKLI_MAX_BLOCK_RANGE env var should override config file"
             );
+        });
+    }
+
+    #[test]
+    fn test_block_range_reprobe_interval_from_config_file_and_env() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "jura-dev"
+            rpc_url = "http://localhost:8545"
+            block_range_reprobe_interval = 25
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+        let args = Args {
+            verbose: 0,
+            config: Some(path),
+            command: None,
+        };
+
+        temp_env::with_var("BLOKLI_BLOCK_RANGE_REPROBE_INTERVAL", None::<&str>, || {
+            let config = args.load_config(false).expect("Failed to load config");
+            assert_eq!(config.block_range_reprobe_interval, 25);
+        });
+
+        temp_env::with_var("BLOKLI_BLOCK_RANGE_REPROBE_INTERVAL", Some("0"), || {
+            let config = args.load_config(false).expect("Failed to load config");
+            assert_eq!(config.block_range_reprobe_interval, 0);
         });
     }
 
