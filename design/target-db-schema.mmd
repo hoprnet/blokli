@@ -204,35 +204,86 @@ erDiagram
         bigint last_redeemed_log_index "Last successful redemption log index, or 0 when none has succeeded yet (NOT NULL)"
     }
 
-    curvy_note {
-        bigint leaf_index PK "Dense non-zero note-tree position"
-        binary(32) note_id UK "Curvy note commitment"
-        binary(32) batch_index "Commitment batch identifier"
-        bigint published_block "Event block"
-        bigint published_tx_index "Event transaction index"
-        bigint published_log_index "Event log index"
-        bigint item_index "Raw array position, including skipped padding gaps"
+    curvy_pending_note {
+        bigint id PK "Primary key, autoincrement"
+        binary(32) note_id "Curvy note commitment (NOT NULL)"
+        binary(32) ephemeral_key_x "Ephemeral public key x coordinate (NOT NULL)"
+        binary(32) ephemeral_key_y "Ephemeral public key y coordinate (NOT NULL)"
+        bigint view_tag "Ownership scanning tag (NOT NULL)"
+        binary(32) token_id "Token identifier (NOT NULL)"
+        binary(32) amount "Note amount (NOT NULL)"
+        bool is_plaintext "Whether the amount is plaintext (NOT NULL)"
+        bigint event_item_index "Raw array position, including skipped padding gaps (NOT NULL)"
+        binary(32) chain_tx_hash "Event transaction hash (NOT NULL)"
+        binary(32) block_hash "Event block hash (NOT NULL)"
+        bigint published_block "Event block (NOT NULL)"
+        bigint published_tx_index "Event transaction index (NOT NULL)"
+        bigint published_log_index "Event log index (NOT NULL)"
     }
-    %% Composite unique constraint: UNIQUE(published_block, published_tx_index, published_log_index, item_index)
+    %% Composite unique constraint: idx_curvy_pending_note_unique_position UNIQUE(published_block, published_tx_index, published_log_index, event_item_index)
+    %% Index: idx_curvy_pending_note_note_id (note_id)
 
-    curvy_tree_checkpoint {
-        bigint id PK "Primary key"
-        bigint published_block "Committed-note log block"
-        bigint published_tx_index "Committed-note log transaction index"
-        bigint published_log_index "Committed-note log index"
-        bigint leaf_count "Dense non-zero leaves included"
-        binary(32) root "Depth-30 Poseidon root"
-        binary frontier "Versioned compact frontier snapshot"
+    curvy_committed_note {
+        bigint id PK "Primary key, autoincrement"
+        binary(32) batch_index "Commitment batch identifier (NOT NULL)"
+        binary(32) note_id "Curvy note commitment (NOT NULL)"
+        bigint event_item_index "Raw array position, including skipped padding gaps (NOT NULL)"
+        binary(32) chain_tx_hash "Event transaction hash (NOT NULL)"
+        binary(32) block_hash "Event block hash (NOT NULL)"
+        bigint published_block "Event block (NOT NULL)"
+        bigint published_tx_index "Event transaction index (NOT NULL)"
+        bigint published_log_index "Event log index (NOT NULL)"
+        bigint leaf_index UK "Dense non-zero note-tree position (UNIQUE, NOT NULL)"
     }
-    %% Composite unique constraint: UNIQUE(published_block, published_tx_index, published_log_index)
+    %% Composite unique constraint: idx_curvy_committed_note_unique_position UNIQUE(published_block, published_tx_index, published_log_index, event_item_index)
+    %% Unique index: idx_curvy_committed_note_leaf_index (leaf_index)
+    %% Index: idx_curvy_committed_note_note_id (note_id)
+
+    curvy_committed_nullifier {
+        bigint id PK "Primary key, autoincrement"
+        binary(32) batch_index "Commitment batch identifier (NOT NULL)"
+        binary(32) nullifier "Committed nullifier (NOT NULL)"
+        bigint event_item_index "Raw array position, including skipped padding gaps (NOT NULL)"
+        binary(32) chain_tx_hash "Event transaction hash (NOT NULL)"
+        binary(32) block_hash "Event block hash (NOT NULL)"
+        bigint published_block "Event block (NOT NULL)"
+        bigint published_tx_index "Event transaction index (NOT NULL)"
+        bigint published_log_index "Event log index (NOT NULL)"
+        bigint nullifier_index UK "Dense non-zero nullifier position (UNIQUE, NOT NULL)"
+    }
+    %% Composite unique constraint: idx_curvy_committed_nullifier_unique_position UNIQUE(published_block, published_tx_index, published_log_index, event_item_index)
+    %% Unique index: idx_curvy_committed_nullifier_index (nullifier_index)
 
     curvy_shard_root {
-        bigint shard_index PK "Zero-based completed shard index"
-        binary(32) root "Root of 16,384 dense leaves"
-        bigint completed_block "Block that completed the shard"
-        bigint completed_tx_index "Transaction that completed the shard"
-        bigint completed_log_index "Log that completed the shard"
+        bigint id PK "Primary key, autoincrement"
+        bigint tree_version "Notes-tree format version (NOT NULL)"
+        bigint shard_height "Height of each completed shard (NOT NULL)"
+        bigint shard_index "Zero-based completed shard index (NOT NULL)"
+        binary(32) root "Completed shard root (NOT NULL)"
+        binary(32) block_hash "Completion block hash (NOT NULL)"
+        binary(32) chain_tx_hash "Completion transaction hash (NOT NULL)"
+        bigint completion_block "Block that completed the shard (NOT NULL)"
+        bigint completion_tx_index "Transaction that completed the shard (NOT NULL)"
+        bigint completion_log_index "Log that completed the shard (NOT NULL)"
+        bigint completion_event_item_index "Raw item position that completed the shard (NOT NULL)"
     }
+    %% Composite unique constraint: idx_curvy_shard_root_geometry_index UNIQUE(tree_version, shard_height, shard_index)
+
+    curvy_sync_checkpoint {
+        bigint id PK "Primary key, autoincrement"
+        bigint block_number UK "Synchronization block (UNIQUE, NOT NULL)"
+        binary(32) block_hash UK "Synchronization block hash (UNIQUE, NOT NULL)"
+        binary(20) aggregator_address "Curvy Aggregator proxy address (NOT NULL)"
+        bigint tree_version "Notes-tree format version (NOT NULL)"
+        bigint tree_depth "Notes-tree depth (NOT NULL)"
+        bigint shard_height "Height of each completed shard (NOT NULL)"
+        bigint leaf_count "Dense non-zero leaves included (NOT NULL)"
+        bigint nullifier_count "Dense non-zero nullifiers included (NOT NULL)"
+        bigint shard_count "Completed shards included (NOT NULL)"
+        binary(32) root "Notes-tree root (NOT NULL)"
+        binary frontier_snapshot "Versioned compact frontier snapshot (NOT NULL)"
+    }
+    %% Unique index: idx_curvy_sync_checkpoint_block (block_number)
 
     service_type {
         int id PK "Primary key, autoincrement"
