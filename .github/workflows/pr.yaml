@@ -291,6 +291,8 @@ jobs:
           # In the merge queue the PR-only jobs, the Docker builds and the
           # schema jobs skip, and checks/tests/build-binaries have every inner
           # job input-disabled, so their caller jobs report skipped. On a pull
-          # request only the fork-gated schema jobs may skip; every other job
-          # must succeed. A failed job reds the gate either way.
-          allowed-skips: ${{ github.event_name == 'merge_group' && 'validate-pr-title, label, checks, tests, schema-validation, postgres-schema, build-binaries, build-docker, build-docker-with-anvil' || 'schema-validation, postgres-schema' }}
+          # request only the fork-gated schema jobs may skip. Coverage (the only
+          # enabled test job) is skipped by tests.yaml on draft PRs, so `tests`
+          # may skip on a draft only; a ready PR must run it. A failed job reds
+          # the gate in every case.
+          allowed-skips: ${{ github.event_name == 'merge_group' && 'validate-pr-title, label, checks, tests, schema-validation, postgres-schema, build-binaries, build-docker, build-docker-with-anvil' || (github.event.pull_request.draft && 'schema-validation, postgres-schema, tests' || 'schema-validation, postgres-schema') }}
