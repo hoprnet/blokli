@@ -17,9 +17,8 @@ on:
       - ready_for_review
 permissions:
   contents: read
-  id-token: write # zizmor: ignore[excessive-permissions]
 concurrency:
-  group: ${{ github.event.pull_request.head.ref || github.ref_name }}-pr
+  group: ${{ github.event.pull_request.number || github.ref }}-pr
   cancel-in-progress: true
 env:
   CARGO_TERM_COLOR: always
@@ -46,6 +45,8 @@ jobs:
             refactor
             perf
             test
+            ci
+            revert
           requireScope: false
           ignoreLabels: |
             bot
@@ -112,6 +113,9 @@ jobs:
     # Unit` reports (skipped) without re-running (see `checks`). The other Test
     # contexts are already skipped on every event.
     uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@2f28adfb7c34a9f18087d8646e190b6aafcd4b52 # workflow-tests-v6.1.2
+    permissions:
+      contents: read
+      id-token: write # Codecov OIDC upload in the coverage job
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
       cachix_cache_name: blokli
@@ -259,3 +263,34 @@ jobs:
       concurrency_group_suffix: anvil
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+  # Single aggregate merge gate: green only if every other job in this run
+  # succeeded. Mark THIS one as the required check in the branch ruleset once
+  # the individual required checks are dropped. `if: always()` runs it even when
+  # a dependency fails; alls-green then reds the gate on any non-success (a
+  # failed job, or a skip that is not allowed).
+  merge-gate:
+    name: Merge gate
+    if: always()
+    needs:
+      - validate-pr-title
+      - label
+      - checks
+      - tests
+      - schema-validation
+      - postgres-schema
+      - build-binaries
+      - build-docker
+      - build-docker-with-anvil
+    runs-on: depot-ubuntu-24.04-2
+    permissions: {}
+    steps:
+      - name: Require all jobs to pass
+        uses: re-actors/alls-green@b5b5b37504aa4183270bd3d855c52a67f212be35 # v1.3.0
+        with:
+          jobs: ${{ toJSON(needs) }}
+          # In the merge queue the PR-only jobs, the Docker builds and the
+          # schema jobs skip, and checks/tests/build-binaries have every inner
+          # job input-disabled, so their caller jobs report skipped. On a pull
+          # request only the fork-gated schema jobs may skip; every other job
+          # must succeed. A failed job reds the gate either way.
+          allowed-skips: ${{ github.event_name == 'merge_group' && 'validate-pr-title, label, checks, tests, schema-validation, postgres-schema, build-binaries, build-docker, build-docker-with-anvil' || 'schema-validation, postgres-schema' }}
