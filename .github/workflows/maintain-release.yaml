@@ -9,6 +9,8 @@ on:
         required: true
         type: string
 
+permissions: {}
+
 concurrency:
   group: maintain-release-${{ inputs.tag }}
   cancel-in-progress: false
