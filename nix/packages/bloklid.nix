@@ -8,60 +8,43 @@
   pkgs,
   builders,
   sources,
-  bloklidCrateInfo,
   buildVersion,
   rev,
-  buildPlatform,
   nixLib,
 }:
 
 let
-  mkbloklidBuildArgs =
-    { src, depsSrc }:
-    {
-      inherit
-        src
-        depsSrc
-        rev
-        buildVersion
-        ;
-      cargoExtraArgs = "--bins"; # Build all binary targets
-      cargoToml = ./../../bloklid/Cargo.toml;
-    };
+  # Build a bloklid variant with `builder`; `args` extend or override the defaults.
+  mkBloklid =
+    builder: args:
+    builder.callPackage nixLib.mkRustPackage (
+      {
+        inherit rev buildVersion;
+        src = sources.main;
+        depsSrc = sources.deps;
+        cargoExtraArgs = "--bins"; # Build all binary targets
+        cargoToml = ./../../bloklid/Cargo.toml;
+      }
+      // args
+    );
 
-  # Production builds includes bloklid in each platform derivation.
-  # prependPackageName = false lets us specify both packages explicitly via cargoExtraArgs.
+  # Production builds for each platform, plus a dev profile variant on Linux.
+  # prependPackageName = false lets us select the package explicitly via cargoExtraArgs.
   mkBloklidPlatformPackages =
     platform:
     let
-      args =
-        (mkbloklidBuildArgs {
-          src = sources.main;
-          depsSrc = sources.deps;
-        })
-        // {
-          prependPackageName = false;
-          cargoExtraArgs = "-p bloklid --bins --locked";
-        };
+      args = {
+        prependPackageName = false;
+        cargoExtraArgs = "-p bloklid --bins --locked";
+      };
       name = "binary-bloklid-${platform}";
     in
     {
-      "${name}" = builders.${platform}.callPackage nixLib.mkRustPackage args;
+      "${name}" = mkBloklid builders.${platform} args;
     }
     // lib.optionalAttrs (lib.hasSuffix "-linux" platform) {
-      "${name}-dev" = builders.${platform}.callPackage nixLib.mkRustPackage (
-        args // { CARGO_PROFILE = "dev"; }
-      );
+      "${name}-dev" = mkBloklid builders.${platform} (args // { CARGO_PROFILE = "dev"; });
     };
-
-  bloklidPackages = builtins.foldl' (a: b: a // b) { } (
-    map mkBloklidPlatformPackages [
-      "x86_64-linux"
-      "aarch64-linux"
-      "x86_64-darwin"
-      "aarch64-darwin"
-    ]
-  );
 
   blokliSchema = builders.local.callPackage nixLib.mkRustPackage {
     src = sources.schema;
@@ -82,104 +65,66 @@ let
       rm -rf "$out/bin"
     '';
   };
+
+  buildPlatform = pkgs.stdenv.buildPlatform;
 in
-{
-  # Development builds - for local testing and debugging
-  bloklid = builders.local.callPackage nixLib.mkRustPackage (mkbloklidBuildArgs {
-    src = sources.main;
-    depsSrc = sources.deps;
-  });
-
-  bloklid-dev = builders.local.callPackage nixLib.mkRustPackage (
-    (mkbloklidBuildArgs {
-      src = sources.main;
-      depsSrc = sources.deps;
-    })
-    // {
-      CARGO_PROFILE = "dev";
-    }
-  );
-}
-// bloklidPackages
+lib.mergeAttrsList (
+  map mkBloklidPlatformPackages [
+    "x86_64-linux"
+    "aarch64-linux"
+    "x86_64-darwin"
+    "aarch64-darwin"
+  ]
+)
 // {
+  # Development builds - for local testing and debugging
+  bloklid = mkBloklid builders.local { };
+  bloklid-dev = mkBloklid builders.local { CARGO_PROFILE = "dev"; };
+
   # Test and quality assurance builds
-  bloklid-test = builders.local.callPackage nixLib.mkRustPackage (
-    (mkbloklidBuildArgs {
-      src = sources.test;
-      depsSrc = sources.deps;
-    })
-    // {
-      runTests = true;
-    }
-  );
+  bloklid-test = mkBloklid builders.local {
+    src = sources.test;
+    runTests = true;
+  };
 
-  bloklid-nextest = builders.local.callPackage nixLib.mkRustPackage (
-    (mkbloklidBuildArgs {
-      src = sources.test;
-      depsSrc = sources.deps;
-    })
-    // {
-      runNextest = true;
-      testCargoProfile = "ci-test";
-      prependPackageName = false;
-      cargoExtraArgs = "--workspace";
-      extraNativeBuildInputs = [ pkgs.foundry-bin ];
-    }
-  );
+  bloklid-nextest = mkBloklid builders.local {
+    src = sources.test;
+    runNextest = true;
+    testCargoProfile = "ci-test";
+    prependPackageName = false;
+    cargoExtraArgs = "--workspace";
+    extraNativeBuildInputs = [ pkgs.foundry-bin ];
+  };
 
-  bloklid-test-nightly = builders.localNightly.callPackage nixLib.mkRustPackage (
-    (mkbloklidBuildArgs {
-      src = sources.test;
-      depsSrc = sources.deps;
-    })
-    // {
-      runTests = true;
-      cargoExtraArgs = "--locked -Z panic-abort-tests"; # Nightly feature for test optimization
-    }
-  );
+  bloklid-test-nightly = mkBloklid builders.localNightly {
+    src = sources.test;
+    runTests = true;
+    cargoExtraArgs = "--locked -Z panic-abort-tests"; # Nightly feature for test optimization
+  };
 
-  bloklid-clippy = builders.local.callPackage nixLib.mkRustPackage (
-    (mkbloklidBuildArgs {
-      src = sources.main;
-      depsSrc = sources.deps;
-    })
-    // {
-      runClippy = true; # Run Clippy linter
-      prependPackageName = false;
-      # --all-features ensures optional, cfg-gated code such as the Curvy test
-      # deployment is linted by CI too.
-      cargoExtraArgs = "--workspace --all-features";
-    }
-  );
+  bloklid-clippy = mkBloklid builders.local {
+    runClippy = true;
+    prependPackageName = false;
+    # --all-features ensures optional, cfg-gated code such as the Curvy test
+    # deployment is linted by CI too.
+    cargoExtraArgs = "--workspace --all-features";
+  };
 
   # Coverage runs the unit-test suite through nextest and emits the LCOV report.
-  bloklid-coverage = builders.localCoverage.callPackage nixLib.mkRustPackage (
-    (mkbloklidBuildArgs {
-      src = sources.test;
-      depsSrc = sources.deps;
-    })
-    // {
-      runCoverage = true;
-      cargoLlvmCovCommand = "nextest";
-      testCargoProfile = "ci-test";
-      # Nix renders nextest's in-place progress bar as repeated, truncated log lines.
-      cargoExtraArgs = "--show-progress=none";
-      extraNativeBuildInputs = [
-        pkgs.cargo-nextest
-        pkgs.foundry-bin
-      ];
-    }
-  );
+  bloklid-coverage = mkBloklid builders.localCoverage {
+    src = sources.test;
+    runCoverage = true;
+    cargoLlvmCovCommand = "nextest";
+    testCargoProfile = "ci-test";
+    # Nix renders nextest's in-place progress bar as repeated, truncated log lines.
+    cargoExtraArgs = "--show-progress=none";
+    extraNativeBuildInputs = [
+      pkgs.cargo-nextest
+      pkgs.foundry-bin
+    ];
+  };
 
-  bloklid-bench = builders.local.callPackage nixLib.mkRustPackage (
-    (mkbloklidBuildArgs {
-      src = sources.main;
-      depsSrc = sources.deps;
-    })
-    // {
-      runBench = true; # Run benchmarks
-    }
-  );
+  bloklid-bench = mkBloklid builders.local { runBench = true; };
 
   blokli-schema = blokliSchema;
 
@@ -202,36 +147,10 @@ in
 
   # Candidate build - used for smoke testing before release
   # Builds as static binary on Linux x86_64 for better test coverage
-  bloklid-candidate =
-    if buildPlatform.isLinux && buildPlatform.isx86_64 then
-      builders.x86_64-linux.callPackage nixLib.mkRustPackage (
-        (mkbloklidBuildArgs {
-          src = sources.main;
-          depsSrc = sources.deps;
-        })
-        // {
-          CARGO_PROFILE = "candidate";
-        }
-      )
-    else
-      builders.local.callPackage nixLib.mkRustPackage (
-        (mkbloklidBuildArgs {
-          src = sources.main;
-          depsSrc = sources.deps;
-        })
-        // {
-          CARGO_PROFILE = "candidate";
-        }
-      );
+  bloklid-candidate = mkBloklid (
+    if buildPlatform.isLinux && buildPlatform.isx86_64 then builders.x86_64-linux else builders.local
+  ) { CARGO_PROFILE = "candidate"; };
 
   # Documentation build using nightly Rust for unstable doc features
-  bloklid-docs = builders.localNightly.callPackage nixLib.mkRustPackage (
-    (mkbloklidBuildArgs {
-      src = sources.main;
-      depsSrc = sources.deps;
-    })
-    // {
-      buildDocs = true;
-    }
-  );
+  bloklid-docs = mkBloklid builders.localNightly { buildDocs = true; };
 }
