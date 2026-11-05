@@ -255,14 +255,14 @@ priority over their canonical database aliases when both are set. Boolean enviro
 
 #### Root Configuration
 
-| Config Key                     | Default                 | Environment Variable                  | Description                                                                                                  |
-| :----------------------------- | :---------------------- | :------------------------------------ | :----------------------------------------------------------------------------------------------------------- |
-| `data_directory`               | `data`                  | `BLOKLI_DATA_DIRECTORY`               | Directory for daemon data                                                                                    |
-| `network`                      | `jura-dev`              | `BLOKLI_NETWORK`                      | `jura-dev`, `jura-prod`, or `anvil-localhost` (`localhost` is an alias)                                      |
-| `rpc_url`                      | `http://localhost:8545` | `BLOKLI_RPC_URL`                      | Chain JSON-RPC endpoint                                                                                      |
-| `max_rpc_requests_per_sec`     | `100`                   | `BLOKLI_MAX_RPC_REQUESTS_PER_SEC`     | Maximum request rate; `0` means unlimited                                                                    |
-| `max_block_range`              | `10000`                 | `BLOKLI_MAX_BLOCK_RANGE`              | Ceiling for adaptive `eth_getLogs` ranges; `0` auto-discovers up to 10000                                    |
-| `block_range_reprobe_interval` | `100`                   | `BLOKLI_BLOCK_RANGE_REPROBE_INTERVAL` | Successful requests at a reduced `eth_getLogs` range before a larger range is probed again; `0` never probes |
+| Config Key                     | Default                 | Environment Variable                  | Description                                                                                                               |
+| :----------------------------- | :---------------------- | :------------------------------------ | :------------------------------------------------------------------------------------------------------------------------ |
+| `data_directory`               | `data`                  | `BLOKLI_DATA_DIRECTORY`               | Directory for daemon data                                                                                                 |
+| `network`                      | `jura-dev`              | `BLOKLI_NETWORK`                      | `jura-dev`, `jura-prod`, or `anvil-localhost` (`localhost` is an alias)                                                   |
+| `rpc_url`                      | `http://localhost:8545` | `BLOKLI_RPC_URL`                      | Chain JSON-RPC endpoint                                                                                                   |
+| `max_rpc_requests_per_sec`     | `100`                   | `BLOKLI_MAX_RPC_REQUESTS_PER_SEC`     | Maximum request rate; `0` means unlimited                                                                                 |
+| `max_block_range`              | `10000`                 | `BLOKLI_MAX_BLOCK_RANGE`              | Ceiling for adaptive `eth_getLogs` ranges; `0` auto-discovers up to 10000                                                 |
+| `block_range_reprobe_interval` | `100`                   | `BLOKLI_BLOCK_RANGE_REPROBE_INTERVAL` | Successful `eth_getLogs` requests spanning the full reduced range before a larger range is probed again; `0` never probes |
 
 The daemon also requires a `[database]` table or equivalent database environment variables.
 

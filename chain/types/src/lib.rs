@@ -90,7 +90,8 @@ pub struct ChainConfig {
     pub confirmations: u16,
     /// Maximum block range ceiling for adaptive RPC log queries
     pub max_block_range: u32,
-    /// Successful requests at a reduced log block range after which a larger range is probed again (0 = never)
+    /// Successful requests spanning the full reduced log block range after which a larger range is probed again
+    /// (0 = never)
     pub block_range_reprobe_interval: u32,
     /// Starting block number for channel contract (where indexing should begin)
     pub channel_contract_deploy_block: u32,

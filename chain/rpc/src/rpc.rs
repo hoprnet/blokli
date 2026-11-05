@@ -136,8 +136,8 @@ pub struct RpcOperationsConfig {
     #[validate(range(min = 0))]
     #[default = 2000]
     pub max_block_range_fetch_size: u64,
-    /// Number of consecutive successful `eth_getLogs` requests at a stable block range below the ceiling after which
-    /// a larger range is probed again.
+    /// Number of consecutive successful `eth_getLogs` requests spanning the full stable block range below the ceiling
+    /// after which a larger range is probed again. Shorter requests, such as those near the chain head, do not count.
     ///
     /// Endpoint limits can depend on the number of logs in a range, so a range reduced in a dense region of the chain
     /// must be able to grow again once that region has passed. A value of `0` disables upward probing.
