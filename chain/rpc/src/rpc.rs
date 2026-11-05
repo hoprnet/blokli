@@ -221,10 +221,6 @@ pub(crate) struct LogBlockRangeLimit {
     stable_successes: u64,
     reprobe_interval: u64,
     warned_single_block: bool,
-    /// First block of a multi-block request within the proven working range that failed with an unrecognized error.
-    /// Cleared once a request covering that block succeeds; successes elsewhere, such as the indexer replaying earlier
-    /// blocks before retrying, do not show that the failure was transient.
-    pending_partial_failure: Option<u64>,
 }
 
 impl LogBlockRangeLimit {
@@ -240,7 +236,6 @@ impl LogBlockRangeLimit {
             stable_successes: 0,
             reprobe_interval,
             warned_single_block: false,
-            pending_partial_failure: None,
         }
     }
 
@@ -321,6 +316,7 @@ impl LogBlockRangeLimit {
             return LogBlockRangeFailureUpdate {
                 next_limit: 1,
                 retry: false,
+                confirm_failure: false,
                 warn_single_block,
             };
         }
@@ -342,6 +338,7 @@ impl LogBlockRangeLimit {
         LogBlockRangeFailureUpdate {
             next_limit: self.current(),
             retry: self.current() < failed_span,
+            confirm_failure: false,
             warn_single_block: false,
         }
     }
@@ -349,16 +346,16 @@ impl LogBlockRangeLimit {
     /// Records a failed request whose error is not a known range limit error. Such an error may be transient (a
     /// timeout, a rate limit, an outage) or a range rejection the endpoint reports in an unrecognized way.
     ///
-    /// A multi-block request is treated as possibly too large when it used the full current limit or was larger than
-    /// any range known to work. A smaller request within the proven range, such as one near the chain head, most
-    /// likely failed transiently; it only counts as a range signal when its blocks fail again before a request covering
-    /// them succeeds, which the indexer's retry gives it the chance to do. Returns `None` when the failure is not a
-    /// range signal.
+    /// A multi-block request is treated as possibly too large when it used the full current limit, was larger than
+    /// any range known to work, or failed again when retried unchanged (`repeated`). A smaller request within the
+    /// proven range, such as one near the chain head, is first retried unchanged by the caller, so a transient error
+    /// neither shrinks the range nor reaches the indexer's failure handling. Returns `None` when the failure is not
+    /// a range signal.
     fn record_unrecognized_failure(
         &mut self,
-        from_block: u64,
         requested_span: u64,
         attempted_limit: u64,
+        repeated: bool,
     ) -> Option<LogBlockRangeFailureUpdate> {
         self.stable_successes = 0;
 
@@ -372,30 +369,17 @@ impl LogBlockRangeLimit {
             return None;
         }
 
-        let to_block = from_block.saturating_add(requested_span - 1);
         let beyond_proven_range = requested_span == attempted_limit || requested_span > self.last_working;
-        let failed_again = self
-            .pending_partial_failure
-            .is_some_and(|block| (from_block..=to_block).contains(&block));
-
-        if beyond_proven_range || failed_again {
-            self.pending_partial_failure = None;
+        if beyond_proven_range || repeated {
             return Some(self.record_failure(requested_span));
         }
 
-        self.pending_partial_failure = Some(from_block);
-        None
-    }
-
-    /// Records that the blocks `from_block..=to_block` were fetched, which shows that a pending failure of a request
-    /// starting within them was transient.
-    fn record_fetched_blocks(&mut self, from_block: u64, to_block: u64) {
-        if self
-            .pending_partial_failure
-            .is_some_and(|block| (from_block..=to_block).contains(&block))
-        {
-            self.pending_partial_failure = None;
-        }
+        Some(LogBlockRangeFailureUpdate {
+            next_limit: self.current(),
+            retry: true,
+            confirm_failure: true,
+            warn_single_block: false,
+        })
     }
 }
 
@@ -403,6 +387,8 @@ impl LogBlockRangeLimit {
 pub(crate) struct LogBlockRangeFailureUpdate {
     pub next_limit: u64,
     pub retry: bool,
+    /// The failed range is retried unchanged once to tell a transient failure from a rejection.
+    pub confirm_failure: bool,
     pub warn_single_block: bool,
 }
 
@@ -768,11 +754,9 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         self.with_log_block_range_limit(|range_limit| range_limit.current())
     }
 
-    pub(crate) fn record_log_block_range_success(&self, from_block: u64, requested_span: u64, attempted_limit: u64) {
-        let stable = self.update_log_block_range_limit(|range_limit| {
-            range_limit.record_fetched_blocks(from_block, from_block.saturating_add(requested_span.saturating_sub(1)));
-            range_limit.record_success(requested_span, attempted_limit)
-        });
+    pub(crate) fn record_log_block_range_success(&self, requested_span: u64, attempted_limit: u64) {
+        let stable = self
+            .update_log_block_range_limit(|range_limit| range_limit.record_success(requested_span, attempted_limit));
 
         if let Some(stable) = stable {
             debug!(
@@ -789,12 +773,12 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
     /// server errors), so a failure of a multi-block request that used the full current limit is treated as a range
     /// signal even when the error is not a known range limit error. Retrying the same range would only fail again
     /// until the indexer gives up. Other failures are only range signals when the endpoint explicitly reports a range
-    /// limit.
+    /// limit. `repeated` tells whether the same block range failed on the previous attempt.
     pub(crate) fn record_log_block_range_failure(
         &self,
-        from_block: u64,
         requested_span: u64,
         attempted_limit: u64,
+        repeated: bool,
         error: &RpcError,
     ) -> bool {
         let is_range_limit_error = is_log_block_range_limit_error(error);
@@ -802,7 +786,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
             if is_range_limit_error {
                 Some(range_limit.record_failure(requested_span))
             } else {
-                range_limit.record_unrecognized_failure(from_block, requested_span, attempted_limit)
+                range_limit.record_unrecognized_failure(requested_span, attempted_limit, repeated)
             }
         });
 
@@ -810,7 +794,13 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
             return false;
         };
 
-        if update.warn_single_block {
+        if update.confirm_failure {
+            warn!(
+                failed_block_range = requested_span,
+                error = %error,
+                "eth_getLogs failed for block range; retrying it once before treating the range as the cause"
+            );
+        } else if update.warn_single_block {
             warn!(
                 error = %error,
                 "RPC rejected a single-block eth_getLogs request; continuing in single-block mode, but this mode of \
@@ -1395,7 +1385,8 @@ mod tests {
         send_requests(&mut range_limit, 100, REPROBE_INTERVAL as usize - 1);
 
         // A short request near the chain head fails transiently.
-        assert_eq!(range_limit.record_unrecognized_failure(1_000, 2, 100), None);
+        let update = range_limit.record_unrecognized_failure(2, 100, false);
+        assert!(update.is_some_and(|update| update.retry && update.confirm_failure && update.next_limit == 100));
         assert_eq!(range_limit.current(), 100);
 
         // The failure interrupts the consecutive successes, so the next success does not start an upward probe.
@@ -1409,7 +1400,7 @@ mod tests {
         // rejects the never-tested 3_000-block request with an unrecognized error.
         let mut range_limit = LogBlockRangeLimit::new(5_000, REPROBE_INTERVAL);
 
-        let update = range_limit.record_unrecognized_failure(0, 3_000, 5_000);
+        let update = range_limit.record_unrecognized_failure(3_000, 5_000, false);
 
         assert!(update.is_some_and(|update| update.retry && update.next_limit < 3_000));
     }
@@ -1419,18 +1410,13 @@ mod tests {
         let mut range_limit = LogBlockRangeLimit::new(10_000, REPROBE_INTERVAL);
         send_requests(&mut range_limit, 100, 100);
 
-        // Fetching the failed blocks afterwards shows the first failure was transient.
-        assert_eq!(range_limit.record_unrecognized_failure(1_000, 50, 100), None);
-        range_limit.record_fetched_blocks(1_000, 1_049);
-        assert_eq!(range_limit.record_unrecognized_failure(1_000, 50, 100), None);
+        // The first failure is retried unchanged.
+        let update = range_limit.record_unrecognized_failure(50, 100, false);
+        assert!(update.is_some_and(|update| update.confirm_failure));
         assert_eq!(range_limit.current(), 100);
 
-        // The indexer replays earlier blocks before retrying; that success says nothing about the failed blocks.
-        range_limit.record_fetched_blocks(900, 999);
-        range_limit.record_success(100, 100);
-
-        // Failing again on the same blocks is treated as a rejection of the range.
-        let update = range_limit.record_unrecognized_failure(1_000, 50, 100);
+        // Failing again on the unchanged range is treated as a rejection of the range.
+        let update = range_limit.record_unrecognized_failure(50, 100, true);
         assert!(update.is_some_and(|update| update.retry && update.next_limit < 50));
     }
 
@@ -1443,7 +1429,7 @@ mod tests {
         // Every request fails while the endpoint is down, down to a single block.
         loop {
             let candidate = range_limit.current();
-            match range_limit.record_unrecognized_failure(0, candidate, candidate) {
+            match range_limit.record_unrecognized_failure(candidate, candidate, false) {
                 Some(update) => assert!(update.retry && update.next_limit < candidate),
                 None => break,
             }
