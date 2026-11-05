@@ -125,6 +125,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
             tx_polling_interval: Duration::from_millis(chain_config.tx_polling_interval),
             finality: chain_config.confirmations as u32,
             max_block_range_fetch_size: chain_config.max_block_range as u64,
+            log_block_range_reprobe_interval: chain_config.block_range_reprobe_interval as u64,
             ..Default::default()
         };
 

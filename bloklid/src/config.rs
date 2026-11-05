@@ -23,6 +23,10 @@ fn default_max_block_range() -> u32 {
     10000
 }
 
+fn default_block_range_reprobe_interval() -> u32 {
+    100
+}
+
 /// PostgreSQL database configuration
 ///
 /// Supports two formats:
@@ -266,6 +270,10 @@ pub struct Config {
     #[serde(default = "default_max_block_range")]
     pub max_block_range: u32,
 
+    #[default(100)]
+    #[serde(default = "default_block_range_reprobe_interval")]
+    pub block_range_reprobe_interval: u32,
+
     #[serde(default)]
     pub indexer: IndexerConfig,
 
@@ -307,6 +315,10 @@ impl Config {
             self.max_rpc_requests_per_sec
         ));
         output.push_str(&format!("  max_block_range: {}\n", self.max_block_range));
+        output.push_str(&format!(
+            "  block_range_reprobe_interval: {}\n",
+            self.block_range_reprobe_interval
+        ));
 
         if let Some(db_config) = &self.database {
             output.push_str(&format!("  database: {}\n", db_config.display_redacted()));
