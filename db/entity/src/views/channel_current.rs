@@ -1,7 +1,7 @@
 //! SeaORM entity for the `channel_current` database view
 //!
-//! This view returns one row per channel with the latest state, using window functions
-//! to select the most recent `channel_state` entry by `(published_block, published_tx_index, published_log_index)`.
+//! This view returns one row per channel with the latest state, using a correlated `ORDER BY ... LIMIT 1`
+//! subquery to select the most recent `channel_state` entry by `(published_block, published_tx_index, published_log_index)`.
 
 use sea_orm::entity::prelude::{
     ActiveModelBehavior, DateTimeWithTimeZone, DeriveEntityModel, DerivePrimaryKey, DeriveRelation, EntityTrait,
