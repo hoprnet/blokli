@@ -2049,28 +2049,21 @@ impl SubscriptionRoot {
                     continue;
                 }
 
-                let status = match transaction_store.status(transaction_id) {
-                    Ok(status) => status,
+                let record = match transaction_store.get_public(transaction_id) {
+                    Ok(record) => record,
                     Err(_) => break,
                 };
-                if status == last_record.status {
+                if record == last_record {
                     continue;
                 }
 
-                if let Ok(record) = transaction_store.get_public(transaction_id) {
+                last_record = record.clone();
+                let is_terminal = is_terminal_status(&last_record.status);
 
-                    if record == last_record {
-                        continue;
-                    }
+                yield transaction_from_record(record);
 
-                    last_record = record.clone();
-                    let is_terminal = is_terminal_status(&last_record.status);
-
-                    yield transaction_from_record(record);
-
-                    if is_terminal {
-                        break;
-                    }
+                if is_terminal {
+                    break;
                 }
             }
         })
