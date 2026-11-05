@@ -1,7 +1,8 @@
 //! SeaORM entity for the `account_current` database view
 //!
 //! This view returns one row per account with the latest state, using a correlated `ORDER BY ... LIMIT 1`
-//! subquery to select the most recent `account_state` entry by `(published_block, published_tx_index, published_log_index)`.
+//! subquery to select the most recent `account_state` entry by `(published_block, published_tx_index,
+//! published_log_index)`.
 
 use sea_orm::entity::prelude::{
     ActiveModelBehavior, DeriveEntityModel, DerivePrimaryKey, DeriveRelation, EntityTrait, EnumIter, PrimaryKeyTrait,
