@@ -221,8 +221,10 @@ pub(crate) struct LogBlockRangeLimit {
     stable_successes: u64,
     reprobe_interval: u64,
     warned_single_block: bool,
-    /// Set after an unrecognized error of a multi-block request within the proven working range.
-    pending_partial_failure: bool,
+    /// First block of a multi-block request within the proven working range that failed with an unrecognized error.
+    /// Cleared once a request covering that block succeeds; successes elsewhere, such as the indexer replaying earlier
+    /// blocks before retrying, do not show that the failure was transient.
+    pending_partial_failure: Option<u64>,
 }
 
 impl LogBlockRangeLimit {
@@ -238,7 +240,7 @@ impl LogBlockRangeLimit {
             stable_successes: 0,
             reprobe_interval,
             warned_single_block: false,
-            pending_partial_failure: false,
+            pending_partial_failure: None,
         }
     }
 
@@ -252,8 +254,6 @@ impl LogBlockRangeLimit {
         if requested_span == 0 {
             return None;
         }
-
-        self.pending_partial_failure = false;
 
         match self.stable {
             Some(stable) if stable < self.cap && requested_span == stable && attempted_limit == stable => {
@@ -351,10 +351,12 @@ impl LogBlockRangeLimit {
     ///
     /// A multi-block request is treated as possibly too large when it used the full current limit or was larger than
     /// any range known to work. A smaller request within the proven range, such as one near the chain head, most
-    /// likely failed transiently; it only counts as a range signal when it fails again before any request succeeds,
-    /// which the indexer's retry gives it the chance to do. Returns `None` when the failure is not a range signal.
+    /// likely failed transiently; it only counts as a range signal when its blocks fail again before a request covering
+    /// them succeeds, which the indexer's retry gives it the chance to do. Returns `None` when the failure is not a
+    /// range signal.
     fn record_unrecognized_failure(
         &mut self,
+        from_block: u64,
         requested_span: u64,
         attempted_limit: u64,
     ) -> Option<LogBlockRangeFailureUpdate> {
@@ -370,14 +372,30 @@ impl LogBlockRangeLimit {
             return None;
         }
 
+        let to_block = from_block.saturating_add(requested_span - 1);
         let beyond_proven_range = requested_span == attempted_limit || requested_span > self.last_working;
-        if beyond_proven_range || self.pending_partial_failure {
-            self.pending_partial_failure = false;
+        let failed_again = self
+            .pending_partial_failure
+            .is_some_and(|block| (from_block..=to_block).contains(&block));
+
+        if beyond_proven_range || failed_again {
+            self.pending_partial_failure = None;
             return Some(self.record_failure(requested_span));
         }
 
-        self.pending_partial_failure = true;
+        self.pending_partial_failure = Some(from_block);
         None
+    }
+
+    /// Records that the blocks `from_block..=to_block` were fetched, which shows that a pending failure of a request
+    /// starting within them was transient.
+    fn record_fetched_blocks(&mut self, from_block: u64, to_block: u64) {
+        if self
+            .pending_partial_failure
+            .is_some_and(|block| (from_block..=to_block).contains(&block))
+        {
+            self.pending_partial_failure = None;
+        }
     }
 }
 
@@ -750,9 +768,11 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         self.with_log_block_range_limit(|range_limit| range_limit.current())
     }
 
-    pub(crate) fn record_log_block_range_success(&self, requested_span: u64, attempted_limit: u64) {
-        let stable = self
-            .update_log_block_range_limit(|range_limit| range_limit.record_success(requested_span, attempted_limit));
+    pub(crate) fn record_log_block_range_success(&self, from_block: u64, requested_span: u64, attempted_limit: u64) {
+        let stable = self.update_log_block_range_limit(|range_limit| {
+            range_limit.record_fetched_blocks(from_block, from_block.saturating_add(requested_span.saturating_sub(1)));
+            range_limit.record_success(requested_span, attempted_limit)
+        });
 
         if let Some(stable) = stable {
             debug!(
@@ -772,6 +792,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
     /// limit.
     pub(crate) fn record_log_block_range_failure(
         &self,
+        from_block: u64,
         requested_span: u64,
         attempted_limit: u64,
         error: &RpcError,
@@ -781,7 +802,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
             if is_range_limit_error {
                 Some(range_limit.record_failure(requested_span))
             } else {
-                range_limit.record_unrecognized_failure(requested_span, attempted_limit)
+                range_limit.record_unrecognized_failure(from_block, requested_span, attempted_limit)
             }
         });
 
@@ -1374,7 +1395,7 @@ mod tests {
         send_requests(&mut range_limit, 100, REPROBE_INTERVAL as usize - 1);
 
         // A short request near the chain head fails transiently.
-        assert_eq!(range_limit.record_unrecognized_failure(2, 100), None);
+        assert_eq!(range_limit.record_unrecognized_failure(1_000, 2, 100), None);
         assert_eq!(range_limit.current(), 100);
 
         // The failure interrupts the consecutive successes, so the next success does not start an upward probe.
@@ -1388,7 +1409,7 @@ mod tests {
         // rejects the never-tested 3_000-block request with an unrecognized error.
         let mut range_limit = LogBlockRangeLimit::new(5_000, REPROBE_INTERVAL);
 
-        let update = range_limit.record_unrecognized_failure(3_000, 5_000);
+        let update = range_limit.record_unrecognized_failure(0, 3_000, 5_000);
 
         assert!(update.is_some_and(|update| update.retry && update.next_limit < 3_000));
     }
@@ -1398,14 +1419,18 @@ mod tests {
         let mut range_limit = LogBlockRangeLimit::new(10_000, REPROBE_INTERVAL);
         send_requests(&mut range_limit, 100, 100);
 
-        // A success in between shows the first failure was transient.
-        assert_eq!(range_limit.record_unrecognized_failure(50, 100), None);
-        send_requests(&mut range_limit, 100, 1);
-        assert_eq!(range_limit.record_unrecognized_failure(50, 100), None);
+        // Fetching the failed blocks afterwards shows the first failure was transient.
+        assert_eq!(range_limit.record_unrecognized_failure(1_000, 50, 100), None);
+        range_limit.record_fetched_blocks(1_000, 1_049);
+        assert_eq!(range_limit.record_unrecognized_failure(1_000, 50, 100), None);
         assert_eq!(range_limit.current(), 100);
 
-        // Failing again without a success in between is treated as a rejection of the range.
-        let update = range_limit.record_unrecognized_failure(50, 100);
+        // The indexer replays earlier blocks before retrying; that success says nothing about the failed blocks.
+        range_limit.record_fetched_blocks(900, 999);
+        range_limit.record_success(100, 100);
+
+        // Failing again on the same blocks is treated as a rejection of the range.
+        let update = range_limit.record_unrecognized_failure(1_000, 50, 100);
         assert!(update.is_some_and(|update| update.retry && update.next_limit < 50));
     }
 
@@ -1418,7 +1443,7 @@ mod tests {
         // Every request fails while the endpoint is down, down to a single block.
         loop {
             let candidate = range_limit.current();
-            match range_limit.record_unrecognized_failure(candidate, candidate) {
+            match range_limit.record_unrecognized_failure(0, candidate, candidate) {
                 Some(update) => assert!(update.retry && update.next_limit < candidate),
                 None => break,
             }

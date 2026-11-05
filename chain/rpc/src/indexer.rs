@@ -188,11 +188,11 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
 
                 match find_log_fetch_error(&results) {
                     Some(error) => {
-                        if self.record_log_block_range_failure(subrange.requested_span, subrange.attempted_limit, error) {
+                        if self.record_log_block_range_failure(next_block, subrange.requested_span, subrange.attempted_limit, error) {
                             continue;
                         }
                     }
-                    None => self.record_log_block_range_success(subrange.requested_span, subrange.attempted_limit),
+                    None => self.record_log_block_range_success(next_block, subrange.requested_span, subrange.attempted_limit),
                 }
 
                 for result in results {
@@ -417,7 +417,7 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
 
             match self.provider.get_logs(&filter).await {
                 Ok(chunk_logs) => {
-                    self.record_log_block_range_success(subrange.requested_span, subrange.attempted_limit);
+                    self.record_log_block_range_success(next_block, subrange.requested_span, subrange.attempted_limit);
 
                     let mut converted_logs = chunk_logs
                         .into_iter()
@@ -430,6 +430,7 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
                     let rpc_error = RpcError::from(error);
 
                     if self.record_log_block_range_failure(
+                        next_block,
                         subrange.requested_span,
                         subrange.attempted_limit,
                         &rpc_error,
@@ -1029,6 +1030,47 @@ mod tests {
         second_half.assert();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].as_ref().expect("log fetch should succeed").block_number, 4);
+
+        Ok(())
+    }
+
+    /// The indexer retries a failed batch from its last block with logs, so every retry replays the successful
+    /// earlier subrange before re-requesting the rejected tail.
+    #[test_log::test(tokio::test)]
+    async fn test_try_stream_logs_shrinks_tail_rejected_again_after_replay() -> anyhow::Result<()> {
+        let mut server = mockito::Server::new_async().await;
+        let rpc = create_test_rpc_operations_with_max_range(&server.url(), 8)?;
+
+        // Chain head 12 with the default finality of 3 makes block 9 the latest finalized block.
+        let block_number = server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::PartialJson(json!({"method": "eth_blockNumber"})))
+            .with_status(200)
+            .with_body(json!({"jsonrpc": "2.0", "id": 1, "result": "0xc"}).to_string())
+            .expect_at_least(2)
+            .create();
+        let replayed = mock_get_logs_range(&mut server, 0, 7, empty_logs_response()).expect(2);
+        let rejected_tail = mock_get_logs_range(&mut server, 8, 9, unrecognized_range_error_response()).expect(2);
+        let first_block = mock_get_logs_range(&mut server, 8, 8, empty_logs_response());
+        let second_block = mock_get_logs_range(&mut server, 9, 9, single_log_response(9));
+
+        let filters = FilterSet {
+            all: vec![Filter::new()],
+            token: vec![],
+            no_token: vec![Filter::new()],
+        };
+        let blocks = rpc.try_stream_logs(0, filters, true)?.take(2).collect::<Vec<_>>().await;
+
+        block_number.assert();
+        replayed.assert();
+        rejected_tail.assert();
+        first_block.assert();
+        second_block.assert();
+        let block_ids_with_log_counts = blocks
+            .iter()
+            .map(|block| (block.block_id, block.logs.len()))
+            .collect::<Vec<_>>();
+        assert_eq!(block_ids_with_log_counts, vec![(0, 0), (9, 1)]);
 
         Ok(())
     }
