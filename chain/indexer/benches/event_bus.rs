@@ -52,6 +52,16 @@ unsafe impl GlobalAlloc for CountingAllocator {
         }
         unsafe { System.dealloc(ptr, layout) }
     }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        // Resize in place like production does, instead of the default allocate, copy and free
+        let new_ptr = unsafe { System.realloc(ptr, layout, new_size) };
+        if !new_ptr.is_null() && COUNTING.load(Ordering::Relaxed) {
+            ALLOCATED_BYTES.fetch_add(new_size.saturating_sub(layout.size()), Ordering::Relaxed);
+            LIVE_BYTES.fetch_add(new_size.cast_signed() - layout.size().cast_signed(), Ordering::Relaxed);
+        }
+        new_ptr
+    }
 }
 
 #[global_allocator]

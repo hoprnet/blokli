@@ -49,6 +49,7 @@ use crate::{
     metrics,
     readiness::{ReadinessChecker, ReadinessState},
     schema::{ErasedSchema, LATEST_SCHEMA_VERSION, build_version_registry},
+    sse_connection::{SseConnectionLog, subscription_events},
 };
 
 /// Health check response for liveness probe
@@ -515,25 +516,16 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
         let connection_id = Uuid::new_v4();
         let identifier = format!("sub-{}-{}-keep-alive", subscription_name, connection_id);
 
-        // Log connection establishment
-        tracing::info!(
-            identifier = %identifier,
-            subscription = %subscription_name,
-            "SSE connection established"
-        );
-
+        // Logs the open line now and the close line when the stream is dropped.
+        let connection = SseConnectionLog::open(connection_id, &subscription_name);
+        let responses = stream! {
+            let mut response_stream = schema.execute_stream(request);
+            while let Some(response) = response_stream.next().await {
+                yield response;
+            }
+        };
         let sse_stream: Pin<Box<dyn Stream<Item = Result<Event, std::convert::Infallible>> + Send>> =
-            Box::pin(stream! {
-                let mut response_stream = schema.execute_stream(request);
-                while let Some(response) = response_stream.next().await {
-                    if !response.errors.is_empty() {
-                        metrics::increment_errors(request_type);
-                    }
-                    let json = serde_json::to_string(&response)
-                        .unwrap_or_else(|_| r#"{"errors":[{"message":"Failed to serialize response"}]}"#.to_string());
-                    yield Ok::<_, std::convert::Infallible>(Event::default().event("next").data(json));
-                }
-            });
+            Box::pin(subscription_events(responses, connection, request_type));
 
         if state.sse_keepalive.enabled {
             return Sse::new(sse_stream)
