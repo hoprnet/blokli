@@ -110,7 +110,7 @@ To push daemon telemetry to an OpenTelemetry collector, configure the `[telemetr
 
 ## Testing
 
-Blokli has comprehensive test coverage for temporal queries, blockchain reorganization handling, subscriptions, and edge cases.
+Blokli has comprehensive test coverage for state history, blockchain reorganization handling, subscriptions, and edge cases.
 
 ### Quick Test Commands
 
@@ -119,7 +119,7 @@ Blokli has comprehensive test coverage for temporal queries, blockchain reorgani
 just test
 
 # Run specific package tests
-just test-package blokli-db             # Database and temporal query tests
+just test-package blokli-db             # Database and state history tests
 just test-package blokli-chain-indexer  # Indexer and reorg handling tests
 
 # Run tests with debug output (single-threaded, shows println!)
@@ -193,11 +193,11 @@ Blokli implements a temporal database system for tracking blockchain state chang
 
 ### Key Features
 
-- **Temporal Queries**: Query state at any point in blockchain history using `(block, tx_index, log_index)` positions
+- **State History**: Every state change is stored with its `(block, tx_index, log_index)` position
 - **Reorg Handling**: Preserves audit trail during blockchain reorganizations with corrective states
 - **Never-Delete Principle**: Historical data never deleted, only corrective states added
-- **Position Ordering**: Lexicographic ordering ensures correct temporal queries
-- **Performance**: Efficient point-in-time queries using database indexes
+- **Position Ordering**: Lexicographic ordering of positions determines the latest state
+- **Performance**: Latest-state lookups use indexed position columns
 
 ## Repository Layout
 
