@@ -860,9 +860,13 @@ impl BlokliDbChannelOperations for BlokliDb {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, SystemTime};
+    use std::{
+        collections::HashMap,
+        time::{Duration, SystemTime},
+    };
 
     use anyhow::Context;
+    use blokli_db_entity::{account, prelude::Account, views::channel_current};
     use hopr_types::{
         crypto::{
             keypairs::{ChainKeypair, OffchainKeypair},
@@ -875,10 +879,12 @@ mod tests {
         },
         primitive::prelude::{Address, HoprBalance, U256},
     };
+    use sea_orm::{ActiveValue::Set, EntityTrait};
 
+    use super::{ACCOUNT_LOOKUP_CHUNK_SIZE, DB_STATUS_OPEN, channel_entries_from_view_rows};
     use crate::{
-        BlokliDbGeneralModelOperations, accounts::BlokliDbAccountOperations, channels::BlokliDbChannelOperations,
-        db::BlokliDb,
+        BlokliDbGeneralModelOperations, TargetDb, accounts::BlokliDbAccountOperations,
+        channels::BlokliDbChannelOperations, db::BlokliDb,
     };
 
     fn build_channel_entry(
@@ -897,6 +903,65 @@ mod tests {
             .epoch(channel_epoch)
             .build()
             .expect("valid channel entry")
+    }
+
+    #[tokio::test]
+    async fn test_channel_entries_from_view_rows_spans_multiple_lookup_chunks() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let conn = db.conn(TargetDb::Index);
+
+        // More distinct accounts than one lookup chunk holds, so the batching loop runs twice.
+        let account_count = ACCOUNT_LOOKUP_CHUNK_SIZE + 1;
+        let addresses: Vec<Address> = (0..account_count).map(|_| Address::from(random_bytes())).collect();
+        for (chunk_index, chunk) in addresses.chunks(1_000).enumerate() {
+            let models = chunk.iter().enumerate().map(|(i, addr)| account::ActiveModel {
+                chain_key: Set(addr.as_ref().to_vec()),
+                packet_key: Set(format!("{:064x}", chunk_index * 1_000 + i)),
+                ..Default::default()
+            });
+            Account::insert_many(models).exec(conn).await?;
+        }
+        let id_by_address: HashMap<Address, i64> = Account::find()
+            .all(conn)
+            .await?
+            .into_iter()
+            .map(|a| Ok((Address::try_from(a.chain_key.as_slice())?, a.id)))
+            .collect::<anyhow::Result<_>>()?;
+
+        // Every account is the source of one row and the destination of another, so endpoints repeat.
+        let view_rows: Vec<channel_current::Model> = (0..account_count)
+            .map(|i| {
+                let row_id = i64::try_from(i)?;
+                Ok(channel_current::Model {
+                    id: row_id,
+                    channel_id: row_id,
+                    concrete_channel_id: String::new(),
+                    source: id_by_address[&addresses[i]],
+                    destination: id_by_address[&addresses[(i + 1) % account_count]],
+                    balance: vec![0; 12],
+                    status: DB_STATUS_OPEN,
+                    epoch: 1,
+                    ticket_index: row_id,
+                    closure_time: None,
+                    corrupted_state: false,
+                    published_block: 1,
+                    published_tx_index: 0,
+                    published_log_index: 0,
+                    reorg_correction: false,
+                })
+            })
+            .collect::<anyhow::Result<_>>()?;
+
+        let entries = channel_entries_from_view_rows(conn, &view_rows).await?;
+
+        assert_eq!(entries.len(), account_count);
+        for (i, entry) in entries.iter().enumerate() {
+            assert_eq!(entry.source, addresses[i]);
+            assert_eq!(entry.destination, addresses[(i + 1) % account_count]);
+            assert_eq!(entry.ticket_index, i as u64);
+        }
+
+        Ok(())
     }
 
     #[tokio::test]
