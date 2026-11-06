@@ -11,6 +11,7 @@ mod m007_curvy_note_tree;
 mod m008_align_postgres_column_types;
 mod m009_unchecksummed_log_index;
 mod m010_safe_chain_key_index;
+mod m011_account_state_safe_address_index;
 
 /// This is a special block ID that even pre-dates the v3 contract deployment on Gnosis chain,
 /// and therefore could be safely used to mark data added via the migration.
@@ -43,6 +44,7 @@ impl MigratorTrait for Migrator {
             Box::new(m008_align_postgres_column_types::Migration),
             Box::new(m009_unchecksummed_log_index::Migration),
             Box::new(m010_safe_chain_key_index::Migration),
+            Box::new(m011_account_state_safe_address_index::Migration),
         ]
     }
 }
@@ -66,6 +68,7 @@ impl MigratorTrait for MigratorIndex {
             Box::new(m007_curvy_note_tree::Migration),
             Box::new(m008_align_postgres_column_types::Migration),
             Box::new(m010_safe_chain_key_index::Migration),
+            Box::new(m011_account_state_safe_address_index::Migration),
         ]
     }
 }
@@ -276,6 +279,23 @@ mod tests {
         assert!(
             duplicate_result.is_err(),
             "Duplicate position should be rejected by unique constraint"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_account_state_safe_address_index_created_for_all_index_migrators() {
+        let db = setup_test_db().await;
+        Migrator::up(&db, None).await.unwrap();
+        assert!(
+            index_exists(&db, "idx_account_state_safe_address").await,
+            "full database migrator should create the Safe address index"
+        );
+
+        let index_db = setup_test_db().await;
+        MigratorIndex::up(&index_db, None).await.unwrap();
+        assert!(
+            index_exists(&index_db, "idx_account_state_safe_address").await,
+            "index database migrator should create the Safe address index"
         );
     }
 

@@ -235,9 +235,8 @@ The database implements an event sourcing pattern with temporal versioning:
 
 **Database Views** (for efficient current-state access):
 
-- **account_current**: Returns one row per account with the latest `account_state`, using `ROW_NUMBER()` window function partitioned by
-  account ID and ordered by position tuple descending
-- **channel_current**: Returns one row per channel with the latest `channel_state`, using the same window function pattern
+- **account_current**: Returns one row per account with the latest `account_state`, using a position-ordered correlated lookup
+- **channel_current**: Returns one row per channel with the latest `channel_state`, using the same lookup pattern
 
 These views shift the "latest state" selection logic into the database engine, replacing application-level `ORDER BY ... LIMIT 1`
 subqueries. They simplify query code and enable the database to optimize current-state retrieval internally.
@@ -260,6 +259,7 @@ contention in SQLite's locking model.
 
 - **Event Sourcing**: State tables maintain complete version history with position-based ordering
 - **Temporal Queries**: Query state at any historical point using position coordinates
+- **Lookup Indexes**: State history indexes support both latest-state resolution and common identity predicates such as Safe-address filters
 - **Optimistic Locking**: Position-based unique constraints prevent duplicate event processing
 - **Binary Storage**: Large integers stored as binary to preserve full precision across language boundaries
 - **Watermark Pattern**: Tracks exact last processed position for reliable resume after restarts

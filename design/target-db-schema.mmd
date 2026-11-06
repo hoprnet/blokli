@@ -17,6 +17,7 @@ erDiagram
         binary(8) published_log_index "Published log index (original u64 stored in bytes to preserve precision, NOT NULL)"
     }
     %% Composite unique constraint: UNIQUE(account_id, published_block, published_tx_index, published_log_index)
+    %% Index: idx_account_state_safe_address (safe_address)
     %% Index: idx_account_state_position (account_id, published_block DESC, published_tx_index DESC, published_log_index DESC)
 
     announcement {
