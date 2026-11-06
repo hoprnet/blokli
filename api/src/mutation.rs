@@ -117,7 +117,7 @@ impl MutationRoot {
             Ok(uuid) => {
                 // Retrieve the transaction record
                 let record = store
-                    .get(uuid)
+                    .get_public(uuid)
                     .map_err(|e| async_graphql::Error::new(format!("Failed to retrieve transaction: {}", e)))?;
 
                 Ok(SendTransactionAsyncResult::Transaction(transaction_from_record(record)))
@@ -125,7 +125,7 @@ impl MutationRoot {
             // An equivalent logical action is already tracked: hand back that transaction
             // rather than broadcasting a competing copy of the same intent.
             Err(TransactionExecutorError::DuplicateHoprAction { operation, existing }) => {
-                match store.get(existing) {
+                match store.get_public(existing) {
                     Ok(record) => Ok(SendTransactionAsyncResult::Deduplicated(DeduplicatedTransaction {
                         transaction: transaction_from_record(record),
                         operation: operation.to_string(),

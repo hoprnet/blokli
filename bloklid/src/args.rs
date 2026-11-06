@@ -147,6 +147,14 @@ impl Args {
                 "api.transactions.max_submitted_transactions_per_identity",
             ),
             (
+                "BLOKLI_API_TRANSACTIONS_TERMINAL_TRANSACTION_TTL",
+                "api.transactions.terminal_transaction_ttl",
+            ),
+            (
+                "BLOKLI_API_TRANSACTIONS_MAX_TERMINAL_TRANSACTIONS",
+                "api.transactions.max_terminal_transactions",
+            ),
+            (
                 "BLOKLI_API_TRANSACTIONS_MAX_QUEUED_TRACE_JOBS",
                 "api.transactions.max_queued_trace_jobs",
             ),
@@ -1524,6 +1532,8 @@ mod tests {
             [api.transactions]
             max_submitted_transactions = 200
             max_submitted_transactions_per_identity = 20
+            terminal_transaction_ttl = "12h"
+            max_terminal_transactions = 2000
             max_queued_trace_jobs = 40
             max_concurrent_trace_jobs = 3
             enable_revert_reason_tracing = false
@@ -1539,6 +1549,8 @@ mod tests {
                     "BLOKLI_API_TRANSACTIONS_MAX_SUBMITTED_TRANSACTIONS_PER_IDENTITY",
                     Some("30"),
                 ),
+                ("BLOKLI_API_TRANSACTIONS_TERMINAL_TRANSACTION_TTL", Some("24h")),
+                ("BLOKLI_API_TRANSACTIONS_MAX_TERMINAL_TRANSACTIONS", Some("3000")),
                 ("BLOKLI_API_TRANSACTIONS_MAX_QUEUED_TRACE_JOBS", Some("50")),
                 ("BLOKLI_API_TRANSACTIONS_MAX_CONCURRENT_TRACE_JOBS", Some("4")),
                 ("BLOKLI_API_TRANSACTIONS_ENABLE_REVERT_REASON_TRACING", Some("true")),
@@ -1555,6 +1567,11 @@ mod tests {
                     .expect("Failed to load transaction configuration");
                 assert_eq!(config.api.transactions.max_submitted_transactions, 300);
                 assert_eq!(config.api.transactions.max_submitted_transactions_per_identity, 30);
+                assert_eq!(
+                    config.api.transactions.terminal_transaction_ttl,
+                    Duration::from_secs(24 * 60 * 60)
+                );
+                assert_eq!(config.api.transactions.max_terminal_transactions, 3000);
                 assert_eq!(config.api.transactions.max_queued_trace_jobs, 50);
                 assert_eq!(config.api.transactions.max_concurrent_trace_jobs, 4);
                 assert!(config.api.transactions.enable_revert_reason_tracing);

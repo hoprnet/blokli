@@ -235,6 +235,10 @@ pub struct TransactionMonitorConfig {
     pub poll_interval: Duration,
     /// Maximum time to wait before marking a transaction as timed out
     pub timeout: Duration,
+    /// How long terminal transaction records remain queryable. `Duration::ZERO` disables TTL eviction.
+    pub terminal_transaction_ttl: Duration,
+    /// Maximum terminal transaction records to retain. `0` means unbounded.
+    pub max_terminal_transactions: usize,
     /// Delay between RPC calls when checking multiple transactions
     /// This prevents overwhelming the RPC endpoint with burst requests
     pub per_transaction_delay: Duration,
@@ -275,6 +279,8 @@ impl Default for TransactionMonitorConfig {
         Self {
             poll_interval: Duration::from_secs(5),
             timeout: Duration::from_secs(300), // 5 minutes
+            terminal_transaction_ttl: Duration::from_secs(24 * 60 * 60),
+            max_terminal_transactions: 10_000,
             per_transaction_delay: Duration::from_millis(100),
             request_timeout: Duration::from_secs(30),
             safe_inspection_timeout: Duration::from_secs(30),
@@ -400,6 +406,14 @@ impl<R: ReceiptProvider + 'static, S: SafeAddressChecker> TransactionMonitor<R, 
                 self.check_transaction(record).await;
             })
             .await;
+
+        let evicted = self.transaction_store.evict_terminal_records(
+            self.config.terminal_transaction_ttl,
+            self.config.max_terminal_transactions,
+        );
+        if evicted > 0 {
+            debug!(evicted, "Evicted terminal transaction records");
+        }
 
         Ok(())
     }
