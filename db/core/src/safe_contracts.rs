@@ -1,9 +1,10 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use async_trait::async_trait;
 use blokli_db_entity::{
     hopr_safe_contract, hopr_safe_contract_state,
     prelude::{HoprSafeContract, HoprSafeContractState},
+    views::safe_contract_current,
 };
 use hopr_types::{crypto::types::Hash, primitive::prelude::Address};
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, Set};
@@ -660,42 +661,25 @@ impl BlokliDbSafeContractOperations for BlokliDb {
         module_address: Address,
     ) -> Result<Option<SafeContractEntry>> {
         let tx = self.nest_transaction(tx).await?;
-        let candidate_states = HoprSafeContractState::find()
-            .filter(hopr_safe_contract_state::Column::ModuleAddress.eq(module_address.as_ref().to_vec()))
-            .order_by_desc(hopr_safe_contract_state::Column::PublishedBlock)
-            .order_by_desc(hopr_safe_contract_state::Column::PublishedTxIndex)
-            .order_by_desc(hopr_safe_contract_state::Column::PublishedLogIndex)
-            .all(tx.as_ref())
+        // A module is normally bound to a single Safe; if several Safes currently point at it,
+        // prefer the most recently updated one.
+        let current = safe_contract_current::Entity::find()
+            .filter(safe_contract_current::Column::ModuleAddress.eq(module_address.as_ref().to_vec()))
+            .order_by_desc(safe_contract_current::Column::PublishedBlock)
+            .order_by_desc(safe_contract_current::Column::PublishedTxIndex)
+            .order_by_desc(safe_contract_current::Column::PublishedLogIndex)
+            .one(tx.as_ref())
             .await?;
 
-        let mut seen_safe_ids = HashSet::new();
-        for candidate_state in candidate_states {
-            if !seen_safe_ids.insert(candidate_state.hopr_safe_contract_id) {
-                continue;
-            }
-
-            let Some(latest_state) = get_latest_safe_state(tx.as_ref(), candidate_state.hopr_safe_contract_id).await?
-            else {
-                continue;
-            };
-            if latest_state.id != candidate_state.id {
-                continue;
-            }
-
-            let identity = HoprSafeContract::find_by_id(candidate_state.hopr_safe_contract_id)
-                .one(tx.as_ref())
-                .await?
-                .ok_or_else(|| {
-                    DbSqlError::EntityNotFound(format!(
-                        "safe contract identity not found for id {}",
-                        candidate_state.hopr_safe_contract_id
-                    ))
-                })?;
-
-            return Ok(Some(combine_entry(&identity, &latest_state)));
-        }
-
-        Ok(None)
+        Ok(current.map(|row| SafeContractEntry {
+            id: row.safe_contract_id,
+            address: row.address,
+            module_address: row.module_address,
+            chain_key: row.chain_key,
+            published_block: row.published_block,
+            published_tx_index: row.published_tx_index,
+            published_log_index: row.published_log_index,
+        }))
     }
 
     async fn get_preseeded_safes<'a>(&'a self, tx: OptTx<'a>) -> Result<Vec<SafeContractEntry>> {
