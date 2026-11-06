@@ -617,6 +617,8 @@ CREATE INDEX "idx_native_balance_last_changed_block" ON "native_balance" ("last_
 
 CREATE INDEX "idx_safe_contract_state_chain_key" ON "hopr_safe_contract_state" ("chain_key");
 
+CREATE INDEX "idx_safe_contract_state_module_address" ON "hopr_safe_contract_state" ("module_address");
+
 CREATE INDEX "idx_safe_contract_state_position" ON "hopr_safe_contract_state" ("hopr_safe_contract_id", "published_block" DESC, "published_tx_index" DESC, "published_log_index" DESC);
 
 CREATE UNIQUE INDEX "idx_safe_contract_state_unique_position" ON "hopr_safe_contract_state" ("hopr_safe_contract_id", "published_block", "published_tx_index", "published_log_index");
