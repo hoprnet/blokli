@@ -2222,7 +2222,6 @@ name = "blokli-db"
 version = "0.17.0"
 dependencies = [
  "anyhow",
- "async-broadcast",
  "async-trait",
  "blokli-db-entity",
  "blokli-db-migration",
