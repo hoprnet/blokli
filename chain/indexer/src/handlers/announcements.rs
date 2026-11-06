@@ -148,6 +148,14 @@ where
                                     }
                                 }
                             }
+                            Err(DbSqlError::KeyRebinding(_)) => {
+                                warn!(
+                                    %chain_key,
+                                    packet_key = %binding.packet_key,
+                                    error = %CoreEthereumIndexerError::UnsupportedKeyRebinding,
+                                    "Ignoring key binding for an already bound chain key"
+                                )
+                            }
                             Err(err) => {
                                 // We handle these errors gracefully and don't want the indexer to crash,
                                 // because anybody could write faulty entries into the announcement contract.
@@ -259,7 +267,7 @@ mod tests {
         },
     };
     use hopr_types::{
-        crypto::keypairs::Keypair,
+        crypto::{keypairs::Keypair, prelude::OffchainKeypair},
         internal::{
             account::{AccountEntry, AccountType},
             announcement::KeyBinding,
@@ -331,6 +339,77 @@ mod tests {
                 .await?
                 .context("a value should be present")?,
             account_entry
+        );
+        Ok(())
+    }
+
+    fn key_binding_log(
+        chain_key: Address,
+        packet_keypair: &OffchainKeypair,
+        key_id: u64,
+        announcements: Address,
+        block_number: u64,
+    ) -> SerializableLog {
+        let keybinding = KeyBinding::new(chain_key, packet_keypair);
+        let sig_bytes = keybinding.signature.as_ref();
+
+        let event = KeyBindingEvent {
+            key_id: AlloyU256::from(key_id),
+            chain_key: AlloyAddress::from_hopr_address(chain_key),
+            ed25519_pub_key: FixedBytes::<32>::from_slice(keybinding.packet_key.as_ref()),
+            ed25519_sig_0: FixedBytes::<32>::from_slice(&sig_bytes[..32]),
+            ed25519_sig_1: FixedBytes::<32>::from_slice(&sig_bytes[32..64]),
+        };
+
+        event_to_log_at_block(event, announcements, block_number, 0, 0)
+    }
+
+    #[tokio::test]
+    async fn test_key_rebinding_keeps_first_account() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let clonable_rpc_operations = ClonableMockOperations {
+            inner: Arc::new(MockIndexerRpcOperations::new()),
+        };
+        let (handlers, ..) = init_handlers_with_events(clonable_rpc_operations, db.clone());
+
+        let rebound_keypair = OffchainKeypair::random();
+        let first_binding = key_binding_log(
+            *SELF_CHAIN_ADDRESS,
+            &SELF_PRIV_KEY,
+            1,
+            handlers.addresses.announcements,
+            10,
+        );
+        let second_binding = key_binding_log(
+            *SELF_CHAIN_ADDRESS,
+            &rebound_keypair,
+            2,
+            handlers.addresses.announcements,
+            11,
+        );
+
+        for log in [first_binding, second_binding] {
+            let handlers = handlers.clone();
+            db.begin_transaction()
+                .await?
+                .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, log, false).await }))
+                .await?;
+        }
+
+        let accounts: Vec<AccountEntry> = db
+            .get_accounts(None, false)
+            .await?
+            .into_iter()
+            .filter(|account| account.chain_addr == *SELF_CHAIN_ADDRESS)
+            .collect();
+        assert_eq!(accounts.len(), 1, "a chain key must map to a single account");
+        assert_eq!(accounts[0].public_key, *SELF_PRIV_KEY.public());
+        assert_eq!(accounts[0].key_id, 1.into());
+
+        assert_eq!(
+            db.translate_key(None, *rebound_keypair.public()).await?,
+            None,
+            "the rebound packet key must not resolve to an account"
         );
         Ok(())
     }

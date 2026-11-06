@@ -425,9 +425,7 @@ mod tests {
     // Helper to create test account in database
     async fn create_test_account(db: &DatabaseConnection) -> anyhow::Result<i64> {
         let account = account::ActiveModel {
-            chain_key: ActiveValue::Set(vec![
-                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-            ]),
+            chain_key: ActiveValue::Set(rand::random::<[u8; 20]>().to_vec()),
             packet_key: ActiveValue::Set(format!("packet_key_{}", rand::random::<u32>())),
             published_block: ActiveValue::Set(100),
             published_tx_index: ActiveValue::Set(0),
