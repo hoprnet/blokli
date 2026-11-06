@@ -12,7 +12,6 @@ pub type Result<T, E = FilterError> = core::result::Result<T, E>;
 /// ```
 /// use blokli_tx::{FilterError, TransactionFilter};
 ///
-/// // Every rejection carries the reason, so callers can map it onto their own error surface.
 /// let error = TransactionFilter::default()
 ///     .filter_transaction(&[])
 ///     .expect_err("an empty payload is never authorized");
@@ -48,9 +47,14 @@ pub enum FilterError {
     #[error("failed to recover sender address: {0}")]
     SenderRecovery(String),
 
-    /// The calldata is too short to contain a 4-byte function selector.
+    /// The calldata is non-empty but too short to contain a 4-byte function selector.
     #[error("calldata is too short to contain a 4-byte function selector")]
     MissingSelector,
+
+    /// The call carries no calldata, so it only moves native value, which this filter does not
+    /// permit.
+    #[error("unauthorized: native value transfers are not allowed")]
+    ValueTransferNotAllowed,
 
     /// A Safe-module `execTransactionFromModule` call could not be decoded.
     #[error("failed to decode Safe module call: {0}")]
