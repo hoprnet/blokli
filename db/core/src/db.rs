@@ -17,7 +17,6 @@ use validator::Validate;
 use crate::{
     BlokliDbAllOperations, BlokliDbGeneralModelOperations, SINGULAR_TABLE_FIXED_ID,
     errors::{DbSqlError, Result},
-    events::EventBus,
     safe_contracts::BlokliDbSafeContractOperations,
     version,
 };
@@ -65,8 +64,6 @@ pub fn build_connect_options(url: &str, cfg: &BlokliDbConfig) -> ConnectOptions 
 ///
 /// Supports database snapshot imports for fast synchronization via
 /// [`BlokliDbGeneralModelOperations::import_logs_db`].
-///
-/// Includes event bus for real-time state change notifications.
 #[derive(Clone)]
 pub struct BlokliDb {
     /// Primary database connection (index tables for SQLite, all tables for PostgreSQL)
@@ -74,9 +71,6 @@ pub struct BlokliDb {
 
     /// Logs database connection (only used for SQLite, None for PostgreSQL)
     pub(crate) logs_db: Option<sea_orm::DatabaseConnection>,
-
-    /// Event bus for broadcasting state changes
-    pub(crate) event_bus: EventBus,
 
     #[allow(dead_code)]
     pub(crate) cfg: BlokliDbConfig,
@@ -87,7 +81,6 @@ impl std::fmt::Debug for BlokliDb {
         f.debug_struct("BlokliDb")
             .field("db", &self.db)
             .field("logs_db", &self.logs_db)
-            .field("event_bus_subscribers", &self.event_bus.subscriber_count())
             .field("cfg", &self.cfg)
             .finish()
     }
@@ -240,15 +233,7 @@ impl BlokliDb {
             tracing::warn!("Database data was reset due to schema version change");
         }
 
-        // Initialize event bus with capacity for 1000 events per subscriber
-        let event_bus = EventBus::new(1000);
-
-        let db_instance = Self {
-            db,
-            logs_db,
-            event_bus,
-            cfg,
-        };
+        let db_instance = Self { db, logs_db, cfg };
 
         if !database_url.contains(":memory:") {
             db_instance
@@ -339,24 +324,6 @@ impl BlokliDb {
             .await?;
 
         Ok(())
-    }
-
-    /// Get a reference to the event bus for subscribing to state changes.
-    ///
-    /// Subscribers will receive real-time notifications when account or channel state changes.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let mut subscriber = db.event_bus().subscribe();
-    /// tokio::spawn(async move {
-    ///     while let Ok(event) = subscriber.recv().await {
-    ///         // Handle state change event
-    ///     }
-    /// });
-    /// ```
-    pub fn event_bus(&self) -> &EventBus {
-        &self.event_bus
     }
 }
 
