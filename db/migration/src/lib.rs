@@ -13,6 +13,7 @@ mod m009_unchecksummed_log_index;
 mod m010_safe_chain_key_index;
 mod m011_account_state_safe_address_index;
 mod m012_safe_module_address_index;
+mod m013_account_unique_chain_key;
 
 /// This is a special block ID that even pre-dates the v3 contract deployment on Gnosis chain,
 /// and therefore could be safely used to mark data added via the migration.
@@ -47,6 +48,7 @@ impl MigratorTrait for Migrator {
             Box::new(m010_safe_chain_key_index::Migration),
             Box::new(m011_account_state_safe_address_index::Migration),
             Box::new(m012_safe_module_address_index::Migration),
+            Box::new(m013_account_unique_chain_key::Migration),
         ]
     }
 }
@@ -72,6 +74,7 @@ impl MigratorTrait for MigratorIndex {
             Box::new(m010_safe_chain_key_index::Migration),
             Box::new(m011_account_state_safe_address_index::Migration),
             Box::new(m012_safe_module_address_index::Migration),
+            Box::new(m013_account_unique_chain_key::Migration),
         ]
     }
 }
@@ -300,6 +303,54 @@ mod tests {
             index_exists(&index_db, "idx_account_state_safe_address").await,
             "index database migrator should create the Safe address index"
         );
+    }
+
+    /// Existing duplicate chain keys are reduced to their earliest binding, after which a second
+    /// account for the same chain key is rejected.
+    #[tokio::test]
+    async fn test_account_chain_key_made_unique() {
+        let db = setup_test_db().await;
+        Migrator::up(&db, Some(12)).await.unwrap();
+
+        db.execute_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            "INSERT INTO account (id, chain_key, packet_key, published_block) VALUES (1, \
+             X'0101010101010101010101010101010101010101', 'later', 200), (2, \
+             X'0101010101010101010101010101010101010101', 'earliest', 100)"
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        Migrator::up(&db, None).await.unwrap();
+        assert!(
+            index_exists(&db, "idx_account_unique_chain_key").await,
+            "idx_account_unique_chain_key should exist"
+        );
+        assert!(
+            !index_exists(&db, "idx_account_chain_key").await,
+            "idx_account_chain_key should be dropped"
+        );
+
+        let kept = db
+            .query_all_raw(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT packet_key FROM account".to_string(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(kept.len(), 1, "duplicates should be removed");
+        assert_eq!(kept[0].try_get::<String>("", "packet_key").unwrap(), "earliest");
+
+        let duplicate = db
+            .execute_raw(Statement::from_string(
+                DbBackend::Sqlite,
+                "INSERT INTO account (chain_key, packet_key) VALUES (X'0101010101010101010101010101010101010101', \
+                 'another')"
+                    .to_string(),
+            ))
+            .await;
+        assert!(duplicate.is_err(), "Duplicate chain key should be rejected");
     }
 
     #[tokio::test]
