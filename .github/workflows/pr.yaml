@@ -130,6 +130,8 @@ jobs:
               - "**/Cargo.toml"
               - "Cargo.lock"
               - ".cargo/audit.toml"
+              - "flake.nix"
+              - "flake.lock"
   # ── Stage 1: shared checks (format, pre-commit, lint, audit) ────────────────
   checks:
     name: Check
