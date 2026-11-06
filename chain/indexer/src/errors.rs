@@ -40,9 +40,6 @@ pub enum CoreEthereumIndexerError {
     #[error("Curvy index conversion failed: {0}")]
     CurvyIndexConversion(#[from] TryFromIntError),
 
-    #[error("Address announcement contains empty Multiaddr.")]
-    AnnounceEmptyMultiaddr,
-
     #[error("Node has already announced a key binding. Reassigning keys is not supported.")]
     UnsupportedKeyRebinding,
 
@@ -51,9 +48,6 @@ pub enum CoreEthereumIndexerError {
 
     #[error("Received an event for a channel that is closed or for which we haven't seen an OPEN event.")]
     ChannelDoesNotExist,
-
-    #[error("Cannot deregister non-existent MFA module")]
-    MFAModuleDoesNotExist,
 
     #[error("Unknown smart contract. Received event from {0}")]
     UnknownContract(Address),
