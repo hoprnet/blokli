@@ -2,7 +2,7 @@ use std::{path::Path, time::Duration};
 
 use blokli_db_entity::{
     chain_info,
-    prelude::{Account, Announcement, ChainInfo, ServiceRegistryConfig},
+    prelude::{ChainInfo, ServiceRegistryConfig},
     service_registry_config,
 };
 use migration::{Migrator, MigratorChainLogs, MigratorIndex, MigratorTrait};
@@ -16,7 +16,6 @@ use validator::Validate;
 
 use crate::{
     BlokliDbAllOperations, BlokliDbGeneralModelOperations, SINGULAR_TABLE_FIXED_ID,
-    accounts::model_to_account_entry,
     errors::{DbSqlError, Result},
     events::EventBus,
     safe_contracts::BlokliDbSafeContractOperations,
@@ -122,7 +121,6 @@ impl BlokliDb {
     /// - Configuration validation fails
     /// - Cannot connect to database
     /// - Migrations fail to apply
-    /// - Account initialization encounters errors
     pub async fn new(database_url: &str, logs_database_url: Option<&str>, cfg: BlokliDbConfig) -> Result<Self> {
         cfg.validate()
             .map_err(|e| DbSqlError::Construction(format!("failed configuration validation: {e}")))?;
@@ -257,20 +255,6 @@ impl BlokliDb {
                 .load_preseeded_safes(None, &db_instance.cfg.network_name)
                 .await?;
         }
-
-        // Initialize KeyId mapping for accounts
-        Account::find()
-            .find_with_related(Announcement)
-            .all(&db_instance.db)
-            .await?
-            .into_iter()
-            .try_for_each(|(a, b)| match model_to_account_entry(a, None, b) {
-                Ok(_account) => Ok::<(), DbSqlError>(()),
-                Err(error) => {
-                    tracing::error!(%error, "undecodeable account");
-                    Ok(())
-                }
-            })?;
 
         Ok(db_instance)
     }
