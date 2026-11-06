@@ -553,8 +553,6 @@ WHERE
             s2.published_log_index DESC
         LIMIT 1);
 
-CREATE INDEX "idx_account_chain_key" ON "account" ("chain_key");
-
 CREATE UNIQUE INDEX "idx_account_chain_packet_key" ON "account" ("chain_key", "packet_key");
 
 CREATE INDEX "idx_account_packet_key" ON "account" ("packet_key");
@@ -564,6 +562,8 @@ CREATE INDEX "idx_account_state_position" ON "account_state" ("account_id", "pub
 CREATE INDEX "idx_account_state_safe_address" ON "account_state" ("safe_address");
 
 CREATE UNIQUE INDEX "idx_account_state_unique_position" ON "account_state" ("account_id", "published_block", "published_tx_index", "published_log_index");
+
+CREATE UNIQUE INDEX "idx_account_unique_chain_key" ON "account" ("chain_key");
 
 CREATE INDEX "idx_announcement_account_id" ON "announcement" ("account_id");
 
