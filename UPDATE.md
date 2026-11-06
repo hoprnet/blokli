@@ -80,7 +80,8 @@ A change is breaking when **existing clients would receive a validation error or
 
    `QueryRoot` contains every query that was NOT changed between versions.
 
-4. **Register the new schema version** in `build_version_registry` (`api/src/schema.rs`):
+4. **Add `build_schema_v2`** in `api/src/schema.rs`, a copy of `build_schema_v1` that builds the schema from `MergedQueryV2`, and **register
+   the new schema version** in `build_version_registry`:
 
    ```rust
    pub fn build_version_registry(...) -> HashMap<u32, Arc<dyn ErasedSchema>> {
