@@ -262,26 +262,41 @@ impl BlokliDbAccountOperations for BlokliDb {
             .await?
             .perform(|tx| {
                 Box::pin(async move {
-                    // Step 1: Reuse the account bound to this chain key, or insert a new identity.
+                    // Step 1: Insert the account identity, or reuse the one already bound to this chain key.
+                    // Inserting first (instead of reading first) keeps concurrent upserts of the same chain key
+                    // from racing between the lookup and the insert.
                     // A chain key keeps the packet key of its first binding: re-binding is not supported.
-                    let existing = account::Entity::find()
-                        .filter(account::Column::ChainKey.eq(chain_key.as_ref().to_vec()))
-                        .one(tx.as_ref())
-                        .await?;
-                    let account_id = match existing {
-                        Some(account) if account.packet_key == hex::encode(packet_key.as_ref()) => account.id,
-                        Some(_) => return Err(DbSqlError::KeyRebinding(chain_key)),
-                        None => {
-                            let account_model = account::ActiveModel {
-                                id: Set(i64::from(key_id)),
-                                chain_key: Set(chain_key.as_ref().to_vec()),
-                                packet_key: Set(hex::encode(packet_key.as_ref())),
-                                published_block: Set(block_i64),
-                                published_tx_index: Set(tx_index_i64),
-                                published_log_index: Set(log_index_i64),
-                            };
-                            Account::insert(account_model).exec(tx.as_ref()).await?.last_insert_id
+                    let account_model = account::ActiveModel {
+                        id: Set(i64::from(key_id)),
+                        chain_key: Set(chain_key.as_ref().to_vec()),
+                        packet_key: Set(hex::encode(packet_key.as_ref())),
+                        published_block: Set(block_i64),
+                        published_tx_index: Set(tx_index_i64),
+                        published_log_index: Set(log_index_i64),
+                    };
+                    let account_id = match Account::insert(account_model)
+                        .on_conflict(OnConflict::column(account::Column::ChainKey).do_nothing().to_owned())
+                        .exec(tx.as_ref())
+                        .await
+                    {
+                        Ok(insert_result) => insert_result.last_insert_id,
+                        Err(DbErr::RecordNotInserted) => {
+                            let existing = account::Entity::find()
+                                .filter(account::Column::ChainKey.eq(chain_key.as_ref().to_vec()))
+                                .one(tx.as_ref())
+                                .await?
+                                .ok_or_else(|| {
+                                    DbSqlError::LogicalError(
+                                        "Account insert was skipped but no account exists for the chain key"
+                                            .to_string(),
+                                    )
+                                })?;
+                            if existing.packet_key != hex::encode(packet_key.as_ref()) {
+                                return Err(DbSqlError::KeyRebinding(chain_key));
+                            }
+                            existing.id
                         }
+                        Err(e) => return Err(e.into()),
                     };
 
                     // Step 2: Insert account_state record with state information
