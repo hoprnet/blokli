@@ -289,6 +289,7 @@ jobs:
       build_file: bloklid/Cargo.toml
       docker_image_name: bloklid
       docker_image_format: skopeo
+      concurrency_group_suffix: ${{ github.event.pull_request.number || github.ref_name }}
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
   build-docker-with-anvil:
@@ -317,7 +318,7 @@ jobs:
       build_file: bloklid/Cargo.toml
       docker_image_name: bloklid-anvil
       docker_image_format: skopeo
-      concurrency_group_suffix: anvil
+      concurrency_group_suffix: anvil-${{ github.event.pull_request.number || github.ref_name }}
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
   # Single aggregate merge gate: green only if every other job in this run
