@@ -37,7 +37,6 @@ config:
     subscription:
       eventBusCapacity: 1000
       shutdownSignalCapacity: 10
-      batchSize: 100
   api:
     playgroundEnabled: true
     gasMultiplier: 1.2

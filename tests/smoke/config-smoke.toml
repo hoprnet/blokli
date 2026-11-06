@@ -32,7 +32,6 @@ enable_safe_indexing = true
 
 # GraphQL subscription configuration
 [indexer.subscription]
-batch_size               = 50
 event_bus_capacity       = 100
 shutdown_signal_capacity = 10
 

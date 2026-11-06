@@ -143,10 +143,6 @@ event_bus_capacity = 1000
 # Typically a small value is sufficient (default: 10)
 shutdown_signal_capacity = 10
 
-# Batch size for Phase 1 historical channel queries
-# Higher values fetch more data per query but may increase latency (default: 100)
-batch_size = 100
-
 # API server configuration
 [api]
 # Enable or disable the GraphQL API server (default: true)
@@ -232,8 +228,6 @@ hopr_invalid_action_cooldown = "60s"
 enabled = true
 # Interval between keepalive comments (default: 15s)
 interval = "15s"
-# Comment text sent for keepalive messages (default: "keep-alive")
-text = "keep-alive"
 
 # Health check configuration for Kubernetes probes
 [api.health]

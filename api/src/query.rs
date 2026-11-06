@@ -529,42 +529,17 @@ impl QueryRoot {
             let db = ctx
                 .data::<DatabaseConnection>()
                 .map_err(|error| errors::context_error("DatabaseConnection", error))?;
-            let mut query = curvy_pending_note::Entity::find();
-            if let Some(block) = curvy::from_block(from_block)? {
-                query = query.filter(curvy_pending_note::Column::PublishedBlock.gte(block));
-            }
-            if let Some(cursor) = curvy::event_cursor(after)? {
-                if cursor.block_hash.is_some() {
-                    let anchored = curvy_pending_note::Entity::find()
-                        .filter(curvy_pending_note::Column::PublishedBlock.eq(cursor.block))
-                        .filter(curvy_pending_note::Column::PublishedTxIndex.eq(cursor.transaction_index))
-                        .filter(curvy_pending_note::Column::PublishedLogIndex.eq(cursor.log_index))
-                        .filter(curvy_pending_note::Column::EventItemIndex.eq(cursor.event_item_index))
-                        .one(db)
-                        .await
-                        .map_err(|error| errors::query_failed("validate Curvy cursor anchor", error))?;
-                    curvy::ensure_cursor_anchor(&cursor, anchored.as_ref().map(|row| row.block_hash.as_slice()))?;
-                }
-                query = query.filter(curvy::event_cursor_condition(
-                    curvy_pending_note::Column::PublishedBlock,
-                    curvy_pending_note::Column::PublishedTxIndex,
-                    curvy_pending_note::Column::PublishedLogIndex,
-                    curvy_pending_note::Column::EventItemIndex,
-                    cursor,
-                ));
-            }
-            let notes = query
-                .order_by_asc(curvy_pending_note::Column::PublishedBlock)
-                .order_by_asc(curvy_pending_note::Column::PublishedTxIndex)
-                .order_by_asc(curvy_pending_note::Column::PublishedLogIndex)
-                .order_by_asc(curvy_pending_note::Column::EventItemIndex)
-                .limit(curvy::page_limit(first)?)
-                .all(db)
-                .await
-                .map_err(|error| errors::query_failed("fetch Curvy pending notes", error))?
-                .into_iter()
-                .map(curvy::pending_note)
-                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let notes = curvy::event_page::<curvy_pending_note::Entity>(
+                db,
+                from_block,
+                after,
+                first,
+                "fetch Curvy pending notes",
+            )
+            .await?
+            .into_iter()
+            .map(curvy::pending_note)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
             Ok(CurvyPendingNotes { notes })
         }
         .await;
@@ -587,43 +562,17 @@ impl QueryRoot {
             let db = ctx
                 .data::<DatabaseConnection>()
                 .map_err(|error| errors::context_error("DatabaseConnection", error))?;
-            let mut query = curvy_committed_note::Entity::find();
-            if let Some(block) = curvy::from_block(from_block)? {
-                query = query.filter(curvy_committed_note::Column::PublishedBlock.gte(block));
-            }
-            if let Some(cursor) = curvy::event_cursor(after)? {
-                if cursor.block_hash.is_some() {
-                    let anchored = curvy_committed_note::Entity::find()
-                        .filter(curvy_committed_note::Column::PublishedBlock.eq(cursor.block))
-                        .filter(curvy_committed_note::Column::PublishedTxIndex.eq(cursor.transaction_index))
-                        .filter(curvy_committed_note::Column::PublishedLogIndex.eq(cursor.log_index))
-                        .filter(curvy_committed_note::Column::EventItemIndex.eq(cursor.event_item_index))
-                        .one(db)
-                        .await
-                        .map_err(|error| errors::query_failed("validate Curvy cursor anchor", error))?;
-                    curvy::ensure_cursor_anchor(&cursor, anchored.as_ref().map(|row| row.block_hash.as_slice()))?;
-                }
-                query = query.filter(curvy::event_cursor_condition(
-                    curvy_committed_note::Column::PublishedBlock,
-                    curvy_committed_note::Column::PublishedTxIndex,
-                    curvy_committed_note::Column::PublishedLogIndex,
-                    curvy_committed_note::Column::EventItemIndex,
-                    cursor,
-                ));
-            }
-
-            let notes = query
-                .order_by_asc(curvy_committed_note::Column::PublishedBlock)
-                .order_by_asc(curvy_committed_note::Column::PublishedTxIndex)
-                .order_by_asc(curvy_committed_note::Column::PublishedLogIndex)
-                .order_by_asc(curvy_committed_note::Column::EventItemIndex)
-                .limit(curvy::page_limit(first)?)
-                .all(db)
-                .await
-                .map_err(|error| errors::query_failed("fetch Curvy committed notes", error))?
-                .into_iter()
-                .map(curvy::committed_note)
-                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let notes = curvy::event_page::<curvy_committed_note::Entity>(
+                db,
+                from_block,
+                after,
+                first,
+                "fetch Curvy committed notes",
+            )
+            .await?
+            .into_iter()
+            .map(curvy::committed_note)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
             Ok(CurvyCommittedNotes { notes })
         }
         .await;
@@ -646,42 +595,17 @@ impl QueryRoot {
             let db = ctx
                 .data::<DatabaseConnection>()
                 .map_err(|error| errors::context_error("DatabaseConnection", error))?;
-            let mut query = curvy_committed_nullifier::Entity::find();
-            if let Some(block) = curvy::from_block(from_block)? {
-                query = query.filter(curvy_committed_nullifier::Column::PublishedBlock.gte(block));
-            }
-            if let Some(cursor) = curvy::event_cursor(after)? {
-                if cursor.block_hash.is_some() {
-                    let anchored = curvy_committed_nullifier::Entity::find()
-                        .filter(curvy_committed_nullifier::Column::PublishedBlock.eq(cursor.block))
-                        .filter(curvy_committed_nullifier::Column::PublishedTxIndex.eq(cursor.transaction_index))
-                        .filter(curvy_committed_nullifier::Column::PublishedLogIndex.eq(cursor.log_index))
-                        .filter(curvy_committed_nullifier::Column::EventItemIndex.eq(cursor.event_item_index))
-                        .one(db)
-                        .await
-                        .map_err(|error| errors::query_failed("validate Curvy cursor anchor", error))?;
-                    curvy::ensure_cursor_anchor(&cursor, anchored.as_ref().map(|row| row.block_hash.as_slice()))?;
-                }
-                query = query.filter(curvy::event_cursor_condition(
-                    curvy_committed_nullifier::Column::PublishedBlock,
-                    curvy_committed_nullifier::Column::PublishedTxIndex,
-                    curvy_committed_nullifier::Column::PublishedLogIndex,
-                    curvy_committed_nullifier::Column::EventItemIndex,
-                    cursor,
-                ));
-            }
-            let nullifiers = query
-                .order_by_asc(curvy_committed_nullifier::Column::PublishedBlock)
-                .order_by_asc(curvy_committed_nullifier::Column::PublishedTxIndex)
-                .order_by_asc(curvy_committed_nullifier::Column::PublishedLogIndex)
-                .order_by_asc(curvy_committed_nullifier::Column::EventItemIndex)
-                .limit(curvy::page_limit(first)?)
-                .all(db)
-                .await
-                .map_err(|error| errors::query_failed("fetch Curvy committed nullifiers", error))?
-                .into_iter()
-                .map(curvy::committed_nullifier)
-                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let nullifiers = curvy::event_page::<curvy_committed_nullifier::Entity>(
+                db,
+                from_block,
+                after,
+                first,
+                "fetch Curvy committed nullifiers",
+            )
+            .await?
+            .into_iter()
+            .map(curvy::committed_nullifier)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
             Ok(CurvyCommittedNullifiers { nullifiers })
         }
         .await;
