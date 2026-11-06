@@ -1242,6 +1242,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_get_safe_contract_by_module_address_ignores_replaced_module() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let safe_addr = random_address();
+        let old_module = random_address();
+        let new_module = random_address();
+        let chain_key = random_address();
+
+        db.upsert_safe_contract(None, safe_addr, old_module, chain_key, 100, 0, 0)
+            .await?;
+        db.update_safe_module_address(None, safe_addr, new_module, 200, 0, 0)
+            .await?;
+
+        assert!(
+            db.get_safe_contract_by_module_address(None, old_module)
+                .await?
+                .is_none(),
+            "a module the Safe no longer uses must not resolve"
+        );
+        let entry = db
+            .get_safe_contract_by_module_address(None, new_module)
+            .await?
+            .expect("current module should resolve");
+        assert_eq!(entry.address, safe_addr.as_ref().to_vec());
+        assert_eq!(entry.published_block, 200);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_safe_contract_by_module_address_prefers_newest_sharing_safe() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let module = random_address();
+        let chain_key = random_address();
+        let resolved = |entry: Option<SafeContractEntry>| entry.expect("shared module should resolve").address;
+
+        // Same block and transaction: the higher log index wins.
+        let safe_a = random_address();
+        let safe_b = random_address();
+        db.upsert_safe_contract(None, safe_a, module, chain_key, 100, 5, 0)
+            .await?;
+        db.upsert_safe_contract(None, safe_b, module, chain_key, 100, 5, 3)
+            .await?;
+        assert_eq!(
+            resolved(db.get_safe_contract_by_module_address(None, module).await?),
+            safe_b.as_ref().to_vec()
+        );
+
+        // Same block: a later transaction wins even with a lower log index.
+        let safe_c = random_address();
+        db.upsert_safe_contract(None, safe_c, module, chain_key, 100, 6, 1)
+            .await?;
+        assert_eq!(
+            resolved(db.get_safe_contract_by_module_address(None, module).await?),
+            safe_c.as_ref().to_vec()
+        );
+
+        // A later block wins regardless of transaction and log index.
+        let safe_d = random_address();
+        db.upsert_safe_contract(None, safe_d, module, chain_key, 101, 0, 0)
+            .await?;
+        assert_eq!(
+            resolved(db.get_safe_contract_by_module_address(None, module).await?),
+            safe_d.as_ref().to_vec()
+        );
+
+        // Moving the newest Safe to another module hands the shared module back to the next newest.
+        db.update_safe_module_address(None, safe_d, random_address(), 102, 0, 0)
+            .await?;
+        assert_eq!(
+            resolved(db.get_safe_contract_by_module_address(None, module).await?),
+            safe_c.as_ref().to_vec()
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_multiple_safes_isolation() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
 
