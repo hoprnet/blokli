@@ -620,6 +620,98 @@ mod tests {
         snapshot.assert_async().await;
     }
 
+    const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+    #[tokio::test]
+    async fn test_empty_file_matches_empty_digest_and_rejects_other() {
+        let temp_dir = TempDir::new().unwrap();
+        let source = temp_dir.path().join("empty.tar.xz");
+        fs::write(&source, b"").unwrap();
+        let url = format!("file://{}", source.display());
+        let downloader = SnapshotDownloader::new().unwrap();
+
+        let ok_target = temp_dir.path().join("ok.tar.xz");
+        downloader
+            .download_snapshot(&url, &ok_target, Some(EMPTY_SHA256))
+            .await
+            .expect("empty file should match the empty-input digest");
+
+        let bad_target = temp_dir.path().join("bad.tar.xz");
+        let result = downloader
+            .download_snapshot(&url, &bad_target, Some(&"1".repeat(64)))
+            .await;
+        assert!(
+            matches!(result, Err(SnapshotError::DigestMismatch { .. })),
+            "got {result:?}"
+        );
+        assert!(!bad_target.exists());
+    }
+
+    #[tokio::test]
+    async fn test_truncated_file_is_rejected_by_digest() {
+        let temp_dir = TempDir::new().unwrap();
+        let full = b"0123456789abcdef".repeat(1024);
+        let expected = {
+            let full_path = temp_dir.path().join("full");
+            fs::write(&full_path, &full).unwrap();
+            sha256_file_hex(&full_path).unwrap()
+        };
+        let source = temp_dir.path().join("truncated.tar.xz");
+        fs::write(&source, &full[..full.len() - 1]).unwrap();
+        let target = temp_dir.path().join("target.tar.xz");
+
+        let result = SnapshotDownloader::new()
+            .unwrap()
+            .download_snapshot(&format!("file://{}", source.display()), &target, Some(&expected))
+            .await;
+        match result {
+            Err(SnapshotError::DigestMismatch { expected: e, actual }) => {
+                assert_eq!(e, expected);
+                assert_ne!(actual, expected);
+            }
+            other => panic!("expected DigestMismatch, got {other:?}"),
+        }
+        assert!(!target.exists());
+    }
+
+    #[tokio::test]
+    async fn test_http_download_with_matching_uppercase_padded_digest() {
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path().join("snapshot.tar.xz");
+        let body = b"snapshot bytes";
+        let reference = temp_dir.path().join("reference");
+        fs::write(&reference, body).unwrap();
+        let digest = format!("\t{}\n", sha256_file_hex(&reference).unwrap().to_ascii_uppercase());
+
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("GET", "/snapshot")
+            .with_status(200)
+            .with_body(body)
+            .create_async()
+            .await;
+
+        SnapshotDownloader::new()
+            .unwrap()
+            .download_snapshot(&format!("{}/snapshot", server.url()), &target, Some(&digest))
+            .await
+            .expect("matching digest should pass over http");
+        assert_eq!(fs::read(&target).unwrap(), body);
+    }
+
+    #[tokio::test]
+    async fn test_whitespace_only_digest_is_rejected() {
+        let temp_dir = TempDir::new().unwrap();
+        let source = temp_dir.path().join("a.tar.xz");
+        fs::write(&source, b"x").unwrap();
+        let target = temp_dir.path().join("t.tar.xz");
+        let result = SnapshotDownloader::new()
+            .unwrap()
+            .download_snapshot(&format!("file://{}", source.display()), &target, Some("   "))
+            .await;
+        assert!(matches!(result, Err(SnapshotError::Configuration(_))), "got {result:?}");
+    }
+
     #[tokio::test]
     async fn test_enhanced_error_messages() {
         let temp_dir = TempDir::new().unwrap();

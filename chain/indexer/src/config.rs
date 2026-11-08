@@ -260,6 +260,15 @@ mod tests {
     }
 
     #[test]
+    fn test_snapshot_sha256_validated_even_when_snapshot_disabled() {
+        let mut cfg = IndexerConfig::new(0, true, false, false, false, None, "".to_string(), 1000, 10);
+        cfg.logs_snapshot_sha256 = Some("   ".to_string());
+        assert!(cfg.validate().is_err());
+        cfg.logs_snapshot_sha256 = Some(format!(" {} ", "AB".repeat(32)));
+        assert!(cfg.validate().is_ok(), "uppercase padded digest is accepted");
+    }
+
+    #[test]
     fn test_missing_snapshot_url() {
         let cfg = IndexerConfig::new(0, true, true, false, false, None, "".to_string(), 1000, 10);
 
