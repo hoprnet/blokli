@@ -1,0 +1,211 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Orb base setup for hoprnet/blokli.
+#
+# Installs a pinned version of Determinate Nix, realizes the Nix dev shell,
+# fetches Cargo dependencies, and activates the dev shell in login shells
+# started in the repo.
+#
+# Determinism: pinning the nix-installer release tag also pins the bundled
+# Determinate Nix version, so every orb gets the same toolchain.
+#
+# Idempotence: an existing install with the matching installer version is
+# detected via /nix/receipt.json and left untouched; anything else (e.g. the
+# base image's plain single-user Nix) is replaced.
+
+log() { printf '[blokli-setup] %s\n' "$*" >&2; }
+
+readonly NIX_INSTALLER_TAG="v3.24.1"
+readonly NIX_PROFILE="/nix/var/nix/profiles/default"
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+step() {
+  local name="$1"
+  shift
+  local start=$SECONDS
+  echo "==> $name"
+  "$@"
+  echo "<== $name ($((SECONDS - start))s)"
+}
+
+is_pinned_determinate_nix() {
+  # A receipt alone can remain after an interrupted install. Require the
+  # matching executable to run successfully before treating setup as complete.
+  [ -f /nix/receipt.json ] \
+    && grep -q "\"version\": \"${NIX_INSTALLER_TAG#v}\"" /nix/receipt.json \
+    && [ -x "${NIX_PROFILE}/bin/nix" ] \
+    && "${NIX_PROFILE}/bin/nix" --version | grep -Fq "Determinate Nix ${NIX_INSTALLER_TAG#v}"
+}
+
+install_determinate_nix() {
+  local installer
+  local previous_nix
+
+  log "Installing Determinate Nix (${NIX_INSTALLER_TAG})"
+  installer="$(mktemp)"
+  previous_nix="/nix.before-determinate-nix.$$"
+
+  # Download before replacing the base image's Nix store so a network failure
+  # never leaves the orb without a working Nix installation.
+  curl --proto '=https' --tlsv1.2 -sSf -L \
+    "https://install.determinate.systems/nix/tag/${NIX_INSTALLER_TAG}" \
+    -o "${installer}"
+
+  if [ -d /nix ]; then
+    sudo mv /nix "${previous_nix}"
+  fi
+
+  if ! sh "${installer}" install --no-confirm || ! is_pinned_determinate_nix; then
+    sudo rm -rf /nix
+    if [ -d "${previous_nix}" ]; then
+      sudo mv "${previous_nix}" /nix
+    fi
+    rm -f "${installer}"
+    log "Determinate Nix installation failed; restored the previous Nix store"
+    return 1
+  fi
+
+  sudo rm -rf "${previous_nix}"
+  rm -f "${installer}"
+
+  # The installer cannot update this running script's environment.
+  # shellcheck disable=SC1091
+  source "${NIX_PROFILE}/etc/profile.d/nix-daemon.sh"
+  log "Installed $(nix --version)"
+}
+
+expose_nix() {
+  # The installer intentionally relies on shell profiles. Amp commands run in
+  # non-interactive shells too, so expose every pinned executable on their PATH:
+  # `nix develop` shell hooks call tools such as nix-store, not only nix. The
+  # links point into the profile, so they follow later profile upgrades.
+  local executable
+  for executable in "${NIX_PROFILE}"/bin/*; do
+    sudo ln -sfn "${executable}" "/usr/local/bin/${executable##*/}"
+  done
+}
+
+# Appending to a file whose last line lacks a newline would join it to the first appended line.
+# Extra arguments, such as sudo, prefix the command that writes the file.
+ensure_trailing_newline() {
+  local file="$1"
+  shift
+  if [[ -s "$file" && -n "$(tail -c1 "$file")" ]]; then
+    echo | "$@" tee -a "$file" >/dev/null
+  fi
+}
+
+# Public binary caches that CI pushes to (see cachix_cache_name in .github/workflows).
+# The daemon trusts only root, so it ignores substituters from user config: add
+# them to the system config that Determinate Nix keeps for local settings.
+configure_caches() {
+  local conf="/etc/nix/nix.custom.conf"
+  local marker="# blokli binary caches"
+  if ! grep -Fqx "$marker" "$conf" 2>/dev/null; then
+    ensure_trailing_newline "$conf" sudo
+    sudo tee -a "$conf" >/dev/null <<'EOF'
+# blokli binary caches
+extra-substituters = https://blokli.cachix.org https://hoprnet.cachix.org
+extra-trusted-public-keys = blokli.cachix.org-1:SmgBcB1qdG60qBo7wnRFQamn6kfFKgtldkceAztqXlY= hoprnet.cachix.org-1:FzIaDwgsZOy42i2h0qyQ/k9kkggzoeTWmoo/2ehEr90=
+EOF
+    sudo systemctl restart nix-daemon.service
+  fi
+}
+
+# Keep the dev shell alive across garbage collection and record its environment.
+build_dev_shell() {
+  mkdir -p "$HOME/.cache/blokli"
+  nix print-dev-env --profile "$HOME/.cache/blokli/devshell" >/dev/null
+}
+
+fetch_cargo_deps() {
+  nix develop --command cargo fetch --locked
+}
+
+# Pre-build dependencies so the first `just check` / `just quick` in an orb is incremental.
+check_workspace() {
+  nix develop --command just check
+}
+
+# Login shells started inside the repo get the dev shell environment, so Amp's
+# commands and supervised services see the same tools as `nix develop`.
+# The block is rewritten on every run so changes to it reach existing orbs.
+install_profile_hook() {
+  local begin="# >>> blokli Nix development shell >>>"
+  local end="# <<< blokli Nix development shell <<<"
+  if [[ ! -e "$HOME/.bash_profile" ]]; then
+    # Bash reads only the first of these files, so keep loading the one it used before.
+    local previous
+    for previous in .bash_login .profile; do
+      if [[ -e "$HOME/$previous" ]]; then
+        echo ". \"\$HOME/$previous\"" >"$HOME/.bash_profile"
+        break
+      fi
+    done
+    touch "$HOME/.bash_profile"
+  fi
+  # sed deletes from an unclosed begin marker to the end of the file, so stop instead.
+  if ! awk -v b="$begin" -v e="$end" \
+    '$0 == b { if (open) bad = 1; open = 1 } $0 == e { if (!open) bad = 1; open = 0 } END { exit bad || open }' \
+    "$HOME/.bash_profile"; then
+    echo "$HOME/.bash_profile has unpaired '$begin' / '$end' lines; fix them and rerun." >&2
+    return 1
+  fi
+  # Edit the target of a symlinked profile instead of replacing the link.
+  sed -i --follow-symlinks "\|^$begin\$|,\|^$end\$|d" "$HOME/.bash_profile"
+  ensure_trailing_newline "$HOME/.bash_profile"
+  # Quote the paths for the shell that reads the hook, so no character in them is expanded.
+  local root nix
+  printf -v root '%q' "$repo_root"
+  printf -v nix '%q' "${NIX_PROFILE}/bin/nix"
+  cat >>"$HOME/.bash_profile" <<EOF
+$begin
+if [[ -z "\${IN_NIX_SHELL:-}" && ( "\$PWD" == $root || "\$PWD" == $root/* ) ]]; then
+  # Drop the shell hook's banner and the dirty-tree warning from every command.
+  eval "\$($nix print-dev-env --quiet --option warn-dirty false $root)" >/dev/null
+fi
+$end
+EOF
+}
+
+# Tell agents in the orb that the dev shell is already active.
+install_agent_notes() {
+  local notes="$HOME/.config/amp/AGENTS.md"
+  local marker="# blokli orb notes"
+  mkdir -p "$(dirname "$notes")"
+  if ! grep -Fqx "$marker" "$notes" 2>/dev/null; then
+    cat >>"$notes" <<'EOF'
+
+# blokli orb notes
+
+- Login shells inside the blokli checkout already load the Nix dev shell (`IN_NIX_SHELL` is set), so run `just`, `cargo`, `forge`, and
+  `psql` directly instead of wrapping them in `nix develop -c`.
+- After changing `flake.nix`, `flake.lock`, `nix/`, or `rust-toolchain.toml`, new commands pick up the change automatically; the first
+  one rebuilds the dev shell. A shell that already has the dev shell loaded, and any shell started from it, keeps the old one.
+EOF
+  fi
+}
+
+main() {
+  if is_pinned_determinate_nix; then
+    log "Determinate Nix ${NIX_INSTALLER_TAG} already installed; skipping install"
+  else
+    install_determinate_nix
+  fi
+
+  expose_nix
+
+  cd "$repo_root"
+  step "Configure Nix binary caches" configure_caches
+  step "Build Nix dev shell" build_dev_shell
+  step "Fetch Cargo dependencies" fetch_cargo_deps
+  step "Install login shell hook" install_profile_hook
+  step "Install agent notes" install_agent_notes
+  step "Check workspace" check_workspace
+
+  log "Setup complete"
+}
+
+main "$@"

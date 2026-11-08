@@ -7,9 +7,11 @@
 
 use async_graphql::ErrorExtensions;
 use blokli_api_types::{
-    ContractNotAllowedError, FunctionNotAllowedError, InvalidAddressError, InvalidTransactionIdError,
-    MissingFilterError, QueryFailedError, RpcError, TimeoutError,
+    ContractNotAllowedError, FunctionNotAllowedError, HoprActionRejectedError, HoprActionThrottledError,
+    InvalidAddressError, InvalidTransactionIdError, MissingFilterError, OverloadedError, QueryFailedError, RpcError,
+    TimeoutError,
 };
+use blokli_chain_api::broadcast_error::{BroadcastRejection, classify_broadcast_error};
 use thiserror::Error;
 
 // ============================================================================
@@ -82,6 +84,25 @@ pub mod codes {
     /// Blockchain RPC operation errors
     pub const RPC_ERROR: &str = "RPC_ERROR";
 
+    /// The RPC node already holds this exact transaction
+    pub const ALREADY_KNOWN: &str = "ALREADY_KNOWN";
+
+    /// The RPC node refused the transaction: another one with the same nonce is pending and
+    /// this one does not pay enough more to replace it
+    pub const REPLACEMENT_UNDERPRICED: &str = "REPLACEMENT_UNDERPRICED";
+
+    /// The RPC node refused the transaction: its nonce was already used
+    pub const NONCE_TOO_LOW: &str = "NONCE_TOO_LOW";
+
+    /// The RPC node refused the transaction: its nonce is ahead of the signer's next nonce
+    pub const NONCE_TOO_HIGH: &str = "NONCE_TOO_HIGH";
+
+    /// The RPC node refused the transaction: its fees are below the base fee or the node's minimum
+    pub const FEE_TOO_LOW: &str = "FEE_TOO_LOW";
+
+    /// The RPC node refused the transaction: the signer cannot pay for its gas
+    pub const INSUFFICIENT_FUNDS: &str = "INSUFFICIENT_FUNDS";
+
     /// Generic internal server errors
     pub const INTERNAL_ERROR: &str = "INTERNAL_ERROR";
 
@@ -93,6 +114,15 @@ pub mod codes {
 
     /// Operation timeout
     pub const TIMEOUT: &str = "TIMEOUT";
+
+    /// Transaction submission capacity is exhausted; the client should retry later
+    pub const SUBMISSION_CAPACITY_EXCEEDED: &str = "SUBMISSION_CAPACITY_EXCEEDED";
+
+    /// A supported HOPR action failed Blokli's deterministic preflight.
+    pub const HOPR_ACTION_REJECTED: &str = "HOPR_ACTION_REJECTED";
+
+    /// Repeated invalid HOPR submissions from one signer are temporarily suppressed.
+    pub const HOPR_ACTION_THROTTLED: &str = "HOPR_ACTION_THROTTLED";
 
     /// Invalid transaction ID format
     pub const INVALID_TRANSACTION_ID: &str = "INVALID_TRANSACTION_ID";
@@ -258,6 +288,11 @@ pub mod messages {
             "{} limit exceeded: {} exceeds the maximum of {}; narrow the query with a filter",
             resource, actual, max
         )
+    }
+
+    /// Transaction submission capacity exhausted message
+    pub fn submission_capacity_exceeded() -> String {
+        "Transaction submission capacity is exhausted; retry later".to_string()
     }
 
     /// Ticket parameters missing or incomplete message
@@ -566,6 +601,74 @@ pub fn rpc_error_with_message(message: impl Into<String>) -> RpcError {
     }
 }
 
+/// Creates an RpcError for a raw transaction the RPC node refused to accept
+///
+/// The code identifies the refusal reason when the node's message is recognised, and is
+/// `RPC_ERROR` otherwise (transport failures, unrecognised messages).
+pub fn rpc_broadcast_error(message: impl Into<String>) -> RpcError {
+    let message = message.into();
+    let code = match classify_broadcast_error(&message) {
+        Some(BroadcastRejection::AlreadyKnown) => codes::ALREADY_KNOWN,
+        Some(BroadcastRejection::ReplacementUnderpriced) => codes::REPLACEMENT_UNDERPRICED,
+        Some(BroadcastRejection::NonceTooLow) => codes::NONCE_TOO_LOW,
+        Some(BroadcastRejection::NonceTooHigh) => codes::NONCE_TOO_HIGH,
+        Some(BroadcastRejection::FeeTooLow) => codes::FEE_TOO_LOW,
+        Some(BroadcastRejection::InsufficientFunds) => codes::INSUFFICIENT_FUNDS,
+        None => codes::RPC_ERROR,
+    };
+    RpcError {
+        code: code.to_string(),
+        message,
+    }
+}
+
+/// Creates an Overloaded error for an exhausted transaction submission capacity
+/// This is a transient, retryable condition rather than an internal failure, so
+/// it carries its own code instead of `INTERNAL_ERROR`.
+pub fn submission_capacity_exceeded() -> OverloadedError {
+    OverloadedError {
+        code: codes::SUBMISSION_CAPACITY_EXCEEDED.to_string(),
+        message: messages::submission_capacity_exceeded(),
+    }
+}
+
+/// Creates a HoprActionRejectedError for a deterministic HOPR preflight failure.
+///
+/// `operation` and `reason` are fixed-cardinality strings produced by the chain-api policy,
+/// never client input, so they are safe to surface verbatim.
+pub fn hopr_action_rejected(operation: &str, reason_code: &str, reason_message: &str) -> HoprActionRejectedError {
+    HoprActionRejectedError {
+        code: codes::HOPR_ACTION_REJECTED.to_string(),
+        message: format!("HOPR {operation} rejected before broadcast: {reason_message}"),
+        operation: operation.to_string(),
+        reason: reason_code.to_string(),
+    }
+}
+
+/// Creates a HoprActionThrottledError for a signer on invalid-action cooldown.
+pub fn hopr_action_throttled(
+    operation: &str,
+    reason_code: &str,
+    reason_message: &str,
+    retry_after: std::time::Duration,
+) -> HoprActionThrottledError {
+    // Rounded up, not truncated: a sub-second cooldown reported as `0` would invite an
+    // immediate retry that is refused again. Saturating at i32::MAX, since a cooldown that
+    // long is not representable in GraphQL and is not a configuration we support.
+    let whole_seconds = retry_after.as_secs() + u64::from(retry_after.subsec_nanos() > 0);
+    let retry_after_seconds = i32::try_from(whole_seconds).unwrap_or(i32::MAX);
+    HoprActionThrottledError {
+        code: codes::HOPR_ACTION_THROTTLED.to_string(),
+        message: format!(
+            "HOPR {operation} is temporarily suppressed after repeated invalid submissions ({reason_message}); retry \
+             in {retry_after_seconds}s"
+        ),
+        operation: operation.to_string(),
+        reason: reason_code.to_string(),
+        retry_after_seconds,
+    }
+}
+
 /// Creates an RpcError for internal errors
 pub fn rpc_internal_error(error: impl std::fmt::Display) -> RpcError {
     RpcError {
@@ -608,4 +711,34 @@ pub fn feature_disabled(feature: &str) -> async_graphql::Error {
 pub fn transaction_not_found(transaction_id: impl std::fmt::Display) -> async_graphql::Error {
     async_graphql::Error::new(messages::not_found("Transaction", transaction_id))
         .extend_with(|_, e| e.set("code", codes::NOT_FOUND))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rpc_broadcast_error_codes_recognised_refusals() {
+        let cases = [
+            ("RPC error: nonce too low", codes::NONCE_TOO_LOW),
+            (
+                "RPC error: replacement transaction underpriced",
+                codes::REPLACEMENT_UNDERPRICED,
+            ),
+            (
+                "RPC error: max fee per gas less than block base fee",
+                codes::FEE_TOO_LOW,
+            ),
+            (
+                "RPC error: insufficient funds for gas * price + value",
+                codes::INSUFFICIENT_FUNDS,
+            ),
+            ("RPC error: error sending request for url", codes::RPC_ERROR),
+        ];
+        for (message, code) in cases {
+            let error = rpc_broadcast_error(message);
+            assert_eq!(error.code, code, "{message}");
+            assert_eq!(error.message, message);
+        }
+    }
 }

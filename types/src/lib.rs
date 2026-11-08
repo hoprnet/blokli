@@ -621,6 +621,63 @@ pub struct ChannelUpdate {
     pub source: Account,
     /// Destination account of the channel
     pub destination: Account,
+    /// Position of the channel state this update carries. Not part of the API; the graph subscription turns it
+    /// into the resume cursor of an entry.
+    #[graphql(skip)]
+    pub position: Option<ChannelStatePosition>,
+}
+
+/// Position of a channel state change in the indexed chain: the log that produced it.
+///
+/// Positions are ordered by block, then transaction index, then log index.
+#[derive(SimpleObject, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChannelStatePosition {
+    /// Block number containing the log.
+    pub block: UInt64,
+    /// Zero-based transaction index inside the block.
+    #[graphql(name = "transactionIndex")]
+    pub transaction_index: UInt64,
+    /// Zero-based log index inside the transaction receipt.
+    #[graphql(name = "logIndex")]
+    pub log_index: UInt64,
+}
+
+/// Exclusive resume cursor for the `openedChannelGraphUpdated` subscription.
+///
+/// Pass the `cursor` of the last entry received to get every channel change after it.
+#[derive(InputObject, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChannelStateCursor {
+    /// Block number containing the log.
+    pub block: UInt64,
+    /// Zero-based transaction index inside the block.
+    #[graphql(name = "transactionIndex")]
+    pub transaction_index: UInt64,
+    /// Zero-based log index inside the transaction receipt.
+    #[graphql(name = "logIndex")]
+    pub log_index: UInt64,
+}
+
+impl ChannelStatePosition {
+    /// Builds a position from the `published_*` columns of a channel state row.
+    ///
+    /// Fails if a value is negative, which the database never stores.
+    pub fn from_published(block: i64, tx_index: i64, log_index: i64) -> Result<Self, std::num::TryFromIntError> {
+        Ok(Self {
+            block: UInt64(u64::try_from(block)?),
+            transaction_index: UInt64(u64::try_from(tx_index)?),
+            log_index: UInt64(u64::try_from(log_index)?),
+        })
+    }
+}
+
+impl From<ChannelStatePosition> for ChannelStateCursor {
+    fn from(position: ChannelStatePosition) -> Self {
+        Self {
+            block: position.block,
+            transaction_index: position.transaction_index,
+            log_index: position.log_index,
+        }
+    }
 }
 
 /// A single edge in the opened payment channels graph
@@ -632,7 +689,8 @@ pub struct ChannelUpdate {
 /// **Structure:**
 /// - Each entry contains exactly one channel with its source and destination accounts
 /// - If multiple channels exist between the same account pair, each is emitted as a separate entry
-/// - The channel is always open (closed channels are not included)
+/// - The initial snapshot holds only open and pending-to-close channels; later updates and a resumed subscription also
+///   carry closed channels
 ///
 /// **Usage in subscriptions:**
 /// The `openedChannelGraphUpdated` subscription streams these entries one at a time.
@@ -646,6 +704,11 @@ pub struct OpenedChannelsGraphEntry {
     pub source: Account,
     /// Destination account (recipient end of the directed edge)
     pub destination: Account,
+    /// Where to resume the subscription after this entry: pass it as `after` when reconnecting.
+    ///
+    /// Set on every live update and on every resumed entry. In the initial snapshot only the last entry has it, so
+    /// that a client cut off in the middle of the snapshot starts over instead of skipping channels.
+    pub cursor: Option<ChannelStatePosition>,
 }
 
 /// HOPR token balance information for a specific address
@@ -768,6 +831,15 @@ pub struct RpcError {
     pub message: String,
 }
 
+/// Transaction submission capacity exceeded (transient, retryable error)
+#[derive(SimpleObject, Clone, Debug)]
+pub struct OverloadedError {
+    /// Error code
+    pub code: String,
+    /// Human-readable error message
+    pub message: String,
+}
+
 /// Target contract not in allowlist
 #[derive(SimpleObject, Clone, Debug)]
 pub struct ContractNotAllowedError {
@@ -793,6 +865,55 @@ pub struct FunctionNotAllowedError {
     /// Function selector that was rejected
     #[graphql(name = "functionSelector")]
     pub function_selector: String,
+}
+
+/// A supported HOPR action was refused by Blokli's deterministic preflight.
+///
+/// The transaction was never broadcast: no reachable chain state would have made the call
+/// succeed. Re-submitting the same action without first changing the on-chain state will be
+/// refused again.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct HoprActionRejectedError {
+    /// Error code
+    pub code: String,
+    /// Human-readable error message
+    pub message: String,
+    /// The decoded HOPR operation that was refused
+    pub operation: String,
+    /// Stable code for the precondition that failed
+    pub reason: String,
+}
+
+/// Repeated deterministically invalid submissions from this signer are temporarily suppressed.
+///
+/// The transaction was not broadcast. Unlike [`HoprActionRejectedError`] this is transient:
+/// the same action may be submitted again after `retryAfterSeconds`.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct HoprActionThrottledError {
+    /// Error code
+    pub code: String,
+    /// Human-readable error message
+    pub message: String,
+    /// The decoded HOPR operation that was suppressed
+    pub operation: String,
+    /// Stable code for the precondition that most recently failed
+    pub reason: String,
+    /// Seconds until this signer may submit this operation again
+    #[graphql(name = "retryAfterSeconds")]
+    pub retry_after_seconds: i32,
+}
+
+/// An equivalent logical HOPR action was already in flight, so nothing was broadcast.
+///
+/// Retries of a HOPR action are re-signed with a new nonce, so they are distinct raw
+/// transactions describing one intent. Blokli returns the transaction already tracking that
+/// intent instead of submitting a competing copy.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct DeduplicatedTransaction {
+    /// The transaction already tracking this logical action
+    pub transaction: Transaction,
+    /// The decoded HOPR operation that was deduplicated
+    pub operation: String,
 }
 
 /// Operation timed out
@@ -1379,6 +1500,7 @@ impl From<&blokli_chain_types::ContractAddresses> for ContractAddressMap {
             ("curvy_aggregator", &addresses.curvy_aggregator),
             ("curvy_portal_factory", &addresses.curvy_portal_factory),
             ("curvy_vault", &addresses.curvy_vault),
+            ("curvy_shield_router", &addresses.curvy_shield_router),
             ("service_registry", &addresses.service_registry),
         ]
         .into_iter()

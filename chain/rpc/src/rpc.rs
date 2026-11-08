@@ -30,13 +30,17 @@ use hopr_bindings::{
     },
     hopr_node_safe_registry::HoprNodeSafeRegistry,
 };
+#[cfg(all(feature = "telemetry", not(test)))]
+use hopr_types::telemetry::SimpleGauge;
 use hopr_types::{
     crypto::prelude::Hash,
     internal::prelude::{EncodedWinProb, WinningProbability},
     primitive::prelude::*,
 };
 use serde::{Deserialize, Serialize};
-use tracing::{debug, warn};
+#[cfg(all(feature = "telemetry", not(test)))]
+use tracing::error;
+use tracing::{debug, info, warn};
 use url::Url;
 use validator::Validate;
 
@@ -80,11 +84,31 @@ sol!(
     }
 );
 
+#[cfg(all(feature = "telemetry", not(test)))]
+lazy_static::lazy_static! {
+    static ref METRIC_RPC_LOG_BLOCK_RANGE: Option<SimpleGauge> =
+        SimpleGauge::new(
+            "blokli_rpc_log_block_range",
+            "Number of blocks per eth_getLogs request currently used by the adaptive log block range",
+    ).inspect_err(|error| error!(%error, metric = "blokli_rpc_log_block_range", "failed to register telemetry metric")).ok();
+}
+
+fn set_log_block_range_metric(_block_range: u64) {
+    #[cfg(all(feature = "telemetry", not(test)))]
+    if let Some(metric) = METRIC_RPC_LOG_BLOCK_RANGE.as_ref() {
+        metric.set(_block_range as f64);
+    }
+}
+
 /// Default gas oracle URL for Gnosis chain.
 pub const DEFAULT_GAS_ORACLE_URL: &str = "https://ggnosis.blockscan.com/gasapi.ashx?apikey=key&method=gasoracle";
 
 /// Default upper bound for adaptive `eth_getLogs` block range discovery.
 pub const DEFAULT_AUTO_LOG_BLOCK_RANGE_CAP: u64 = 10_000;
+
+/// Default number of consecutive successful requests at a reduced `eth_getLogs` block range after which a larger
+/// range is probed again.
+pub const DEFAULT_LOG_BLOCK_RANGE_REPROBE_INTERVAL: u64 = 100;
 
 /// Configuration of the RPC related parameters.
 #[derive(Clone, Debug, PartialEq, Eq, smart_default::SmartDefault, Serialize, Deserialize, Validate)]
@@ -112,6 +136,15 @@ pub struct RpcOperationsConfig {
     #[validate(range(min = 0))]
     #[default = 2000]
     pub max_block_range_fetch_size: u64,
+    /// Number of consecutive successful `eth_getLogs` requests spanning the full stable block range below the ceiling
+    /// after which a larger range is probed again. Shorter requests, such as those near the chain head, do not count.
+    ///
+    /// Endpoint limits can depend on the number of logs in a range, so a range reduced in a dense region of the chain
+    /// must be able to grow again once that region has passed. A value of `0` disables upward probing.
+    ///
+    /// Defaults to [`DEFAULT_LOG_BLOCK_RANGE_REPROBE_INTERVAL`].
+    #[default(DEFAULT_LOG_BLOCK_RANGE_REPROBE_INTERVAL)]
+    pub log_block_range_reprobe_interval: u64,
     /// Interval for polling on TX submission
     ///
     /// Defaults to 7 seconds.
@@ -185,11 +218,13 @@ pub(crate) struct LogBlockRangeLimit {
     last_working: u64,
     first_failing: Option<u64>,
     stable: Option<u64>,
+    stable_successes: u64,
+    reprobe_interval: u64,
     warned_single_block: bool,
 }
 
 impl LogBlockRangeLimit {
-    fn new(configured_cap: u64) -> Self {
+    fn new(configured_cap: u64, reprobe_interval: u64) -> Self {
         let cap = sanitize_log_block_range_cap(configured_cap);
 
         Self {
@@ -198,6 +233,8 @@ impl LogBlockRangeLimit {
             last_working: 0,
             first_failing: None,
             stable: None,
+            stable_successes: 0,
+            reprobe_interval,
             warned_single_block: false,
         }
     }
@@ -213,11 +250,31 @@ impl LogBlockRangeLimit {
             return None;
         }
 
+        match self.stable {
+            Some(stable) if stable < self.cap && requested_span == stable && attempted_limit == stable => {
+                self.stable_successes += 1;
+
+                if self.reprobe_interval > 0 && self.stable_successes >= self.reprobe_interval {
+                    // Keep the stable range as the known-good lower bound and search upward towards the ceiling.
+                    let above_cap = self.cap.saturating_add(1);
+                    self.stable = None;
+                    self.stable_successes = 0;
+                    self.last_working = stable;
+                    self.first_failing = Some(above_cap);
+                    self.candidate = next_probe(stable, above_cap);
+                    self.warned_single_block = false;
+                }
+
+                return None;
+            }
+            _ => {}
+        }
+
         match self.first_failing {
             Some(first_failing) if requested_span < first_failing => {
                 self.last_working = self.last_working.max(requested_span);
 
-                if self.last_working + 1 >= first_failing {
+                if self.last_working.saturating_add(1) >= first_failing {
                     let stable = self.last_working.max(1);
                     self.stable = Some(stable);
                     self.candidate = stable;
@@ -245,6 +302,7 @@ impl LogBlockRangeLimit {
 
     fn record_failure(&mut self, requested_span: u64) -> LogBlockRangeFailureUpdate {
         let failed_span = requested_span.max(1).min(self.cap);
+        self.stable_successes = 0;
 
         if failed_span <= 1 {
             self.first_failing = Some(1);
@@ -258,6 +316,7 @@ impl LogBlockRangeLimit {
             return LogBlockRangeFailureUpdate {
                 next_limit: 1,
                 retry: false,
+                confirm_failure: false,
                 warn_single_block,
             };
         }
@@ -279,8 +338,48 @@ impl LogBlockRangeLimit {
         LogBlockRangeFailureUpdate {
             next_limit: self.current(),
             retry: self.current() < failed_span,
+            confirm_failure: false,
             warn_single_block: false,
         }
+    }
+
+    /// Records a failed request whose error is not a known range limit error. Such an error may be transient (a
+    /// timeout, a rate limit, an outage) or a range rejection the endpoint reports in an unrecognized way.
+    ///
+    /// A multi-block request is treated as possibly too large when it used the full current limit, was larger than
+    /// any range known to work, or failed again when retried unchanged (`repeated`). A smaller request within the
+    /// proven range, such as one near the chain head, is first retried unchanged by the caller, so a transient error
+    /// neither shrinks the range nor reaches the indexer's failure handling. Returns `None` when the failure is not
+    /// a range signal.
+    fn record_unrecognized_failure(
+        &mut self,
+        requested_span: u64,
+        attempted_limit: u64,
+        repeated: bool,
+    ) -> Option<LogBlockRangeFailureUpdate> {
+        self.stable_successes = 0;
+
+        if requested_span <= 1 {
+            if attempted_limit <= 1 {
+                // Even a single block failed, so the endpoint is failing rather than rejecting the range. Restart the
+                // discovery from the ceiling so that an outage does not leave the range at a single block.
+                *self = Self::new(self.cap, self.reprobe_interval);
+            }
+
+            return None;
+        }
+
+        let beyond_proven_range = requested_span == attempted_limit || requested_span > self.last_working;
+        if beyond_proven_range || repeated {
+            return Some(self.record_failure(requested_span));
+        }
+
+        Some(LogBlockRangeFailureUpdate {
+            next_limit: self.current(),
+            retry: true,
+            confirm_failure: true,
+            warn_single_block: false,
+        })
     }
 }
 
@@ -288,6 +387,8 @@ impl LogBlockRangeLimit {
 pub(crate) struct LogBlockRangeFailureUpdate {
     pub next_limit: u64,
     pub retry: bool,
+    /// The failed range is retried unchanged once to tell a transient failure from a rejection.
+    pub confirm_failure: bool,
     pub warn_single_block: bool,
 }
 
@@ -300,7 +401,7 @@ fn sanitize_log_block_range_cap(configured_cap: u64) -> u64 {
 }
 
 fn next_probe(last_working: u64, first_failing: u64) -> u64 {
-    if last_working + 1 >= first_failing {
+    if last_working.saturating_add(1) >= first_failing {
         last_working.max(1)
     } else {
         (last_working + ((first_failing - last_working) / 2)).max(1)
@@ -382,19 +483,24 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
 
         debug!(contract_addresses = ?cfg.contract_addrs, "configured contract addresses");
 
+        let log_block_range_limit =
+            LogBlockRangeLimit::new(cfg.max_block_range_fetch_size, cfg.log_block_range_reprobe_interval);
+        set_log_block_range_metric(log_block_range_limit.current());
+
         Ok(Self {
             contract_instances: Arc::new(ContractInstances::new(
                 &cfg.contract_addrs,
                 provider.clone(),
                 use_dummy_nr.unwrap_or(cfg!(test)),
             )),
-            log_block_range_limit: Arc::new(Mutex::new(LogBlockRangeLimit::new(cfg.max_block_range_fetch_size))),
+            log_block_range_limit: Arc::new(Mutex::new(log_block_range_limit)),
             cfg,
             provider: Arc::new(provider),
         })
     }
 
-    /// Resolves the Curvy Vault and optional PortalFactory from the configured Aggregator proxy.
+    /// Resolves the Curvy Vault and optional PortalFactory from the configured Aggregator proxy, and the shield
+    /// router from its one canonical address.
     ///
     /// The Aggregator is the sole Curvy bootstrap address. Resolution happens once
     /// during daemon startup so the indexer and GraphQL API share one validated
@@ -416,13 +522,29 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
             warn!("Curvy Aggregator returned the zero address for Curvy PortalFactory");
         }
 
+        // The shield router is not configured anywhere: its init code takes no arguments and deploys through CreateX
+        // under a chain-agnostic salt, so it can only ever be at this one address. Published only when code is
+        // there, because an ERC-777 `send` to an empty address succeeds and would strand the shield.
+        let expected_shield_router = curvy_bindings::config::shield_router_address();
+        let shield_router_address = if self.provider.get_code_at(expected_shield_router).await?.is_empty() {
+            warn!(
+                shield_router = %expected_shield_router,
+                "no Curvy shield router is deployed on this network; nodes cannot shield directly from their Safe"
+            );
+            AlloyAddress::ZERO
+        } else {
+            expected_shield_router
+        };
+
         self.cfg.contract_addrs.curvy_vault = vault_address.to_hopr_address();
         self.cfg.contract_addrs.curvy_portal_factory = portal_factory_address.to_hopr_address();
+        self.cfg.contract_addrs.curvy_shield_router = shield_router_address.to_hopr_address();
 
         debug!(
             aggregator = %aggregator_address,
             vault = %vault_address,
             portal_factory = %portal_factory_address,
+            shield_router = %shield_router_address,
             "resolved Curvy contract addresses from Aggregator"
         );
 
@@ -520,9 +642,11 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         let code = provider.get_code_at(address_alloy).await?;
 
         if code.is_empty() {
-            // Empty code means EOA (Externally Owned Account), use eth_getTransactionCount
+            // Empty code means EOA (Externally Owned Account), use eth_getTransactionCount.
+            // Pending, so a client signing its next transaction does not reuse the nonce of one
+            // still in the mempool.
             debug!(%address, "address has no code, using eth_getTransactionCount");
-            let tx_count = provider.get_transaction_count(address_alloy).await?;
+            let tx_count = provider.get_transaction_count(address_alloy).pending().await?;
             return Ok(tx_count);
         }
 
@@ -563,7 +687,9 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
                          eth_getTransactionCount. Error: {:?}",
                         address, e
                     );
-                    let tx_count = provider.get_transaction_count(address_alloy).await?;
+                    // Pending for the same reason as EOAs: this path also serves EOAs with
+                    // delegated code (EIP-7702).
+                    let tx_count = provider.get_transaction_count(address_alloy).pending().await?;
                     Ok(tx_count)
                 } else {
                     // Real error (RPC failure, network issue, etc.) - propagate it
@@ -629,8 +755,8 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
     }
 
     pub(crate) fn record_log_block_range_success(&self, requested_span: u64, attempted_limit: u64) {
-        let stable =
-            self.with_log_block_range_limit(|range_limit| range_limit.record_success(requested_span, attempted_limit));
+        let stable = self
+            .update_log_block_range_limit(|range_limit| range_limit.record_success(requested_span, attempted_limit));
 
         if let Some(stable) = stable {
             debug!(
@@ -641,29 +767,87 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         }
     }
 
+    /// Records a failed `eth_getLogs` request and returns whether it should be retried with a smaller block range.
+    ///
+    /// Endpoints report an oversized range in many ways (dedicated error codes, HTTP 413, gateway timeouts, plain
+    /// server errors), so a failure of a multi-block request that used the full current limit is treated as a range
+    /// signal even when the error is not a known range limit error. Retrying the same range would only fail again
+    /// until the indexer gives up. Other failures are only range signals when the endpoint explicitly reports a range
+    /// limit. `repeated` tells whether the same block range failed on the previous attempt.
     pub(crate) fn record_log_block_range_failure(
         &self,
         requested_span: u64,
+        attempted_limit: u64,
+        repeated: bool,
         error: &RpcError,
-    ) -> LogBlockRangeFailureUpdate {
-        let update = self.with_log_block_range_limit(|range_limit| range_limit.record_failure(requested_span));
+    ) -> bool {
+        let is_range_limit_error = is_log_block_range_limit_error(error);
+        let update = self.update_log_block_range_limit(|range_limit| {
+            if is_range_limit_error {
+                Some(range_limit.record_failure(requested_span))
+            } else {
+                range_limit.record_unrecognized_failure(requested_span, attempted_limit, repeated)
+            }
+        });
 
-        if update.warn_single_block {
+        let Some(update) = update else {
+            return false;
+        };
+
+        if update.confirm_failure {
+            warn!(
+                failed_block_range = requested_span,
+                error = %error,
+                "eth_getLogs failed for block range; retrying it once before treating the range as the cause"
+            );
+        } else if update.warn_single_block {
             warn!(
                 error = %error,
                 "RPC rejected a single-block eth_getLogs request; continuing in single-block mode, but this mode of \
                  operation is very slow"
             );
-        } else {
+        } else if is_range_limit_error {
             warn!(
                 failed_block_range = requested_span,
                 next_block_range = update.next_limit,
                 error = %error,
                 "RPC rejected eth_getLogs block range; adapting block range limit"
             );
+        } else {
+            warn!(
+                failed_block_range = requested_span,
+                next_block_range = update.next_limit,
+                error = %error,
+                "eth_getLogs failed for block range; reducing block range limit in case the range is the cause"
+            );
         }
 
-        update
+        update.retry
+    }
+
+    /// Applies an observation to the adaptive log block range and reports a change of the usable block range.
+    fn update_log_block_range_limit<T, F>(&self, action: F) -> T
+    where
+        F: FnOnce(&mut LogBlockRangeLimit) -> T,
+    {
+        self.with_log_block_range_limit(|range_limit| {
+            let previous_block_range = range_limit.current();
+            let result = action(range_limit);
+            let block_range = range_limit.current();
+
+            // Reported while holding the lock, so concurrent updates are logged and exported in order.
+            if block_range != previous_block_range {
+                info!(
+                    previous_block_range,
+                    block_range,
+                    configured_cap = range_limit.cap,
+                    "usable eth_getLogs block range changed"
+                );
+                set_log_block_range_metric(block_range);
+            }
+
+            result
+        })
     }
 
     fn with_log_block_range_limit<T, F>(&self, action: F) -> T
@@ -1000,8 +1184,8 @@ mod tests {
     use serde_json::value::RawValue;
 
     use super::{
-        DEFAULT_AUTO_LOG_BLOCK_RANGE_CAP, LogBlockRangeLimit, is_curvy_token_not_registered,
-        is_log_block_range_limit_error,
+        DEFAULT_AUTO_LOG_BLOCK_RANGE_CAP, DEFAULT_LOG_BLOCK_RANGE_REPROBE_INTERVAL as REPROBE_INTERVAL,
+        LogBlockRangeLimit, is_curvy_token_not_registered, is_log_block_range_limit_error,
     };
     use crate::errors::RpcError;
 
@@ -1026,7 +1210,7 @@ mod tests {
     }
 
     fn converge_limit(cap: u64, allowed_limit: u64) -> LogBlockRangeLimit {
-        let mut range_limit = LogBlockRangeLimit::new(cap);
+        let mut range_limit = LogBlockRangeLimit::new(cap, REPROBE_INTERVAL);
 
         for _ in 0..64 {
             let candidate = range_limit.current();
@@ -1047,7 +1231,7 @@ mod tests {
 
     #[test]
     fn test_log_block_range_limit_uses_default_cap_for_zero_config() {
-        let range_limit = LogBlockRangeLimit::new(0);
+        let range_limit = LogBlockRangeLimit::new(0, REPROBE_INTERVAL);
 
         assert_eq!(range_limit.current(), DEFAULT_AUTO_LOG_BLOCK_RANGE_CAP);
     }
@@ -1064,7 +1248,7 @@ mod tests {
 
     #[test]
     fn test_log_block_range_limit_reports_stable_limit_once() {
-        let mut range_limit = LogBlockRangeLimit::new(10_000);
+        let mut range_limit = LogBlockRangeLimit::new(10_000, REPROBE_INTERVAL);
 
         assert_eq!(range_limit.record_success(10_000, 10_000), Some(10_000));
         assert_eq!(range_limit.record_success(10_000, 10_000), None);
@@ -1100,12 +1284,172 @@ mod tests {
 
     #[test]
     fn test_log_block_range_limit_single_block_failure_keeps_single_block_mode() {
-        let mut range_limit = LogBlockRangeLimit::new(10_000);
+        let mut range_limit = LogBlockRangeLimit::new(10_000, REPROBE_INTERVAL);
         let update = range_limit.record_failure(1);
 
         assert!(!update.retry);
         assert!(update.warn_single_block);
         assert_eq!(range_limit.current(), 1);
+    }
+
+    /// Sends `requests` full-span requests against an endpoint that accepts at most `allowed_limit` blocks and
+    /// returns the number of rejected requests. Every rejected multi-block request must be retryable with a smaller
+    /// range, otherwise the error would reach the indexer loop.
+    fn send_requests(range_limit: &mut LogBlockRangeLimit, allowed_limit: u64, requests: usize) -> usize {
+        let mut failures = 0;
+
+        for _ in 0..requests {
+            let candidate = range_limit.current();
+            assert!((1..=range_limit.cap).contains(&candidate));
+
+            if candidate <= allowed_limit {
+                range_limit.record_success(candidate, candidate);
+            } else {
+                failures += 1;
+                let update = range_limit.record_failure(candidate);
+                assert!(
+                    update.retry,
+                    "rejected range {candidate} must be retried with a smaller range"
+                );
+                assert!(update.next_limit < candidate);
+            }
+        }
+
+        failures
+    }
+
+    #[test]
+    fn test_log_block_range_limit_grows_back_after_temporary_reduction() {
+        let mut range_limit = LogBlockRangeLimit::new(5_000, REPROBE_INTERVAL);
+
+        // A dense region of the chain makes the endpoint reject everything above 1_200 blocks.
+        send_requests(&mut range_limit, 1_200, 100);
+        assert_eq!(range_limit.stable, Some(1_200));
+
+        // Once the region has passed, the full configured ceiling must be used again.
+        send_requests(&mut range_limit, 5_000, 2 * REPROBE_INTERVAL as usize);
+        assert_eq!(range_limit.stable, Some(5_000));
+        assert_eq!(range_limit.current(), 5_000);
+    }
+
+    #[test]
+    fn test_log_block_range_limit_reprobing_keeps_unchanged_limit_and_bounds_failures() {
+        for allowed_limit in [1, 2, 100, 2_500, 4_999] {
+            let mut range_limit = LogBlockRangeLimit::new(5_000, REPROBE_INTERVAL);
+            send_requests(&mut range_limit, allowed_limit, 100);
+            assert_eq!(range_limit.stable, Some(allowed_limit));
+
+            let requests = 10 * REPROBE_INTERVAL as usize;
+            let failures = send_requests(&mut range_limit, allowed_limit, requests);
+
+            // At most one binary search (log2(5_000) < 13 rejections) per reprobe interval.
+            assert!(
+                failures <= 11 * 13,
+                "{failures} failures for allowed limit {allowed_limit}"
+            );
+            send_requests(&mut range_limit, allowed_limit, 100);
+            assert_eq!(range_limit.stable, Some(allowed_limit));
+        }
+    }
+
+    #[test]
+    fn test_log_block_range_limit_leaves_single_block_mode_after_reprobe_interval() {
+        let mut range_limit = LogBlockRangeLimit::new(10_000, REPROBE_INTERVAL);
+        range_limit.record_failure(1);
+
+        send_requests(&mut range_limit, 10_000, REPROBE_INTERVAL as usize - 1);
+        assert_eq!(range_limit.current(), 1);
+
+        send_requests(&mut range_limit, 10_000, 64);
+        assert_eq!(range_limit.stable, Some(10_000));
+    }
+
+    #[test]
+    fn test_log_block_range_limit_partial_spans_do_not_trigger_reprobe() {
+        let mut range_limit = LogBlockRangeLimit::new(10_000, REPROBE_INTERVAL);
+        send_requests(&mut range_limit, 100, 100);
+        assert_eq!(range_limit.stable, Some(100));
+
+        // Short tail requests near the chain head say nothing about larger ranges.
+        for _ in 0..(2 * REPROBE_INTERVAL) {
+            range_limit.record_success(1, 100);
+        }
+
+        assert_eq!(range_limit.stable, Some(100));
+    }
+
+    #[test]
+    fn test_log_block_range_limit_ignores_unrecognized_failures_of_partial_spans() {
+        let mut range_limit = LogBlockRangeLimit::new(10_000, REPROBE_INTERVAL);
+        send_requests(&mut range_limit, 100, 100);
+        send_requests(&mut range_limit, 100, REPROBE_INTERVAL as usize - 1);
+
+        // A short request near the chain head fails transiently.
+        let update = range_limit.record_unrecognized_failure(2, 100, false);
+        assert!(update.is_some_and(|update| update.retry && update.confirm_failure && update.next_limit == 100));
+        assert_eq!(range_limit.current(), 100);
+
+        // The failure interrupts the consecutive successes, so the next success does not start an upward probe.
+        send_requests(&mut range_limit, 100, 1);
+        assert_eq!(range_limit.stable, Some(100));
+    }
+
+    #[test]
+    fn test_log_block_range_limit_shrinks_unrecognized_failures_beyond_proven_range() {
+        // After a restart near the chain head only 3_000 blocks remain below a 5_000-block ceiling, and the endpoint
+        // rejects the never-tested 3_000-block request with an unrecognized error.
+        let mut range_limit = LogBlockRangeLimit::new(5_000, REPROBE_INTERVAL);
+
+        let update = range_limit.record_unrecognized_failure(3_000, 5_000, false);
+
+        assert!(update.is_some_and(|update| update.retry && update.next_limit < 3_000));
+    }
+
+    #[test]
+    fn test_log_block_range_limit_shrinks_repeated_failures_within_proven_range() {
+        let mut range_limit = LogBlockRangeLimit::new(10_000, REPROBE_INTERVAL);
+        send_requests(&mut range_limit, 100, 100);
+
+        // The first failure is retried unchanged.
+        let update = range_limit.record_unrecognized_failure(50, 100, false);
+        assert!(update.is_some_and(|update| update.confirm_failure));
+        assert_eq!(range_limit.current(), 100);
+
+        // Failing again on the unchanged range is treated as a rejection of the range.
+        let update = range_limit.record_unrecognized_failure(50, 100, true);
+        assert!(update.is_some_and(|update| update.retry && update.next_limit < 50));
+    }
+
+    #[test]
+    fn test_log_block_range_limit_restarts_from_ceiling_after_outage() {
+        let mut range_limit = LogBlockRangeLimit::new(10_000, REPROBE_INTERVAL);
+        send_requests(&mut range_limit, 100, 100);
+        assert_eq!(range_limit.stable, Some(100));
+
+        // Every request fails while the endpoint is down, down to a single block.
+        loop {
+            let candidate = range_limit.current();
+            match range_limit.record_unrecognized_failure(candidate, candidate, false) {
+                Some(update) => assert!(update.retry && update.next_limit < candidate),
+                None => break,
+            }
+        }
+
+        assert_eq!(range_limit.current(), 10_000);
+        send_requests(&mut range_limit, 100, 100);
+        assert_eq!(range_limit.stable, Some(100));
+    }
+
+    #[test]
+    fn test_log_block_range_limit_zero_reprobe_interval_disables_reprobing() {
+        let mut range_limit = LogBlockRangeLimit::new(10_000, 0);
+        send_requests(&mut range_limit, 100, 100);
+        assert_eq!(range_limit.stable, Some(100));
+
+        let failures = send_requests(&mut range_limit, 100, 10 * REPROBE_INTERVAL as usize);
+
+        assert_eq!(failures, 0);
+        assert_eq!(range_limit.stable, Some(100));
     }
 
     #[test]

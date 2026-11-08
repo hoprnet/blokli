@@ -284,6 +284,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 aggregator = %curvy_contracts.aggregator_proxy,
                 vault = %curvy_contracts.vault_proxy,
                 portal_factory = %curvy_contracts.portal_factory,
+                shield_router = %curvy_contracts.shield_router,
                 "Curvy contracts ready"
             );
             (

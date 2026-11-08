@@ -31,6 +31,10 @@ fn default_max_block_range() -> u32 {
     10000
 }
 
+fn default_block_range_reprobe_interval() -> u32 {
+    100
+}
+
 /// PostgreSQL database configuration
 ///
 /// Supports two formats:
@@ -274,6 +278,10 @@ pub struct Config {
     #[serde(default = "default_max_block_range")]
     pub max_block_range: u32,
 
+    #[default(100)]
+    #[serde(default = "default_block_range_reprobe_interval")]
+    pub block_range_reprobe_interval: u32,
+
     #[serde(default)]
     pub indexer: IndexerConfig,
 
@@ -315,6 +323,10 @@ impl Config {
             self.max_rpc_requests_per_sec
         ));
         output.push_str(&format!("  max_block_range: {}\n", self.max_block_range));
+        output.push_str(&format!(
+            "  block_range_reprobe_interval: {}\n",
+            self.block_range_reprobe_interval
+        ));
 
         if let Some(db_config) = &self.database {
             output.push_str(&format!("  database: {}\n", db_config.display_redacted()));
@@ -344,10 +356,62 @@ impl Config {
         output.push_str(&format!("  api.bind_address: {}\n", self.api.bind_address));
         output.push_str(&format!("  api.playground_enabled: {}\n", self.api.playground_enabled));
         output.push_str(&format!("  api.gas_multiplier: {}\n", self.api.gas_multiplier));
+        output.push_str(&format!(
+            "  api.min_priority_fee_per_gas: {}\n",
+            self.api.min_priority_fee_per_gas
+        ));
+        output.push_str(&format!(
+            "  api.min_max_fee_per_gas: {}\n",
+            self.api.min_max_fee_per_gas
+        ));
         output.push_str(&format!("  api.max_query_depth: {}\n", self.api.max_query_depth));
         output.push_str(&format!(
             "  api.max_query_complexity: {}\n",
             self.api.max_query_complexity
+        ));
+        output.push_str(&format!(
+            "  api.transactions.max_submitted_transactions: {}\n",
+            self.api.transactions.max_submitted_transactions
+        ));
+        output.push_str(&format!(
+            "  api.transactions.max_submitted_transactions_per_identity: {}\n",
+            self.api.transactions.max_submitted_transactions_per_identity
+        ));
+        output.push_str(&format!(
+            "  api.transactions.terminal_transaction_ttl: {:?}\n",
+            self.api.transactions.terminal_transaction_ttl
+        ));
+        output.push_str(&format!(
+            "  api.transactions.max_terminal_transactions: {}\n",
+            self.api.transactions.max_terminal_transactions
+        ));
+        output.push_str(&format!(
+            "  api.transactions.max_queued_trace_jobs: {}\n",
+            self.api.transactions.max_queued_trace_jobs
+        ));
+        output.push_str(&format!(
+            "  api.transactions.max_concurrent_trace_jobs: {}\n",
+            self.api.transactions.max_concurrent_trace_jobs
+        ));
+        output.push_str(&format!(
+            "  api.transactions.enable_revert_reason_tracing: {}\n",
+            self.api.transactions.enable_revert_reason_tracing
+        ));
+        output.push_str(&format!(
+            "  api.transactions.enable_hopr_action_validation: {}\n",
+            self.api.transactions.enable_hopr_action_validation
+        ));
+        output.push_str(&format!(
+            "  api.transactions.hopr_action_ttl: {:?}\n",
+            self.api.transactions.hopr_action_ttl
+        ));
+        output.push_str(&format!(
+            "  api.transactions.hopr_invalid_action_threshold: {}\n",
+            self.api.transactions.hopr_invalid_action_threshold
+        ));
+        output.push_str(&format!(
+            "  api.transactions.hopr_invalid_action_cooldown: {:?}\n",
+            self.api.transactions.hopr_invalid_action_cooldown
         ));
         output.push_str(&format!(
             "  api.sse_keepalive.enabled: {}\n",
@@ -483,11 +547,22 @@ pub struct ApiConfig {
     #[serde(default = "default_api_gas_multiplier")]
     pub gas_multiplier: f64,
 
+    #[default(blokli_api::config::DEFAULT_MIN_PRIORITY_FEE_PER_GAS)]
+    #[serde(default = "default_api_min_priority_fee_per_gas")]
+    pub min_priority_fee_per_gas: u64,
+
+    #[default(blokli_api::config::DEFAULT_MIN_MAX_FEE_PER_GAS)]
+    #[serde(default = "default_api_min_max_fee_per_gas")]
+    pub min_max_fee_per_gas: u64,
+
     #[serde(default)]
     pub sse_keepalive: SseKeepAliveConfig,
 
     #[serde(default)]
     pub health: HealthConfig,
+
+    #[serde(default)]
+    pub transactions: TransactionConfig,
 
     #[default(8)]
     #[serde(default = "default_max_query_depth")]
@@ -496,6 +571,79 @@ pub struct ApiConfig {
     #[default(500)]
     #[serde(default = "default_max_query_complexity")]
     pub max_query_complexity: usize,
+}
+
+/// Configuration for transaction submission and optional Safe revert tracing.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
+#[serde(deny_unknown_fields)]
+pub struct TransactionConfig {
+    /// Global limit for transactions awaiting receipt monitoring. `0` means unbounded.
+    ///
+    /// Applies to asynchronous submissions only, since they are the only ones
+    /// tracked by the background receipt monitor.
+    #[default(1024)]
+    #[serde(default = "default_max_submitted_transactions")]
+    pub max_submitted_transactions: usize,
+
+    /// Per-signer limit for transactions awaiting receipt monitoring. `0` means unbounded.
+    #[default(64)]
+    #[serde(default = "default_max_submitted_transactions_per_identity")]
+    pub max_submitted_transactions_per_identity: usize,
+
+    /// How long terminal transaction records remain queryable. `0s` disables TTL eviction.
+    #[default(_code = "Duration::from_secs(24 * 60 * 60)")]
+    #[serde(default = "default_terminal_transaction_ttl", with = "humantime_serde")]
+    pub terminal_transaction_ttl: Duration,
+
+    /// Maximum terminal transaction records retained in memory. `0` means unbounded.
+    #[default(10000)]
+    #[serde(default = "default_max_terminal_transactions")]
+    pub max_terminal_transactions: usize,
+
+    /// Maximum number of optional Safe revert-reason trace jobs waiting to run. `0` means unbounded.
+    #[default(128)]
+    #[serde(default = "default_max_queued_trace_jobs")]
+    pub max_queued_trace_jobs: usize,
+
+    /// Number of concurrent optional Safe revert-reason trace jobs. `0` means unbounded.
+    #[default(2)]
+    #[serde(default = "default_max_concurrent_trace_jobs")]
+    pub max_concurrent_trace_jobs: usize,
+
+    /// Whether to request optional Safe revert reasons through debug tracing.
+    #[default(true)]
+    #[serde(default = "default_true")]
+    pub enable_revert_reason_tracing: bool,
+
+    /// Whether to apply the HOPR-aware policy to supported HOPR node-management transactions.
+    ///
+    /// When disabled, every transaction keeps generic Blokli behaviour. Transactions the
+    /// policy does not recognise are unaffected either way.
+    ///
+    /// Off unless set explicitly, so an existing deployment does not start rejecting or
+    /// deduplicating transactions before its clients understand the new result types.
+    #[default(false)]
+    #[serde(default)]
+    pub enable_hopr_action_validation: bool,
+
+    /// How long one logical HOPR action stays deduplicated while its transaction is tracked.
+    ///
+    /// This is an upper bound: an action whose transaction already concluded is released
+    /// earlier.
+    #[default(_code = "Duration::from_secs(120)")]
+    #[serde(default = "default_hopr_action_ttl", with = "humantime_serde")]
+    pub hopr_action_ttl: Duration,
+
+    /// Consecutive deterministically invalid submissions of one operation by one signer
+    /// before that signer is put on cooldown. `0` disables invalid-action suppression.
+    #[default(3)]
+    #[serde(default = "default_hopr_invalid_action_threshold")]
+    pub hopr_invalid_action_threshold: u32,
+
+    /// How long a signer is suppressed for an operation once the threshold is reached.
+    #[default(_code = "Duration::from_secs(60)")]
+    #[serde(default = "default_hopr_invalid_action_cooldown", with = "humantime_serde")]
+    pub hopr_invalid_action_cooldown: Duration,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
@@ -566,6 +714,14 @@ fn default_api_gas_multiplier() -> f64 {
     1.0
 }
 
+fn default_api_min_priority_fee_per_gas() -> u64 {
+    blokli_api::config::DEFAULT_MIN_PRIORITY_FEE_PER_GAS
+}
+
+fn default_api_min_max_fee_per_gas() -> u64 {
+    blokli_api::config::DEFAULT_MIN_MAX_FEE_PER_GAS
+}
+
 fn default_sse_keepalive_interval() -> Duration {
     Duration::from_secs(15)
 }
@@ -580,6 +736,42 @@ fn default_max_query_depth() -> usize {
 
 fn default_max_query_complexity() -> usize {
     500
+}
+
+fn default_max_submitted_transactions() -> usize {
+    1024
+}
+
+fn default_max_submitted_transactions_per_identity() -> usize {
+    64
+}
+
+fn default_terminal_transaction_ttl() -> Duration {
+    Duration::from_secs(24 * 60 * 60)
+}
+
+fn default_max_terminal_transactions() -> usize {
+    10_000
+}
+
+fn default_max_queued_trace_jobs() -> usize {
+    128
+}
+
+fn default_max_concurrent_trace_jobs() -> usize {
+    2
+}
+
+fn default_hopr_action_ttl() -> Duration {
+    Duration::from_secs(120)
+}
+
+fn default_hopr_invalid_action_threshold() -> u32 {
+    3
+}
+
+fn default_hopr_invalid_action_cooldown() -> Duration {
+    Duration::from_secs(60)
 }
 
 fn default_max_indexer_lag() -> u64 {
@@ -645,6 +837,7 @@ mod tests {
                 curvy_aggregator: Address::default(),
                 curvy_vault: Address::default(),
                 curvy_portal_factory: Address::default(),
+                curvy_shield_router: Address::default(),
                 service_registry: Address::from([0xee; 20]),
             })
         );
@@ -981,6 +1174,8 @@ mod tests {
         assert!(!cfg.api.playground_enabled); // Default
         assert_eq!(cfg.api.bind_address.to_string(), "127.0.0.1:8080"); // Default
         assert_eq!(cfg.api.gas_multiplier, 1.0); // Default
+        assert_eq!(cfg.api.min_priority_fee_per_gas, 100); // Default
+        assert_eq!(cfg.api.min_max_fee_per_gas, 5_000_000); // Default
         assert_eq!(cfg.api.health.max_indexer_lag, 10); // Default
         assert_eq!(cfg.api.health.timeout, Duration::from_millis(5000)); // Default
         assert!(cfg.database.is_some()); // Database was provided
@@ -998,6 +1193,22 @@ mod tests {
      "#;
         let cfg: Config = toml::from_str(config).expect("Failed to parse config");
         assert_eq!(cfg.api.gas_multiplier, 1.5);
+    }
+
+    #[test]
+    fn test_api_gas_fee_floors_override() {
+        let config = r#"
+         [api]
+         min_priority_fee_per_gas = 100000000
+         min_max_fee_per_gas = 1000000000
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
+        let cfg: Config = toml::from_str(config).expect("Failed to parse config");
+        assert_eq!(cfg.api.min_priority_fee_per_gas, 100_000_000);
+        assert_eq!(cfg.api.min_max_fee_per_gas, 1_000_000_000);
     }
 
     #[test]

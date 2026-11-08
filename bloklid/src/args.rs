@@ -100,6 +100,7 @@ impl Args {
                 "BLOKLI_INDEXER_SAFE_TX_PREFETCH_CONCURRENCY",
                 "indexer.safe_tx_prefetch.concurrency",
             ),
+            ("BLOKLI_BLOCK_RANGE_REPROBE_INTERVAL", "block_range_reprobe_interval"),
             ("BLOKLI_CURVY_AGGREGATOR", "curvy_aggregator"),
             ("DATABASE_URL", "database.url"),
             ("PGHOST", "database.host"),
@@ -143,6 +144,52 @@ impl Args {
             ("BLOKLI_API_BIND_ADDRESS", "api.bind_address"),
             ("BLOKLI_API_PLAYGROUND_ENABLED", "api.playground_enabled"),
             ("BLOKLI_API_GAS_MULTIPLIER", "api.gas_multiplier"),
+            ("BLOKLI_API_MIN_PRIORITY_FEE_PER_GAS", "api.min_priority_fee_per_gas"),
+            ("BLOKLI_API_MIN_MAX_FEE_PER_GAS", "api.min_max_fee_per_gas"),
+            (
+                "BLOKLI_API_TRANSACTIONS_MAX_SUBMITTED_TRANSACTIONS",
+                "api.transactions.max_submitted_transactions",
+            ),
+            (
+                "BLOKLI_API_TRANSACTIONS_MAX_SUBMITTED_TRANSACTIONS_PER_IDENTITY",
+                "api.transactions.max_submitted_transactions_per_identity",
+            ),
+            (
+                "BLOKLI_API_TRANSACTIONS_TERMINAL_TRANSACTION_TTL",
+                "api.transactions.terminal_transaction_ttl",
+            ),
+            (
+                "BLOKLI_API_TRANSACTIONS_MAX_TERMINAL_TRANSACTIONS",
+                "api.transactions.max_terminal_transactions",
+            ),
+            (
+                "BLOKLI_API_TRANSACTIONS_MAX_QUEUED_TRACE_JOBS",
+                "api.transactions.max_queued_trace_jobs",
+            ),
+            (
+                "BLOKLI_API_TRANSACTIONS_MAX_CONCURRENT_TRACE_JOBS",
+                "api.transactions.max_concurrent_trace_jobs",
+            ),
+            (
+                "BLOKLI_API_TRANSACTIONS_ENABLE_REVERT_REASON_TRACING",
+                "api.transactions.enable_revert_reason_tracing",
+            ),
+            (
+                "BLOKLI_API_TRANSACTIONS_ENABLE_HOPR_ACTION_VALIDATION",
+                "api.transactions.enable_hopr_action_validation",
+            ),
+            (
+                "BLOKLI_API_TRANSACTIONS_HOPR_ACTION_TTL",
+                "api.transactions.hopr_action_ttl",
+            ),
+            (
+                "BLOKLI_API_TRANSACTIONS_HOPR_INVALID_ACTION_THRESHOLD",
+                "api.transactions.hopr_invalid_action_threshold",
+            ),
+            (
+                "BLOKLI_API_TRANSACTIONS_HOPR_INVALID_ACTION_COOLDOWN",
+                "api.transactions.hopr_invalid_action_cooldown",
+            ),
             ("BLOKLI_API_SSE_KEEPALIVE_ENABLED", "api.sse_keepalive.enabled"),
             ("BLOKLI_API_SSE_KEEPALIVE_INTERVAL", "api.sse_keepalive.interval"),
             ("BLOKLI_API_SSE_KEEPALIVE_TEXT", "api.sse_keepalive.text"),
@@ -200,6 +247,8 @@ impl Args {
             "indexer.enable_curvy_indexing",
             "api.enabled",
             "api.playground_enabled",
+            "api.transactions.enable_revert_reason_tracing",
+            "api.transactions.enable_hopr_action_validation",
             "api.sse_keepalive.enabled",
         ];
 
@@ -241,6 +290,13 @@ impl Args {
             .into());
         }
 
+        if config.api.min_max_fee_per_gas < config.api.min_priority_fee_per_gas {
+            return Err(ConfigError::Parse(
+                "api.min_max_fee_per_gas must be greater than or equal to api.min_priority_fee_per_gas".to_string(),
+            )
+            .into());
+        }
+
         if config
             .telemetry
             .otlp_endpoint
@@ -273,6 +329,7 @@ impl Args {
             tx_polling_interval: config.network.tx_polling_interval(),
             confirmations: config.network.confirmations(),
             max_block_range: config.max_block_range,
+            block_range_reprobe_interval: config.block_range_reprobe_interval,
             channel_contract_deploy_block: network_config.indexer_start_block_number,
             max_requests_per_sec: config.max_rpc_requests_per_sec,
             expected_block_time: config.network.expected_block_time(),
@@ -293,6 +350,7 @@ impl Args {
             curvy_aggregator: Default::default(),
             curvy_vault: Default::default(),
             curvy_portal_factory: Default::default(),
+            curvy_shield_router: Default::default(),
             service_registry: network_config.addresses.service_registry.to_hopr_address(),
         };
 
@@ -1134,6 +1192,49 @@ mod tests {
     }
 
     #[test]
+    fn test_max_fee_floor_below_priority_fee_floor_rejected() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "jura-dev"
+            rpc_url = "http://localhost:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+            [api]
+            min_priority_fee_per_gas = 2000
+            min_max_fee_per_gas = 1000
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        temp_env::with_vars(
+            [
+                ("BLOKLI_API_MIN_PRIORITY_FEE_PER_GAS", None::<&str>),
+                ("BLOKLI_API_MIN_MAX_FEE_PER_GAS", None::<&str>),
+            ],
+            || {
+                let args = Args {
+                    verbose: 0,
+                    config: Some(path),
+                    command: None,
+                };
+                let error = args
+                    .load_config(false)
+                    .expect_err("a max fee floor below the priority fee floor should be invalid");
+                assert!(
+                    error.to_string().contains(
+                        "api.min_max_fee_per_gas must be greater than or equal to api.min_priority_fee_per_gas"
+                    ),
+                    "unexpected error: {error}"
+                );
+            },
+        );
+    }
+
+    #[test]
     fn test_max_block_range_default() {
         let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
@@ -1150,16 +1251,23 @@ mod tests {
         .unwrap();
         let path = file.path().to_path_buf();
 
-        temp_env::with_var("BLOKLI_MAX_BLOCK_RANGE", None::<&str>, || {
-            let args = Args {
-                verbose: 0,
-                config: Some(path),
-                command: None,
-            };
+        temp_env::with_vars(
+            [
+                ("BLOKLI_MAX_BLOCK_RANGE", None::<&str>),
+                ("BLOKLI_BLOCK_RANGE_REPROBE_INTERVAL", None::<&str>),
+            ],
+            || {
+                let args = Args {
+                    verbose: 0,
+                    config: Some(path),
+                    command: None,
+                };
 
-            let config = args.load_config(false).expect("Failed to load config");
-            assert_eq!(config.max_block_range, 10000, "max_block_range should default to 10000");
-        });
+                let config = args.load_config(false).expect("Failed to load config");
+                assert_eq!(config.max_block_range, 10000, "max_block_range should default to 10000");
+                assert_eq!(config.block_range_reprobe_interval, 100);
+            },
+        );
     }
 
     #[test]
@@ -1225,6 +1333,39 @@ mod tests {
                 config.max_block_range, 2500,
                 "BLOKLI_MAX_BLOCK_RANGE env var should override config file"
             );
+        });
+    }
+
+    #[test]
+    fn test_block_range_reprobe_interval_from_config_file_and_env() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "jura-dev"
+            rpc_url = "http://localhost:8545"
+            block_range_reprobe_interval = 25
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+        let args = Args {
+            verbose: 0,
+            config: Some(path),
+            command: None,
+        };
+
+        temp_env::with_var("BLOKLI_BLOCK_RANGE_REPROBE_INTERVAL", None::<&str>, || {
+            let config = args.load_config(false).expect("Failed to load config");
+            assert_eq!(config.block_range_reprobe_interval, 25);
+        });
+
+        temp_env::with_var("BLOKLI_BLOCK_RANGE_REPROBE_INTERVAL", Some("0"), || {
+            let config = args.load_config(false).expect("Failed to load config");
+            assert_eq!(config.block_range_reprobe_interval, 0);
         });
     }
 
@@ -1466,5 +1607,66 @@ mod tests {
                 "Expected NoConfiguration error, got: {result:?}"
             );
         });
+    }
+
+    #[test]
+    fn test_transaction_limits_and_tracing_are_configurable() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "jura-dev"
+            rpc_url = "http://localhost:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+            [api.transactions]
+            max_submitted_transactions = 200
+            max_submitted_transactions_per_identity = 20
+            terminal_transaction_ttl = "12h"
+            max_terminal_transactions = 2000
+            max_queued_trace_jobs = 40
+            max_concurrent_trace_jobs = 3
+            enable_revert_reason_tracing = false
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        temp_env::with_vars(
+            [
+                ("BLOKLI_API_TRANSACTIONS_MAX_SUBMITTED_TRANSACTIONS", Some("300")),
+                (
+                    "BLOKLI_API_TRANSACTIONS_MAX_SUBMITTED_TRANSACTIONS_PER_IDENTITY",
+                    Some("30"),
+                ),
+                ("BLOKLI_API_TRANSACTIONS_TERMINAL_TRANSACTION_TTL", Some("24h")),
+                ("BLOKLI_API_TRANSACTIONS_MAX_TERMINAL_TRANSACTIONS", Some("3000")),
+                ("BLOKLI_API_TRANSACTIONS_MAX_QUEUED_TRACE_JOBS", Some("50")),
+                ("BLOKLI_API_TRANSACTIONS_MAX_CONCURRENT_TRACE_JOBS", Some("4")),
+                ("BLOKLI_API_TRANSACTIONS_ENABLE_REVERT_REASON_TRACING", Some("true")),
+            ],
+            || {
+                let args = Args {
+                    verbose: 0,
+                    config: Some(path),
+                    command: None,
+                };
+
+                let config = args
+                    .load_config(false)
+                    .expect("Failed to load transaction configuration");
+                assert_eq!(config.api.transactions.max_submitted_transactions, 300);
+                assert_eq!(config.api.transactions.max_submitted_transactions_per_identity, 30);
+                assert_eq!(
+                    config.api.transactions.terminal_transaction_ttl,
+                    Duration::from_secs(24 * 60 * 60)
+                );
+                assert_eq!(config.api.transactions.max_terminal_transactions, 3000);
+                assert_eq!(config.api.transactions.max_queued_trace_jobs, 50);
+                assert_eq!(config.api.transactions.max_concurrent_trace_jobs, 4);
+                assert!(config.api.transactions.enable_revert_reason_tracing);
+            },
+        );
     }
 }

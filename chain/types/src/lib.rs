@@ -90,6 +90,9 @@ pub struct ChainConfig {
     pub confirmations: u16,
     /// Maximum block range ceiling for adaptive RPC log queries
     pub max_block_range: u32,
+    /// Successful requests spanning the full reduced log block range after which a larger range is probed again
+    /// (0 = never)
+    pub block_range_reprobe_interval: u32,
     /// Starting block number for channel contract (where indexing should begin)
     pub channel_contract_deploy_block: u32,
     /// Maximum RPC requests per second (None = default, Some(0) = unlimited)
@@ -145,6 +148,13 @@ pub struct ContractAddresses {
     #[serde_as(as = "DisplayFromStr")]
     #[serde(default)]
     pub curvy_portal_factory: Address,
+    /// Curvy shield router, through which a node's Safe shields with one ERC-777 `send`.
+    ///
+    /// Never configured: it lives at `curvy_bindings::config::shield_router_address()` on every chain, and is
+    /// resolved at startup only if code is there. The zero address means it is not deployed on this network.
+    #[serde_as(as = "DisplayFromStr")]
+    #[serde(default)]
+    pub curvy_shield_router: Address,
     /// Service registry contract.
     ///
     /// The zero address means the registry is not deployed on this network and consumers must skip the contract
@@ -176,6 +186,7 @@ impl ContractAddresses {
             curvy_aggregator,
             curvy_vault,
             curvy_portal_factory,
+            curvy_shield_router: Address::default(),
             service_registry: hopr.service_registry.to_hopr_address(),
         }
     }
@@ -389,6 +400,7 @@ where
             curvy_aggregator: Address::default(),
             curvy_vault: Address::default(),
             curvy_portal_factory: Address::default(),
+            curvy_shield_router: Address::default(),
             service_registry: instances.service_registry.address().to_hopr_address(),
         }
     }

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use blokli_api_types::{Account, Channel, ChannelUpdate, TokenValueString, UInt64};
+use blokli_api_types::{Account, Channel, ChannelStatePosition, ChannelUpdate, TokenValueString, UInt64};
 use blokli_db_entity::{account, conversions::account_aggregation, views::channel_current};
 use chrono::Utc;
 use hopr_bindings::exports::alloy::hex;
@@ -116,10 +116,23 @@ where
         multi_addresses: dest_account.multi_addresses.clone(),
     };
 
+    let position = ChannelStatePosition::from_published(
+        current.published_block,
+        current.published_tx_index,
+        current.published_log_index,
+    )
+    .map_err(|e| {
+        CoreEthereumIndexerError::ValidationError(format!(
+            "Channel {} state position is negative or out of range: {}",
+            channel_id_hex, e
+        ))
+    })?;
+
     Ok(ChannelUpdate {
         channel: channel_gql,
         source: source_gql,
         destination: dest_gql,
+        position: Some(position),
     })
 }
 

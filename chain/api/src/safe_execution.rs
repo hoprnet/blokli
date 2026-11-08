@@ -9,7 +9,7 @@ use alloy_sol_types::{SolEvent, sol};
 use async_trait::async_trait;
 use blokli_db::BlokliDbAllOperations;
 use hopr_bindings::exports::alloy::{
-    consensus::{Transaction, TxEnvelope},
+    consensus::{Transaction, TxEnvelope, transaction::SignerRecoverable},
     eips::eip2718::Decodable2718,
 };
 use hopr_types::{crypto::types::Hash, primitive::prelude::Address};
@@ -35,6 +35,54 @@ pub fn decode_transaction_to_address(raw_tx: &[u8]) -> Option<[u8; 20]> {
     let envelope = TxEnvelope::decode_2718(&mut &raw_tx[..]).ok()?;
     let to_addr = envelope.to()?;
     Some(to_addr.into_array())
+}
+
+/// Recover the signer address of a raw signed transaction.
+///
+/// The signer is recovered from the transaction signature, so it identifies the
+/// account that authorised and pays for the transaction. Unlike the `to`
+/// address it cannot be chosen freely by a client, which makes it the correct
+/// identity for per-client fairness accounting.
+///
+/// Returns `None` if the envelope cannot be decoded or the signature does not
+/// recover to an address.
+pub fn decode_transaction_signer(raw_tx: &[u8]) -> Option<[u8; 20]> {
+    let envelope = TxEnvelope::decode_2718(&mut &raw_tx[..]).ok()?;
+    envelope.recover_signer().ok().map(|signer| signer.into_array())
+}
+
+/// Recover the signer address and nonce of a raw signed transaction.
+///
+/// Returns `None` if the envelope cannot be decoded or the signature does not
+/// recover to an address.
+pub fn decode_transaction_signer_and_nonce(raw_tx: &[u8]) -> Option<([u8; 20], u64)> {
+    let envelope = TxEnvelope::decode_2718(&mut &raw_tx[..]).ok()?;
+    let signer = envelope.recover_signer().ok()?;
+    Some((signer.into_array(), envelope.nonce()))
+}
+
+/// Identifying fields of a raw signed transaction, for logging.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RawTransactionSummary {
+    pub transaction_hash: Hash,
+    pub nonce: u64,
+    pub to: Option<Address>,
+    pub max_fee_per_gas: u128,
+    pub max_priority_fee_per_gas: Option<u128>,
+}
+
+/// Decode the identifying fields of a raw signed transaction without recovering its signer.
+///
+/// Returns `None` if the envelope cannot be decoded.
+pub fn decode_transaction_summary(raw_tx: &[u8]) -> Option<RawTransactionSummary> {
+    let envelope = TxEnvelope::decode_2718(&mut &raw_tx[..]).ok()?;
+    Some(RawTransactionSummary {
+        transaction_hash: Hash::from(envelope.tx_hash().0),
+        nonce: envelope.nonce(),
+        to: envelope.to().map(|to| Address::from(to.into_array())),
+        max_fee_per_gas: envelope.max_fee_per_gas(),
+        max_priority_fee_per_gas: envelope.max_priority_fee_per_gas(),
+    })
 }
 
 /// Check receipt logs for Safe `ExecutionSuccess`/`ExecutionFailure` events.

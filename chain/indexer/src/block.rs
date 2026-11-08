@@ -24,7 +24,7 @@ use futures::{
 };
 use hopr_bindings::{
     exports::alloy::{primitives::Address as AlloyAddress, rpc::types::Filter, sol_types::SolEvent},
-    hopr_token::HoprToken::{Approval, Transfer},
+    hopr_token::HoprToken::Approval,
 };
 #[cfg(all(feature = "telemetry", not(test)))]
 use hopr_types::primitive::prelude::ToHex;
@@ -644,22 +644,8 @@ where
         Ok(())
     }
 
-    /// Generates specialized log filters for efficient blockchain event processing.
-    ///
-    /// This function creates a comprehensive set of log filters that optimize
-    /// indexer performance by categorizing filters based on contract types and
-    /// event relevance to the specific node.
-    ///
-    /// # Arguments
-    /// * `logs_handler` - Handler containing contract addresses and safe address
-    ///
     /// # Returns
     /// * `Vec<(Address, Hash)>` - Address-topic pairs used to validate/prime the logs DB origin metadata.
-    ///
-    /// # Filter Categories
-    /// * `all` - Complete set of filters for normal operation
-    /// * `token` - Token-specific filters (Transfer, Approval events for safe)
-    /// * `no_token` - Non-token contract filters for initial sync optimization
     fn generate_address_topics(logs_handler: &U) -> Vec<(Address, Hash)> {
         let static_addresses = logs_handler.contract_addresses();
         let mut address_topics = vec![];
@@ -680,6 +666,12 @@ where
         address_topics
     }
 
+    /// Generate log filters for the requested indexing phase.
+    ///
+    /// # Filter categories
+    /// * `all` contains every active filter.
+    /// * `token` contains owner-filtered token Approval filters.
+    /// * `no_token` contains non-token filters for historical discovery.
     async fn generate_log_filters(
         db: &Db,
         logs_handler: &U,
@@ -707,29 +699,33 @@ where
         let filter_base = Filter::new()
             .address(filter_base_addresses)
             .event_signature(filter_base_topics);
-        let filter_token = Filter::new().address(AlloyAddress::from_hopr_address(
-            logs_handler.contract_addresses_map().token,
-        ));
-
-        let filter_token_transfer = filter_token.clone().event_signature(Transfer::SIGNATURE_HASH);
-
-        let filter_token_approval = filter_token.event_signature(Approval::SIGNATURE_HASH);
-
-        let safe_filter = if enable_safe_indexing {
-            let safe_addresses = db.get_safe_contract_addresses(None).await?;
-            (!safe_addresses.is_empty()).then(|| {
-                Filter::new()
-                    .address(
-                        safe_addresses
-                            .into_iter()
-                            .map(AlloyAddress::from_hopr_address)
-                            .collect::<Vec<_>>(),
-                    )
-                    .event_signature(crate::constants::topics::safe_contract())
-            })
-        } else {
-            None
-        };
+        let safe_addresses = db.get_safe_contract_addresses(None).await?;
+        let safe_filter = (enable_safe_indexing && !safe_addresses.is_empty()).then(|| {
+            Filter::new()
+                .address(
+                    safe_addresses
+                        .iter()
+                        .copied()
+                        .map(AlloyAddress::from_hopr_address)
+                        .collect::<Vec<_>>(),
+                )
+                .event_signature(crate::constants::topics::safe_contract())
+        });
+        let filter_token_approval = (!safe_addresses.is_empty()).then(|| {
+            Filter::new()
+                .address(AlloyAddress::from_hopr_address(
+                    logs_handler.contract_addresses_map().token,
+                ))
+                .event_signature(Approval::SIGNATURE_HASH)
+                .topic1(
+                    safe_addresses
+                        .iter()
+                        .copied()
+                        .map(AlloyAddress::from_hopr_address)
+                        .map(|address| address.into_word())
+                        .collect::<Vec<_>>(),
+                )
+        });
 
         match phase {
             LogFilterPhase::HistoricalDiscovery => Ok(FilterSet {
@@ -747,8 +743,9 @@ where
                 if let Some(filter_safe_contract) = safe_filter.clone() {
                     all_filters.push(filter_safe_contract);
                 }
-                all_filters.push(filter_token_transfer.clone());
-                all_filters.push(filter_token_approval.clone());
+                if let Some(filter_token_approval) = filter_token_approval.clone() {
+                    all_filters.push(filter_token_approval);
+                }
 
                 let mut no_token_filters = vec![filter_base];
                 if let Some(filter_safe_contract) = safe_filter {
@@ -757,7 +754,7 @@ where
 
                 Ok(FilterSet {
                     all: all_filters,
-                    token: vec![filter_token_approval, filter_token_transfer],
+                    token: filter_token_approval.into_iter().collect(),
                     no_token: no_token_filters,
                 })
             }
@@ -1032,7 +1029,42 @@ where
 
         let mut logs_to_process = Vec::new();
 
+        // A log that has already been applied to the index must not be applied again: replaying it
+        // re-runs handler writes whose idempotency is only as good as each handler's conflict
+        // handling. Blocks are re-delivered routinely - the historical phases re-stream their whole
+        // range after any interrupted run, and fast sync replays every log of a block that holds a
+        // single unprocessed one - so the processed flag is the only thing that makes those replays
+        // cheap and safe. Logs that were never stored (token logs are filtered out of the logs DB)
+        // are absent from the set and are therefore dispatched, as before, and so is a log that a
+        // reorganisation put at the position of one already applied: the identity carries the block
+        // hash precisely so the canonical replacement is not mistaken for what it replaces.
+        let processed_logs = if block.logs.is_empty() {
+            HashSet::new()
+        } else {
+            match db.get_processed_log_identities(block_id).await {
+                Ok(identities) => identities,
+                Err(error) => {
+                    // The logs DB is unreachable; dispatching now would mean marking the logs as
+                    // processed right after, which would fail the same way.
+                    error!(block_id, %error, "failed to load processed log identities, panicking to prevent double-processing");
+                    panic!("failed to load processed log identities, panicking to prevent double-processing")
+                }
+            }
+        };
+
+        // FIXME: The block indexing and marking as processed should be done in a single
+        // transaction. This is difficult since currently this would be across databases.
+        // Process all logs - events are published internally via IndexerState
         for log in block.logs.clone() {
+            if processed_logs.contains(&(log.tx_index, log.log_index, log.block_hash)) {
+                debug!(
+                    block_id = log.block_number,
+                    tx_index = log.tx_index,
+                    log_index = %log.log_index,
+                    "skipping log already marked as processed"
+                );
+                continue;
+            }
             if log.removed || !logs_handler.should_process_log(&log) {
                 debug!(
                     block_id = log.block_number,
@@ -1538,9 +1570,12 @@ mod tests {
     };
     use futures::{Stream, channel::mpsc::unbounded, join};
     use hex_literal::hex;
-    use hopr_bindings::exports::alloy::{
-        dyn_abi::DynSolValue,
-        primitives::{Address as AlloyAddress, B256},
+    use hopr_bindings::{
+        exports::alloy::{
+            dyn_abi::DynSolValue,
+            primitives::{Address as AlloyAddress, B256},
+        },
+        hopr_token::HoprToken::{Approval, Transfer},
     };
     use hopr_types::{
         crypto::{
@@ -1686,6 +1721,100 @@ mod tests {
 
             Ok(())
         }
+    }
+
+    #[derive(Clone)]
+    struct ApprovalFilterHandler {
+        contract_addresses: Arc<ContractAddresses>,
+        primary_topic: B256,
+    }
+
+    #[async_trait]
+    impl ChainLogHandler for ApprovalFilterHandler {
+        fn contract_addresses(&self) -> Vec<Address> {
+            vec![self.contract_addresses.announcements, self.contract_addresses.token]
+        }
+
+        fn contract_addresses_map(&self) -> Arc<ContractAddresses> {
+            self.contract_addresses.clone()
+        }
+
+        fn contract_address_topics(&self, contract: Address) -> Vec<B256> {
+            if contract == self.contract_addresses.announcements {
+                vec![self.primary_topic]
+            } else {
+                Vec::new()
+            }
+        }
+
+        async fn collect_log_event(&self, _log: SerializableLog, _is_synced: bool) -> crate::errors::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn continuous_filters_only_request_approvals_for_tracked_safe_owners() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let announcement_address = Address::from([0x11; 20]);
+        let token_address = Address::from([0x22; 20]);
+        let safe_address = Address::from([0x33; 20]);
+        let other_address = Address::from([0x44; 20]);
+        let primary_topic = B256::repeat_byte(0x55);
+        let contract_addresses = Arc::new(ContractAddresses {
+            announcements: announcement_address,
+            token: token_address,
+            ..ContractAddresses::default()
+        });
+        let handler = ApprovalFilterHandler {
+            contract_addresses,
+            primary_topic,
+        };
+
+        db.create_safe_contract(None, safe_address, Address::default(), safe_address, 1, 0, 0)
+            .await?;
+
+        let filters = Indexer::<MockHoprIndexerOps, ApprovalFilterHandler, BlokliDb>::generate_log_filters(
+            &db,
+            &handler,
+            LogFilterPhase::Continuous,
+            false,
+        )
+        .await?;
+
+        assert_eq!(filters.token.len(), 1);
+        assert!(
+            !filters
+                .no_token
+                .iter()
+                .any(|filter| filter.matches_address(AlloyAddress::from_hopr_address(safe_address)))
+        );
+        let approval_filter = &filters.token[0];
+        assert!(approval_filter.matches_address(AlloyAddress::from_hopr_address(token_address)));
+        assert!(approval_filter.matches_topics(&[
+            Approval::SIGNATURE_HASH,
+            AlloyAddress::from_hopr_address(safe_address).into_word(),
+            B256::ZERO,
+        ]));
+        assert!(!approval_filter.matches_topics(&[
+            Approval::SIGNATURE_HASH,
+            AlloyAddress::from_hopr_address(other_address).into_word(),
+            B256::ZERO,
+        ]));
+        assert!(!approval_filter.matches_topics(&[
+            Transfer::SIGNATURE_HASH,
+            AlloyAddress::from_hopr_address(safe_address).into_word(),
+            B256::ZERO,
+        ]));
+        assert_eq!(
+            filters
+                .all
+                .iter()
+                .filter(|filter| filter.matches_address(AlloyAddress::from_hopr_address(token_address)))
+                .count(),
+            1
+        );
+
+        Ok(())
     }
 
     #[derive(Clone, Default)]
@@ -1957,6 +2086,154 @@ mod tests {
                 .processed,
             Some(true)
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_block_skips_log_already_marked_processed() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let handler = DispatchTrackingLogHandler::default();
+        let log = SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: vec![Hash::create(&[b"my topic"]).into()],
+            data: vec![1, 2, 3],
+            tx_hash: Hash::create(&[b"my tx hash"]).into(),
+            block_hash: Hash::create(&[b"my block hash"]).into(),
+            tx_index: 1,
+            block_number: 100,
+            log_index: 2,
+            ..Default::default()
+        };
+        db.store_log(log.clone()).await?;
+        db.set_log_processed(log.clone()).await?;
+
+        // Blocks are re-delivered routinely - an interrupted historical run re-streams its whole
+        // range - and a log applied twice re-runs handler writes that are not all idempotent.
+        let result = Indexer::<MockHoprIndexerOps, DispatchTrackingLogHandler, BlokliDb>::process_block(
+            &db,
+            &handler,
+            BlockWithLogs {
+                block_id: log.block_number,
+                logs: BTreeSet::from([log.clone()]),
+            },
+            false,
+            false,
+            &IndexerState::default(),
+            false,
+            PrefetchedLogData::default(),
+        )
+        .await;
+
+        assert!(result.is_some());
+        assert!(!handler.collect_called.load(StdOrdering::SeqCst));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_block_dispatches_reorg_replacement_at_a_processed_position() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let handler = DispatchTrackingLogHandler::default();
+        let orphaned = SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: vec![Hash::create(&[b"my topic"]).into()],
+            data: vec![1, 2, 3],
+            tx_hash: Hash::create(&[b"my tx hash"]).into(),
+            block_hash: Hash::create(&[b"orphaned block"]).into(),
+            tx_index: 1,
+            block_number: 100,
+            log_index: 2,
+            ..Default::default()
+        };
+        db.store_log(orphaned.clone()).await?;
+        db.set_log_processed(orphaned.clone()).await?;
+
+        // A reorganisation can put a different log at the same position, so keying the skip on the
+        // position alone would drop the canonical event and never apply it.
+        let canonical = SerializableLog {
+            block_hash: Hash::create(&[b"canonical block"]).into(),
+            ..orphaned
+        };
+        db.store_log(canonical.clone()).await?;
+
+        let block = BlockWithLogs {
+            block_id: canonical.block_number,
+            logs: BTreeSet::from([canonical]),
+        };
+
+        let result = Indexer::<MockHoprIndexerOps, DispatchTrackingLogHandler, BlokliDb>::process_block(
+            &db,
+            &handler,
+            block.clone(),
+            false,
+            false,
+            &IndexerState::default(),
+            false,
+            PrefetchedLogData::default(),
+        )
+        .await;
+
+        assert!(result.is_some());
+        assert!(handler.collect_called.load(StdOrdering::SeqCst));
+
+        // ...and once applied, the canonical log is a replay like any other: storing it replaced the
+        // orphaned row, so the processed identity now carries the canonical hash and matches.
+        handler.collect_called.store(false, StdOrdering::SeqCst);
+
+        let result = Indexer::<MockHoprIndexerOps, DispatchTrackingLogHandler, BlokliDb>::process_block(
+            &db,
+            &handler,
+            block,
+            false,
+            false,
+            &IndexerState::default(),
+            false,
+            PrefetchedLogData::default(),
+        )
+        .await;
+
+        assert!(result.is_some());
+        assert!(!handler.collect_called.load(StdOrdering::SeqCst));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_block_dispatches_log_that_was_never_stored() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let handler = DispatchTrackingLogHandler::default();
+        let log = SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: vec![Hash::create(&[b"my topic"]).into()],
+            data: vec![1, 2, 3],
+            tx_hash: Hash::create(&[b"my tx hash"]).into(),
+            block_hash: Hash::create(&[b"my block hash"]).into(),
+            tx_index: 1,
+            block_number: 100,
+            log_index: 2,
+            ..Default::default()
+        };
+
+        // Token logs are filtered out of the logs DB, so a log with no stored status must still be
+        // dispatched rather than mistaken for one that was already processed.
+        let result = Indexer::<MockHoprIndexerOps, DispatchTrackingLogHandler, BlokliDb>::process_block(
+            &db,
+            &handler,
+            BlockWithLogs {
+                block_id: log.block_number,
+                logs: BTreeSet::from([log.clone()]),
+            },
+            false,
+            false,
+            &IndexerState::default(),
+            false,
+            PrefetchedLogData::default(),
+        )
+        .await;
+
+        assert!(result.is_some());
+        assert!(handler.collect_called.load(StdOrdering::SeqCst));
 
         Ok(())
     }

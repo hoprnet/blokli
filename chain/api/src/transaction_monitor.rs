@@ -9,11 +9,21 @@ use async_trait::async_trait;
 use futures::{StreamExt, stream};
 use hopr_types::crypto::types::Hash;
 use thiserror::Error;
-use tokio::time::{sleep, timeout};
+use tokio::{
+    sync::{
+        Semaphore,
+        mpsc::{self, error::TrySendError},
+    },
+    time::{Instant, sleep, timeout},
+};
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    safe_execution::{decode_transaction_to_address, inspect_safe_execution_logs},
+    metrics::{
+        record_safe_execution, record_safe_inspection_retry, record_trace_failure, record_trace_queue_saturated,
+        record_trace_timeout,
+    },
+    safe_execution::{decode_transaction_signer_and_nonce, decode_transaction_to_address, inspect_safe_execution_logs},
     transaction_store::{SafeExecutionResult, TransactionStatus, TransactionStore},
 };
 
@@ -28,12 +38,26 @@ pub struct ReceiptLog {
     pub data: Vec<u8>,
 }
 
+/// The parts of an Ethereum receipt needed by the monitor.  Keeping status and
+/// logs together is deliberate: a Safe outcome must be derived from the same
+/// receipt that established outer inclusion.
+#[derive(Debug, Clone)]
+pub struct TransactionReceipt {
+    /// Outer EVM receipt status.
+    pub success: bool,
+    /// Receipt logs, including Safe execution events.
+    pub logs: Vec<ReceiptLog>,
+}
+
 /// Trait for querying transaction receipts from the RPC
 #[async_trait]
 pub trait ReceiptProvider: Send + Sync {
-    /// Get the status of a transaction by its hash
-    /// Returns Some(true) if confirmed, Some(false) if reverted, None if still pending
-    async fn get_transaction_status(&self, tx_hash: Hash) -> Result<Option<bool>, String>;
+    /// Fetch the complete receipt once. `None` means the transaction is not
+    /// mined yet.
+    ///
+    /// Implementations must derive status and logs from a single receipt
+    /// response so the two can never disagree.
+    async fn get_transaction_receipt(&self, tx_hash: Hash) -> Result<Option<TransactionReceipt>, String>;
 
     /// Fetch receipt logs for a confirmed transaction.
     ///
@@ -47,6 +71,92 @@ pub trait ReceiptProvider: Send + Sync {
     /// Returns `Ok(Some(reason))` if extracted, `Ok(None)` if tracing
     /// succeeded but no decodable reason was found, or `Err` on RPC failure.
     async fn get_revert_reason(&self, tx_hash: Hash) -> Result<Option<String>, String>;
+
+    /// Whether the RPC node still knows the transaction, mined or pending.
+    ///
+    /// Returns `Ok(false)` when the node has no record of it, which for an unmined
+    /// transaction means it was dropped from the mempool or replaced.
+    async fn is_transaction_known(&self, tx_hash: Hash) -> Result<bool, String>;
+
+    /// Number of transactions mined from `address` as of the latest block, i.e. the
+    /// next nonce the account can use.
+    async fn get_mined_nonce(&self, address: [u8; 20]) -> Result<u64, String>;
+
+    /// Next nonce of `address` counting the transactions the node holds as executable
+    /// in its mempool, i.e. the first nonce missing after the contiguous pending run.
+    async fn get_pending_nonce(&self, address: [u8; 20]) -> Result<u64, String>;
+}
+
+/// Why a submitted transaction has not been mined by the time it times out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnminedDiagnosis {
+    /// The node no longer knows the transaction and its nonce was consumed by another one.
+    Replaced,
+    /// The node no longer knows the transaction and its nonce is still unused.
+    Dropped,
+    /// The node holds the transaction, but an earlier nonce of the signer is neither mined
+    /// nor pending.
+    NonceGap { nonce: u64, missing_nonce: u64 },
+    /// The node holds the transaction and every earlier nonce is mined or pending: it is
+    /// underpriced or queued behind earlier pending transactions.
+    Pending,
+    /// The transaction was mined after the receipt lookup; the next poll confirms it.
+    MinedSinceCheck,
+    /// The diagnosis could not be established.
+    Unknown,
+}
+
+impl UnminedDiagnosis {
+    fn label(self) -> &'static str {
+        match self {
+            UnminedDiagnosis::Replaced => "replaced",
+            UnminedDiagnosis::Dropped => "dropped",
+            UnminedDiagnosis::NonceGap { .. } => "nonce_gap",
+            UnminedDiagnosis::Pending => "pending",
+            UnminedDiagnosis::MinedSinceCheck => "mined_since_check",
+            UnminedDiagnosis::Unknown => "unknown",
+        }
+    }
+
+    fn message(self) -> String {
+        match self {
+            UnminedDiagnosis::Replaced => "Transaction was not mined: another transaction with the same nonce from \
+                                           the same signer was mined instead (replaced)"
+                .to_string(),
+            UnminedDiagnosis::Dropped => {
+                "Transaction was not mined: the RPC node no longer knows it (dropped from the mempool)".to_string()
+            }
+            UnminedDiagnosis::NonceGap { nonce, missing_nonce } => format!(
+                "Transaction was not mined: its nonce {nonce} waits for the signer's nonce {missing_nonce}, which is \
+                 neither mined nor pending (nonce gap)"
+            ),
+            UnminedDiagnosis::Pending => "Transaction timed out waiting for confirmation: still pending in the \
+                                          mempool (possibly underpriced)"
+                .to_string(),
+            UnminedDiagnosis::MinedSinceCheck | UnminedDiagnosis::Unknown => {
+                "Transaction timed out waiting for confirmation".to_string()
+            }
+        }
+    }
+}
+
+/// Classify an unmined transaction from whether the node still knows it and how its nonce
+/// compares to the signer's mined and pending next nonces.
+///
+/// A nonce ahead of the mined one is only a gap when the pending run does not reach it:
+/// with nonce 5 mined and 5, 6, 7 pending, nonce 7 is merely queued behind 5 and 6.
+fn classify_unmined(known: bool, nonce: u64, mined_nonce: u64, pending_nonce: u64) -> UnminedDiagnosis {
+    // Some nodes answer the pending count from the latest block only; never go below it.
+    let missing_nonce = pending_nonce.max(mined_nonce);
+    match (known, nonce < mined_nonce) {
+        (true, true) => UnminedDiagnosis::MinedSinceCheck,
+        (true, false) if nonce > mined_nonce && nonce >= missing_nonce => {
+            UnminedDiagnosis::NonceGap { nonce, missing_nonce }
+        }
+        (true, false) => UnminedDiagnosis::Pending,
+        (false, true) => UnminedDiagnosis::Replaced,
+        (false, false) => UnminedDiagnosis::Dropped,
+    }
 }
 
 /// Trait for resolving a transaction target address to a Safe contract address.
@@ -71,7 +181,7 @@ pub struct NoSafeEnrichment;
 
 #[async_trait]
 impl ReceiptProvider for NoSafeEnrichment {
-    async fn get_transaction_status(&self, _tx_hash: Hash) -> Result<Option<bool>, String> {
+    async fn get_transaction_receipt(&self, _tx_hash: Hash) -> Result<Option<TransactionReceipt>, String> {
         unreachable!("NoSafeEnrichment is behind Option::None")
     }
 
@@ -80,6 +190,18 @@ impl ReceiptProvider for NoSafeEnrichment {
     }
 
     async fn get_revert_reason(&self, _tx_hash: Hash) -> Result<Option<String>, String> {
+        unreachable!("NoSafeEnrichment is behind Option::None")
+    }
+
+    async fn is_transaction_known(&self, _tx_hash: Hash) -> Result<bool, String> {
+        unreachable!("NoSafeEnrichment is behind Option::None")
+    }
+
+    async fn get_mined_nonce(&self, _address: [u8; 20]) -> Result<u64, String> {
+        unreachable!("NoSafeEnrichment is behind Option::None")
+    }
+
+    async fn get_pending_nonce(&self, _address: [u8; 20]) -> Result<u64, String> {
         unreachable!("NoSafeEnrichment is behind Option::None")
     }
 }
@@ -113,6 +235,10 @@ pub struct TransactionMonitorConfig {
     pub poll_interval: Duration,
     /// Maximum time to wait before marking a transaction as timed out
     pub timeout: Duration,
+    /// How long terminal transaction records remain queryable. `Duration::ZERO` disables TTL eviction.
+    pub terminal_transaction_ttl: Duration,
+    /// Maximum terminal transaction records to retain. `0` means unbounded.
+    pub max_terminal_transactions: usize,
     /// Delay between RPC calls when checking multiple transactions
     /// This prevents overwhelming the RPC endpoint with burst requests
     pub per_transaction_delay: Duration,
@@ -124,6 +250,28 @@ pub struct TransactionMonitorConfig {
     pub revert_reason_timeout: Duration,
     /// Maximum number of transaction checks performed concurrently
     pub max_concurrent_checks: usize,
+    /// Maximum trace jobs waiting for an optional revert-reason lookup. `0` means unbounded.
+    pub max_queued_trace_jobs: usize,
+    /// Number of trace workers. These workers never consume receipt-monitor capacity.
+    /// `0` means unbounded.
+    pub max_concurrent_trace_jobs: usize,
+    /// Disable optional debug tracing while retaining Safe failure publication.
+    pub enable_revert_reason_tracing: bool,
+}
+
+/// Translate a `0` limit into an effectively unbounded one.
+///
+/// Tokio's channel rejects a zero buffer capacity, so unbounded is expressed as the
+/// largest capacity it accepts, and the semaphore is given the same value for
+/// consistency. Neither preallocates, so this costs nothing until the capacity is
+/// actually used.
+fn unbounded_if_zero(limit: usize) -> usize {
+    // Tokio semaphores and bounded channels panic above `MAX_PERMITS`.
+    if limit == 0 {
+        Semaphore::MAX_PERMITS
+    } else {
+        limit.min(Semaphore::MAX_PERMITS)
+    }
 }
 
 impl Default for TransactionMonitorConfig {
@@ -131,11 +279,16 @@ impl Default for TransactionMonitorConfig {
         Self {
             poll_interval: Duration::from_secs(5),
             timeout: Duration::from_secs(300), // 5 minutes
+            terminal_transaction_ttl: Duration::from_secs(24 * 60 * 60),
+            max_terminal_transactions: 10_000,
             per_transaction_delay: Duration::from_millis(100),
             request_timeout: Duration::from_secs(30),
             safe_inspection_timeout: Duration::from_secs(30),
             revert_reason_timeout: Duration::from_secs(30),
             max_concurrent_checks: 16,
+            max_queued_trace_jobs: 128,
+            max_concurrent_trace_jobs: 2,
+            enable_revert_reason_tracing: true,
         }
     }
 }
@@ -146,6 +299,13 @@ pub struct TransactionMonitor<R: ReceiptProvider, S: SafeAddressChecker> {
     receipt_provider: Arc<R>,
     safe_checker: Option<Arc<S>>,
     config: TransactionMonitorConfig,
+    trace_jobs: mpsc::Sender<TraceJob>,
+}
+
+#[derive(Debug, Clone)]
+struct TraceJob {
+    id: uuid::Uuid,
+    tx_hash: Hash,
 }
 
 impl<R: ReceiptProvider, S: SafeAddressChecker> std::fmt::Debug for TransactionMonitor<R, S> {
@@ -157,7 +317,7 @@ impl<R: ReceiptProvider, S: SafeAddressChecker> std::fmt::Debug for TransactionM
     }
 }
 
-impl<R: ReceiptProvider, S: SafeAddressChecker> TransactionMonitor<R, S> {
+impl<R: ReceiptProvider + 'static, S: SafeAddressChecker> TransactionMonitor<R, S> {
     /// Create a new transaction monitor
     pub fn new(
         transaction_store: Arc<TransactionStore>,
@@ -165,11 +325,57 @@ impl<R: ReceiptProvider, S: SafeAddressChecker> TransactionMonitor<R, S> {
         config: TransactionMonitorConfig,
         safe_checker: Option<Arc<S>>,
     ) -> Self {
-        Self {
-            transaction_store,
-            receipt_provider: Arc::new(receipt_provider),
-            safe_checker,
-            config,
+        let (trace_jobs, mut trace_rx) = mpsc::channel::<TraceJob>(unbounded_if_zero(config.max_queued_trace_jobs));
+        if config.enable_revert_reason_tracing {
+            let provider = Arc::new(receipt_provider);
+            let trace_provider = provider.clone();
+            let store = transaction_store.clone();
+            let trace_timeout = config.revert_reason_timeout;
+            let permits = Arc::new(Semaphore::new(unbounded_if_zero(config.max_concurrent_trace_jobs)));
+            tokio::spawn(async move {
+                while let Some(job) = trace_rx.recv().await {
+                    let Ok(permit) = permits.clone().acquire_owned().await else {
+                        break;
+                    };
+                    let provider = trace_provider.clone();
+                    let store = store.clone();
+                    tokio::spawn(async move {
+                        let started = Instant::now();
+                        match timeout(trace_timeout, provider.get_revert_reason(job.tx_hash)).await {
+                            Ok(Ok(reason)) => {
+                                if let Some(reason) = reason {
+                                    let _ = store.update_safe_revert_reason(job.id, reason);
+                                }
+                            }
+                            Ok(Err(error)) => {
+                                record_trace_failure();
+                                warn!(id = %job.id, tx_hash = %job.tx_hash, %error, "Failed to enrich Safe failure");
+                            }
+                            Err(_) => {
+                                record_trace_timeout();
+                                warn!(id = %job.id, tx_hash = %job.tx_hash, "Safe failure trace timed out");
+                            }
+                        }
+                        debug!(id = %job.id, elapsed = ?started.elapsed(), "Safe failure trace job completed");
+                        drop(permit);
+                    });
+                }
+            });
+            Self {
+                transaction_store,
+                receipt_provider: provider,
+                safe_checker,
+                config,
+                trace_jobs,
+            }
+        } else {
+            Self {
+                transaction_store,
+                receipt_provider: Arc::new(receipt_provider),
+                safe_checker,
+                config,
+                trace_jobs,
+            }
         }
     }
 
@@ -191,7 +397,7 @@ impl<R: ReceiptProvider, S: SafeAddressChecker> TransactionMonitor<R, S> {
 
     /// Perform a single poll of all submitted transactions
     async fn poll_once(&self) -> Result<(), String> {
-        let submitted = self.transaction_store.list_by_status(TransactionStatus::Submitted);
+        let submitted = self.transaction_store.list_submitted_fair();
 
         debug!("Polling {} submitted transactions", submitted.len());
 
@@ -201,26 +407,34 @@ impl<R: ReceiptProvider, S: SafeAddressChecker> TransactionMonitor<R, S> {
             })
             .await;
 
+        let evicted = self.transaction_store.evict_terminal_records(
+            self.config.terminal_transaction_ttl,
+            self.config.max_terminal_transactions,
+        );
+        if evicted > 0 {
+            debug!(evicted, "Evicted terminal transaction records");
+        }
+
         Ok(())
     }
 
     async fn check_transaction(&self, record: crate::transaction_store::TransactionRecord) {
         let tx_hash = record.transaction_hash;
-        let receipt_status = timeout(
+        let receipt = timeout(
             self.config.request_timeout,
-            self.receipt_provider.get_transaction_status(tx_hash),
+            self.receipt_provider.get_transaction_receipt(tx_hash),
         )
         .await;
 
-        match receipt_status {
-            Ok(Ok(Some(true))) => {
+        match receipt {
+            Ok(Ok(Some(receipt))) if receipt.success => {
                 info!(id = %record.id, tx_hash = %tx_hash, "Outer transaction confirmed");
 
                 // A successful outer receipt is not sufficient for Safe transactions: the
                 // inner execution outcome must be known before notifying the client.
-                let mut safe_execution = match timeout(
+                let safe_execution = match timeout(
                     self.config.safe_inspection_timeout,
-                    self.try_inspect_safe_execution(&record),
+                    self.try_inspect_safe_execution(&record, &receipt.logs),
                 )
                 .await
                 {
@@ -234,6 +448,7 @@ impl<R: ReceiptProvider, S: SafeAddressChecker> TransactionMonitor<R, S> {
                         None
                     }
                     Ok(Err(error)) => {
+                        record_safe_inspection_retry();
                         warn!(
                             id = %record.id,
                             tx_hash = %tx_hash,
@@ -243,6 +458,7 @@ impl<R: ReceiptProvider, S: SafeAddressChecker> TransactionMonitor<R, S> {
                         return;
                     }
                     Err(_) => {
+                        record_safe_inspection_retry();
                         warn!(
                             id = %record.id,
                             tx_hash = %tx_hash,
@@ -253,45 +469,30 @@ impl<R: ReceiptProvider, S: SafeAddressChecker> TransactionMonitor<R, S> {
                     }
                 };
 
-                // Revert-reason tracing is optional. The Safe failure event already provides
-                // the mandatory inner outcome, so tracing failure must not delay publication.
-                if let Some(safe_result) = safe_execution.as_mut() {
-                    if !safe_result.success {
-                        match timeout(
-                            self.config.revert_reason_timeout,
-                            self.receipt_provider.get_revert_reason(record.transaction_hash),
-                        )
-                        .await
-                        {
-                            Ok(Ok(reason)) => safe_result.revert_reason = reason,
-                            Ok(Err(error)) => {
-                                warn!(
-                                    id = %record.id,
-                                    tx_hash = %tx_hash,
-                                    %error,
-                                    "Failed to enrich Safe execution failure with revert reason"
-                                );
+                let safe_failure = safe_execution.as_ref().is_some_and(|result| !result.success);
+
+                if let Err(e) = self
+                    .transaction_store
+                    .confirm_with_safe_execution(record.id, safe_execution.clone())
+                {
+                    error!(id = %record.id, tx_hash = %tx_hash, error = %e, "Failed to confirm transaction");
+                } else if let Some(result) = safe_execution.as_ref() {
+                    record_safe_execution(result.success);
+                    if safe_failure && self.config.enable_revert_reason_tracing {
+                        match self.trace_jobs.try_send(TraceJob { id: record.id, tx_hash }) {
+                            Ok(()) => {}
+                            Err(TrySendError::Full(_)) => {
+                                record_trace_queue_saturated();
+                                warn!(id = %record.id, "Safe failure trace queue is full; skipping optional enrichment");
                             }
-                            Err(_) => {
-                                warn!(
-                                    id = %record.id,
-                                    tx_hash = %tx_hash,
-                                    timeout = ?self.config.revert_reason_timeout,
-                                    "Revert-reason tracing timed out"
-                                );
+                            Err(TrySendError::Closed(_)) => {
+                                warn!(id = %record.id, "Safe failure trace worker is not running; skipping optional enrichment");
                             }
                         }
                     }
                 }
-
-                if let Err(e) = self
-                    .transaction_store
-                    .confirm_with_safe_execution(record.id, safe_execution)
-                {
-                    error!(id = %record.id, tx_hash = %tx_hash, error = %e, "Failed to confirm transaction");
-                }
             }
-            Ok(Ok(Some(false))) => {
+            Ok(Ok(Some(_))) => {
                 warn!(id = %record.id, tx_hash = %tx_hash, "Transaction reverted");
                 if let Err(e) = self.transaction_store.update_status(
                     record.id,
@@ -309,11 +510,22 @@ impl<R: ReceiptProvider, S: SafeAddressChecker> TransactionMonitor<R, S> {
             Ok(Ok(None)) => {
                 let elapsed = chrono::Utc::now().signed_duration_since(record.submitted_at);
                 if elapsed.to_std().ok() > Some(self.config.timeout) {
-                    warn!(id = %record.id, tx_hash = %tx_hash, "Transaction timed out");
+                    let diagnosis = self.diagnose_unmined(&record).await;
+                    if diagnosis == UnminedDiagnosis::MinedSinceCheck {
+                        debug!(id = %record.id, tx_hash = %tx_hash, "Transaction mined since the receipt lookup");
+                        return;
+                    }
+                    warn!(
+                        id = %record.id,
+                        tx_hash = %tx_hash,
+                        diagnosis = diagnosis.label(),
+                        "Transaction timed out: {}",
+                        diagnosis.message()
+                    );
                     if let Err(e) = self.transaction_store.update_status(
                         record.id,
                         TransactionStatus::Timeout,
-                        Some("Transaction timed out waiting for confirmation".to_string()),
+                        Some(diagnosis.message()),
                     ) {
                         error!(
                             id = %record.id,
@@ -346,11 +558,50 @@ impl<R: ReceiptProvider, S: SafeAddressChecker> TransactionMonitor<R, S> {
     async fn try_inspect_safe_execution(
         &self,
         record: &crate::transaction_store::TransactionRecord,
+        logs: &[ReceiptLog],
     ) -> Result<Option<SafeExecutionResult>, SafeExecutionInspectionError> {
         let Some(safe_checker) = self.safe_checker.as_ref() else {
             return Ok(None);
         };
-        inspect_safe_execution(record, self.receipt_provider.as_ref(), safe_checker.as_ref()).await
+        inspect_safe_execution_logs_for_record(record, safe_checker.as_ref(), logs).await
+    }
+
+    /// Explain why a timed-out transaction was not mined, from the node's view of the
+    /// transaction and of the signer's nonce. Any lookup failure yields `Unknown`.
+    async fn diagnose_unmined(&self, record: &crate::transaction_store::TransactionRecord) -> UnminedDiagnosis {
+        let Some((signer, nonce)) = decode_transaction_signer_and_nonce(&record.raw_transaction) else {
+            return UnminedDiagnosis::Unknown;
+        };
+
+        let known = timeout(
+            self.config.request_timeout,
+            self.receipt_provider.is_transaction_known(record.transaction_hash),
+        );
+        let mined_nonce = timeout(
+            self.config.request_timeout,
+            self.receipt_provider.get_mined_nonce(signer),
+        );
+        let pending_nonce = timeout(
+            self.config.request_timeout,
+            self.receipt_provider.get_pending_nonce(signer),
+        );
+
+        match tokio::join!(known, mined_nonce, pending_nonce) {
+            (Ok(Ok(known)), Ok(Ok(mined_nonce)), Ok(Ok(pending_nonce))) => {
+                classify_unmined(known, nonce, mined_nonce, pending_nonce)
+            }
+            (known, mined_nonce, pending_nonce) => {
+                debug!(
+                    id = %record.id,
+                    tx_hash = %record.transaction_hash,
+                    ?known,
+                    ?mined_nonce,
+                    ?pending_nonce,
+                    "Could not diagnose why the transaction was not mined"
+                );
+                UnminedDiagnosis::Unknown
+            }
+        }
     }
 
     #[cfg(test)]
@@ -359,7 +610,13 @@ impl<R: ReceiptProvider, S: SafeAddressChecker> TransactionMonitor<R, S> {
         record: &crate::transaction_store::TransactionRecord,
     ) -> Option<SafeExecutionResult> {
         let safe_checker = self.safe_checker.as_ref()?;
-        enrich_safe_execution(record, self.receipt_provider.as_ref(), safe_checker.as_ref()).await
+        enrich_safe_execution(
+            record,
+            self.receipt_provider.as_ref(),
+            safe_checker.as_ref(),
+            self.config.enable_revert_reason_tracing,
+        )
+        .await
     }
 }
 
@@ -402,6 +659,28 @@ pub async fn inspect_safe_execution(
     Ok(Some(result))
 }
 
+/// Decode a Safe outcome from receipt logs which have already been fetched by
+/// the monitor. This keeps Safe inspection and outer receipt status atomic from
+/// the client's point of view and prevents a second receipt RPC request.
+async fn inspect_safe_execution_logs_for_record(
+    record: &crate::transaction_store::TransactionRecord,
+    safe_checker: &(impl SafeAddressChecker + ?Sized),
+    logs: &[ReceiptLog],
+) -> Result<Option<SafeExecutionResult>, SafeExecutionInspectionError> {
+    let to_addr = decode_transaction_to_address(&record.raw_transaction)
+        .ok_or(SafeExecutionInspectionError::InvalidTransactionTarget)?;
+    let Some(safe_address) = safe_checker
+        .find_safe_for_target(&to_addr)
+        .await
+        .map_err(SafeExecutionInspectionError::SafeLookup)?
+    else {
+        return Ok(None);
+    };
+    inspect_safe_execution_logs(&safe_address, logs)
+        .map(Some)
+        .ok_or(SafeExecutionInspectionError::ExecutionEventMissing)
+}
+
 /// Attempt to extract Safe execution results for a confirmed transaction.
 ///
 /// Decodes the raw transaction to extract the `to` address, checks if it is a
@@ -417,6 +696,7 @@ pub async fn enrich_safe_execution(
     record: &crate::transaction_store::TransactionRecord,
     receipt_provider: &(impl ReceiptProvider + ?Sized),
     safe_checker: &(impl SafeAddressChecker + ?Sized),
+    enable_revert_reason_tracing: bool,
 ) -> Option<SafeExecutionResult> {
     let mut result = match inspect_safe_execution(record, receipt_provider, safe_checker).await {
         Ok(result) => result,
@@ -427,11 +707,15 @@ pub async fn enrich_safe_execution(
     };
 
     if let Some(safe_result) = result.as_mut() {
-        if !safe_result.success {
-            safe_result.revert_reason = receipt_provider
-                .get_revert_reason(record.transaction_hash)
-                .await
-                .unwrap_or(None);
+        if !safe_result.success && enable_revert_reason_tracing {
+            safe_result.revert_reason = match receipt_provider.get_revert_reason(record.transaction_hash).await {
+                Ok(reason) => reason,
+                Err(error) => {
+                    record_trace_failure();
+                    warn!(id = %record.id, %error, "Failed to trace Safe failure");
+                    None
+                }
+            };
         }
     }
 
@@ -440,7 +724,10 @@ pub async fn enrich_safe_execution(
 
 #[cfg(test)]
 mod tests {
-    use std::future::pending;
+    use std::{
+        future::pending,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
 
     use alloy_sol_types::SolEvent;
     use chrono::{DateTime, Utc};
@@ -484,6 +771,13 @@ mod tests {
         hanging_revert_reasons: Arc<DashMap<Hash, ()>>,
         // Transactions whose receipt lookup never completes
         hanging_statuses: Arc<DashMap<Hash, ()>>,
+        // Transactions the node still knows (absent = unknown to the node)
+        known_transactions: Arc<DashMap<Hash, ()>>,
+        // Next nonce per signer (absent = 0)
+        mined_nonces: Arc<DashMap<[u8; 20], u64>>,
+        // Next nonce per signer including the mempool (absent = mined nonce)
+        pending_nonces: Arc<DashMap<[u8; 20], u64>>,
+        receipt_calls: Arc<AtomicUsize>,
     }
 
     impl MockReceiptProvider {
@@ -494,7 +788,23 @@ mod tests {
                 revert_reasons: Arc::new(DashMap::new()),
                 hanging_revert_reasons: Arc::new(DashMap::new()),
                 hanging_statuses: Arc::new(DashMap::new()),
+                known_transactions: Arc::new(DashMap::new()),
+                mined_nonces: Arc::new(DashMap::new()),
+                pending_nonces: Arc::new(DashMap::new()),
+                receipt_calls: Arc::new(AtomicUsize::new(0)),
             }
+        }
+
+        fn set_known(&self, tx_hash: Hash) {
+            self.known_transactions.insert(tx_hash, ());
+        }
+
+        fn set_mined_nonce(&self, address: [u8; 20], nonce: u64) {
+            self.mined_nonces.insert(address, nonce);
+        }
+
+        fn set_pending_nonce(&self, address: [u8; 20], nonce: u64) {
+            self.pending_nonces.insert(address, nonce);
         }
 
         fn set_status(&self, tx_hash: Hash, status: Option<bool>) {
@@ -520,15 +830,28 @@ mod tests {
         fn set_revert_reason_hanging(&self, tx_hash: Hash) {
             self.hanging_revert_reasons.insert(tx_hash, ());
         }
+
+        fn receipt_call_count(&self) -> usize {
+            self.receipt_calls.load(Ordering::Relaxed)
+        }
     }
 
     #[async_trait]
     impl ReceiptProvider for MockReceiptProvider {
-        async fn get_transaction_status(&self, tx_hash: Hash) -> Result<Option<bool>, String> {
+        async fn get_transaction_receipt(&self, tx_hash: Hash) -> Result<Option<TransactionReceipt>, String> {
+            self.receipt_calls.fetch_add(1, Ordering::Relaxed);
             if self.hanging_statuses.contains_key(&tx_hash) {
                 return pending().await;
             }
-            Ok(self.statuses.get(&tx_hash).map(|entry| *entry.value()).unwrap_or(None))
+            let Some(Some(success)) = self.statuses.get(&tx_hash).map(|entry| *entry.value()) else {
+                return Ok(None);
+            };
+            let logs = match self.receipt_logs.get(&tx_hash) {
+                Some(entry) => entry.value().clone()?,
+                None => None,
+            }
+            .unwrap_or_default();
+            Ok(Some(TransactionReceipt { success, logs }))
         }
 
         async fn get_transaction_receipt_logs(&self, tx_hash: Hash) -> Result<Option<Vec<ReceiptLog>>, String> {
@@ -546,6 +869,21 @@ mod tests {
             match self.revert_reasons.get(&tx_hash) {
                 Some(entry) => entry.value().clone(),
                 None => Ok(None),
+            }
+        }
+
+        async fn is_transaction_known(&self, tx_hash: Hash) -> Result<bool, String> {
+            Ok(self.known_transactions.contains_key(&tx_hash))
+        }
+
+        async fn get_mined_nonce(&self, address: [u8; 20]) -> Result<u64, String> {
+            Ok(self.mined_nonces.get(&address).map(|entry| *entry.value()).unwrap_or(0))
+        }
+
+        async fn get_pending_nonce(&self, address: [u8; 20]) -> Result<u64, String> {
+            match self.pending_nonces.get(&address) {
+                Some(entry) => Ok(*entry.value()),
+                None => self.get_mined_nonce(address).await,
             }
         }
     }
@@ -601,10 +939,15 @@ mod tests {
 
     /// Create a raw signed transaction targeting a specific address
     async fn create_raw_tx_to(target: &[u8; 20]) -> Vec<u8> {
+        create_raw_tx_with_nonce(target, 0).await
+    }
+
+    /// Create a raw signed transaction targeting a specific address with a given nonce
+    async fn create_raw_tx_with_nonce(target: &[u8; 20], nonce: u64) -> Vec<u8> {
         let signer = PrivateKeySigner::random();
         let tx = TxLegacy {
             chain_id: Some(1),
-            nonce: 0,
+            nonce,
             gas_price: 1_000_000_000,
             gas_limit: 21_000,
             to: TxKind::Call(AlloyAddress::from_slice(target)),
@@ -639,6 +982,29 @@ mod tests {
             TransactionMonitorConfig::default(),
             Some(Arc::new(safe_checker)),
         )
+    }
+
+    #[test]
+    fn test_unbounded_if_zero_caps_at_max_permits() {
+        assert_eq!(unbounded_if_zero(0), Semaphore::MAX_PERMITS);
+        assert_eq!(unbounded_if_zero(3), 3);
+        assert_eq!(unbounded_if_zero(usize::MAX), Semaphore::MAX_PERMITS);
+    }
+
+    #[tokio::test]
+    async fn test_monitor_accepts_oversized_trace_limits() {
+        let config = TransactionMonitorConfig {
+            enable_revert_reason_tracing: true,
+            max_concurrent_trace_jobs: usize::MAX,
+            max_queued_trace_jobs: usize::MAX,
+            ..TransactionMonitorConfig::default()
+        };
+        let _monitor: TransactionMonitor<MockReceiptProvider, NoSafeEnrichment> = TransactionMonitor::new(
+            Arc::new(TransactionStore::new()),
+            MockReceiptProvider::new(),
+            config,
+            None,
+        );
     }
 
     #[tokio::test]
@@ -767,6 +1133,170 @@ mod tests {
         let updated = store.get(id).unwrap();
         assert_eq!(updated.status, TransactionStatus::Timeout);
         assert!(updated.error_message.is_some());
+    }
+
+    #[test]
+    fn test_classify_unmined() {
+        assert_eq!(classify_unmined(false, 4, 5, 5), UnminedDiagnosis::Replaced);
+        assert_eq!(classify_unmined(false, 5, 5, 5), UnminedDiagnosis::Dropped);
+        assert_eq!(classify_unmined(false, 7, 5, 5), UnminedDiagnosis::Dropped);
+        assert_eq!(classify_unmined(true, 5, 5, 6), UnminedDiagnosis::Pending);
+        // Nonces 5, 6 and 7 are all pending: 7 is queued, not gapped.
+        assert_eq!(classify_unmined(true, 7, 5, 8), UnminedDiagnosis::Pending);
+        // Node not reporting mempool nonces: pending equals mined.
+        assert_eq!(classify_unmined(true, 5, 5, 5), UnminedDiagnosis::Pending);
+        assert_eq!(
+            classify_unmined(true, 7, 5, 5),
+            UnminedDiagnosis::NonceGap {
+                nonce: 7,
+                missing_nonce: 5
+            }
+        );
+        // Nonce 5 is pending but 6 is missing.
+        assert_eq!(
+            classify_unmined(true, 7, 5, 6),
+            UnminedDiagnosis::NonceGap {
+                nonce: 7,
+                missing_nonce: 6
+            }
+        );
+        assert_eq!(classify_unmined(true, 4, 5, 5), UnminedDiagnosis::MinedSinceCheck);
+    }
+
+    /// Insert a submitted record for `raw_tx` that is already past the monitor timeout.
+    fn insert_expired_record(store: &TransactionStore, raw_tx: Vec<u8>) -> Hash {
+        let tx_hash = test_tx_hash();
+        store
+            .insert(TransactionRecord {
+                id: TEST_UUID,
+                raw_transaction: raw_tx,
+                transaction_hash: tx_hash,
+                status: TransactionStatus::Submitted,
+                submitted_at: chrono::Utc::now() - chrono::Duration::try_seconds(400).unwrap(),
+                confirmed_at: None,
+                error_message: None,
+                safe_execution: None,
+            })
+            .unwrap();
+        tx_hash
+    }
+
+    #[tokio::test]
+    async fn test_monitor_timeout_reports_replaced_transaction() {
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        let raw_tx = create_raw_tx_to(&[0x11; 20]).await;
+        let (signer, nonce) = decode_transaction_signer_and_nonce(&raw_tx).unwrap();
+        provider.set_mined_nonce(signer, nonce + 1);
+        insert_expired_record(&store, raw_tx);
+
+        let monitor = create_monitor(store.clone(), provider);
+        monitor.poll_once().await.unwrap();
+
+        let updated = store.get(TEST_UUID).unwrap();
+        assert_eq!(updated.status, TransactionStatus::Timeout);
+        assert_eq!(updated.error_message, Some(UnminedDiagnosis::Replaced.message()));
+    }
+
+    #[tokio::test]
+    async fn test_monitor_timeout_reports_dropped_transaction() {
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        insert_expired_record(&store, create_raw_tx_to(&[0x11; 20]).await);
+
+        let monitor = create_monitor(store.clone(), provider);
+        monitor.poll_once().await.unwrap();
+
+        let updated = store.get(TEST_UUID).unwrap();
+        assert_eq!(updated.status, TransactionStatus::Timeout);
+        assert_eq!(updated.error_message, Some(UnminedDiagnosis::Dropped.message()));
+    }
+
+    #[tokio::test]
+    async fn test_monitor_timeout_reports_pending_transaction() {
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        let tx_hash = test_tx_hash();
+        provider.set_known(tx_hash);
+        insert_expired_record(&store, create_raw_tx_to(&[0x11; 20]).await);
+
+        let monitor = create_monitor(store.clone(), provider);
+        monitor.poll_once().await.unwrap();
+
+        let updated = store.get(TEST_UUID).unwrap();
+        assert_eq!(updated.status, TransactionStatus::Timeout);
+        assert_eq!(updated.error_message, Some(UnminedDiagnosis::Pending.message()));
+    }
+
+    #[tokio::test]
+    async fn test_monitor_timeout_reports_queued_transaction_as_pending() {
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        // Nonces 5, 6 and 7 are all pending; 7 is queued behind the others.
+        let raw_tx = create_raw_tx_with_nonce(&[0x11; 20], 7).await;
+        let (signer, _) = decode_transaction_signer_and_nonce(&raw_tx).unwrap();
+        provider.set_known(test_tx_hash());
+        provider.set_mined_nonce(signer, 5);
+        provider.set_pending_nonce(signer, 8);
+        insert_expired_record(&store, raw_tx);
+
+        let monitor = create_monitor(store.clone(), provider);
+        monitor.poll_once().await.unwrap();
+
+        let updated = store.get(TEST_UUID).unwrap();
+        assert_eq!(updated.status, TransactionStatus::Timeout);
+        assert_eq!(updated.error_message, Some(UnminedDiagnosis::Pending.message()));
+    }
+
+    #[tokio::test]
+    async fn test_monitor_timeout_reports_nonce_gap() {
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        // Nonce 5 is pending but 6 is missing, so 7 cannot be mined.
+        let raw_tx = create_raw_tx_with_nonce(&[0x11; 20], 7).await;
+        let (signer, _) = decode_transaction_signer_and_nonce(&raw_tx).unwrap();
+        provider.set_known(test_tx_hash());
+        provider.set_mined_nonce(signer, 5);
+        provider.set_pending_nonce(signer, 6);
+        insert_expired_record(&store, raw_tx);
+
+        let monitor = create_monitor(store.clone(), provider);
+        monitor.poll_once().await.unwrap();
+
+        let updated = store.get(TEST_UUID).unwrap();
+        assert_eq!(updated.status, TransactionStatus::Timeout);
+        assert_eq!(
+            updated.error_message,
+            Some(
+                UnminedDiagnosis::NonceGap {
+                    nonce: 7,
+                    missing_nonce: 6
+                }
+                .message()
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn test_monitor_timeout_skips_transaction_mined_since_check() {
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        let raw_tx = create_raw_tx_to(&[0x11; 20]).await;
+        let (signer, nonce) = decode_transaction_signer_and_nonce(&raw_tx).unwrap();
+        provider.set_known(test_tx_hash());
+        provider.set_mined_nonce(signer, nonce + 1);
+        insert_expired_record(&store, raw_tx);
+
+        let monitor = create_monitor(store.clone(), provider);
+        monitor.poll_once().await.unwrap();
+
+        assert_eq!(store.get(TEST_UUID).unwrap().status, TransactionStatus::Submitted);
     }
 
     #[tokio::test]
@@ -903,6 +1433,44 @@ mod tests {
             .unwrap();
 
         assert_eq!(store.get(TEST_UUID).unwrap().status, TransactionStatus::Submitted);
+    }
+
+    #[tokio::test]
+    async fn test_known_safe_uses_one_receipt_for_status_and_execution_logs() {
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+        let safe_address = [0xAA; 20];
+        let tx_hash = test_tx_hash();
+        provider.set_status(tx_hash, Some(true));
+        provider.set_receipt_logs(
+            tx_hash,
+            vec![ReceiptLog {
+                address: safe_address,
+                topics: vec![ExecutionSuccess::SIGNATURE_HASH.0],
+                data: vec![0u8; 64],
+            }],
+        );
+        store
+            .insert(TransactionRecord {
+                id: TEST_UUID,
+                raw_transaction: create_raw_tx_to(&safe_address).await,
+                transaction_hash: tx_hash,
+                status: TransactionStatus::Submitted,
+                submitted_at: Utc::now(),
+                confirmed_at: None,
+                error_message: None,
+                safe_execution: None,
+            })
+            .unwrap();
+
+        let safe_checker = MockSafeAddressChecker::new();
+        safe_checker.add_safe(safe_address);
+        let monitor = create_monitor_with_safe_checker(store.clone(), provider, safe_checker);
+        monitor.poll_once().await.unwrap();
+
+        let record = store.get(TEST_UUID).unwrap();
+        assert_eq!(record.status, TransactionStatus::Confirmed);
+        assert_eq!(monitor.receipt_provider.receipt_call_count(), 1);
     }
 
     #[tokio::test]

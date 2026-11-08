@@ -20,7 +20,7 @@ use blokli_api::{
     mutation::MutationRoot,
     query::QueryRoot,
     readiness::ReadinessChecker,
-    schema::build_schema,
+    schema::{GasFeeFloors, build_schema},
     server::{ApiDatabases, build_app},
     subscription::SubscriptionRoot,
 };
@@ -104,6 +104,19 @@ pub fn create_test_schema(db: &BlokliDb) -> (Schema<QueryRoot, MutationRoot, Sub
     (schema, indexer_state)
 }
 
+/// Like [`create_test_schema`], but with an event bus that holds only `event_bus_capacity` events, so tests can make
+/// a subscription fall behind.
+#[allow(unused)]
+pub fn create_test_schema_with_event_bus_capacity(
+    db: &BlokliDb,
+    event_bus_capacity: usize,
+) -> (Schema<QueryRoot, MutationRoot, SubscriptionRoot>, IndexerState) {
+    let indexer_state = IndexerState::new(event_bus_capacity, 100);
+    let schema = build_subscription_test_schema(db, indexer_state.clone());
+
+    (schema, indexer_state)
+}
+
 fn build_subscription_test_schema(
     db: &BlokliDb,
     indexer_state: IndexerState,
@@ -147,6 +160,7 @@ fn build_subscription_test_schema(
         1,
         3,
         1.0,
+        GasFeeFloors::default(),
         indexer_state,
         transaction_executor,
         transaction_store,
@@ -291,6 +305,7 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
         config.expected_block_time.as_secs(),
         3, // Test finality value
         1.0,
+        GasFeeFloors::default(),
         indexer_state,
         transaction_executor.clone(),
         transaction_store.clone(),
@@ -577,11 +592,16 @@ pub async fn setup_transaction_test_environment(
     let monitor_config = TransactionMonitorConfig {
         poll_interval,
         timeout: Duration::from_secs(30),
+        terminal_transaction_ttl: Duration::from_secs(24 * 60 * 60),
+        max_terminal_transactions: 10_000,
         per_transaction_delay: Duration::from_millis(10),
         request_timeout: Duration::from_secs(5),
         safe_inspection_timeout: Duration::from_secs(5),
         revert_reason_timeout: Duration::from_secs(5),
         max_concurrent_checks: 4,
+        max_queued_trace_jobs: 8,
+        max_concurrent_trace_jobs: 4,
+        enable_revert_reason_tracing: true,
     };
 
     let transaction_monitor = Arc::new(TransactionMonitor::new(
