@@ -192,7 +192,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | `config.indexer.enableSafeIndexing`                  | Enable Safe contract event indexing for discovered Safes                                                      | `false`             |
 | `config.indexer.enableCurvyIndexing`                 | Enable Curvy event indexing using config.curvyAggregator                                                      | `false`             |
 | `config.indexer.logsSnapshotUrl`                     | URL for logs snapshot download (required when enableLogsSnapshot is true)                                     | `""`                |
-| `config.indexer.logsSnapshotSha256`                  | Expected SHA-256 hex digest of the logs snapshot archive (recommended when enableLogsSnapshot is true)        | `""`                |
+| `config.indexer.logsSnapshotSha256`                  | Expected SHA-256 hex digest of the logs snapshot archive (required when enableLogsSnapshot is true or logsSnapshotUrl is set) | `""`                |
 | `config.indexer.subscription.eventBusCapacity`       | Capacity of the event bus buffer for channel events                                                           | `1000`              |
 | `config.indexer.subscription.shutdownSignalCapacity` | Capacity of the shutdown signal buffer                                                                        | `10`                |
 | `config.indexer.subscription.batchSize`              | Batch size for Phase 1 historical channel queries                                                             | `100`               |

@@ -42,9 +42,7 @@ data:
     {{- end }}
     {{- if .Values.config.indexer.enableLogsSnapshot }}
     logs_snapshot_url = "{{ required "config.indexer.logsSnapshotUrl is required" .Values.config.indexer.logsSnapshotUrl }}"
-    {{- if .Values.config.indexer.logsSnapshotSha256 }}
-    logs_snapshot_sha256 = "{{ .Values.config.indexer.logsSnapshotSha256 }}"
-    {{- end }}
+    logs_snapshot_sha256 = "{{ required "config.indexer.logsSnapshotSha256 is required" .Values.config.indexer.logsSnapshotSha256 }}"
     {{- end }}
 
     # Indexer subscription configuration

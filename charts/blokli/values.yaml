@@ -482,7 +482,7 @@ config:
     ## @param config.indexer.logsSnapshotUrl URL for logs snapshot download (required when enableLogsSnapshot is true)
     ##
     logsSnapshotUrl: ""
-    ## @param config.indexer.logsSnapshotSha256 Expected SHA-256 hex digest of the logs snapshot archive (recommended when enableLogsSnapshot is true)
+    ## @param config.indexer.logsSnapshotSha256 Expected SHA-256 hex digest of the logs snapshot archive (required when enableLogsSnapshot is true or logsSnapshotUrl is set)
     ##
     logsSnapshotSha256: ""
     # Subscription behavior configuration
