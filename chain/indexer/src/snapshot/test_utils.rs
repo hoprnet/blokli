@@ -41,7 +41,7 @@ impl TestSnapshotManager {
     /// # Arguments
     ///
     /// * `url` - Snapshot URL (`https://`, `http://`, or `file://` scheme)
-    /// * `expected_sha256` - Optional hex-encoded SHA-256 digest of the archive
+    /// * `expected_sha256` - Hex-encoded SHA-256 digest of the archive
     /// * `data_dir` - Target directory for extracted files
     ///
     /// # Returns
@@ -50,7 +50,7 @@ impl TestSnapshotManager {
     pub async fn download_and_setup_snapshot(
         &self,
         url: &str,
-        expected_sha256: Option<&str>,
+        expected_sha256: &str,
         data_dir: &Path,
     ) -> SnapshotResult<SnapshotInfo> {
         self.workflow

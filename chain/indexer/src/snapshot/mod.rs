@@ -7,7 +7,7 @@
 //!
 //! - **HTTP/HTTPS Downloads**: Secure download with retry logic and progress tracking
 //! - **Local File Support**: Direct installation from local `file://` URLs
-//! - **Integrity Check**: Optional SHA-256 digest verification of the archive before extraction
+//! - **Integrity Check**: Mandatory SHA-256 digest verification of the archive before extraction
 //! - **Archive Extraction**: Safe tar.xz extraction with path traversal protection
 //! - **SQL Validation**: PostgreSQL-style `COPY ... FROM stdin` dump verification
 //! - **Disk Space Management**: Cross-platform space validation before operations
@@ -29,7 +29,7 @@
 //! let info = manager
 //!     .download_and_setup_snapshot(
 //!         "https://snapshots.hoprnet.org/logs.tar.xz",
-//!         Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+//!         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 //!         Path::new("/data/hopr")
 //!     )
 //!     .await?;
@@ -111,12 +111,12 @@ impl SnapshotWorkflow {
     ///
     /// Downloads, verifies, extracts, validates, and installs a snapshot using the provided installer.
     ///
-    /// If `expected_sha256` is set, the downloaded archive must match it before extraction starts.
+    /// The downloaded archive must match `expected_sha256` before extraction starts.
     async fn execute_workflow<I: SnapshotInstaller>(
         &self,
         installer: &I,
         url: &str,
-        expected_sha256: Option<&str>,
+        expected_sha256: &str,
         data_dir: &Path,
         use_temp_subdir: bool,
     ) -> SnapshotResult<SnapshotInfo> {
@@ -213,7 +213,7 @@ where
     ///
     /// Performs the complete snapshot setup workflow:
     /// 1. Downloads archive from URL (HTTP/HTTPS/file://)
-    /// 2. Verifies the archive SHA-256 digest, if `expected_sha256` is set
+    /// 2. Verifies the archive SHA-256 digest against `expected_sha256`
     /// 3. Extracts tar.xz archive safely
     /// 4. Validates SQL dump integrity
     /// 5. Installs via [`BlokliDbGeneralModelOperations::import_logs_snapshot`]
@@ -222,7 +222,7 @@ where
     /// # Arguments
     ///
     /// * `url` - Snapshot URL (`https://`, `http://`, or `file://` scheme)
-    /// * `expected_sha256` - Optional hex-encoded SHA-256 digest of the archive
+    /// * `expected_sha256` - Hex-encoded SHA-256 digest of the archive
     /// * `data_dir` - Target directory for temporary files during installation
     ///
     /// # Returns
@@ -243,14 +243,18 @@ where
     /// # async fn example(manager: SnapshotManager<impl blokli_db::BlokliDbGeneralModelOperations + Clone + Send + Sync + 'static>) -> Result<(), Box<dyn std::error::Error>> {
     /// // Download from HTTPS
     /// let info = manager
-    ///     .download_and_setup_snapshot("https://snapshots.hoprnet.org/logs.tar.xz", None, Path::new("/data"))
+    ///     .download_and_setup_snapshot(
+    ///         "https://snapshots.hoprnet.org/logs.tar.xz",
+    ///         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    ///         Path::new("/data"),
+    ///     )
     ///     .await?;
     ///
     /// // Use local file and verify its digest
     /// let info = manager
     ///     .download_and_setup_snapshot(
     ///         "file:///backups/snapshot.tar.xz",
-    ///         Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+    ///         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     ///         Path::new("/data"),
     ///     )
     ///     .await?;
@@ -260,7 +264,7 @@ where
     pub async fn download_and_setup_snapshot(
         &self,
         url: &str,
-        expected_sha256: Option<&str>,
+        expected_sha256: &str,
         data_dir: &Path,
     ) -> SnapshotResult<SnapshotInfo> {
         self.workflow
@@ -422,7 +426,9 @@ mod tests {
 
         // Test file:// URL using TestSnapshotManager
         let file_url = format!("file://{}", archive_path.display());
-        let result = manager.download_and_setup_snapshot(&file_url, None, &data_dir).await;
+        let result = manager
+            .download_and_setup_snapshot(&file_url, &sha256_hex(&archive_path), &data_dir)
+            .await;
 
         assert!(result.is_ok(), "TestSnapshotManager should handle file:// URLs");
         let info = result.unwrap();
@@ -447,7 +453,9 @@ mod tests {
         let file_url = format!("file://{}", archive_path.display());
 
         // Test the full workflow through TestSnapshotManager
-        let result = manager.download_and_setup_snapshot(&file_url, None, &data_dir).await;
+        let result = manager
+            .download_and_setup_snapshot(&file_url, &sha256_hex(&archive_path), &data_dir)
+            .await;
         assert!(result.is_ok(), "TestSnapshotManager should handle complete workflow");
 
         let info = result.unwrap();
@@ -459,7 +467,9 @@ mod tests {
         // Also test individual component access
         let downloader = manager.workflow.downloader;
         let downloaded_archive = data_dir.join("test_download.tar.xz");
-        let download_result = downloader.download_snapshot(&file_url, &downloaded_archive, None).await;
+        let download_result = downloader
+            .download_snapshot(&file_url, &downloaded_archive, &sha256_hex(&archive_path))
+            .await;
         assert!(download_result.is_ok(), "file:// URL download should succeed");
         assert!(downloaded_archive.exists(), "Downloaded archive should exist");
     }
@@ -475,7 +485,7 @@ mod tests {
         let manager = TestSnapshotManager::new().expect("Failed to create TestSnapshotManager");
         let file_url = format!("file://{}", archive_path.display());
         let result = manager
-            .download_and_setup_snapshot(&file_url, Some(WRONG_SHA256), &data_dir)
+            .download_and_setup_snapshot(&file_url, WRONG_SHA256, &data_dir)
             .await;
 
         match result {
@@ -508,7 +518,7 @@ mod tests {
         let manager = TestSnapshotManager::new().expect("Failed to create TestSnapshotManager");
         let file_url = format!("file://{}", archive_path.display());
         let info = manager
-            .download_and_setup_snapshot(&file_url, Some(&expected_sha256), &data_dir)
+            .download_and_setup_snapshot(&file_url, &expected_sha256, &data_dir)
             .await
             .expect("snapshot with matching digest should be installed");
 
@@ -542,7 +552,7 @@ mod tests {
         let importer = SnapshotManager::with_db(restored_db.clone()).expect("snapshot manager");
 
         let rejected = importer
-            .download_and_setup_snapshot(&file_url, Some(WRONG_SHA256), &data_dir)
+            .download_and_setup_snapshot(&file_url, WRONG_SHA256, &data_dir)
             .await;
         assert!(
             matches!(rejected, Err(SnapshotError::DigestMismatch { .. })),
@@ -560,7 +570,7 @@ mod tests {
         );
 
         let restored = importer
-            .download_and_setup_snapshot(&file_url, Some(&sha256_hex(&archive_path)), &data_dir)
+            .download_and_setup_snapshot(&file_url, &sha256_hex(&archive_path), &data_dir)
             .await
             .expect("import snapshot with matching digest");
         assert_eq!(restored.log_count, Some(2));
@@ -589,7 +599,11 @@ mod tests {
         let restored_db = BlokliDb::new_in_memory().await.expect("restored db");
         let importer = SnapshotManager::with_db(restored_db.clone()).expect("snapshot manager");
         let restored = importer
-            .download_and_setup_snapshot(&format!("file://{}", archive_path.display()), None, temp_dir.path())
+            .download_and_setup_snapshot(
+                &format!("file://{}", archive_path.display()),
+                &sha256_hex(&archive_path),
+                temp_dir.path(),
+            )
             .await
             .expect("import snapshot");
 

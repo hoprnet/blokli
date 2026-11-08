@@ -4,7 +4,7 @@
 //! - **URL Support**: HTTP/HTTPS with retry logic, local file:// URLs
 //! - **Safety**: Size limits, timeout protection, disk space validation
 //! - **Reliability**: Exponential backoff, progress tracking, error recovery
-//! - **Integrity**: Optional SHA-256 digest check of the archive before it is used
+//! - **Integrity**: Mandatory SHA-256 digest check of the archive before it is used
 //! - **Cross-platform**: Uses sysinfo for disk space checking
 
 use std::{
@@ -80,7 +80,7 @@ pub struct DownloadConfig {
 ///     .download_snapshot(
 ///         "https://snapshots.hoprnet.org/logs.tar.xz",
 ///         Path::new("/tmp/snapshot.tar.xz"),
-///         None,
+///         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 ///     )
 ///     .await?;
 ///
@@ -89,7 +89,7 @@ pub struct DownloadConfig {
 ///     .download_snapshot(
 ///         "file:///backups/snapshot.tar.xz",
 ///         Path::new("/tmp/snapshot.tar.xz"),
-///         Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+///         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 ///     )
 ///     .await?;
 /// # Ok(())
@@ -126,18 +126,13 @@ impl SnapshotDownloader {
     ///
     /// * `url` - Source URL (http://, https://, or file:// scheme)
     /// * `target_path` - Destination file path
-    /// * `expected_sha256` - Optional hex-encoded SHA-256 digest the downloaded archive must match
+    /// * `expected_sha256` - Hex-encoded SHA-256 digest the downloaded archive must match
     ///
     /// # Errors
     ///
     /// Returns [`SnapshotError`] for network failures, file system errors, or validation failures.
-    /// Returns [`SnapshotError::DigestMismatch`] if `expected_sha256` is set and does not match.
-    pub async fn download_snapshot(
-        &self,
-        url: &str,
-        target_path: &Path,
-        expected_sha256: Option<&str>,
-    ) -> SnapshotResult<()> {
+    /// Returns [`SnapshotError::DigestMismatch`] if the archive does not match `expected_sha256`.
+    pub async fn download_snapshot(&self, url: &str, target_path: &Path, expected_sha256: &str) -> SnapshotResult<()> {
         self.download_snapshot_with_retry(url, target_path, expected_sha256, self.config.max_retries)
             .await
     }
@@ -152,7 +147,7 @@ impl SnapshotDownloader {
     ///
     /// * `url` - The HTTP/HTTPS or file:// URL to download/copy from
     /// * `target_path` - Local path where the downloaded file will be saved
-    /// * `expected_sha256` - Optional hex-encoded SHA-256 digest the downloaded archive must match
+    /// * `expected_sha256` - Hex-encoded SHA-256 digest the downloaded archive must match
     /// * `max_retries` - Maximum number of retry attempts (ignored for file:// URLs)
     ///
     /// # Errors
@@ -168,55 +163,39 @@ impl SnapshotDownloader {
         &self,
         url: &str,
         target_path: &Path,
-        expected_sha256: Option<&str>,
+        expected_sha256: &str,
         max_retries: u32,
     ) -> SnapshotResult<()> {
-        let expected_sha256 = expected_sha256
-            .map(|digest| {
-                normalize_sha256_hex(digest).ok_or_else(|| {
-                    SnapshotError::Configuration("expected snapshot SHA-256 must be 64 hex characters".to_string())
-                })
-            })
-            .transpose()?;
+        let expected_sha256 = normalize_sha256_hex(expected_sha256).ok_or_else(|| {
+            SnapshotError::Configuration("expected snapshot SHA-256 must be 64 hex characters".to_string())
+        })?;
 
         let backoff = backon::ExponentialBuilder::default().with_max_times(max_retries as usize);
 
-        (|| async {
-            self.download_snapshot_once(url, target_path, expected_sha256.as_deref())
-                .await
-        })
-        .retry(backoff)
-        .sleep(FuturesTimerSleeper)
-        .when(|err| {
-            !matches!(
-                err,
-                SnapshotError::TooLarge { .. }
-                    | SnapshotError::InsufficientSpace { .. }
-                    | SnapshotError::DigestMismatch { .. }
-                    | SnapshotError::HttpStatus { status: 400..=499 },
-            )
-        })
-        .notify(|error, _dur| {
-            error!(%error, "Download attempt failed");
-        })
-        .await
+        (|| async { self.download_snapshot_once(url, target_path, &expected_sha256).await })
+            .retry(backoff)
+            .sleep(FuturesTimerSleeper)
+            .when(|err| {
+                !matches!(
+                    err,
+                    SnapshotError::TooLarge { .. }
+                        | SnapshotError::InsufficientSpace { .. }
+                        | SnapshotError::DigestMismatch { .. }
+                        | SnapshotError::HttpStatus { status: 400..=499 },
+                )
+            })
+            .notify(|error, _dur| {
+                error!(%error, "Download attempt failed");
+            })
+            .await
     }
 
     /// Performs a single download attempt and verifies the result against `expected_sha256`.
     ///
     /// `expected_sha256` must already be normalized with [`normalize_sha256_hex`].
-    async fn download_snapshot_once(
-        &self,
-        url: &str,
-        target_path: &Path,
-        expected_sha256: Option<&str>,
-    ) -> SnapshotResult<()> {
+    async fn download_snapshot_once(&self, url: &str, target_path: &Path, expected_sha256: &str) -> SnapshotResult<()> {
         self.fetch_snapshot_once(url, target_path).await?;
-
-        match expected_sha256 {
-            Some(expected) => verify_sha256(target_path, expected),
-            None => Ok(()),
-        }
+        verify_sha256(target_path, expected_sha256)
     }
 
     /// Fetches the snapshot into `target_path` without integrity verification.
@@ -429,7 +408,7 @@ impl SnapshotDownloader {
 /// Validates a hex-encoded SHA-256 digest and returns it in lowercase.
 ///
 /// Surrounding whitespace is ignored. Returns `None` unless the digest is exactly 64 hex characters.
-pub(crate) fn normalize_sha256_hex(digest: &str) -> Option<String> {
+pub fn normalize_sha256_hex(digest: &str) -> Option<String> {
     let digest = digest.trim();
     (digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit())).then(|| digest.to_ascii_lowercase())
 }
@@ -578,7 +557,7 @@ mod tests {
             .download_snapshot(
                 &format!("{}/snapshot", server.url()),
                 &target_path,
-                Some("0000000000000000000000000000000000000000000000000000000000000000"),
+                "0000000000000000000000000000000000000000000000000000000000000000",
             )
             .await;
 
@@ -609,7 +588,7 @@ mod tests {
             .await;
 
         let result = downloader
-            .download_snapshot(&format!("{}/snapshot", server.url()), &target_path, Some("abc"))
+            .download_snapshot(&format!("{}/snapshot", server.url()), &target_path, "abc")
             .await;
 
         assert!(
@@ -632,14 +611,12 @@ mod tests {
 
         let ok_target = temp_dir.path().join("ok.tar.xz");
         downloader
-            .download_snapshot(&url, &ok_target, Some(EMPTY_SHA256))
+            .download_snapshot(&url, &ok_target, EMPTY_SHA256)
             .await
             .expect("empty file should match the empty-input digest");
 
         let bad_target = temp_dir.path().join("bad.tar.xz");
-        let result = downloader
-            .download_snapshot(&url, &bad_target, Some(&"1".repeat(64)))
-            .await;
+        let result = downloader.download_snapshot(&url, &bad_target, &"1".repeat(64)).await;
         assert!(
             matches!(result, Err(SnapshotError::DigestMismatch { .. })),
             "got {result:?}"
@@ -662,7 +639,7 @@ mod tests {
 
         let result = SnapshotDownloader::new()
             .unwrap()
-            .download_snapshot(&format!("file://{}", source.display()), &target, Some(&expected))
+            .download_snapshot(&format!("file://{}", source.display()), &target, &expected)
             .await;
         match result {
             Err(SnapshotError::DigestMismatch { expected: e, actual }) => {
@@ -693,7 +670,7 @@ mod tests {
 
         SnapshotDownloader::new()
             .unwrap()
-            .download_snapshot(&format!("{}/snapshot", server.url()), &target, Some(&digest))
+            .download_snapshot(&format!("{}/snapshot", server.url()), &target, &digest)
             .await
             .expect("matching digest should pass over http");
         assert_eq!(fs::read(&target).unwrap(), body);
@@ -707,7 +684,7 @@ mod tests {
         let target = temp_dir.path().join("t.tar.xz");
         let result = SnapshotDownloader::new()
             .unwrap()
-            .download_snapshot(&format!("file://{}", source.display()), &target, Some("   "))
+            .download_snapshot(&format!("file://{}", source.display()), &target, "   ")
             .await;
         assert!(matches!(result, Err(SnapshotError::Configuration(_))), "got {result:?}");
     }
@@ -723,7 +700,7 @@ mod tests {
 
         // Test invalid URL error
         let result = downloader
-            .download_snapshot("invalid://url", temp_dir.path(), None)
+            .download_snapshot("invalid://url", temp_dir.path(), EMPTY_SHA256)
             .await;
         assert!(result.is_err());
 
@@ -731,7 +708,7 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let _not_found = server.mock("GET", "/snapshot").with_status(404).expect(1).create();
         let result = downloader
-            .download_snapshot(&format!("{}/snapshot", server.url()), temp_dir.path(), None)
+            .download_snapshot(&format!("{}/snapshot", server.url()), temp_dir.path(), EMPTY_SHA256)
             .await;
         assert!(result.is_err());
     }
