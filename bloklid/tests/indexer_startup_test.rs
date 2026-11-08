@@ -1,7 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use blokli_chain_indexer::{IndexerConfig, block::Indexer, handlers::ContractEventHandlers, traits::ChainLogHandler};
+use blokli_chain_indexer::{
+    IndexerConfig, SafeTxPrefetchConfig, block::Indexer, handlers::ContractEventHandlers, traits::ChainLogHandler,
+};
 use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{api::logs::BlokliDbLogOperations, db::BlokliDb, info::BlokliDbInfoOperations};
@@ -168,6 +170,7 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
         indexer_state.clone(),
         false,
         false,
+        SafeTxPrefetchConfig::default(),
     );
 
     // Initialize logs origin data using the proper contract addresses and topics
@@ -193,6 +196,7 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
         data_directory: db_path.to_string_lossy().to_string(),
         event_bus_capacity: 1000,
         shutdown_signal_capacity: 10,
+        safe_tx_prefetch: Default::default(),
     };
 
     // Create indexer
@@ -258,6 +262,7 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
         indexer_state.clone(),
         false,
         false,
+        SafeTxPrefetchConfig::default(),
     );
 
     // Initialize logs origin data using the proper contract addresses and topics
@@ -283,6 +288,7 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
         data_directory: db_path.to_string_lossy().to_string(),
         event_bus_capacity: 1000,
         shutdown_signal_capacity: 10,
+        safe_tx_prefetch: Default::default(),
     };
 
     // Create indexer
@@ -452,6 +458,7 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         indexer_state.clone(),
         false,
         false,
+        SafeTxPrefetchConfig::default(),
     );
 
     // Initialize logs origin data using the proper contract addresses and topics
@@ -478,6 +485,7 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         data_directory: db_path.to_string_lossy().to_string(),
         event_bus_capacity: 1000,
         shutdown_signal_capacity: 10,
+        safe_tx_prefetch: Default::default(),
     };
 
     // Create and start indexer
@@ -565,6 +573,7 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
         indexer_state.clone(),
         false,
         false,
+        SafeTxPrefetchConfig::default(),
     );
 
     // Initialize logs origin data
@@ -590,6 +599,7 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
         data_directory: db_path.to_string_lossy().to_string(),
         event_bus_capacity: 1000,
         shutdown_signal_capacity: 10,
+        safe_tx_prefetch: Default::default(),
     };
 
     // Create indexer
@@ -639,6 +649,7 @@ async fn test_service_registry_is_in_the_handler_filter_set() -> anyhow::Result<
         blokli_chain_indexer::IndexerState::new(1000, 10),
         false,
         false,
+        SafeTxPrefetchConfig::default(),
     );
 
     let addresses = handlers.contract_addresses();
@@ -678,6 +689,7 @@ async fn test_zero_service_registry_is_not_monitored() -> anyhow::Result<()> {
         blokli_chain_indexer::IndexerState::new(1000, 10),
         false,
         false,
+        SafeTxPrefetchConfig::default(),
     );
 
     let addresses = handlers.contract_addresses();
