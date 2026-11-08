@@ -120,6 +120,7 @@ impl Args {
             ("BLOKLI_INDEXER_ENABLE_SAFE_INDEXING", "indexer.enable_safe_indexing"),
             ("BLOKLI_INDEXER_ENABLE_CURVY_INDEXING", "indexer.enable_curvy_indexing"),
             ("BLOKLI_INDEXER_LOGS_SNAPSHOT_URL", "indexer.logs_snapshot_url"),
+            ("BLOKLI_INDEXER_LOGS_SNAPSHOT_SHA256", "indexer.logs_snapshot_sha256"),
             (
                 "BLOKLI_INDEXER_SUBSCRIPTION_EVENT_BUS_CAPACITY",
                 "indexer.subscription.event_bus_capacity",

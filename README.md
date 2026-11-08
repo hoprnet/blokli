@@ -237,6 +237,9 @@ For fast-sync bootstrap, configure `indexer.fast_sync = true`, `indexer.enable_l
 `.tar.xz` archive that contains `hopr_logs.sql`. On an empty node, `bloklid` imports that file into the raw logs tables, rebuilds derived
 state locally, and then resumes normal RPC catch-up from the snapshot end. If the configured snapshot restore fails, startup fails.
 
+Set `indexer.logs_snapshot_sha256` to the archive's SHA-256 digest (for example from `sha256sum logs-snapshot.tar.xz`) so a tampered or
+swapped archive is rejected before extraction. Without it, the archive is imported without an integrity check.
+
 For a complete example with comments, see [`bloklid/example-config.toml`](bloklid/example-config.toml). Duration values use human-readable
 syntax such as `500ms`, `15s`, and `1m`.
 
@@ -292,6 +295,7 @@ fields. SQLite uses separate index and raw-log databases.
 | `indexer.enable_logs_snapshot`                  | `false` | `BLOKLI_INDEXER_ENABLE_LOGS_SNAPSHOT`                  | Restores raw logs from a snapshot before catch-up     |
 | `indexer.enable_safe_indexing`                  | `false` | `BLOKLI_INDEXER_ENABLE_SAFE_INDEXING`                  | Indexes Safe events after Safe discovery              |
 | `indexer.logs_snapshot_url`                     | unset   | `BLOKLI_INDEXER_LOGS_SNAPSHOT_URL`                     | URL of a `.tar.xz` archive containing `hopr_logs.sql` |
+| `indexer.logs_snapshot_sha256`                  | unset   | `BLOKLI_INDEXER_LOGS_SNAPSHOT_SHA256`                  | Expected SHA-256 hex digest of the archive            |
 | `indexer.subscription.event_bus_capacity`       | `1000`  | `BLOKLI_INDEXER_SUBSCRIPTION_EVENT_BUS_CAPACITY`       | Channel-event bus capacity                            |
 | `indexer.subscription.shutdown_signal_capacity` | `10`    | `BLOKLI_INDEXER_SUBSCRIPTION_SHUTDOWN_SIGNAL_CAPACITY` | Shutdown signal buffer capacity                       |
 | `indexer.subscription.batch_size`               | `100`   | `BLOKLI_INDEXER_SUBSCRIPTION_BATCH_SIZE`               | Historical subscription query batch size              |

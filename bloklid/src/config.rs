@@ -343,6 +343,9 @@ impl Config {
         if let Some(snapshot_url) = &self.indexer.logs_snapshot_url {
             output.push_str(&format!("  indexer.logs_snapshot_url: {}\n", redact_url(snapshot_url)));
         }
+        if let Some(snapshot_sha256) = &self.indexer.logs_snapshot_sha256 {
+            output.push_str(&format!("  indexer.logs_snapshot_sha256: {snapshot_sha256}\n"));
+        }
 
         output.push_str(&format!("  api.enabled: {}\n", self.api.enabled));
         output.push_str(&format!("  api.bind_address: {}\n", self.api.bind_address));
@@ -472,6 +475,11 @@ pub struct IndexerConfig {
 
     #[serde(default)]
     pub logs_snapshot_url: Option<String>,
+
+    /// Expected SHA-256 digest (64 hex characters) of the logs snapshot archive.
+    /// When set, an archive with a different digest is rejected before extraction.
+    #[serde(default)]
+    pub logs_snapshot_sha256: Option<String>,
 
     #[serde(default)]
     pub subscription: SubscriptionConfig,

@@ -51,11 +51,12 @@ For the complete OTLP setup guide, including environment overrides and endpoint 
   - `fast_sync`: Enable fast synchronization
   - `enable_logs_snapshot`: Enable snapshot download for faster initial sync
   - `logs_snapshot_url`: URL of a tar.xz archive containing `hopr_logs.sql`
+  - `logs_snapshot_sha256`: Expected SHA-256 digest (64 hex characters) of the snapshot archive; recommended
 
 When `fast_sync = true`, `enable_logs_snapshot = true`, and the local logs database is empty, `bloklid` downloads the configured archive,
-validates that it contains a usable `hopr_logs.sql`, imports the raw logs tables, rebuilds derived state from those logs, and then catches
-up from the snapshot end to the current chain head. If this configured snapshot restore fails, startup fails instead of silently falling
-back to a full historical RPC sync.
+checks it against `logs_snapshot_sha256` if set (a mismatch aborts the restore before extraction), validates that it contains a usable
+`hopr_logs.sql`, imports the raw logs tables, rebuilds derived state from those logs, and then catches up from the snapshot end to the
+current chain head. If this configured snapshot restore fails, startup fails instead of silently falling back to a full historical RPC sync.
 
 For the Curvy-enabled local Anvil image, dependency pins, generated deployment artifacts, and validation steps, see
 [Curvy local contract deployment](../docs/curvy-local-deployment.md).
