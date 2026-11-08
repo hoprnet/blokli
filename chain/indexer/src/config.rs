@@ -291,6 +291,77 @@ mod tests {
     }
 
     #[test]
+    fn test_snapshot_sha256_required_when_snapshot_enabled() {
+        let cfg = IndexerConfig::new(
+            0,
+            true,
+            true,
+            false,
+            false,
+            Some("file:///tmp/snapshot.tar.xz".to_string()),
+            None,
+            "/tmp/hopr_test_data".to_string(),
+            1000,
+            10,
+        );
+
+        let error = cfg
+            .validate()
+            .expect_err("enabled snapshot without digest must be rejected");
+        assert!(
+            error.contains("logs_snapshot_sha256"),
+            "error should name the option: {error}"
+        );
+    }
+
+    #[test]
+    fn test_snapshot_sha256_required_when_snapshot_url_set() {
+        let cfg = IndexerConfig::new(
+            0,
+            true,
+            false,
+            false,
+            false,
+            Some("https://example.com/snapshot.tar.xz".to_string()),
+            None,
+            "/tmp/hopr_test_data".to_string(),
+            1000,
+            10,
+        );
+
+        let error = cfg
+            .validate()
+            .expect_err("snapshot URL without digest must be rejected");
+        assert!(
+            error.contains("logs_snapshot_sha256"),
+            "error should name the option: {error}"
+        );
+    }
+
+    #[test]
+    fn test_snapshot_sha256_not_required_without_snapshot() {
+        let cfg = IndexerConfig::new(0, true, false, false, false, None, None, "".to_string(), 1000, 10);
+        assert!(cfg.validate().is_ok());
+
+        let cfg = IndexerConfig::new(
+            0,
+            true,
+            false,
+            false,
+            false,
+            Some("  ".to_string()),
+            None,
+            "".to_string(),
+            1000,
+            10,
+        );
+        assert!(
+            cfg.validate().is_ok(),
+            "a blank URL does not count as a configured snapshot"
+        );
+    }
+
+    #[test]
     fn test_missing_snapshot_url() {
         let cfg = IndexerConfig::new(
             0,
