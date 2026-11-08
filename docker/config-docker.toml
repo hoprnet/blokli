@@ -35,8 +35,9 @@ fast_sync = true
 # Enable downloading logs snapshot for faster initial sync
 enable_logs_snapshot = false
 
-# URL to download logs snapshot from (optional)
+# URL to download logs snapshot from (required when enable_logs_snapshot = true)
 # logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz"
 
-# Expected SHA-256 digest of the snapshot archive (optional, recommended)
+# Expected SHA-256 digest of the snapshot archive
+# (required when enable_logs_snapshot = true or logs_snapshot_url is set)
 # logs_snapshot_sha256 = "<64 hex characters>"

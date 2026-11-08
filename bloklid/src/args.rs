@@ -307,6 +307,8 @@ impl Args {
             return Err(ConfigError::NoDatabaseConfiguration.into());
         }
 
+        config.indexer.validate().map_err(ConfigError::Parse)?;
+
         config.validate().map_err(ConfigError::Validation)?;
 
         let network_config = config.network.resolve().ok_or_else(|| {
@@ -1579,4 +1581,5 @@ mod tests {
             },
         );
     }
+
 }

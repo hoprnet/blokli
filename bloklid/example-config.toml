@@ -121,11 +121,12 @@ fast_sync = true
 # Enable downloading a `hopr_logs.sql` snapshot archive for faster initial sync
 enable_logs_snapshot = false
 
-# URL to download logs snapshot from (optional)
-logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz"
+# URL to download logs snapshot from (required when enable_logs_snapshot = true)
+# logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz"
 
-# Expected SHA-256 digest of the snapshot archive, 64 hex characters (optional, recommended)
-# The archive is rejected before extraction if its digest differs. Without it, the archive is not integrity-checked.
+# Expected SHA-256 digest of the snapshot archive, 64 hex characters
+# (required when enable_logs_snapshot = true or logs_snapshot_url is set)
+# The archive is rejected before extraction if its digest differs.
 # logs_snapshot_sha256 = "<64 hex characters>"
 
 # Enable indexing of Safe contract events after a Safe has been discovered

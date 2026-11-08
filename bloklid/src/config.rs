@@ -1,6 +1,6 @@
 use std::{fmt, time::Duration};
 
-use blokli_chain_indexer::utils::redact_url;
+use blokli_chain_indexer::{snapshot::download::normalize_sha256_hex, utils::redact_url};
 use blokli_chain_types::{ChainConfig, ContractAddresses};
 use blokli_db::utils::redact_database_url;
 use hopr_types::primitive::primitives::Address;
@@ -477,12 +477,38 @@ pub struct IndexerConfig {
     pub logs_snapshot_url: Option<String>,
 
     /// Expected SHA-256 digest (64 hex characters) of the logs snapshot archive.
-    /// When set, an archive with a different digest is rejected before extraction.
+    /// An archive with a different digest is rejected before extraction.
+    /// Required when `enable_logs_snapshot` is true or `logs_snapshot_url` is set.
     #[serde(default)]
     pub logs_snapshot_sha256: Option<String>,
 
     #[serde(default)]
     pub subscription: SubscriptionConfig,
+}
+
+impl IndexerConfig {
+    /// Validates the logs snapshot settings.
+    ///
+    /// `logs_snapshot_sha256` is required when `enable_logs_snapshot` is true or a non-empty
+    /// `logs_snapshot_url` is set, and must be a SHA-256 digest of 64 hex characters when present.
+    pub fn validate(&self) -> Result<(), String> {
+        let snapshot_url_set = self
+            .logs_snapshot_url
+            .as_deref()
+            .is_some_and(|url| !url.trim().is_empty());
+
+        match &self.logs_snapshot_sha256 {
+            None if self.enable_logs_snapshot || snapshot_url_set => Err("indexer.logs_snapshot_sha256 must be \
+                                                                          specified when \
+                                                                          indexer.enable_logs_snapshot is true or \
+                                                                          indexer.logs_snapshot_url is set"
+                .to_string()),
+            Some(digest) if normalize_sha256_hex(digest).is_none() => {
+                Err("indexer.logs_snapshot_sha256 must be a SHA-256 digest of 64 hex characters".to_string())
+            }
+            _ => Ok(()),
+        }
+    }
 }
 
 /// Configuration for GraphQL subscription behavior
