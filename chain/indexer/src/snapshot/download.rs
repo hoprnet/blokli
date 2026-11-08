@@ -542,6 +542,84 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    #[test]
+    fn test_normalize_sha256_hex() {
+        let digest = "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855";
+        assert_eq!(
+            normalize_sha256_hex(&format!(" {digest}\n")),
+            Some(digest.to_ascii_lowercase())
+        );
+        assert_eq!(normalize_sha256_hex(&digest[..63]), None);
+        assert_eq!(normalize_sha256_hex(&format!("{digest}0")), None);
+        assert_eq!(normalize_sha256_hex(&format!("{}g", &digest[..63])), None);
+        assert_eq!(normalize_sha256_hex(""), None);
+    }
+
+    #[tokio::test]
+    async fn test_digest_mismatch_is_not_retried() {
+        let temp_dir = TempDir::new().unwrap();
+        let target_path = temp_dir.path().join("snapshot.tar.xz");
+        let downloader = SnapshotDownloader::with_config(DownloadConfig {
+            max_retries: 3,
+            ..Default::default()
+        })
+        .expect("Failed to create SnapshotDownloader");
+
+        let mut server = mockito::Server::new_async().await;
+        let snapshot = server
+            .mock("GET", "/snapshot")
+            .with_status(200)
+            .with_body("not the expected archive")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let result = downloader
+            .download_snapshot(
+                &format!("{}/snapshot", server.url()),
+                &target_path,
+                Some("0000000000000000000000000000000000000000000000000000000000000000"),
+            )
+            .await;
+
+        assert!(
+            matches!(result, Err(SnapshotError::DigestMismatch { .. })),
+            "expected DigestMismatch, got {result:?}"
+        );
+        assert!(
+            !target_path.exists(),
+            "archive with mismatching digest should be removed"
+        );
+        snapshot.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_malformed_expected_digest_is_rejected_before_download() {
+        let temp_dir = TempDir::new().unwrap();
+        let target_path = temp_dir.path().join("snapshot.tar.xz");
+        let downloader = SnapshotDownloader::new().expect("Failed to create SnapshotDownloader");
+
+        let mut server = mockito::Server::new_async().await;
+        let snapshot = server
+            .mock("GET", "/snapshot")
+            .with_status(200)
+            .with_body("archive")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let result = downloader
+            .download_snapshot(&format!("{}/snapshot", server.url()), &target_path, Some("abc"))
+            .await;
+
+        assert!(
+            matches!(result, Err(SnapshotError::Configuration(_))),
+            "expected Configuration error, got {result:?}"
+        );
+        assert!(!target_path.exists());
+        snapshot.assert_async().await;
+    }
+
     #[tokio::test]
     async fn test_enhanced_error_messages() {
         let temp_dir = TempDir::new().unwrap();

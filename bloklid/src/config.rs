@@ -1138,6 +1138,25 @@ mod tests {
     }
 
     #[test]
+    fn test_indexer_logs_snapshot_sha256() {
+        let config = r#"
+         [indexer]
+         enable_logs_snapshot = true
+         logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz"
+         logs_snapshot_sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
+        let cfg: Config = toml::from_str(config).expect("config with logs_snapshot_sha256 should parse");
+        assert_eq!(
+            cfg.indexer.logs_snapshot_sha256.as_deref(),
+            Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        );
+    }
+
+    #[test]
     fn test_partial_api_config() {
         // Only set enabled, all other fields should use defaults
         let config = r#"

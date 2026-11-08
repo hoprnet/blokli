@@ -376,10 +376,20 @@ mod tests {
         crypto::types::Hash,
         primitive::prelude::{DateTime, SerializableLog},
     };
+    use sha2::{Digest, Sha256};
     use tempfile::TempDir;
 
     use super::{test_utils::*, *};
     use crate::snapshot::SnapshotInfo;
+
+    const WRONG_SHA256: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+
+    fn sha256_hex(path: &Path) -> String {
+        Sha256::digest(fs::read(path).expect("read archive"))
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
 
     fn sample_log(block_number: u64, tx_index: u64, log_index: u64) -> SerializableLog {
         SerializableLog {
@@ -452,6 +462,109 @@ mod tests {
         let download_result = downloader.download_snapshot(&file_url, &downloaded_archive, None).await;
         assert!(download_result.is_ok(), "file:// URL download should succeed");
         assert!(downloaded_archive.exists(), "Downloaded archive should exist");
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_with_wrong_digest_is_rejected_before_extraction() {
+        let temp_dir = TempDir::new().unwrap();
+        let archive_path = create_test_archive(&temp_dir, None).await.unwrap();
+        let actual_sha256 = sha256_hex(&archive_path);
+        let data_dir = temp_dir.path().join("data");
+        fs::create_dir_all(&data_dir).unwrap();
+
+        let manager = TestSnapshotManager::new().expect("Failed to create TestSnapshotManager");
+        let file_url = format!("file://{}", archive_path.display());
+        let result = manager
+            .download_and_setup_snapshot(&file_url, Some(WRONG_SHA256), &data_dir)
+            .await;
+
+        match result {
+            Err(SnapshotError::DigestMismatch { expected, actual }) => {
+                assert_eq!(expected, WRONG_SHA256);
+                assert_eq!(actual, actual_sha256);
+            }
+            other => panic!("expected DigestMismatch, got {other:?}"),
+        }
+        assert!(
+            !data_dir.join(SNAPSHOT_SQL_FILE).exists(),
+            "nothing should be installed on digest mismatch"
+        );
+        assert_eq!(
+            fs::read_dir(&data_dir).unwrap().count(),
+            0,
+            "data directory should hold no extracted or downloaded files"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_with_matching_digest_is_installed() {
+        let temp_dir = TempDir::new().unwrap();
+        let archive_path = create_test_archive(&temp_dir, None).await.unwrap();
+        // Upper case and surrounding whitespace are accepted.
+        let expected_sha256 = format!(" {} ", sha256_hex(&archive_path).to_ascii_uppercase());
+        let data_dir = temp_dir.path().join("data");
+        fs::create_dir_all(&data_dir).unwrap();
+
+        let manager = TestSnapshotManager::new().expect("Failed to create TestSnapshotManager");
+        let file_url = format!("file://{}", archive_path.display());
+        let info = manager
+            .download_and_setup_snapshot(&file_url, Some(&expected_sha256), &data_dir)
+            .await
+            .expect("snapshot with matching digest should be installed");
+
+        assert_eq!(info.log_count, Some(2));
+        assert!(data_dir.join(SNAPSHOT_SQL_FILE).exists());
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_manager_imports_only_with_matching_digest() {
+        let source_db = BlokliDb::new_in_memory().await.expect("source db");
+        source_db
+            .ensure_logs_origin(vec![(sample_log(10, 1, 0).address, Hash::create(&[b"topic"]))])
+            .await
+            .expect("logs origin");
+        source_db.store_log(sample_log(10, 1, 0)).await.expect("first log");
+        source_db.store_log(sample_log(11, 1, 1)).await.expect("second log");
+        source_db.update_logs_checksums().await.expect("checksums");
+
+        let temp_dir = TempDir::new().expect("tempdir");
+        let archive_path = temp_dir.path().join("logs-snapshot.tar.xz");
+        SnapshotManager::with_db(source_db)
+            .expect("snapshot manager")
+            .export_snapshot(&archive_path)
+            .await
+            .expect("export snapshot");
+        let file_url = format!("file://{}", archive_path.display());
+        let data_dir = temp_dir.path().join("data");
+        fs::create_dir_all(&data_dir).unwrap();
+
+        let restored_db = BlokliDb::new_in_memory().await.expect("restored db");
+        let importer = SnapshotManager::with_db(restored_db.clone()).expect("snapshot manager");
+
+        let rejected = importer
+            .download_and_setup_snapshot(&file_url, Some(WRONG_SHA256), &data_dir)
+            .await;
+        assert!(
+            matches!(rejected, Err(SnapshotError::DigestMismatch { .. })),
+            "expected DigestMismatch, got {rejected:?}"
+        );
+        assert_eq!(restored_db.get_logs_count(None, None).await.expect("logs count"), 0);
+        let temp_subdir = data_dir.join("snapshot_temp");
+        assert!(
+            !temp_subdir.join("snapshot.tar.xz").exists(),
+            "archive should be removed"
+        );
+        assert!(
+            !temp_subdir.join(SNAPSHOT_SQL_FILE).exists(),
+            "nothing should be extracted"
+        );
+
+        let restored = importer
+            .download_and_setup_snapshot(&file_url, Some(&sha256_hex(&archive_path)), &data_dir)
+            .await
+            .expect("import snapshot with matching digest");
+        assert_eq!(restored.log_count, Some(2));
+        assert_eq!(restored_db.get_logs_count(None, None).await.expect("logs count"), 2);
     }
 
     #[tokio::test]

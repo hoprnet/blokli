@@ -239,6 +239,27 @@ mod tests {
     }
 
     #[test]
+    fn test_snapshot_sha256_format_is_validated() {
+        let mut cfg = IndexerConfig::new(
+            0,
+            true,
+            true,
+            false,
+            false,
+            Some("file:///tmp/snapshot.tar.xz".to_string()),
+            "/tmp/hopr_test_data".to_string(),
+            1000,
+            10,
+        );
+
+        cfg.logs_snapshot_sha256 = Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string());
+        assert!(cfg.validate().is_ok(), "64 hex characters should be accepted");
+
+        cfg.logs_snapshot_sha256 = Some("not-a-digest".to_string());
+        assert!(cfg.validate().is_err(), "malformed digest should be rejected");
+    }
+
+    #[test]
     fn test_missing_snapshot_url() {
         let cfg = IndexerConfig::new(0, true, true, false, false, None, "".to_string(), 1000, 10);
 
