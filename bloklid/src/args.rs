@@ -245,9 +245,14 @@ impl Args {
             "api.sse_keepalive.enabled",
         ];
 
+        // Values that must stay strings even when they look numeric (e.g. an all-digit SHA-256 digest).
+        let string_keys = ["indexer.logs_snapshot_url", "indexer.logs_snapshot_sha256"];
+
         for (env_var, config_key) in env_mappings {
             if let Ok(val) = std::env::var(env_var) {
-                let override_val: config_rs::Value = if boolean_keys.contains(&config_key) {
+                let override_val: config_rs::Value = if string_keys.contains(&config_key) {
+                    val.into()
+                } else if boolean_keys.contains(&config_key) {
                     if let Ok(flag) = val.parse::<bool>() {
                         flag.into()
                     } else if let Ok(num) = val.parse::<u64>() {
