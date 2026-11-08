@@ -1374,10 +1374,14 @@ where
 
         let data_dir = Path::new(&self.cfg.data_directory);
 
+        if self.cfg.logs_snapshot_sha256.is_none() {
+            warn!("logs snapshot SHA-256 is not configured, the snapshot archive will not be integrity-checked");
+        }
+
         // The URL has been verified so we can just use it.
         if let Some(url) = &self.cfg.logs_snapshot_url {
             snapshot_manager
-                .download_and_setup_snapshot(url, data_dir)
+                .download_and_setup_snapshot(url, self.cfg.logs_snapshot_sha256.as_deref(), data_dir)
                 .await
                 .map_err(|e| CoreEthereumIndexerError::SnapshotError(e.to_string()))
         } else {

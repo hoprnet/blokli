@@ -4,12 +4,13 @@
 //! - **URL Support**: HTTP/HTTPS with retry logic, local file:// URLs
 //! - **Safety**: Size limits, timeout protection, disk space validation
 //! - **Reliability**: Exponential backoff, progress tracking, error recovery
+//! - **Integrity**: Optional SHA-256 digest check of the archive before it is used
 //! - **Cross-platform**: Uses sysinfo for disk space checking
 
 use std::{
     fs,
     fs::File,
-    io::{Error, ErrorKind},
+    io::{Error, ErrorKind, Read},
     path::Path,
     sync::{
         Arc,
@@ -22,9 +23,10 @@ use async_lock::Mutex;
 use backon::{FuturesTimerSleeper, Retryable};
 use futures_util::{AsyncWriteExt, TryStreamExt, io::AllowStdIo};
 use reqwest::Client;
+use sha2::{Digest, Sha256};
 use smart_default::SmartDefault;
 use sysinfo::Disks;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     constants::{
@@ -78,12 +80,17 @@ pub struct DownloadConfig {
 ///     .download_snapshot(
 ///         "https://snapshots.hoprnet.org/logs.tar.xz",
 ///         Path::new("/tmp/snapshot.tar.xz"),
+///         None,
 ///     )
 ///     .await?;
 ///
-/// // Copy from local file
+/// // Copy from local file and verify its SHA-256 digest
 /// downloader
-///     .download_snapshot("file:///backups/snapshot.tar.xz", Path::new("/tmp/snapshot.tar.xz"))
+///     .download_snapshot(
+///         "file:///backups/snapshot.tar.xz",
+///         Path::new("/tmp/snapshot.tar.xz"),
+///         Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+///     )
 ///     .await?;
 /// # Ok(())
 /// # }
@@ -119,12 +126,19 @@ impl SnapshotDownloader {
     ///
     /// * `url` - Source URL (http://, https://, or file:// scheme)
     /// * `target_path` - Destination file path
+    /// * `expected_sha256` - Optional hex-encoded SHA-256 digest the downloaded archive must match
     ///
     /// # Errors
     ///
     /// Returns [`SnapshotError`] for network failures, file system errors, or validation failures.
-    pub async fn download_snapshot(&self, url: &str, target_path: &Path) -> SnapshotResult<()> {
-        self.download_snapshot_with_retry(url, target_path, self.config.max_retries)
+    /// Returns [`SnapshotError::DigestMismatch`] if `expected_sha256` is set and does not match.
+    pub async fn download_snapshot(
+        &self,
+        url: &str,
+        target_path: &Path,
+        expected_sha256: Option<&str>,
+    ) -> SnapshotResult<()> {
+        self.download_snapshot_with_retry(url, target_path, expected_sha256, self.config.max_retries)
             .await
     }
 
@@ -138,6 +152,7 @@ impl SnapshotDownloader {
     ///
     /// * `url` - The HTTP/HTTPS or file:// URL to download/copy from
     /// * `target_path` - Local path where the downloaded file will be saved
+    /// * `expected_sha256` - Optional hex-encoded SHA-256 digest the downloaded archive must match
     /// * `max_retries` - Maximum number of retry attempts (ignored for file:// URLs)
     ///
     /// # Errors
@@ -147,33 +162,65 @@ impl SnapshotDownloader {
     /// - HTTP errors (4xx without retry, 5xx with retry)
     /// - Insufficient disk space (without retry)
     /// - File size exceeding limits (without retry)
+    /// - Malformed `expected_sha256` (before any download, without retry)
+    /// - Digest mismatch (without retry; the downloaded file is removed)
     pub async fn download_snapshot_with_retry(
         &self,
         url: &str,
         target_path: &Path,
+        expected_sha256: Option<&str>,
         max_retries: u32,
     ) -> SnapshotResult<()> {
+        let expected_sha256 = expected_sha256
+            .map(|digest| {
+                normalize_sha256_hex(digest).ok_or_else(|| {
+                    SnapshotError::Configuration("expected snapshot SHA-256 must be 64 hex characters".to_string())
+                })
+            })
+            .transpose()?;
+
         let backoff = backon::ExponentialBuilder::default().with_max_times(max_retries as usize);
 
-        (|| async { self.download_snapshot_once(url, target_path).await })
-            .retry(backoff)
-            .sleep(FuturesTimerSleeper)
-            .when(|err| {
-                !matches!(
-                    err,
-                    SnapshotError::TooLarge { .. }
-                        | SnapshotError::InsufficientSpace { .. }
-                        | SnapshotError::HttpStatus { status: 400..=499 },
-                )
-            })
-            .notify(|error, _dur| {
-                error!(%error, "Download attempt failed");
-            })
-            .await
+        (|| async {
+            self.download_snapshot_once(url, target_path, expected_sha256.as_deref())
+                .await
+        })
+        .retry(backoff)
+        .sleep(FuturesTimerSleeper)
+        .when(|err| {
+            !matches!(
+                err,
+                SnapshotError::TooLarge { .. }
+                    | SnapshotError::InsufficientSpace { .. }
+                    | SnapshotError::DigestMismatch { .. }
+                    | SnapshotError::HttpStatus { status: 400..=499 },
+            )
+        })
+        .notify(|error, _dur| {
+            error!(%error, "Download attempt failed");
+        })
+        .await
     }
 
-    /// Performs a single download attempt
-    async fn download_snapshot_once(&self, url: &str, target_path: &Path) -> SnapshotResult<()> {
+    /// Performs a single download attempt and verifies the result against `expected_sha256`.
+    ///
+    /// `expected_sha256` must already be normalized with [`normalize_sha256_hex`].
+    async fn download_snapshot_once(
+        &self,
+        url: &str,
+        target_path: &Path,
+        expected_sha256: Option<&str>,
+    ) -> SnapshotResult<()> {
+        self.fetch_snapshot_once(url, target_path).await?;
+
+        match expected_sha256 {
+            Some(expected) => verify_sha256(target_path, expected),
+            None => Ok(()),
+        }
+    }
+
+    /// Fetches the snapshot into `target_path` without integrity verification.
+    async fn fetch_snapshot_once(&self, url: &str, target_path: &Path) -> SnapshotResult<()> {
         let redacted_url = redact_url(url);
         info!(%redacted_url, "Downloading logs snapshot file");
 
@@ -379,6 +426,49 @@ impl SnapshotDownloader {
     }
 }
 
+/// Validates a hex-encoded SHA-256 digest and returns it in lowercase.
+///
+/// Surrounding whitespace is ignored. Returns `None` unless the digest is exactly 64 hex characters.
+pub(crate) fn normalize_sha256_hex(digest: &str) -> Option<String> {
+    let digest = digest.trim();
+    (digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit())).then(|| digest.to_ascii_lowercase())
+}
+
+/// Computes the SHA-256 digest of the file at `path` and returns it as lowercase hex.
+fn sha256_file_hex(path: &Path) -> SnapshotResult<String> {
+    let mut file = File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher.finalize().iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+/// Verifies that the file at `path` has the SHA-256 digest `expected` (normalized lowercase hex).
+///
+/// On mismatch the file is removed so it cannot be extracted later, and
+/// [`SnapshotError::DigestMismatch`] is returned.
+fn verify_sha256(path: &Path, expected: &str) -> SnapshotResult<()> {
+    let actual = sha256_file_hex(path)?;
+    if actual != expected {
+        if let Err(error) = fs::remove_file(path) {
+            warn!(%error, path = %path.display(), "failed to remove snapshot archive with mismatching digest");
+        }
+        return Err(SnapshotError::DigestMismatch {
+            expected: expected.to_string(),
+            actual,
+        });
+    }
+
+    info!(sha256 = %actual, "Logs snapshot archive digest verified");
+    Ok(())
+}
+
 /// Gets available disk space in bytes for the given directory using cross-platform sysinfo.
 ///
 /// This function uses the sysinfo crate to provide platform-independent disk space checking.
@@ -462,14 +552,16 @@ mod tests {
         .expect("Failed to create SnapshotDownloader");
 
         // Test invalid URL error
-        let result = downloader.download_snapshot("invalid://url", temp_dir.path()).await;
+        let result = downloader
+            .download_snapshot("invalid://url", temp_dir.path(), None)
+            .await;
         assert!(result.is_err());
 
         // Test an HTTP not-found response without depending on a public service.
         let mut server = mockito::Server::new_async().await;
         let _not_found = server.mock("GET", "/snapshot").with_status(404).expect(1).create();
         let result = downloader
-            .download_snapshot(&format!("{}/snapshot", server.url()), temp_dir.path())
+            .download_snapshot(&format!("{}/snapshot", server.url()), temp_dir.path(), None)
             .await;
         assert!(result.is_err());
     }

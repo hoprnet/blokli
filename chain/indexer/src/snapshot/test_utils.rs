@@ -41,13 +41,21 @@ impl TestSnapshotManager {
     /// # Arguments
     ///
     /// * `url` - Snapshot URL (`https://`, `http://`, or `file://` scheme)
+    /// * `expected_sha256` - Optional hex-encoded SHA-256 digest of the archive
     /// * `data_dir` - Target directory for extracted files
     ///
     /// # Returns
     ///
     /// [`SnapshotInfo`] containing validation results
-    pub async fn download_and_setup_snapshot(&self, url: &str, data_dir: &Path) -> SnapshotResult<SnapshotInfo> {
-        self.workflow.execute_workflow(self, url, data_dir, false).await
+    pub async fn download_and_setup_snapshot(
+        &self,
+        url: &str,
+        expected_sha256: Option<&str>,
+        data_dir: &Path,
+    ) -> SnapshotResult<SnapshotInfo> {
+        self.workflow
+            .execute_workflow(self, url, expected_sha256, data_dir, false)
+            .await
     }
 }
 

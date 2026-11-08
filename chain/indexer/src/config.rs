@@ -1,3 +1,5 @@
+use crate::snapshot::download::normalize_sha256_hex;
+
 /// Configuration for the chain indexer functionality
 #[derive(Debug, Clone, smart_default::SmartDefault)]
 pub struct IndexerConfig {
@@ -46,6 +48,14 @@ pub struct IndexerConfig {
     #[default(None)]
     pub logs_snapshot_url: Option<String>,
 
+    /// Expected SHA-256 digest of the logs snapshot archive, hex-encoded (64 characters).
+    /// When set, the downloaded archive is rejected before extraction if its digest differs.
+    /// When unset, the archive is used without an integrity check.
+    ///
+    /// Default is None
+    #[default(None)]
+    pub logs_snapshot_sha256: Option<String>,
+
     /// Path to the data directory where databases are stored.
     /// This is used for snapshot installation and database state checking.
     ///
@@ -84,7 +94,7 @@ impl IndexerConfig {
     ///
     /// # Returns
     ///
-    /// A new instance of `IndexerConfig`
+    /// A new instance of `IndexerConfig`. `logs_snapshot_sha256` is left unset.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         start_block_number: u64,
@@ -104,6 +114,7 @@ impl IndexerConfig {
             enable_safe_indexing,
             enable_curvy_indexing,
             logs_snapshot_url,
+            logs_snapshot_sha256: None,
             data_directory,
             event_bus_capacity,
             shutdown_signal_capacity,
@@ -117,6 +128,7 @@ impl IndexerConfig {
     /// - File extension validation (.tar.xz required)
     /// - Data directory path validation
     /// - Dependency validation (data directory required when snapshots enabled)
+    /// - Snapshot SHA-256 digest format (64 hex characters) when set
     ///
     /// # Returns
     ///
@@ -146,6 +158,12 @@ impl IndexerConfig {
         // Check that url is valid if logs snapshot is enabled
         if self.enable_logs_snapshot && self.logs_snapshot_url.is_none() {
             return Err("Logs snapshot URL must be specified when logs snapshots are enabled".to_string());
+        }
+
+        if let Some(digest) = &self.logs_snapshot_sha256 {
+            if normalize_sha256_hex(digest).is_none() {
+                return Err("Logs snapshot SHA-256 must be 64 hex characters".to_string());
+            }
         }
 
         Ok(())
