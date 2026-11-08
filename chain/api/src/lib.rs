@@ -18,7 +18,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use blokli_chain_indexer::{IndexerConfig, IndexerState, block::Indexer, handlers::ContractEventHandlers};
 use blokli_chain_rpc::{
     HoprIndexerRpcOperations, HoprRpcOperations,
-    client::{DefaultRetryPolicy, MetricsLayer},
+    client::{DefaultRetryPolicy, InstrumentedRetryBackoffLayer, MetricsLayer},
     rpc::{RpcOperations, RpcOperationsConfig},
     transport::ReqwestClient,
 };
@@ -28,10 +28,7 @@ use futures::future::{AbortHandle, abortable};
 use hopr_bindings::exports::alloy::{
     providers::Provider,
     rpc::client::ClientBuilder,
-    transports::{
-        http::{Http, ReqwestTransport},
-        layers::RetryBackoffLayer,
-    },
+    transports::http::{Http, ReqwestTransport},
 };
 pub use hopr_types::internal::channels::ChannelEntry;
 use hopr_types::internal::{
@@ -134,7 +131,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         let transport_client = build_transport_client(&rpc_url)?;
 
         let rpc_client = ClientBuilder::default()
-            .layer(RetryBackoffLayer::new_with_policy(
+            .layer(InstrumentedRetryBackoffLayer::new_with_policy(
                 2,
                 100,
                 max_requests_per_sec,
