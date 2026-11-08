@@ -17,9 +17,8 @@ on:
       - ready_for_review
 permissions:
   contents: read
-  id-token: write # zizmor: ignore[excessive-permissions]
 concurrency:
-  group: ${{ github.event.pull_request.head.ref || github.ref_name }}-pr
+  group: ${{ github.event.pull_request.number || github.ref }}-pr
   cancel-in-progress: true
 env:
   CARGO_TERM_COLOR: always
@@ -46,6 +45,8 @@ jobs:
             refactor
             perf
             test
+            ci
+            revert
           requireScope: false
           ignoreLabels: |
             bot
@@ -53,6 +54,7 @@ jobs:
   label:
     name: Add labels
     if: github.event_name == 'pull_request'
+    continue-on-error: true
     runs-on: depot-ubuntu-24.04-2
     permissions:
       contents: read
@@ -81,9 +83,59 @@ jobs:
           if [[ "$HEAD_REPO" != "$BASE_REPO" ]]; then
             gh pr edit "$PR_NUMBER" --add-label "external"
           fi
-  # ── Shared checks (lint, pre-commit, audit) ─────────────────────────────────
+  # ── Path filter ─────────────────────────────────────────────────────────────
+  # Gate jobs through inputs on the reusable workflows, not with a caller-level
+  # `if:`: an input-skipped inner job still reports its required check name as
+  # skipped (green), a skipped caller job does not. Outside pull_request (merge
+  # queue) every output is true, so the queue never filters anything out.
+  changes:
+    name: Detect changes
+    runs-on: depot-ubuntu-24.04-2
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      rust: ${{ github.event_name != 'pull_request' || steps.filter.outputs.rust == 'true' }}
+      lockfile: ${{ github.event_name != 'pull_request' || steps.filter.outputs.lockfile == 'true' }}
+    steps:
+      - name: Filter changed paths
+        id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            rust:
+              - "api/**"
+              - "bloklid/**"
+              - "chain/**"
+              - "db/**"
+              - "helper/**"
+              - "types/**"
+              - "tests/**"
+              - "scripts/**"
+              - "docker/**"
+              - "justfile"
+              - "Cargo.toml"
+              - "Cargo.lock"
+              - "rust-toolchain.toml"
+              - "rustfmt.toml"
+              - ".cargo/**"
+              - ".config/**"
+              - ".graphql*"
+              - "flake.nix"
+              - "flake.lock"
+              - "nix/**"
+              - ".github/workflows/**"
+            lockfile:
+              - "**/Cargo.toml"
+              - "Cargo.lock"
+              - ".cargo/audit.toml"
+              - "flake.nix"
+              - "flake.lock"
+  # ── Stage 1: shared checks (format, pre-commit, lint, audit) ────────────────
   checks:
     name: Check
+    needs: changes
     # In the merge queue we don't re-run the heavy checks, but their contexts
     # (`Check / *`) are required and must report on the merge group or the queue
     # stalls. So the job runs on merge_group too, with the reusable workflow's
@@ -96,8 +148,8 @@ jobs:
       cachix_cache_name: blokli
       format: ${{ github.event_name != 'merge_group' }}
       pre_commit: ${{ github.event_name != 'merge_group' }}
-      lint: ${{ github.event_name != 'merge_group' }}
-      audit: ${{ github.event_name != 'merge_group' }}
+      lint: ${{ github.event_name != 'merge_group' && needs.changes.outputs.rust == 'true' }}
+      audit: ${{ github.event_name != 'merge_group' && needs.changes.outputs.lockfile == 'true' }}
       lint_command: "nix build -L .#bloklid-clippy"
       audit_command: "nix run -L .#audit"
       deps: ${{ github.event_name != 'merge_group' }}
@@ -105,18 +157,27 @@ jobs:
       runner_large: depot-ubuntu-24.04-4
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-  # ── Shared tests (unit) ─────────────────────────────────────────────────────
+  # ── Stage 2: tests ──────────────────────────────────────────────────────────
+  # Stages: changes + checks, then tests and schema jobs, then builds. A later
+  # stage runs when every earlier job succeeded or was skipped. The `!cancelled()
+  # && !failure()` condition tolerates a skipped upstream (input-skipped caller,
+  # draft PR, fork) while a real failure still stops the later stages.
   tests:
     name: Test
+    needs: [changes, checks]
+    if: ${{ !cancelled() && !failure() }}
     # Runs on merge_group too, but coverage is disabled there so `Test / Coverage /
     # Unit` reports (skipped) without re-running (see `checks`). The other Test
     # contexts are already skipped on every event.
     uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@2f28adfb7c34a9f18087d8646e190b6aafcd4b52 # workflow-tests-v6.1.2
+    permissions:
+      contents: read
+      id-token: write # Codecov OIDC upload in the coverage job
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
       cachix_cache_name: blokli
       enable_unit_tests: false
-      enable_unit_coverage: ${{ github.event_name != 'merge_group' }}
+      enable_unit_coverage: ${{ github.event_name != 'merge_group' && needs.changes.outputs.rust == 'true' }}
       unit_coverage_command: "nix build -L .#bloklid-coverage -o coverage.lcov"
       runner_unit: depot-ubuntu-24.04-4
       test_timeout: 30
@@ -127,8 +188,8 @@ jobs:
     name: Schema Validation
     runs-on: depot-ubuntu-24.04-4
     timeout-minutes: 30
-    needs: checks
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    needs: [changes, checks]
+    if: ${{ !cancelled() && !failure() && github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -146,8 +207,8 @@ jobs:
     name: Postgres Schema
     runs-on: depot-ubuntu-24.04-4
     timeout-minutes: 30
-    needs: checks
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    needs: [changes, checks]
+    if: ${{ !cancelled() && !failure() && github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -160,9 +221,11 @@ jobs:
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Check entities against the PostgreSQL schema
         run: nix develop -c just test-postgres-schema
-  # ── Build: binaries ─────────────────────────────────────────────────────────
+  # ── Stage 3: builds (binaries, Docker) ──────────────────────────────────────
   build-binaries:
     name: Binary ${{ matrix.architecture }}
+    needs: [changes, checks, tests, schema-validation, postgres-schema]
+    if: ${{ !cancelled() && !failure() }}
     # Runs on merge_group too; `enabled` is off there so the `Binary … / Build`
     # and `… / Sign and Publish` contexts report (skipped) without rebuilding
     # (see `checks`). The reusable job carries the matrix so names stay expanded.
@@ -195,7 +258,7 @@ jobs:
       build_command: ${{ matrix.build_command }}
       binary: bloklid
       runner: ${{ matrix.runner }}
-      enabled: ${{ github.event_name != 'merge_group' && (matrix.required_label == '' || contains(github.event.pull_request.labels.*.name, matrix.required_label)) }}
+      enabled: ${{ github.event_name != 'merge_group' && needs.changes.outputs.rust == 'true' && (matrix.required_label == '' || contains(github.event.pull_request.labels.*.name, matrix.required_label)) }}
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       gpg_private_key: ${{ secrets.GPG_HOPRNET_PRIVATE_KEY }}
@@ -205,9 +268,9 @@ jobs:
     # Docker builds are too heavy to run in the queue and build-docker.yaml has no
     # skip input, so this stays skipped on merge_group; the required `Docker / *`
     # contexts are reported (green) by merge-queue-docker.yaml instead.
-    if: github.event_name == 'pull_request'
+    if: ${{ !cancelled() && !failure() && github.event_name == 'pull_request' }}
     uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@25898d13dab1b3fbf4c33c394e7c581578a2b0d7 # build-docker-v3.2.0
-    needs: build-binaries
+    needs: [changes, checks, tests, schema-validation, postgres-schema, build-binaries]
     permissions:
       contents: read
       pull-requests: write
@@ -228,14 +291,15 @@ jobs:
       build_file: bloklid/Cargo.toml
       docker_image_name: bloklid
       docker_image_format: skopeo
+      concurrency_group_suffix: ${{ github.event.pull_request.number || github.ref_name }}
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
   build-docker-with-anvil:
     name: Docker anvil
     # Not a required check; skip in the merge queue.
-    if: github.event_name == 'pull_request'
+    if: ${{ !cancelled() && !failure() && github.event_name == 'pull_request' }}
     uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@25898d13dab1b3fbf4c33c394e7c581578a2b0d7 # build-docker-v3.2.0
-    needs: build-binaries
+    needs: [changes, checks, tests, schema-validation, postgres-schema, build-binaries]
     permissions:
       contents: read
       pull-requests: write
@@ -256,6 +320,41 @@ jobs:
       build_file: bloklid/Cargo.toml
       docker_image_name: bloklid-anvil
       docker_image_format: skopeo
-      concurrency_group_suffix: anvil
+      concurrency_group_suffix: anvil-${{ github.event.pull_request.number || github.ref_name }}
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+  # Single aggregate merge gate: green only if every other job in this run
+  # succeeded. Mark THIS one as the required check in the branch ruleset once
+  # the individual required checks are dropped. `if: always()` runs it even when
+  # a dependency fails; alls-green then reds the gate on any non-success (a
+  # failed job, or a skip that is not allowed).
+  merge-gate:
+    name: Merge gate
+    if: always()
+    needs:
+      - validate-pr-title
+      - label
+      - changes
+      - checks
+      - tests
+      - schema-validation
+      - postgres-schema
+      - build-binaries
+      - build-docker
+      - build-docker-with-anvil
+    runs-on: depot-ubuntu-24.04-2
+    permissions: {}
+    steps:
+      - name: Require all jobs to pass
+        uses: re-actors/alls-green@b5b5b37504aa4183270bd3d855c52a67f212be35 # v1.3.0
+        with:
+          jobs: ${{ toJSON(needs) }}
+          # In the merge queue the PR-only jobs, the Docker builds and the
+          # schema jobs skip, and checks/tests/build-binaries have every inner
+          # job input-disabled, so their caller jobs report skipped. On a pull
+          # request only the fork-gated schema jobs may skip, plus: `tests` on a
+          # draft (tests.yaml skips coverage on drafts) or when the rust filter
+          # is false; `build-binaries` when the rust filter is false. The Docker
+          # builds never skip on a pull request. A failed job reds the gate in
+          # every case.
+          allowed-skips: ${{ github.event_name == 'merge_group' && 'validate-pr-title, label, checks, tests, schema-validation, postgres-schema, build-binaries, build-docker, build-docker-with-anvil' || format('schema-validation, postgres-schema{0}{1}', (github.event.pull_request.draft || needs.changes.outputs.rust != 'true') && ', tests' || '', needs.changes.outputs.rust != 'true' && ', build-binaries' || '') }}

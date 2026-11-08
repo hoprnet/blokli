@@ -19,11 +19,14 @@
     "enabled": true,
     "labels": ["security"],
     "schedule": ["at any time"],
-    "automerge": true
+    "automerge": true,
+    "groupName": "security updates",
+    "commitMessageTopic": "security updates"
   },
   "packageRules": [
     {
       "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["minor", "patch", "digest", "pin", "pinDigest"],
       "groupName": "github-actions",
       "pinDigests": true,
       "commitMessageTopic": "GitHub Actions"
@@ -33,16 +36,9 @@
       "matchUpdateTypes": ["minor", "patch"],
       "groupName": "cargo dependencies",
       "commitMessageTopic": "Cargo dependencies"
-    },
-    {
-      "description": "Expedite cargo security updates \u2014 bypass weekly schedule",
-      "matchManagers": ["cargo"],
-      "matchCategories": ["security"],
-      "schedule": ["at any time"],
-      "automerge": true,
-      "labels": ["security"],
-      "groupName": "cargo security updates",
-      "commitMessageTopic": "Cargo security updates"
     }
-  ]
+  ],
+  "lockFileMaintenance": {
+    "enabled": true
+  }
 }

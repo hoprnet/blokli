@@ -4,6 +4,7 @@
 //!
 //! - `blokli_transaction_status_total`: Counter of terminal outcomes for raw-transaction attempts processed by the raw
 //!   transaction executor, labelled by `status`.
+//! - `blokli_transaction_store_size`: Gauge of transaction records currently retained in the in-memory store.
 
 /// All terminal transaction outcome label values for `blokli_transaction_status_total`.
 ///
@@ -43,7 +44,9 @@ lazy_static::lazy_static! {
 }
 
 #[cfg(all(feature = "telemetry", not(test)))]
-use hopr_types::telemetry as hopr_metrics;
+use hopr_types::telemetry::{self as hopr_metrics, SimpleGauge};
+#[cfg(all(feature = "telemetry", not(test)))]
+use tracing::error;
 
 #[cfg(all(feature = "telemetry", not(test)))]
 lazy_static::lazy_static! {
@@ -56,6 +59,13 @@ lazy_static::lazy_static! {
             &["status"],
         )
         .unwrap();
+    static ref METRIC_BLOKLI_TRANSACTION_STORE_SIZE: Option<SimpleGauge> =
+        SimpleGauge::new(
+            "blokli_transaction_store_size",
+            "Number of transaction records retained in the in-memory transaction store",
+        )
+        .inspect_err(|error| error!(%error, metric = "blokli_transaction_store_size", "failed to register telemetry metric"))
+        .ok();
 }
 
 /// Increment the `blokli_transaction_status_total` counter for the given terminal outcome.
@@ -71,6 +81,15 @@ lazy_static::lazy_static! {
 pub fn record_transaction_status(status: &str) {
     #[cfg(all(feature = "telemetry", not(test)))]
     METRIC_BLOKLI_TRANSACTION_STATUS_TOTAL.increment(&[status]);
+}
+
+/// Set the number of transaction records currently retained in the in-memory store.
+#[allow(unused_variables)]
+pub fn set_transaction_store_size(size: usize) {
+    #[cfg(all(feature = "telemetry", not(test)))]
+    if let Some(metric) = METRIC_BLOKLI_TRANSACTION_STORE_SIZE.as_ref() {
+        metric.set(size as f64);
+    }
 }
 
 #[allow(unused_variables)]

@@ -2988,7 +2988,7 @@ impl QueryRoot {
         let store = ctx.data::<Arc<TransactionStore>>()?;
 
         // Try to retrieve the transaction
-        match store.get(uuid) {
+        match store.get_public(uuid) {
             Ok(record) => Ok(Some(TransactionResult::Transaction(transaction_from_record(record)))),
             Err(_) => Ok(None), // Transaction not found
         }

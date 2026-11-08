@@ -1992,7 +1992,7 @@ impl SubscriptionRoot {
         // to avoid race condition where we miss an update
         let mut event_receiver = transaction_store.subscribe();
         let initial_record = transaction_store
-            .get(transaction_id)
+            .get_public(transaction_id)
             .map_err(|_| errors::transaction_not_found(transaction_id))?;
 
         Ok(stream! {
@@ -2009,7 +2009,6 @@ impl SubscriptionRoot {
 
             // Phase 1: Emit the state captured after subscribing to the event bus.
             let mut last_record = initial_record;
-            last_record.raw_transaction.clear();
             let is_terminal = is_terminal_status(&last_record.status);
 
             yield transaction_from_record(last_record.clone());
@@ -2043,25 +2042,28 @@ impl SubscriptionRoot {
                     _ = reconciliation.tick() => true,
                 };
 
+                // Unrelated global-bus events cannot change this transaction. Avoid a
+                // store read for each one; periodic reconciliation still recovers a
+                // dropped notification.
                 if !should_reconcile {
                     continue;
                 }
 
-                if let Ok(mut record) = transaction_store.get(transaction_id) {
-                    record.raw_transaction.clear();
+                let record = match transaction_store.get_public(transaction_id) {
+                    Ok(record) => record,
+                    Err(_) => break,
+                };
+                if record == last_record {
+                    continue;
+                }
 
-                    if record == last_record {
-                        continue;
-                    }
+                last_record = record.clone();
+                let is_terminal = is_terminal_status(&last_record.status);
 
-                    last_record = record.clone();
-                    let is_terminal = is_terminal_status(&last_record.status);
+                yield transaction_from_record(record);
 
-                    yield transaction_from_record(record);
-
-                    if is_terminal {
-                        break;
-                    }
+                if is_terminal {
+                    break;
                 }
             }
         })

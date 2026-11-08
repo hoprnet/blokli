@@ -370,6 +370,14 @@ impl Config {
             self.api.transactions.max_submitted_transactions_per_identity
         ));
         output.push_str(&format!(
+            "  api.transactions.terminal_transaction_ttl: {:?}\n",
+            self.api.transactions.terminal_transaction_ttl
+        ));
+        output.push_str(&format!(
+            "  api.transactions.max_terminal_transactions: {}\n",
+            self.api.transactions.max_terminal_transactions
+        ));
+        output.push_str(&format!(
             "  api.transactions.max_queued_trace_jobs: {}\n",
             self.api.transactions.max_queued_trace_jobs
         ));
@@ -556,6 +564,16 @@ pub struct TransactionConfig {
     #[serde(default = "default_max_submitted_transactions_per_identity")]
     pub max_submitted_transactions_per_identity: usize,
 
+    /// How long terminal transaction records remain queryable. `0s` disables TTL eviction.
+    #[default(_code = "Duration::from_secs(24 * 60 * 60)")]
+    #[serde(default = "default_terminal_transaction_ttl", with = "humantime_serde")]
+    pub terminal_transaction_ttl: Duration,
+
+    /// Maximum terminal transaction records retained in memory. `0` means unbounded.
+    #[default(10000)]
+    #[serde(default = "default_max_terminal_transactions")]
+    pub max_terminal_transactions: usize,
+
     /// Maximum number of optional Safe revert-reason trace jobs waiting to run. `0` means unbounded.
     #[default(128)]
     #[serde(default = "default_max_queued_trace_jobs")]
@@ -700,6 +718,14 @@ fn default_max_submitted_transactions() -> usize {
 
 fn default_max_submitted_transactions_per_identity() -> usize {
     64
+}
+
+fn default_terminal_transaction_ttl() -> Duration {
+    Duration::from_secs(24 * 60 * 60)
+}
+
+fn default_max_terminal_transactions() -> usize {
+    10_000
 }
 
 fn default_max_queued_trace_jobs() -> usize {

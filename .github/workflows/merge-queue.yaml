@@ -1,39 +1,307 @@
 ---
 name: Merge queue
-# The merge queue's mandatory gate. Integration throughput is a required status
-# check, so a red result here ejects the queued change and sends the PR back;
-# everything else in the queue is a heavy pr.yaml job that skips (see pr.yaml).
+# Dispatches hoprnet/hopr-integration-tests and blocks on its verdict, so nothing reaches `main`
+# without the v5 throughput + PIX suites passing against that candidate.
 #
-# Triggers on BOTH events on purpose:
-#   * merge_group — the job runs for real and gates the merge.
-#   * pull_request — the job SKIPS (see the `if` below). A required check must
-#     report on every PR or the PR is blocked on a status that never arrives; a
-#     skipped job still reports (skipped = passing), so the requirement is
-#     satisfied on the PR without the job running there.
-#
-# Placeholder for now: a no-op that always passes. It will become a dispatch to
-# hoprnet/hopr-integration-tests (`integration.yaml`) once the cross-repo trigger
-# is wired up.
+# On pull_request only the `run-integration` label event dispatches (and only for PRs targeting
+# `main`): a required check must report on every PR, and skipped counts as passing.
 on:
   pull_request:
     types:
       - opened
       - synchronize
       - reopened
-      - ready_for_review
+      # So applying `run-integration` starts the opt-in run.
+      - labeled
   merge_group:
     types: [checks_requested]
 permissions:
   contents: read
 concurrency:
-  group: ${{ github.event.pull_request.head.ref || github.ref_name }}-merge-queue
+  # Unrelated label events get their own group so they cannot cancel a watched opt-in run.
+  group: ${{ github.event.pull_request.number || github.ref_name }}-merge-queue${{ github.event.action == 'labeled' && github.event.label.name != 'run-integration' && '-label' || '' }}
   cancel-in-progress: true
 jobs:
   integration-throughput:
     name: Integration throughput # must match the required-check context exactly
-    # Runs only in the merge queue; skips on pull_request (reports skipped = passing).
-    if: github.event_name == 'merge_group'
+    # The label EVENT, not merely the label's presence: a dispatched run is never cancelled, so
+    # re-dispatching on every push piles runs onto the single integration box and starves later
+    # queue entries. Re-running the opt-in means re-applying the label.
+    if: >-
+      (github.event_name == 'merge_group' && github.event.merge_group.base_ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main' && github.event.action == 'labeled' && github.event.label.name == 'run-integration' && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: depot-ubuntu-24.04-2
+    # <=5 min of discovery plus 4 x 53 min of watching is ~217 min. The queue is ALLGREEN with one
+    # entry built at a time, so there is no tail to wait for; entries are tested one by one.
+    timeout-minutes: 350
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      REPO: hoprnet/hopr-integration-tests
     steps:
-      - name: Placeholder
-        run: echo "Integration throughput placeholder — always passes for now."
+      - name: Generate GitHub App token
+        id: bot-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0 # zizmor: ignore[github-app]
+        with:
+          client-id: ${{ vars.GH_APP_HOPRNET_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_HOPRNET_BOT_PRIVATE_KEY }}
+          owner: hoprnet
+          repositories: hopr-integration-tests
+      # The dispatch returns no run id and the API does not expose a run's payload, so the wait
+      # step finds the run by this marker in its title.
+      - name: Build a run marker
+        id: marker
+        run: echo "value=${GITHUB_REPOSITORY##*/}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >>"${GITHUB_OUTPUT}"
+      # NOT `github.sha` on a pull_request: that is `refs/pull/N/merge`, and cargo mirrors only
+      # heads and tags, so it cannot resolve there. A queue candidate is a head.
+      - name: Resolve the rev to test
+        id: rev
+        env:
+          MQ_SHA: ${{ github.event.merge_group.head_sha }}
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+        run: echo "head_sha=${MQ_SHA:-${PR_SHA}}" >>"${GITHUB_OUTPUT}"
+      # A breaking change names its adapted tests PR in the description; see hopr-integration-tests README.
+      - name: Find the companion tests PR
+        id: companion
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          MQ_REF: ${{ github.event.merge_group.head_ref }}
+        run: |
+          set -euo pipefail
+          pr="${PR_NUMBER}"
+          if [ -z "${pr}" ] && [[ ${MQ_REF} =~ /pr-([0-9]+)- ]]; then pr="${BASH_REMATCH[1]}"; fi
+          body="$(gh pr view "${pr}" -R "${GITHUB_REPOSITORY}" --json body -q .body)"
+          tests_pr="$(grep -oP '^Requires: hoprnet/hopr-integration-tests#\K[0-9]+' <<<"${body}" | head -1 || true)"
+          echo "pr=${tests_pr}" >>"${GITHUB_OUTPUT}"
+          [ -z "${tests_pr}" ] || echo "Tests from hoprnet/hopr-integration-tests#${tests_pr}" >>"${GITHUB_STEP_SUMMARY}"
+      - name: Invoke integration test
+        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
+        with:
+          token: ${{ steps.bot-token.outputs.token }}
+          repository: hoprnet/hopr-integration-tests
+          event-type: integration
+          client-payload: |-
+            {
+              "line": "v5",
+              "project": "blokli",
+              "rev": "${{ steps.rev.outputs.head_sha }}",
+              "marker": "${{ steps.marker.outputs.value }}",
+              "tests_pr": "${{ steps.companion.outputs.pr }}"
+            }
+      # `repository_dispatch` is fire-and-forget: without the watch stages below the job would go
+      # green as soon as the event is accepted, whatever the test then does.
+      - name: Find the dispatched run
+        id: find
+        env:
+          GH_TOKEN: ${{ steps.bot-token.outputs.token }}
+          MARKER: ${{ steps.marker.outputs.value }}
+          REV: ${{ steps.rev.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+
+          # The run is created even while its concurrency group holds it, so this only waits out
+          # dispatch delivery, not the queue ahead of it.
+          id=""
+          for _ in $(seq 1 20); do
+            id=$(gh run list -R "${REPO}" --workflow=integration.yaml --event repository_dispatch -L 100 \
+                   --json databaseId,displayTitle \
+                   -q "[.[] | select(.displayTitle | contains(\"${MARKER}\")) | .databaseId] | first // empty" || true)
+            [ -n "${id}" ] && break
+            sleep 15
+          done
+          if [ -z "${id}" ]; then
+            echo "::error::dispatched for ${REV} but never found a run tagged ${MARKER};" \
+                 "if the dispatch succeeded the token most likely lacks \`actions: read\`" >&2
+            exit 1
+          fi
+
+          echo "id=${id}" >>"${GITHUB_OUTPUT}"
+          url="https://github.com/${REPO}/actions/runs/${id}"
+          echo "Gating on ${url}"
+          echo "Integration throughput (v5) for \`${REV}\`: ${url}" >>"${GITHUB_STEP_SUMMARY}"
+      # App installation tokens are hard-capped at 1 hour by GitHub, with no expiry knob, while the
+      # suite runs 45-150 min. So each stage below mints its own token and watches for less than
+      # that hour; run 35857281010 died at 1h0m25s on `HTTP 401: Bad credentials`, mid-suite.
+      - name: Refresh token (stage 1)
+        id: bot-token-1
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0 # zizmor: ignore[github-app]
+        with:
+          client-id: ${{ vars.GH_APP_HOPRNET_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_HOPRNET_BOT_PRIVATE_KEY }}
+          owner: hoprnet
+          repositories: hopr-integration-tests
+      - name: Watch the integration run (stage 1)
+        id: wait1
+        env:
+          GH_TOKEN: ${{ steps.bot-token-1.outputs.token }}
+          RUN_ID: ${{ steps.find.outputs.id }}
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 3180))
+          while [ "${SECONDS}" -lt "${deadline}" ]; do
+            rc=0
+            timeout "$((deadline - SECONDS))" gh run watch "${RUN_ID}" -R "${REPO}" --interval 30 --exit-status || rc=$?
+            if [ "${rc}" -eq 0 ]; then
+              echo "done=true" >>"${GITHUB_OUTPUT}"
+              exit 0
+            fi
+            # `gh` exits 1 for a red run AND for its own API errors, so ask the run itself rather
+            # than trusting the exit code. `|| true` because this call can be the thing that 401s.
+            concl=$(gh run view "${RUN_ID}" -R "${REPO}" --json status,conclusion \
+                      -q 'select(.status == "completed") | .conclusion' 2>/dev/null || true)
+            if [ -n "${concl}" ]; then
+              echo "done=true" >>"${GITHUB_OUTPUT}"
+              [ "${concl}" = success ] && exit 0
+              echo "::error::integration run concluded ${concl}"
+              echo "::error::If this PR breaks the tests on purpose, adapt them in ${REPO} and add 'Requires: ${REPO}#<N>' on its own line to this PR's description"
+              exit 1
+            fi
+            # 124 is the planned hand-off at the deadline; anything else is a transient: retry.
+            [ "${rc}" -eq 124 ] || sleep 30
+          done
+      - name: Refresh token (stage 2)
+        id: bot-token-2
+        if: steps.wait1.outputs.done != 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0 # zizmor: ignore[github-app]
+        with:
+          client-id: ${{ vars.GH_APP_HOPRNET_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_HOPRNET_BOT_PRIVATE_KEY }}
+          owner: hoprnet
+          repositories: hopr-integration-tests
+      - name: Watch the integration run (stage 2)
+        id: wait2
+        if: steps.wait1.outputs.done != 'true'
+        env:
+          GH_TOKEN: ${{ steps.bot-token-2.outputs.token }}
+          RUN_ID: ${{ steps.find.outputs.id }}
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 3180))
+          while [ "${SECONDS}" -lt "${deadline}" ]; do
+            rc=0
+            timeout "$((deadline - SECONDS))" gh run watch "${RUN_ID}" -R "${REPO}" --interval 30 --exit-status || rc=$?
+            if [ "${rc}" -eq 0 ]; then
+              echo "done=true" >>"${GITHUB_OUTPUT}"
+              exit 0
+            fi
+            # `gh` exits 1 for a red run AND for its own API errors, so ask the run itself rather
+            # than trusting the exit code. `|| true` because this call can be the thing that 401s.
+            concl=$(gh run view "${RUN_ID}" -R "${REPO}" --json status,conclusion \
+                      -q 'select(.status == "completed") | .conclusion' 2>/dev/null || true)
+            if [ -n "${concl}" ]; then
+              echo "done=true" >>"${GITHUB_OUTPUT}"
+              [ "${concl}" = success ] && exit 0
+              echo "::error::integration run concluded ${concl}"
+              echo "::error::If this PR breaks the tests on purpose, adapt them in ${REPO} and add 'Requires: ${REPO}#<N>' on its own line to this PR's description"
+              exit 1
+            fi
+            # 124 is the planned hand-off at the deadline; anything else is a transient: retry.
+            [ "${rc}" -eq 124 ] || sleep 30
+          done
+      # Each `if:` chains EVERY prior stage: a skipped step's output is the empty string, not
+      # 'true', so guarding only on the previous one would run this whenever that one was skipped.
+      - name: Refresh token (stage 3)
+        id: bot-token-3
+        if: steps.wait1.outputs.done != 'true' && steps.wait2.outputs.done != 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0 # zizmor: ignore[github-app]
+        with:
+          client-id: ${{ vars.GH_APP_HOPRNET_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_HOPRNET_BOT_PRIVATE_KEY }}
+          owner: hoprnet
+          repositories: hopr-integration-tests
+      - name: Watch the integration run (stage 3)
+        id: wait3
+        if: steps.wait1.outputs.done != 'true' && steps.wait2.outputs.done != 'true'
+        env:
+          GH_TOKEN: ${{ steps.bot-token-3.outputs.token }}
+          RUN_ID: ${{ steps.find.outputs.id }}
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 3180))
+          while [ "${SECONDS}" -lt "${deadline}" ]; do
+            rc=0
+            timeout "$((deadline - SECONDS))" gh run watch "${RUN_ID}" -R "${REPO}" --interval 30 --exit-status || rc=$?
+            if [ "${rc}" -eq 0 ]; then
+              echo "done=true" >>"${GITHUB_OUTPUT}"
+              exit 0
+            fi
+            # `gh` exits 1 for a red run AND for its own API errors, so ask the run itself rather
+            # than trusting the exit code. `|| true` because this call can be the thing that 401s.
+            concl=$(gh run view "${RUN_ID}" -R "${REPO}" --json status,conclusion \
+                      -q 'select(.status == "completed") | .conclusion' 2>/dev/null || true)
+            if [ -n "${concl}" ]; then
+              echo "done=true" >>"${GITHUB_OUTPUT}"
+              [ "${concl}" = success ] && exit 0
+              echo "::error::integration run concluded ${concl}"
+              echo "::error::If this PR breaks the tests on purpose, adapt them in ${REPO} and add 'Requires: ${REPO}#<N>' on its own line to this PR's description"
+              exit 1
+            fi
+            # 124 is the planned hand-off at the deadline; anything else is a transient: retry.
+            [ "${rc}" -eq 124 ] || sleep 30
+          done
+      - name: Refresh token (stage 4)
+        id: bot-token-4
+        if: steps.wait1.outputs.done != 'true' && steps.wait2.outputs.done != 'true' && steps.wait3.outputs.done != 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0 # zizmor: ignore[github-app]
+        with:
+          client-id: ${{ vars.GH_APP_HOPRNET_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_HOPRNET_BOT_PRIVATE_KEY }}
+          owner: hoprnet
+          repositories: hopr-integration-tests
+      - name: Watch the integration run (stage 4)
+        id: wait4
+        if: steps.wait1.outputs.done != 'true' && steps.wait2.outputs.done != 'true' && steps.wait3.outputs.done != 'true'
+        env:
+          GH_TOKEN: ${{ steps.bot-token-4.outputs.token }}
+          RUN_ID: ${{ steps.find.outputs.id }}
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 3180))
+          while [ "${SECONDS}" -lt "${deadline}" ]; do
+            rc=0
+            timeout "$((deadline - SECONDS))" gh run watch "${RUN_ID}" -R "${REPO}" --interval 30 --exit-status || rc=$?
+            if [ "${rc}" -eq 0 ]; then
+              echo "done=true" >>"${GITHUB_OUTPUT}"
+              exit 0
+            fi
+            # `gh` exits 1 for a red run AND for its own API errors, so ask the run itself rather
+            # than trusting the exit code. `|| true` because this call can be the thing that 401s.
+            concl=$(gh run view "${RUN_ID}" -R "${REPO}" --json status,conclusion \
+                      -q 'select(.status == "completed") | .conclusion' 2>/dev/null || true)
+            if [ -n "${concl}" ]; then
+              echo "done=true" >>"${GITHUB_OUTPUT}"
+              [ "${concl}" = success ] && exit 0
+              echo "::error::integration run concluded ${concl}"
+              echo "::error::If this PR breaks the tests on purpose, adapt them in ${REPO} and add 'Requires: ${REPO}#<N>' on its own line to this PR's description"
+              exit 1
+            fi
+            # 124 is the planned hand-off at the deadline; anything else is a transient: retry.
+            [ "${rc}" -eq 124 ] || sleep 30
+          done
+      - name: Fail if the integration test never concluded
+        if: >-
+          steps.wait1.outputs.done != 'true' && steps.wait2.outputs.done != 'true' && steps.wait3.outputs.done != 'true' && steps.wait4.outputs.done != 'true'
+        env:
+          RUN_ID: ${{ steps.find.outputs.id }}
+        run: |
+          echo "::error::integration run ${RUN_ID} still running after 212 min of watching" >&2
+          exit 1
+      # A cancelled gate (a newer run in this concurrency group, or a dequeued entry) must free the
+      # shared integration slot: the dispatched run is never cancelled with it. Best effort, since
+      # it needs `actions: write` on the target repo and must not mask the cancellation.
+      - name: Refresh token (cancel)
+        id: bot-token-cancel
+        if: cancelled() && steps.find.outputs.id != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0 # zizmor: ignore[github-app]
+        with:
+          client-id: ${{ vars.GH_APP_HOPRNET_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_HOPRNET_BOT_PRIVATE_KEY }}
+          owner: hoprnet
+          repositories: hopr-integration-tests
+      - name: Cancel the dispatched integration run
+        if: cancelled() && steps.find.outputs.id != ''
+        env:
+          GH_TOKEN: ${{ steps.bot-token-cancel.outputs.token }}
+          RUN_ID: ${{ steps.find.outputs.id }}
+        run: gh run cancel "${RUN_ID}" -R "${REPO}" || echo "::warning::could not cancel ${REPO} run ${RUN_ID}"

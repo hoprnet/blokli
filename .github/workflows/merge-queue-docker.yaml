@@ -30,4 +30,6 @@ jobs:
     runs-on: depot-ubuntu-24.04-2
     steps:
       - name: Passthrough
-        run: echo "merge-queue passthrough for '${{ matrix.context }}' — the real check ran on the PR."
+        env:
+          CONTEXT: ${{ matrix.context }}
+        run: echo "merge-queue passthrough for '$CONTEXT' — the real check ran on the PR."
