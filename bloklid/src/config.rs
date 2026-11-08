@@ -1183,6 +1183,43 @@ mod tests {
     }
 
     #[test]
+    fn test_indexer_validate_requires_logs_snapshot_sha256() {
+        let digest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+        assert!(IndexerConfig::default().validate().is_ok(), "defaults need no digest");
+
+        let enabled = IndexerConfig {
+            enable_logs_snapshot: true,
+            logs_snapshot_url: Some("https://example.com/logs-snapshot.tar.xz".to_string()),
+            ..Default::default()
+        };
+        let error = enabled
+            .validate()
+            .expect_err("enabled snapshot without digest must fail");
+        assert!(error.contains("indexer.logs_snapshot_sha256"), "{error}");
+
+        let url_only = IndexerConfig {
+            logs_snapshot_url: Some("https://example.com/logs-snapshot.tar.xz".to_string()),
+            ..Default::default()
+        };
+        let error = url_only.validate().expect_err("snapshot URL without digest must fail");
+        assert!(error.contains("indexer.logs_snapshot_sha256"), "{error}");
+
+        let malformed = IndexerConfig {
+            logs_snapshot_sha256: Some("abc".to_string()),
+            ..url_only.clone()
+        };
+        let error = malformed.validate().expect_err("malformed digest must fail");
+        assert!(error.contains("indexer.logs_snapshot_sha256"), "{error}");
+
+        let valid = IndexerConfig {
+            logs_snapshot_sha256: Some(digest.to_string()),
+            ..enabled
+        };
+        assert!(valid.validate().is_ok());
+    }
+
+    #[test]
     fn test_partial_api_config() {
         // Only set enabled, all other fields should use defaults
         let config = r#"
