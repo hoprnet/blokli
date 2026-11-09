@@ -49,7 +49,6 @@ data:
     [indexer.subscription]
     event_bus_capacity = {{ .Values.config.indexer.subscription.eventBusCapacity }}
     shutdown_signal_capacity = {{ .Values.config.indexer.subscription.shutdownSignalCapacity }}
-    batch_size = {{ .Values.config.indexer.subscription.batchSize }}
 
     # API server configuration
     [api]

@@ -454,7 +454,6 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
         sse_keepalive: SseKeepAliveConfig {
             enabled: true,
             interval: Duration::from_millis(50),
-            text: "keepalive-test".to_string(),
         },
         health: HealthConfig {
             max_indexer_lag: 10,
