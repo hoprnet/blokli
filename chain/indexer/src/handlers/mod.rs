@@ -508,6 +508,7 @@ where
     /// #     let handler = /* ContractEventHandlers::new(...) */ unimplemented!();
     /// #     let tx = /* OpenTransaction */ unimplemented!();
     /// #     let slog = /* SerializableLog */ unimplemented!();
+    /// # let batch_context = todo!();
     /// let is_synced = true;
     /// // Awaiting the processing result; errors propagate as `CoreEthereumIndexerError`.
     /// let _ = handler.process_log_event_with_prefetch(&tx, slog, is_synced, &batch_context).await;

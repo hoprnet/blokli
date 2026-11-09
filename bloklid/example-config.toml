@@ -136,7 +136,9 @@ enable_curvy_indexing = false
 # Concurrent pre-fetch of the transactions needed to decode Safe execution
 # failures. These lookups run before a block's database transaction is opened,
 # so they trade requests in flight against how long a slow RPC endpoint can
-# stall indexing. Only relevant when enable_safe_indexing is true.
+# stall indexing. The transaction lookups happen only when enable_safe_indexing
+# is true; the request budget below also covers the pre-fetch of Safe discovery-block
+# logs, which runs regardless of that flag.
 [indexer.safe_tx_prefetch]
 # Transaction hashes packed into a single batched JSON-RPC request (default: 16)
 # Lower it if the RPC provider rejects or truncates large batch requests.

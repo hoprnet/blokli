@@ -37,8 +37,11 @@ pub trait BlokliDbLogOperations {
     /// Stores multiple log entries in the database.
     ///
     /// The whole batch is written in one transaction, so it either applies in full or not at all.
-    /// Logs already stored are left untouched, and a position repeated within `logs` is stored
-    /// once. There is deliberately no per-log outcome: a single log cannot fail on its own.
+    /// A log already stored at a position under the same block hash is left untouched, and a
+    /// position repeated within `logs` is stored once. A position stored under a different block
+    /// hash is treated as a reorganisation orphan: it is replaced, its status is reset and the
+    /// checksums from that block onwards are cleared. There is deliberately no per-log outcome:
+    /// a single log cannot fail on its own.
     ///
     /// # Arguments
     ///
