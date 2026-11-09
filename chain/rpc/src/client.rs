@@ -40,7 +40,7 @@ use hopr_bindings::exports::alloy::{
     },
     rpc::{
         client::ClientBuilder,
-        json_rpc::{ErrorPayload, RequestPacket, ResponsePacket, ResponsePayload},
+        json_rpc::{ErrorPayload, RequestPacket, Response, ResponsePacket, ResponsePayload},
     },
     signers::local::PrivateKeySigner,
     transports::{
@@ -379,8 +379,10 @@ where
 /// requests the policy considers retryable, paces those retries against the provider's compute
 /// budget, and records the retry count for each completed request.
 ///
-/// Item-level errors inside a batch response are left in the packet for the individual calls to
-/// read, so one failing item does not fail the rest of the batch.
+/// A batch response is retried as a whole only when every item failed with a retryable error.
+/// Otherwise the packet is returned intact and each call reads its own response, so a failing
+/// item does not fail the rest of the batch. Retryable item errors in such a mixed batch are not
+/// retried and reach their calls as is.
 ///
 /// # Examples
 ///
@@ -436,6 +438,26 @@ fn compute_retry_queue_delay_secs(
     }
 }
 
+/// Returns the error to retry a batch response on, or `None` to hand the packet back as is.
+///
+/// A batch is retried only when every item failed with a retryable error, which is what a
+/// rate-limited batch looks like. As soon as one item succeeded or failed with a non-retryable
+/// error, the packet is returned intact so each call reads its own response: retrying would
+/// resend the items that already got an answer, and exhausting the retries would replace their
+/// results with the retry error. Checking every item keeps the outcome independent of the
+/// order in which the provider lists them.
+fn retryable_batch_error<P: RetryPolicy>(policy: &P, items: &[Response]) -> Option<TransportError> {
+    let mut first_error = None;
+    for item in items {
+        let error = TransportError::ErrorResp(item.payload.as_error()?.clone());
+        if !policy.should_retry(&error) {
+            return None;
+        }
+        first_error.get_or_insert(error);
+    }
+    first_error
+}
+
 #[cfg(all(feature = "telemetry", not(test)))]
 fn record_rpc_retries(method_names: &[String], retry_count: u32) {
     if let Some(metric) = METRIC_RETRIES_PER_RPC_CALL.as_ref() {
@@ -476,30 +498,22 @@ where
 
             loop {
                 let error = match inner.call(request.clone()).await {
-                    Ok(response) => match response.as_error() {
-                        Some(error) => {
-                            let error = TransportError::ErrorResp(error.clone());
+                    Ok(response) => {
+                        let error = match &response {
+                            ResponsePacket::Single(_) => response
+                                .as_error()
+                                .map(|error| TransportError::ErrorResp(error.clone())),
+                            ResponsePacket::Batch(items) => retryable_batch_error(&this.policy, items),
+                        };
 
-                            // `as_error` reports only the first error in the packet, so a batch
-                            // whose items partly succeeded looks identical to a wholly failed
-                            // one. Retrying is still right when that first error is retryable -
-                            // a rate-limited batch is rejected as a whole - but failing the call
-                            // for a non-retryable item error would throw away the responses the
-                            // other items did get, leaving every waiter with the same error and
-                            // sending successful lookups down the fallback path. Hand the packet
-                            // back intact instead and let each call read its own response.
-                            if matches!(response, ResponsePacket::Batch(_)) && !this.policy.should_retry(&error) {
+                        match error {
+                            Some(error) => error,
+                            None => {
                                 record_rpc_retries(&method_names, retry_count);
                                 return Ok(response);
                             }
-
-                            error
                         }
-                        None => {
-                            record_rpc_retries(&method_names, retry_count);
-                            return Ok(response);
-                        }
-                    },
+                    }
                     Err(error) => error,
                 };
 
