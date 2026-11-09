@@ -64,6 +64,19 @@ pub type DbTimestamp = chrono::DateTime<chrono::Utc>;
 /// This is a thin wrapper over [DatabaseTransaction].
 /// The wrapping behavior is needed to allow transaction agnostic functionalities
 /// of the DB traits.
+///
+/// The wrapper cannot be turned into the raw [DatabaseTransaction]: events queued with
+/// [`OpenTransaction::defer_event`] are only published by [`OpenTransaction::commit`], so committing
+/// the inner transaction directly would drop them. Use [`AsRef`] for SQL access instead.
+///
+/// ```compile_fail,E0277
+/// use blokli_db::OpenTransaction;
+/// use sea_orm::DatabaseTransaction;
+///
+/// fn bypass_deferred_events(tx: OpenTransaction) -> DatabaseTransaction {
+///     tx.into()
+/// }
+/// ```
 #[derive(Debug)]
 pub struct OpenTransaction {
     transaction: DatabaseTransaction,
@@ -201,12 +214,6 @@ fn lock_deferred_events(events: &Mutex<Vec<StateChange>>) -> MutexGuard<'_, Vec<
 impl AsRef<DatabaseTransaction> for OpenTransaction {
     fn as_ref(&self) -> &DatabaseTransaction {
         &self.transaction
-    }
-}
-
-impl From<OpenTransaction> for DatabaseTransaction {
-    fn from(value: OpenTransaction) -> Self {
-        value.transaction
     }
 }
 
