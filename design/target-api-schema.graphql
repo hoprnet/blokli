@@ -1399,7 +1399,10 @@ type QueryRoot {
 		chainKey: String
 	): CountResult!
 	"""
-	Retrieve a stable, paginated view of service registry entries.
+	Retrieve a stable, paginated view of service registry entries. With liveOnly enabled, each entry is checked
+	against the on-chain
+	NodeSafeRegistry (at most 16 RPC calls in flight). Its complexity grows
+	with first, so a large page can exceed the query complexity budget.
 	"""
 	services(
 		"""
@@ -1866,7 +1869,9 @@ type QueryRoot {
 	Sum the wxHOPR token balances across indexed safe contracts.
 	
 	When `owner_address` is provided, restricts to safes whose indexed owner
-	set currently contains that address.
+	set currently contains that address. This field has a fixed complexity cost of 500, which equals the default
+	budget. It therefore cannot be combined with other top-level fields or
+	aliases under the default configuration.
 	"""
 	safesBalance(
 		"""
