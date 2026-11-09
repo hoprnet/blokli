@@ -459,6 +459,9 @@ config:
   ## @param config.maxRpcRequestsPerSec Maximum RPC requests per second (0 = unlimited)
   ##
   maxRpcRequestsPerSec: 0
+  ## @param config.maxBlockRange Ceiling for adaptive eth_getLogs block ranges (0 = auto-discover up to 10000)
+  ##
+  maxBlockRange: 2500
   ## @param config.dataDirectory Data directory path (should match persistence mount path)
   ##
   dataDirectory: "/data"

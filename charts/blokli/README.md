@@ -185,6 +185,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | `config.network`                                     | HOPR network to index (anvil-localhost, jura-dev, jura-prod, piz-palu-dev, piz-palu-staging)                  | `jura-prod`         |
 | `config.rpcUrl`                                      | Blockchain RPC URL                                                                                            | `""`                |
 | `config.maxRpcRequestsPerSec`                        | Maximum RPC requests per second (0 = unlimited)                                                               | `0`                 |
+| `config.maxBlockRange`                               | Ceiling for adaptive eth_getLogs block ranges (0 = auto-discover up to 10000)                                 | `2500`              |
 | `config.dataDirectory`                               | Data directory path (should match persistence mount path)                                                     | `/data`             |
 | `config.curvyAggregator`                             | Curvy Aggregator proxy address (required when Curvy indexing is enabled)                                      | `""`                |
 | `config.indexer.fastSync`                            | Enable fast sync mode                                                                                         | `true`              |
