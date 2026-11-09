@@ -1249,7 +1249,7 @@ mod tests {
     use hopr_bindings::exports::alloy::{
         primitives::U64,
         providers::{Provider, ProviderBuilder},
-        rpc::client::ClientBuilder,
+        rpc::client::{BatchRequest, ClientBuilder},
         transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
     };
     use serde_json::json;
@@ -1664,5 +1664,60 @@ mod tests {
         let error_text = error.to_string();
         assert!(error_text.contains("failed to create snapshot file"));
         assert!(error_text.contains(&path));
+    }
+
+    #[tokio::test]
+    async fn test_batch_should_keep_successful_items_when_another_item_fails() -> anyhow::Result<()> {
+        let mut server = mockito::Server::new_async().await;
+
+        // Answer the batch by echoing back the ids the client chose, in reverse order: responses
+        // are matched by id, not by position.
+        let m = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body_from_request(|request| {
+                let body: serde_json::Value = serde_json::from_slice(request.body().unwrap()).unwrap();
+                let responses = body
+                    .as_array()
+                    .expect("a batch request is a JSON array")
+                    .iter()
+                    .map(|call| match call["method"].as_str() {
+                        Some("eth_blockNumber") => json!({"jsonrpc":"2.0","id":call["id"],"result":"0x7"}),
+                        _ => json!({"jsonrpc":"2.0","id":call["id"],"error":{"code":-32000,"message":"unavailable"}}),
+                    })
+                    .rev()
+                    .collect::<Vec<_>>();
+                serde_json::to_vec(&responses).unwrap()
+            })
+            // The item error is not retryable, so the batch is sent exactly once.
+            .expect(1)
+            .create();
+
+        let transport_client = ReqwestTransport::new(url::Url::parse(&server.url())?);
+        let rpc_client = ClientBuilder::default()
+            .layer(InstrumentedRetryBackoffLayer::new_with_policy(
+                2,
+                1,
+                100,
+                DefaultRetryPolicy {
+                    retryable_json_rpc_errors: vec![],
+                    ..DefaultRetryPolicy::default()
+                },
+            ))
+            .transport(transport_client.clone(), transport_client.guess_local());
+        let provider = ProviderBuilder::new().connect_client(rpc_client);
+
+        let mut batch = BatchRequest::new(provider.client());
+        let succeeding = batch.add_call::<_, U64>("eth_blockNumber", &())?;
+        let failing = batch.add_call::<_, U64>("eth_chainId", &())?;
+
+        batch.send().await?;
+
+        assert_eq!(succeeding.await?, U64::from(7));
+        assert!(failing.await.is_err(), "the failing item must report its own error");
+        m.assert();
+
+        Ok(())
     }
 }
