@@ -1734,4 +1734,137 @@ mod tests {
 
         Ok(())
     }
+
+    /// Sends a batch with one successful, one retryable (-32005) and one non-retryable (-32000)
+    /// item, with the provider listing the two errors in the given order, and checks that the
+    /// packet is returned intact after a single attempt.
+    async fn assert_mixed_batch_is_returned_intact(retryable_error_first: bool) -> anyhow::Result<()> {
+        let mut server = mockito::Server::new_async().await;
+
+        let m = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body_from_request(move |request| {
+                let body: serde_json::Value = serde_json::from_slice(request.body().unwrap()).unwrap();
+                let calls = body.as_array().expect("a batch request is a JSON array");
+                let response_for = |method: &str| {
+                    let call = calls
+                        .iter()
+                        .find(|call| call["method"] == method)
+                        .expect("the batch contains every method");
+                    match method {
+                        "eth_blockNumber" => json!({"jsonrpc":"2.0","id":call["id"],"result":"0x7"}),
+                        "eth_chainId" => {
+                            json!({"jsonrpc":"2.0","id":call["id"],"error":{"code":-32005,"message":"limit exceeded"}})
+                        }
+                        _ => json!({"jsonrpc":"2.0","id":call["id"],"error":{"code":-32000,"message":"unavailable"}}),
+                    }
+                };
+                let order = if retryable_error_first {
+                    ["eth_chainId", "eth_gasPrice", "eth_blockNumber"]
+                } else {
+                    ["eth_gasPrice", "eth_chainId", "eth_blockNumber"]
+                };
+                let responses = order.iter().map(|method| response_for(method)).collect::<Vec<_>>();
+                serde_json::to_vec(&responses).unwrap()
+            })
+            // Part of the batch got an answer, so it is not resent whatever the error order.
+            .expect(1)
+            .create();
+
+        let transport_client = ReqwestTransport::new(url::Url::parse(&server.url())?);
+        let rpc_client = ClientBuilder::default()
+            .layer(InstrumentedRetryBackoffLayer::new_with_policy(
+                2,
+                1,
+                100,
+                DefaultRetryPolicy::default(),
+            ))
+            .transport(transport_client.clone(), transport_client.guess_local());
+        let provider = ProviderBuilder::new().connect_client(rpc_client);
+
+        let mut batch = BatchRequest::new(provider.client());
+        let succeeding = batch.add_call::<_, U64>("eth_blockNumber", &())?;
+        let retryable = batch.add_call::<_, U64>("eth_chainId", &())?;
+        let non_retryable = batch.add_call::<_, U64>("eth_gasPrice", &())?;
+
+        batch.send().await?;
+
+        assert_eq!(succeeding.await?, U64::from(7));
+        let retryable_error = retryable
+            .await
+            .expect_err("the retryable item must report its own error");
+        assert_eq!(retryable_error.as_error_resp().map(|error| error.code), Some(-32005));
+        let non_retryable_error = non_retryable
+            .await
+            .expect_err("the non-retryable item must report its own error");
+        assert_eq!(
+            non_retryable_error.as_error_resp().map(|error| error.code),
+            Some(-32000)
+        );
+        m.assert();
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_mixed_batch_with_retryable_error_first_is_returned_intact() -> anyhow::Result<()> {
+        assert_mixed_batch_is_returned_intact(true).await
+    }
+
+    #[tokio::test]
+    async fn test_mixed_batch_with_non_retryable_error_first_is_returned_intact() -> anyhow::Result<()> {
+        assert_mixed_batch_is_returned_intact(false).await
+    }
+
+    #[tokio::test]
+    async fn test_batch_should_be_retried_when_every_item_failed_with_retryable_error() -> anyhow::Result<()> {
+        let mut server = mockito::Server::new_async().await;
+
+        let m = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body_from_request(|request| {
+                let body: serde_json::Value = serde_json::from_slice(request.body().unwrap()).unwrap();
+                let responses = body
+                    .as_array()
+                    .expect("a batch request is a JSON array")
+                    .iter()
+                    .map(|call| {
+                        json!({"jsonrpc":"2.0","id":call["id"],"error":{"code":-32005,"message":"limit exceeded"}})
+                    })
+                    .collect::<Vec<_>>();
+                serde_json::to_vec(&responses).unwrap()
+            })
+            // The first attempt plus two retries.
+            .expect(3)
+            .create();
+
+        let transport_client = ReqwestTransport::new(url::Url::parse(&server.url())?);
+        let rpc_client = ClientBuilder::default()
+            .layer(InstrumentedRetryBackoffLayer::new_with_policy(
+                2,
+                1,
+                100,
+                DefaultRetryPolicy::default(),
+            ))
+            .transport(transport_client.clone(), transport_client.guess_local());
+        let provider = ProviderBuilder::new().connect_client(rpc_client);
+
+        let mut batch = BatchRequest::new(provider.client());
+        let first = batch.add_call::<_, U64>("eth_blockNumber", &())?;
+        let second = batch.add_call::<_, U64>("eth_chainId", &())?;
+
+        assert!(
+            batch.send().await.is_err(),
+            "the batch must fail once retries are exhausted"
+        );
+        assert!(first.await.is_err());
+        assert!(second.await.is_err());
+        m.assert();
+
+        Ok(())
+    }
 }
