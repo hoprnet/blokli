@@ -1189,8 +1189,6 @@ where
     /// # See Also
     ///
     /// - [`ReorgInfo`] - Structure containing reorg detection information
-    /// - [`get_channel_state_at`](blokli_db::state_queries::get_channel_state_at) - Temporal queries that work with
-    ///   corrective states
     /// - Design document section 6.5 - Detailed reorg handling specification
     async fn handle_reorg(
         logs_handler: &U,
@@ -1404,8 +1402,7 @@ mod tests {
     use blokli_chain_rpc::BlockWithLogs;
     use blokli_chain_types::{ContractAddresses, chain_events::ChainEventType};
     use blokli_db::{
-        TargetDb, accounts::BlokliDbAccountOperations, db::BlokliDb, events::BlockPosition,
-        safe_contracts::BlokliDbSafeContractOperations, state_queries::get_channel_state_at,
+        TargetDb, accounts::BlokliDbAccountOperations, db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations,
     };
     use blokli_db_entity::{
         account, channel,
@@ -3736,16 +3733,11 @@ mod tests {
         )
         .await?;
 
-        let conn = db.conn(TargetDb::Index);
-
-        // Query at exact corrective state position (200, 0, 0)
-        let position = BlockPosition {
-            block: 200,
-            tx_index: 0,
-            log_index: 0,
-        };
-
-        let state = get_channel_state_at(conn, 1, position).await?;
+        // Latest state at or before the exact corrective state position (200, 0, 0)
+        let states = get_channel_states(&db, 1).await?;
+        let state = states
+            .into_iter()
+            .rfind(|s| (s.published_block, s.published_tx_index, s.published_log_index) <= (200, 0, 0));
         assert!(state.is_some(), "Should find corrective state");
 
         let found_state = state.unwrap();
