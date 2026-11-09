@@ -11,15 +11,13 @@ use hopr_types::{
         traits::IntoEndian,
     },
 };
+use multiaddr::Multiaddr;
 use tracing::{debug, error, warn};
 
 #[cfg(all(feature = "telemetry", not(test)))]
 use super::increment_indexer_contract_log_count;
 use super::{ContractEventHandlers, helpers::construct_account_update};
-use crate::{
-    errors::{CoreEthereumIndexerError, Result},
-    state::IndexerEvent,
-};
+use crate::{errors::Result, state::IndexerEvent};
 
 impl<T, Db> ContractEventHandlers<T, Db>
 where
@@ -57,18 +55,33 @@ where
                 }
                 let node_address: Address = address_announcement.node.to_hopr_address();
 
-                self.db
-                    .insert_announcement(
-                        Some(tx),
-                        node_address,
-                        address_announcement.baseMultiaddr.parse()?,
-                        block_number,
-                    )
+                // Anybody can announce any string for any address without a key binding, so
+                // announcements that do not fit the model are skipped rather than failing the block.
+                let multiaddr = match address_announcement.baseMultiaddr.parse::<Multiaddr>() {
+                    Ok(multiaddr) => multiaddr,
+                    Err(error) => {
+                        warn!(
+                            address = %node_address,
+                            multiaddress = ?address_announcement.baseMultiaddr,
+                            %error,
+                            "skipping announcement with an invalid multiaddress",
+                        );
+                        return Ok(events);
+                    }
+                };
+
+                match self
+                    .db
+                    .insert_announcement(Some(tx), node_address, multiaddr, block_number)
                     .await
-                    .map_err(|e| match e {
-                        DbSqlError::MissingAccount => CoreEthereumIndexerError::AnnounceBeforeKeyBinding,
-                        other => other.into(),
-                    })?;
+                {
+                    Ok(_) => {}
+                    Err(DbSqlError::MissingAccount) => {
+                        warn!(address = %node_address, "skipping announcement for an address without a key binding");
+                        return Ok(events);
+                    }
+                    Err(error) => return Err(error.into()),
+                }
 
                 // Publish AccountUpdated event if synced
                 if is_synced {
@@ -182,7 +195,7 @@ where
                         }
                     }
                     Err(DbSqlError::MissingAccount) => {
-                        return Err(CoreEthereumIndexerError::RevocationBeforeKeyBinding);
+                        warn!(address = %node_address, "skipping revocation for an address without a key binding");
                     }
                     Err(e) => return Err(e.into()),
                 }
@@ -255,7 +268,8 @@ mod tests {
             sol_types::{SolEvent, SolValue},
         },
         hopr_announcements_events::HoprAnnouncementsEvents::{
-            KeyBinding as KeyBindingEvent, KeyBindingFeeUpdate as KeyBindingFeeUpdateEvent,
+            AddressAnnouncement as AddressAnnouncementEvent, KeyBinding as KeyBindingEvent,
+            KeyBindingFeeUpdate as KeyBindingFeeUpdateEvent, RevokeAnnouncement as RevokeAnnouncementEvent,
         },
     };
     use hopr_types::{
@@ -619,6 +633,65 @@ mod tests {
                 .await?
                 .context("a value should be present")?,
             account_entry
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_announcements_without_key_binding_or_valid_multiaddr_are_skipped() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let clonable_rpc_operations = ClonableMockOperations {
+            inner: Arc::new(MockIndexerRpcOperations::new()),
+        };
+        let (handlers, _indexer_state, _event_receiver) =
+            init_handlers_with_events(clonable_rpc_operations, db.clone());
+
+        // Only SELF_CHAIN_ADDRESS has a key binding
+        db.upsert_account(None, 1, *SELF_CHAIN_ADDRESS, *SELF_PRIV_KEY.public(), None, 1, 0, 0)
+            .await?;
+        let bound = AlloyAddress::from_hopr_address(*SELF_CHAIN_ADDRESS);
+        let unbound = AlloyAddress::repeat_byte(0x42);
+
+        let contract = handlers.addresses.announcements;
+        let logs = [
+            event_to_log(
+                AddressAnnouncementEvent {
+                    node: unbound,
+                    baseMultiaddr: "/ip4/1.2.3.4/tcp/56".into(),
+                },
+                contract,
+            ),
+            event_to_log(RevokeAnnouncementEvent { node: unbound }, contract),
+            event_to_log(
+                AddressAnnouncementEvent {
+                    node: bound,
+                    baseMultiaddr: "not a multiaddress".into(),
+                },
+                contract,
+            ),
+        ];
+
+        for log in logs {
+            let handlers = handlers.clone();
+            let events = db
+                .begin_transaction()
+                .await?
+                .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, log, true).await }))
+                .await?;
+            assert!(events.is_empty());
+        }
+
+        assert!(
+            db.get_account(None, ChainOrPacketKey::ChainKey(unbound.to_hopr_address()))
+                .await?
+                .is_none()
+        );
+        assert_eq!(
+            db.get_account(None, ChainOrPacketKey::ChainKey(*SELF_CHAIN_ADDRESS))
+                .await?
+                .context("a value should be present")?
+                .entry_type,
+            AccountType::NotAnnounced
         );
         Ok(())
     }
