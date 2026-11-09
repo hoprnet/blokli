@@ -29,6 +29,7 @@ config:
   network: "jura-prod"
   rpcUrl: "https://rpc.gnosischain.com"
   maxRpcRequestsPerSec: 0
+  maxBlockRange: 2500
   # Indexer settings
   indexer:
     fastSync: true

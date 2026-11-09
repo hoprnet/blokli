@@ -29,6 +29,7 @@ data:
     {{- if .Values.config.indexer.enableCurvyIndexing }}
     curvy_aggregator = "{{ required "config.curvyAggregator is required" .Values.config.curvyAggregator }}"
     {{- end }}
+    max_block_range = {{ .Values.config.maxBlockRange }}
 
     # Indexer settings
     [indexer]
