@@ -20,13 +20,13 @@ members = [
 alloy-sol-types = "1.7.3"
 anyhow = "1.0.104"
 async-broadcast = "0.7.2"
-async-compression = "0.4.51"
+async-compression = "0.4.52"
 async-graphql = { version = "7.2.1", features = [
   "chrono",
   "dataloader",
   "graphiql",
 ] }
-async-lock = "3.4.2"
+async-lock = "3.5.0"
 async-signal = "0.2.14"
 async-stream = "0.3.6"
 async-tar = { version = "0.6.1", default-features = false, features = [
@@ -51,7 +51,7 @@ config = "0.15.27"
 criterion = { version = "0.8.2", features = ["async_tokio"] }
 # Exact pins.
 curvy-bindings = { version = "=0.1.0" }
-curvy-core = "=0.1.4"
+curvy-core = "=0.1.5"
 dashmap = "6.2.1"
 env_logger = "0.11.11"
 flagset = "0.4.7"
@@ -66,7 +66,7 @@ http = "1.5.0"
 humantime-serde = "1.1.1"
 insta = { version = "1.49.0", features = ["yaml"] }
 lazy_static = "1.5.1"
-libp2p-identity = { version = "0.2.14", features = [
+libp2p-identity = { version = "0.3.1", features = [
   "ed25519",
   "peerid",
   "rand",
@@ -74,11 +74,11 @@ libp2p-identity = { version = "0.2.14", features = [
 mockall = "0.15.0"
 mockito = "1.7.2"
 moka = { version = "0.12.16", features = ["future"] }
-multiaddr = "0.18.2"
-opentelemetry = "0.32.0"
-opentelemetry-otlp = { version = "0.32.0", default-features = false }
-opentelemetry-prometheus-text-exporter = "0.3.0"
-opentelemetry_sdk = "0.32.0"
+multiaddr = "0.19.1"
+opentelemetry = "0.33.1"
+opentelemetry-otlp = { version = "0.33.1", default-features = false }
+opentelemetry-prometheus-text-exporter = "0.4.0"
+opentelemetry_sdk = "0.33.1"
 pem-rfc7468 = "1.0"
 primitive-types = { version = "0.14.0", features = ["serde"] }
 rand = "0.10.3"
@@ -117,7 +117,7 @@ sqlx = { version = "0.9.0", default-features = false, features = [
   "sqlite",
 ] }
 strum = { version = "0.28.0", features = ["derive"] }
-sysinfo = "0.39.3"
+sysinfo = "0.40.1"
 temp-env = "0.3.6"
 tempfile = "3.27.0"
 test-log = { version = "0.2.21", features = ["trace"] }
@@ -133,7 +133,7 @@ tokio = { version = "1.54.1", features = [
 tokio-rustls = { version = "0.26.6", default-features = false, features = [
   "ring",
 ] }
-toml = "1.1.8"
+toml = "1.2.1"
 tower = { version = "0.5.3", default-features = false, features = ["util"] }
 tower-http = { version = "0.7.1", features = [
   "compression-zstd",
@@ -141,7 +141,7 @@ tower-http = { version = "0.7.1", features = [
   "trace",
 ] }
 tracing = { version = "0.1.44" }
-tracing-opentelemetry = "0.33.0"
+tracing-opentelemetry = "0.34.0"
 tracing-subscriber = { version = "0.3.23", features = [
   "env-filter",
   "fmt",
@@ -149,7 +149,7 @@ tracing-subscriber = { version = "0.3.23", features = [
   "std",
 ] }
 url = { version = "2.5.8", features = ["serde"] }
-uuid = { version = "1.29.0", features = ["serde", "v4"] }
+uuid = { version = "1.29.2", features = ["serde", "v4"] }
 validator = { version = "0.21.0", features = ["derive"] }
 
 [profile.dev]
