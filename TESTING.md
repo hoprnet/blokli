@@ -1,7 +1,7 @@
 # Testing Guide
 
-This document provides comprehensive guidance for testing the Blokli indexer and API, with special focus on temporal queries, blockchain
-reorganization handling, and edge cases.
+This document provides comprehensive guidance for testing the Blokli indexer and API, with special focus on blockchain reorganization
+handling, and edge cases.
 
 ## Table of Contents
 
@@ -27,7 +27,7 @@ just test-package blokli-db
 just test-debug
 
 # Run specific test by name
-cargo test test_get_channel_state_at -F runtime-tokio -- --nocapture
+cargo test test_temporal_query_at_reorg_boundary -F runtime-tokio -- --nocapture
 ```
 
 ### Manual API Testing (no Docker required)
@@ -204,12 +204,8 @@ async fn test_with_mock_data() -> anyhow::Result<()> {
 async fn test_error_handling() -> anyhow::Result<()> {
     let db = BlokliDb::new_in_memory().await?;
 
-    // Test with invalid ID
-    let result = get_channel_state_at(
-        &db.conn(TargetDb::Index),
-        -1,  // Invalid channel ID
-        BlockPosition { block: 1000, tx_index: 0, log_index: 0 }
-    ).await?;
+    // Test with an unknown channel ID
+    let result = db.get_channel_state_at_block(None, &Hash::default(), 1000).await?;
 
     // Should return None for non-existent channel
     assert!(result.is_none());

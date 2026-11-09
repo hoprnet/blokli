@@ -29,6 +29,7 @@ data:
     {{- if .Values.config.indexer.enableCurvyIndexing }}
     curvy_aggregator = "{{ required "config.curvyAggregator is required" .Values.config.curvyAggregator }}"
     {{- end }}
+    max_block_range = {{ .Values.config.maxBlockRange }}
 
     # Indexer settings
     [indexer]
@@ -48,7 +49,6 @@ data:
     [indexer.subscription]
     event_bus_capacity = {{ .Values.config.indexer.subscription.eventBusCapacity }}
     shutdown_signal_capacity = {{ .Values.config.indexer.subscription.shutdownSignalCapacity }}
-    batch_size = {{ .Values.config.indexer.subscription.batchSize }}
 
     # API server configuration
     [api]
