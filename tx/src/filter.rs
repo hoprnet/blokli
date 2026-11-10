@@ -3,9 +3,12 @@
 use std::collections::{HashMap, HashSet};
 
 use alloy_sol_types::{SolCall, sol};
-use hopr_bindings::exports::alloy::{
-    consensus::{Transaction, TxEnvelope, TxType, transaction::SignerRecoverable},
-    eips::eip2718::Decodable2718,
+use hopr_bindings::{
+    constants::SAFE_MULTISEND_ADDRESS,
+    exports::alloy::{
+        consensus::{Transaction, TxEnvelope, TxType, transaction::SignerRecoverable},
+        eips::eip2718::Decodable2718,
+    },
 };
 use hopr_types::primitive::{prelude::Address, traits::ToHex};
 
@@ -25,16 +28,6 @@ sol! {
     /// [`decode_multi_send`] for the per-entry layout.
     function multiSend(bytes transactions) external payable;
 }
-
-/// Canonical Gnosis Safe `MultiSend` singleton, deployed at the same address on every chain.
-///
-/// A module `DelegateCall` is only unwrapped when it targets this address: it is the one delegate
-/// target whose bytecode is known to merely replay the batched calls, so authorizing the batch
-/// entries is equivalent to authorizing what the chain will execute.
-const SAFE_MULTI_SEND_ADDRESS: [u8; 20] = [
-    0x38, 0x86, 0x9b, 0xf6, 0x6a, 0x61, 0xcf, 0x6b, 0xdb, 0x99, 0x6a, 0x6a, 0xe4, 0x0d, 0x58, 0x53, 0xfd, 0x43, 0xb5,
-    0x26,
-];
 
 /// Operation code for a plain `CALL` in Safe module and `MultiSend` payloads.
 const OPERATION_CALL: u8 = 0;
@@ -242,10 +235,10 @@ impl TransactionFilter {
                     selector: selector_of(&call.data[..])?,
                 }],
                 // The only delegate target that is transparent about what it executes is the
-                // canonical MultiSend singleton, whose batch entries are validated individually.
-                OPERATION_DELEGATE_CALL if call.to.into_array() == SAFE_MULTI_SEND_ADDRESS => {
-                    decode_multi_send(&call.data[..])?
-                }
+                // canonical Safe `MultiSend` singleton (v1.4.1, the one `SafePayloadGenerator`
+                // delegate-calls): it merely replays the batched calls, so each batch entry is
+                // validated individually.
+                OPERATION_DELEGATE_CALL if call.to == SAFE_MULTISEND_ADDRESS => decode_multi_send(&call.data[..])?,
                 _ => return Err(FilterError::DelegateCallNotAllowed),
             };
 
@@ -371,7 +364,7 @@ mod tests {
     use crate::{
         errors::FilterError,
         filter::{
-            OPERATION_CALL, OPERATION_DELEGATE_CALL, SAFE_MULTI_SEND_ADDRESS, Selector, TransactionFilter,
+            OPERATION_CALL, OPERATION_DELEGATE_CALL, SAFE_MULTISEND_ADDRESS, Selector, TransactionFilter,
             execTransactionFromModuleCall, multiSendCall,
         },
     };
@@ -462,7 +455,7 @@ mod tests {
         }
         .abi_encode();
 
-        module_calldata(SAFE_MULTI_SEND_ADDRESS, multi_send, OPERATION_DELEGATE_CALL)
+        module_calldata(SAFE_MULTISEND_ADDRESS.into_array(), multi_send, OPERATION_DELEGATE_CALL)
     }
 
     /// A filter allowing `transfer`/`approve` on `CONTRACT`.

@@ -61,3 +61,11 @@ env_logger         = { workspace = true }
 insta              = { workspace = true, features = ["redactions", "yaml"] }
 rand               = { workspace = true }
 tokio              = { workspace = true }
+
+hopr-types = { workspace = true, features = [
+  "chain",
+  "crypto",
+  "internal",
+  "primitive",
+  "use-bindings",
+] }

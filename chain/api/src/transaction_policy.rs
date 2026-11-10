@@ -129,7 +129,7 @@ impl TransactionPolicy {
 
 #[cfg(test)]
 mod tests {
-    use blokli_chain_types::ContractAddresses;
+    use blokli_chain_types::{AlloyAddressExt, ContractAddresses};
     use blokli_tx::FilterError;
     use curvy_bindings::curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2::submitWithdrawalRequestCall;
     use hopr_bindings::{
@@ -150,13 +150,20 @@ mod tests {
         hopr_token::HoprToken::{approveCall, transferCall},
         hopr_winning_probability_oracle::HoprWinningProbabilityOracle::setWinProbCall,
     };
-    use hopr_types::primitive::prelude::Address;
+    use hopr_types::{
+        chain::{
+            ContractAddresses as HoprContractAddresses,
+            prelude::{PayloadGenerator, SafePayloadGenerator, SignableTransaction as _},
+        },
+        crypto::keypairs::{ChainKeypair, Keypair},
+        internal::service::{ServiceMetadata, ServiceType},
+        primitive::prelude::{Address, HoprBalance},
+    };
 
     use crate::transaction_policy::{TransactionPolicy, network_transaction_filter};
 
     sol! {
         function execTransactionFromModule(address to, uint256 value, bytes data, uint8 operation) external returns (bool);
-        function multiSend(bytes transactions) external payable;
     }
 
     const KEY: &str = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
@@ -170,11 +177,6 @@ mod tests {
     const TICKET_PRICE_ORACLE: [u8; 20] = [0x88; 20];
     /// Per-node Safe management module; never part of the allow-set, only an unwrapping target.
     const MODULE: [u8; 20] = [0x99; 20];
-    /// Canonical Gnosis Safe `MultiSend` singleton, the only permitted delegate-call target.
-    const SAFE_MULTI_SEND: [u8; 20] = [
-        0x38, 0x86, 0x9b, 0xf6, 0x6a, 0x61, 0xcf, 0x6b, 0xdb, 0x99, 0x6a, 0x6a, 0xe4, 0x0d, 0x58, 0x53, 0xfd, 0x43,
-        0xb5, 0x26,
-    ];
 
     fn calldata(selector: [u8; 4]) -> Vec<u8> {
         let mut input = selector.to_vec();
@@ -219,36 +221,35 @@ mod tests {
         sign(MODULE, input)
     }
 
-    /// A paid service-registry transaction: a module delegate call into `MultiSend` batching an
-    /// allowance on the token and the service-registry call itself.
-    fn signed_paid_service_tx(registry_selector: [u8; 4]) -> Vec<u8> {
-        fn entry(to: [u8; 20], data: &[u8]) -> Vec<u8> {
-            let mut encoded = Vec::with_capacity(85 + data.len());
-            encoded.push(0); // operation: Call
-            encoded.extend_from_slice(&to);
-            encoded.extend_from_slice(&[0u8; 32]);
-            encoded.extend_from_slice(&U256::from(data.len()).to_be_bytes::<32>());
-            encoded.extend_from_slice(data);
-            encoded
+    /// A paid service-registry write exactly as `SafePayloadGenerator` emits it: a module delegate
+    /// call into the Safe `MultiSend` singleton batching a token `approve` and the registry call.
+    async fn signed_paid_service_tx(contracts: &ContractAddresses, update: bool) -> Vec<u8> {
+        let keypair = ChainKeypair::from_secret(&hex::decode(KEY).expect("valid hex")).expect("valid key");
+        let generator = SafePayloadGenerator::new(
+            &keypair,
+            HoprContractAddresses {
+                token: AlloyAddress::from_hopr_address(contracts.token),
+                service_registry: AlloyAddress::from_hopr_address(contracts.service_registry),
+                ..Default::default()
+            },
+            Address::from(MODULE),
+        );
+        let service_type = ServiceType::GVPN_EXIT;
+        let metadata = ServiceMetadata::try_from(b"metadata".to_vec()).expect("valid metadata");
+        let burn = HoprBalance::from(1_u32);
+
+        let payload = if update {
+            generator.update_service(service_type, metadata, burn)
+        } else {
+            generator.register_service(service_type, metadata, burn)
         }
+        .expect("payload");
 
-        let mut transactions = entry(TOKEN, &calldata(approveCall::SELECTOR));
-        transactions.extend(entry(SERVICE_REGISTRY, &calldata(registry_selector)));
-
-        let multi_send = multiSendCall {
-            transactions: Bytes::from(transactions),
-        }
-        .abi_encode();
-
-        let input = execTransactionFromModuleCall {
-            to: AlloyAddress::from(SAFE_MULTI_SEND),
-            value: U256::ZERO,
-            data: Bytes::from(multi_send),
-            operation: 1, // DelegateCall, as the Safe payload generator emits for MultiSend
-        }
-        .abi_encode();
-
-        sign(MODULE, input)
+        payload
+            .sign_and_encode_to_eip2718(0, 1, None, &keypair)
+            .await
+            .expect("sign payload")
+            .into_vec()
     }
 
     fn test_contracts() -> ContractAddresses {
@@ -324,23 +325,23 @@ mod tests {
         }
     }
 
-    #[test]
-    fn network_filter_allows_paid_service_registration_batch() {
+    #[tokio::test]
+    async fn network_filter_allows_paid_service_registration_batch() {
         // Paid service writes are relayed as a module delegate call into `MultiSend`.
-        for selector in [selfRegisterCall::SELECTOR, selfUpdateCall::SELECTOR] {
-            let raw = signed_paid_service_tx(selector);
-            assert!(network_policy().check(&raw).is_ok());
+        for update in [false, true] {
+            let raw = signed_paid_service_tx(&test_contracts(), update).await;
+            assert_eq!(network_policy().check(&raw), Ok(()));
         }
     }
 
-    #[test]
-    fn network_filter_rejects_paid_service_batch_with_unknown_target() {
+    #[tokio::test]
+    async fn network_filter_rejects_paid_service_batch_with_unknown_target() {
         let policy = TransactionPolicy::Whitelist(network_transaction_filter(&ContractAddresses {
             // Without a service registry, the batched registry call has no allowed pair to match.
             service_registry: Address::default(),
             ..test_contracts()
         }));
-        let raw = signed_paid_service_tx(selfRegisterCall::SELECTOR);
+        let raw = signed_paid_service_tx(&test_contracts(), false).await;
 
         assert!(matches!(
             policy.check(&raw),
