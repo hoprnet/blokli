@@ -2931,7 +2931,7 @@ mod tests {
             return Ok(());
         }
 
-        // Create source and destination accounts if they don't exist
+        // Create source and destination accounts if they don't exist; each gets its own chain key
         let source_id: i64 = channel_id * 10;
         let dest_id: i64 = channel_id * 10 + 1;
 
@@ -2939,7 +2939,7 @@ mod tests {
         if !source_exists {
             let source_account = account::ActiveModel {
                 id: Set(source_id),
-                chain_key: Set(vec![1u8; 20]),
+                chain_key: Set([source_id.to_be_bytes().to_vec(), vec![1u8; 12]].concat()),
                 packet_key: Set(format!("source_packet_key_{}", channel_id)),
                 published_block: Set(1),
                 published_tx_index: Set(0),
@@ -2952,7 +2952,7 @@ mod tests {
         if !dest_exists {
             let dest_account = account::ActiveModel {
                 id: Set(dest_id),
-                chain_key: Set(vec![3u8; 20]),
+                chain_key: Set([dest_id.to_be_bytes().to_vec(), vec![3u8; 12]].concat()),
                 packet_key: Set(format!("dest_packet_key_{}", channel_id)),
                 published_block: Set(1),
                 published_tx_index: Set(0),
