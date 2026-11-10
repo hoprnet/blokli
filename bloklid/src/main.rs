@@ -298,6 +298,8 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
             ..Default::default()
         };
         let transaction_monitor_config = TransactionMonitorConfig {
+            terminal_transaction_ttl: api_config.transactions.terminal_transaction_ttl,
+            max_terminal_transactions: api_config.transactions.max_terminal_transactions,
             max_queued_trace_jobs: api_config.transactions.max_queued_trace_jobs,
             max_concurrent_trace_jobs: api_config.transactions.max_concurrent_trace_jobs,
             enable_revert_reason_tracing: api_config.transactions.enable_revert_reason_tracing,
@@ -366,7 +368,6 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 sse_keepalive: blokli_api::config::SseKeepAliveConfig {
                     enabled: api_config.sse_keepalive.enabled,
                     interval: api_config.sse_keepalive.interval,
-                    text: api_config.sse_keepalive.text.clone(),
                 },
                 health: blokli_api::config::HealthConfig {
                     max_indexer_lag: api_config.health.max_indexer_lag,

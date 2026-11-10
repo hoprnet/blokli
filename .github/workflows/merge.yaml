@@ -11,10 +11,7 @@ on:
 concurrency:
   group: merge-${{ github.event.pull_request.base.ref }}
   cancel-in-progress: false
-permissions:
-  contents: read
-  pull-requests: write
-  id-token: write
+permissions: {}
 jobs:
   build-binaries:
     name: Binary ${{ matrix.architecture }}
@@ -140,6 +137,7 @@ jobs:
     if: >-
       ${{ always() && github.event.pull_request.merged == true && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
     runs-on: depot-ubuntu-24.04-2
+    permissions: {}
     steps:
       - name: Notify failed merge pipeline
         uses: zulip/github-actions-zulip/send-message@f675f2b4eb2a95fae974215476dcb7ad8dfeff6b # v2.0.2

@@ -93,6 +93,7 @@ impl Args {
             ("BLOKLI_RPC_URL", "rpc_url"),
             ("BLOKLI_MAX_RPC_REQUESTS_PER_SEC", "max_rpc_requests_per_sec"),
             ("BLOKLI_MAX_BLOCK_RANGE", "max_block_range"),
+            ("BLOKLI_BLOCK_RANGE_REPROBE_INTERVAL", "block_range_reprobe_interval"),
             ("BLOKLI_CURVY_AGGREGATOR", "curvy_aggregator"),
             ("DATABASE_URL", "database.url"),
             ("PGHOST", "database.host"),
@@ -128,10 +129,6 @@ impl Args {
                 "BLOKLI_INDEXER_SUBSCRIPTION_SHUTDOWN_SIGNAL_CAPACITY",
                 "indexer.subscription.shutdown_signal_capacity",
             ),
-            (
-                "BLOKLI_INDEXER_SUBSCRIPTION_BATCH_SIZE",
-                "indexer.subscription.batch_size",
-            ),
             ("BLOKLI_API_ENABLED", "api.enabled"),
             ("BLOKLI_API_BIND_ADDRESS", "api.bind_address"),
             ("BLOKLI_API_PLAYGROUND_ENABLED", "api.playground_enabled"),
@@ -145,6 +142,14 @@ impl Args {
             (
                 "BLOKLI_API_TRANSACTIONS_MAX_SUBMITTED_TRANSACTIONS_PER_IDENTITY",
                 "api.transactions.max_submitted_transactions_per_identity",
+            ),
+            (
+                "BLOKLI_API_TRANSACTIONS_TERMINAL_TRANSACTION_TTL",
+                "api.transactions.terminal_transaction_ttl",
+            ),
+            (
+                "BLOKLI_API_TRANSACTIONS_MAX_TERMINAL_TRANSACTIONS",
+                "api.transactions.max_terminal_transactions",
             ),
             (
                 "BLOKLI_API_TRANSACTIONS_MAX_QUEUED_TRACE_JOBS",
@@ -176,7 +181,6 @@ impl Args {
             ),
             ("BLOKLI_API_SSE_KEEPALIVE_ENABLED", "api.sse_keepalive.enabled"),
             ("BLOKLI_API_SSE_KEEPALIVE_INTERVAL", "api.sse_keepalive.interval"),
-            ("BLOKLI_API_SSE_KEEPALIVE_TEXT", "api.sse_keepalive.text"),
             ("BLOKLI_API_HEALTH_MAX_INDEXER_LAG", "api.health.max_indexer_lag"),
             ("BLOKLI_API_HEALTH_TIMEOUT", "api.health.timeout"),
             (
@@ -344,6 +348,7 @@ impl Args {
             tx_polling_interval: config.network.tx_polling_interval(),
             confirmations: config.network.confirmations(),
             max_block_range: config.max_block_range,
+            block_range_reprobe_interval: config.block_range_reprobe_interval,
             indexer_start_block_number,
             max_requests_per_sec: config.max_rpc_requests_per_sec,
             expected_block_time: config.network.expected_block_time(),
@@ -1255,16 +1260,23 @@ mod tests {
         .unwrap();
         let path = file.path().to_path_buf();
 
-        temp_env::with_var("BLOKLI_MAX_BLOCK_RANGE", None::<&str>, || {
-            let args = Args {
-                verbose: 0,
-                config: Some(path),
-                command: None,
-            };
+        temp_env::with_vars(
+            [
+                ("BLOKLI_MAX_BLOCK_RANGE", None::<&str>),
+                ("BLOKLI_BLOCK_RANGE_REPROBE_INTERVAL", None::<&str>),
+            ],
+            || {
+                let args = Args {
+                    verbose: 0,
+                    config: Some(path),
+                    command: None,
+                };
 
-            let config = args.load_config(false).expect("Failed to load config");
-            assert_eq!(config.max_block_range, 10000, "max_block_range should default to 10000");
-        });
+                let config = args.load_config(false).expect("Failed to load config");
+                assert_eq!(config.max_block_range, 10000, "max_block_range should default to 10000");
+                assert_eq!(config.block_range_reprobe_interval, 100);
+            },
+        );
     }
 
     #[test]
@@ -1328,6 +1340,39 @@ mod tests {
                 config.max_block_range, 2500,
                 "BLOKLI_MAX_BLOCK_RANGE env var should override config file"
             );
+        });
+    }
+
+    #[test]
+    fn test_block_range_reprobe_interval_from_config_file_and_env() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "jura-dev"
+            rpc_url = "http://localhost:8545"
+            block_range_reprobe_interval = 25
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+        let args = Args {
+            verbose: 0,
+            config: Some(path),
+            command: None,
+        };
+
+        temp_env::with_var("BLOKLI_BLOCK_RANGE_REPROBE_INTERVAL", None::<&str>, || {
+            let config = args.load_config(false).expect("Failed to load config");
+            assert_eq!(config.block_range_reprobe_interval, 25);
+        });
+
+        temp_env::with_var("BLOKLI_BLOCK_RANGE_REPROBE_INTERVAL", Some("0"), || {
+            let config = args.load_config(false).expect("Failed to load config");
+            assert_eq!(config.block_range_reprobe_interval, 0);
         });
     }
 
@@ -1578,6 +1623,8 @@ mod tests {
             [api.transactions]
             max_submitted_transactions = 200
             max_submitted_transactions_per_identity = 20
+            terminal_transaction_ttl = "12h"
+            max_terminal_transactions = 2000
             max_queued_trace_jobs = 40
             max_concurrent_trace_jobs = 3
             enable_revert_reason_tracing = false
@@ -1593,6 +1640,8 @@ mod tests {
                     "BLOKLI_API_TRANSACTIONS_MAX_SUBMITTED_TRANSACTIONS_PER_IDENTITY",
                     Some("30"),
                 ),
+                ("BLOKLI_API_TRANSACTIONS_TERMINAL_TRANSACTION_TTL", Some("24h")),
+                ("BLOKLI_API_TRANSACTIONS_MAX_TERMINAL_TRANSACTIONS", Some("3000")),
                 ("BLOKLI_API_TRANSACTIONS_MAX_QUEUED_TRACE_JOBS", Some("50")),
                 ("BLOKLI_API_TRANSACTIONS_MAX_CONCURRENT_TRACE_JOBS", Some("4")),
                 ("BLOKLI_API_TRANSACTIONS_ENABLE_REVERT_REASON_TRACING", Some("true")),
@@ -1609,6 +1658,11 @@ mod tests {
                     .expect("Failed to load transaction configuration");
                 assert_eq!(config.api.transactions.max_submitted_transactions, 300);
                 assert_eq!(config.api.transactions.max_submitted_transactions_per_identity, 30);
+                assert_eq!(
+                    config.api.transactions.terminal_transaction_ttl,
+                    Duration::from_secs(24 * 60 * 60)
+                );
+                assert_eq!(config.api.transactions.max_terminal_transactions, 3000);
                 assert_eq!(config.api.transactions.max_queued_trace_jobs, 50);
                 assert_eq!(config.api.transactions.max_concurrent_trace_jobs, 4);
                 assert!(config.api.transactions.enable_revert_reason_tracing);

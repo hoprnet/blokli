@@ -553,15 +553,17 @@ WHERE
             s2.published_log_index DESC
         LIMIT 1);
 
-CREATE INDEX "idx_account_chain_key" ON "account" ("chain_key");
-
 CREATE UNIQUE INDEX "idx_account_chain_packet_key" ON "account" ("chain_key", "packet_key");
 
 CREATE INDEX "idx_account_packet_key" ON "account" ("packet_key");
 
 CREATE INDEX "idx_account_state_position" ON "account_state" ("account_id", "published_block" DESC, "published_tx_index" DESC, "published_log_index" DESC);
 
+CREATE INDEX "idx_account_state_safe_address" ON "account_state" ("safe_address");
+
 CREATE UNIQUE INDEX "idx_account_state_unique_position" ON "account_state" ("account_id", "published_block", "published_tx_index", "published_log_index");
+
+CREATE UNIQUE INDEX "idx_account_unique_chain_key" ON "account" ("chain_key");
 
 CREATE INDEX "idx_announcement_account_id" ON "announcement" ("account_id");
 
@@ -614,6 +616,8 @@ WHERE
 CREATE INDEX "idx_native_balance_last_changed_block" ON "native_balance" ("last_changed_block");
 
 CREATE INDEX "idx_safe_contract_state_chain_key" ON "hopr_safe_contract_state" ("chain_key");
+
+CREATE INDEX "idx_safe_contract_state_module_address" ON "hopr_safe_contract_state" ("module_address");
 
 CREATE INDEX "idx_safe_contract_state_position" ON "hopr_safe_contract_state" ("hopr_safe_contract_id", "published_block" DESC, "published_tx_index" DESC, "published_log_index" DESC);
 

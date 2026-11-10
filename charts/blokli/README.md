@@ -185,6 +185,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | `config.network`                                     | HOPR network to index (anvil-localhost, jura-dev, jura-prod, piz-palu-dev, piz-palu-staging)                  | `jura-prod`         |
 | `config.rpcUrl`                                      | Blockchain RPC URL                                                                                            | `""`                |
 | `config.maxRpcRequestsPerSec`                        | Maximum RPC requests per second (0 = unlimited)                                                               | `0`                 |
+| `config.maxBlockRange`                               | Ceiling for adaptive eth_getLogs block ranges (0 = auto-discover up to 10000)                                 | `2500`              |
 | `config.dataDirectory`                               | Data directory path (should match persistence mount path)                                                     | `/data`             |
 | `config.curvyAggregator`                             | Curvy Aggregator proxy address (required when Curvy indexing is enabled)                                      | `""`                |
 | `config.indexer.fastSync`                            | Enable fast sync mode                                                                                         | `true`              |
@@ -194,7 +195,6 @@ The command removes all the Kubernetes components associated with the chart and 
 | `config.indexer.logsSnapshotUrl`                     | URL for logs snapshot download (required when enableLogsSnapshot is true)                                     | `""`                |
 | `config.indexer.subscription.eventBusCapacity`       | Capacity of the event bus buffer for channel events                                                           | `1000`              |
 | `config.indexer.subscription.shutdownSignalCapacity` | Capacity of the shutdown signal buffer                                                                        | `10`                |
-| `config.indexer.subscription.batchSize`              | Batch size for Phase 1 historical channel queries                                                             | `100`               |
 | `config.api.enabled`                                 | Enable or disable the GraphQL API server                                                                      | `true`              |
 | `config.api.bindAddress`                             | Address and port for the API server to bind to                                                                | `0.0.0.0:8080`      |
 | `config.api.playgroundEnabled`                       | Enable GraphQL Playground for development and testing. Recommended to set to false for production deployments | `false`             |

@@ -454,7 +454,6 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
         sse_keepalive: SseKeepAliveConfig {
             enabled: true,
             interval: Duration::from_millis(50),
-            text: "keepalive-test".to_string(),
         },
         health: HealthConfig {
             max_indexer_lag: 10,
@@ -592,6 +591,8 @@ pub async fn setup_transaction_test_environment(
     let monitor_config = TransactionMonitorConfig {
         poll_interval,
         timeout: Duration::from_secs(30),
+        terminal_transaction_ttl: Duration::from_secs(24 * 60 * 60),
+        max_terminal_transactions: 10_000,
         per_transaction_delay: Duration::from_millis(10),
         request_timeout: Duration::from_secs(5),
         safe_inspection_timeout: Duration::from_secs(5),

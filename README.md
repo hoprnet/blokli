@@ -110,7 +110,7 @@ To push daemon telemetry to an OpenTelemetry collector, configure the `[telemetr
 
 ## Testing
 
-Blokli has comprehensive test coverage for temporal queries, blockchain reorganization handling, subscriptions, and edge cases.
+Blokli has comprehensive test coverage for state history, blockchain reorganization handling, subscriptions, and edge cases.
 
 ### Quick Test Commands
 
@@ -119,7 +119,7 @@ Blokli has comprehensive test coverage for temporal queries, blockchain reorgani
 just test
 
 # Run specific package tests
-just test-package blokli-db             # Database and temporal query tests
+just test-package blokli-db             # Database and state history tests
 just test-package blokli-chain-indexer  # Indexer and reorg handling tests
 
 # Run tests with debug output (single-threaded, shows println!)
@@ -193,11 +193,11 @@ Blokli implements a temporal database system for tracking blockchain state chang
 
 ### Key Features
 
-- **Temporal Queries**: Query state at any point in blockchain history using `(block, tx_index, log_index)` positions
+- **State History**: Every state change is stored with its `(block, tx_index, log_index)` position
 - **Reorg Handling**: Preserves audit trail during blockchain reorganizations with corrective states
 - **Never-Delete Principle**: Historical data never deleted, only corrective states added
-- **Position Ordering**: Lexicographic ordering ensures correct temporal queries
-- **Performance**: Efficient point-in-time queries using database indexes
+- **Position Ordering**: Lexicographic ordering of positions determines the latest state
+- **Performance**: Latest-state lookups use indexed position columns
 
 ## Repository Layout
 
@@ -255,13 +255,14 @@ priority over their canonical database aliases when both are set. Boolean enviro
 
 #### Root Configuration
 
-| Config Key                 | Default                 | Environment Variable              | Description                                                               |
-| :------------------------- | :---------------------- | :-------------------------------- | :------------------------------------------------------------------------ |
-| `data_directory`           | `data`                  | `BLOKLI_DATA_DIRECTORY`           | Directory for daemon data                                                 |
-| `network`                  | `jura-dev`              | `BLOKLI_NETWORK`                  | `jura-dev`, `jura-prod`, or `anvil-localhost` (`localhost` is an alias)   |
-| `rpc_url`                  | `http://localhost:8545` | `BLOKLI_RPC_URL`                  | Chain JSON-RPC endpoint                                                   |
-| `max_rpc_requests_per_sec` | `100`                   | `BLOKLI_MAX_RPC_REQUESTS_PER_SEC` | Maximum request rate; `0` means unlimited                                 |
-| `max_block_range`          | `10000`                 | `BLOKLI_MAX_BLOCK_RANGE`          | Ceiling for adaptive `eth_getLogs` ranges; `0` auto-discovers up to 10000 |
+| Config Key                     | Default                 | Environment Variable                  | Description                                                                                                               |
+| :----------------------------- | :---------------------- | :------------------------------------ | :------------------------------------------------------------------------------------------------------------------------ |
+| `data_directory`               | `data`                  | `BLOKLI_DATA_DIRECTORY`               | Directory for daemon data                                                                                                 |
+| `network`                      | `jura-dev`              | `BLOKLI_NETWORK`                      | `jura-dev`, `jura-prod`, or `anvil-localhost` (`localhost` is an alias)                                                   |
+| `rpc_url`                      | `http://localhost:8545` | `BLOKLI_RPC_URL`                      | Chain JSON-RPC endpoint                                                                                                   |
+| `max_rpc_requests_per_sec`     | `100`                   | `BLOKLI_MAX_RPC_REQUESTS_PER_SEC`     | Maximum request rate; `0` means unlimited                                                                                 |
+| `max_block_range`              | `10000`                 | `BLOKLI_MAX_BLOCK_RANGE`              | Ceiling for adaptive `eth_getLogs` ranges; `0` auto-discovers up to 10000                                                 |
+| `block_range_reprobe_interval` | `100`                   | `BLOKLI_BLOCK_RANGE_REPROBE_INTERVAL` | Successful `eth_getLogs` requests spanning the full reduced range before a larger range is probed again; `0` never probes |
 
 The daemon also requires a `[database]` table or equivalent database environment variables.
 
@@ -327,15 +328,13 @@ with the current bindings.
 | `api.max_query_complexity`            | `500`            | —                                            | Maximum GraphQL complexity budget             |
 | `api.sse_keepalive.enabled`           | `true`           | `BLOKLI_API_SSE_KEEPALIVE_ENABLED`           | Enables SSE keep-alive events                 |
 | `api.sse_keepalive.interval`          | `15s`            | `BLOKLI_API_SSE_KEEPALIVE_INTERVAL`          | Keep-alive interval                           |
-| `api.sse_keepalive.text`              | `keep-alive`     | `BLOKLI_API_SSE_KEEPALIVE_TEXT`              | Keep-alive payload                            |
 | `api.health.max_indexer_lag`          | `10`             | `BLOKLI_API_HEALTH_MAX_INDEXER_LAG`          | Maximum finality-adjusted lag for readiness   |
 | `api.health.timeout`                  | `5s`             | `BLOKLI_API_HEALTH_TIMEOUT`                  | Readiness query timeout                       |
 | `api.health.readiness_check_interval` | `60s`            | `BLOKLI_API_HEALTH_READINESS_CHECK_INTERVAL` | Cached readiness refresh interval             |
 
 GraphQL subscriptions stream over SSE and send periodic keep-alive events to prevent idle connection timeouts. Keep-alive is enabled by
-default with a 15s interval and `keep-alive` payload, and can be customized via the `api.sse_keepalive.*` settings. `api.gas_multiplier`
-(default `1.0`, minimum `1.0`) scales `chainInfo.maxFeePerGas` and `chainInfo.maxPriorityFeePerGas` (rounded up to whole wei).
-`chainInfo.gasPrice` is not scaled.
+default with a 15s interval, and can be customized via the `api.sse_keepalive.*` settings. `api.gas_multiplier` (default `1.0`, minimum
+`1.0`) scales `chainInfo.maxFeePerGas` and `chainInfo.maxPriorityFeePerGas` (rounded up to whole wei). `chainInfo.gasPrice` is not scaled.
 
 #### Telemetry Configuration
 

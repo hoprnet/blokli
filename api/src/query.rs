@@ -1,6 +1,6 @@
 //! GraphQL query root and resolver implementations
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, future::Future, sync::Arc};
 
 use async_graphql::{Context, ID, Object, Result, SimpleObject, Union};
 use blokli_api_types::{
@@ -39,7 +39,7 @@ use blokli_db_entity::{
     prelude::ServiceRegistryConfig as ServiceRegistryConfigEntity,
     views::{account_current, channel_current, service_entry_current},
 };
-use futures::future::try_join_all;
+use futures::{StreamExt, TryStreamExt, stream};
 use hopr_types::{
     crypto::prelude::Hash,
     internal::prelude::ServiceType,
@@ -480,6 +480,22 @@ async fn build_safe_by_result_from_current_rows(
 /// Bounds RPC load; over this, the caller must narrow the query with `owner_address`.
 const SAFES_BALANCE_MAX_SAFES: usize = 1000;
 
+/// Maximum number of chain RPC calls started concurrently by a single fan-out resolver.
+const RPC_FANOUT_CONCURRENCY: usize = 16;
+
+/// Collect fallible RPC calls while bounding the number that are in flight.
+async fn collect_with_bounded_concurrency<T, E, F>(
+    futures: impl IntoIterator<Item = F>,
+) -> std::result::Result<Vec<T>, E>
+where
+    F: Future<Output = std::result::Result<T, E>>,
+{
+    stream::iter(futures)
+        .buffer_unordered(RPC_FANOUT_CONCURRENCY)
+        .try_collect()
+        .await
+}
+
 /// Enforces the [`SAFES_BALANCE_MAX_SAFES`] cap on the number of safes a single `safesBalance`
 /// request may fan out RPC calls for. Returns an error to surface to the caller when exceeded.
 fn check_safes_balance_cap(count: usize) -> std::result::Result<(), QueryFailedError> {
@@ -529,42 +545,17 @@ impl QueryRoot {
             let db = ctx
                 .data::<DatabaseConnection>()
                 .map_err(|error| errors::context_error("DatabaseConnection", error))?;
-            let mut query = curvy_pending_note::Entity::find();
-            if let Some(block) = curvy::from_block(from_block)? {
-                query = query.filter(curvy_pending_note::Column::PublishedBlock.gte(block));
-            }
-            if let Some(cursor) = curvy::event_cursor(after)? {
-                if cursor.block_hash.is_some() {
-                    let anchored = curvy_pending_note::Entity::find()
-                        .filter(curvy_pending_note::Column::PublishedBlock.eq(cursor.block))
-                        .filter(curvy_pending_note::Column::PublishedTxIndex.eq(cursor.transaction_index))
-                        .filter(curvy_pending_note::Column::PublishedLogIndex.eq(cursor.log_index))
-                        .filter(curvy_pending_note::Column::EventItemIndex.eq(cursor.event_item_index))
-                        .one(db)
-                        .await
-                        .map_err(|error| errors::query_failed("validate Curvy cursor anchor", error))?;
-                    curvy::ensure_cursor_anchor(&cursor, anchored.as_ref().map(|row| row.block_hash.as_slice()))?;
-                }
-                query = query.filter(curvy::event_cursor_condition(
-                    curvy_pending_note::Column::PublishedBlock,
-                    curvy_pending_note::Column::PublishedTxIndex,
-                    curvy_pending_note::Column::PublishedLogIndex,
-                    curvy_pending_note::Column::EventItemIndex,
-                    cursor,
-                ));
-            }
-            let notes = query
-                .order_by_asc(curvy_pending_note::Column::PublishedBlock)
-                .order_by_asc(curvy_pending_note::Column::PublishedTxIndex)
-                .order_by_asc(curvy_pending_note::Column::PublishedLogIndex)
-                .order_by_asc(curvy_pending_note::Column::EventItemIndex)
-                .limit(curvy::page_limit(first)?)
-                .all(db)
-                .await
-                .map_err(|error| errors::query_failed("fetch Curvy pending notes", error))?
-                .into_iter()
-                .map(curvy::pending_note)
-                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let notes = curvy::event_page::<curvy_pending_note::Entity>(
+                db,
+                from_block,
+                after,
+                first,
+                "fetch Curvy pending notes",
+            )
+            .await?
+            .into_iter()
+            .map(curvy::pending_note)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
             Ok(CurvyPendingNotes { notes })
         }
         .await;
@@ -587,43 +578,17 @@ impl QueryRoot {
             let db = ctx
                 .data::<DatabaseConnection>()
                 .map_err(|error| errors::context_error("DatabaseConnection", error))?;
-            let mut query = curvy_committed_note::Entity::find();
-            if let Some(block) = curvy::from_block(from_block)? {
-                query = query.filter(curvy_committed_note::Column::PublishedBlock.gte(block));
-            }
-            if let Some(cursor) = curvy::event_cursor(after)? {
-                if cursor.block_hash.is_some() {
-                    let anchored = curvy_committed_note::Entity::find()
-                        .filter(curvy_committed_note::Column::PublishedBlock.eq(cursor.block))
-                        .filter(curvy_committed_note::Column::PublishedTxIndex.eq(cursor.transaction_index))
-                        .filter(curvy_committed_note::Column::PublishedLogIndex.eq(cursor.log_index))
-                        .filter(curvy_committed_note::Column::EventItemIndex.eq(cursor.event_item_index))
-                        .one(db)
-                        .await
-                        .map_err(|error| errors::query_failed("validate Curvy cursor anchor", error))?;
-                    curvy::ensure_cursor_anchor(&cursor, anchored.as_ref().map(|row| row.block_hash.as_slice()))?;
-                }
-                query = query.filter(curvy::event_cursor_condition(
-                    curvy_committed_note::Column::PublishedBlock,
-                    curvy_committed_note::Column::PublishedTxIndex,
-                    curvy_committed_note::Column::PublishedLogIndex,
-                    curvy_committed_note::Column::EventItemIndex,
-                    cursor,
-                ));
-            }
-
-            let notes = query
-                .order_by_asc(curvy_committed_note::Column::PublishedBlock)
-                .order_by_asc(curvy_committed_note::Column::PublishedTxIndex)
-                .order_by_asc(curvy_committed_note::Column::PublishedLogIndex)
-                .order_by_asc(curvy_committed_note::Column::EventItemIndex)
-                .limit(curvy::page_limit(first)?)
-                .all(db)
-                .await
-                .map_err(|error| errors::query_failed("fetch Curvy committed notes", error))?
-                .into_iter()
-                .map(curvy::committed_note)
-                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let notes = curvy::event_page::<curvy_committed_note::Entity>(
+                db,
+                from_block,
+                after,
+                first,
+                "fetch Curvy committed notes",
+            )
+            .await?
+            .into_iter()
+            .map(curvy::committed_note)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
             Ok(CurvyCommittedNotes { notes })
         }
         .await;
@@ -646,42 +611,17 @@ impl QueryRoot {
             let db = ctx
                 .data::<DatabaseConnection>()
                 .map_err(|error| errors::context_error("DatabaseConnection", error))?;
-            let mut query = curvy_committed_nullifier::Entity::find();
-            if let Some(block) = curvy::from_block(from_block)? {
-                query = query.filter(curvy_committed_nullifier::Column::PublishedBlock.gte(block));
-            }
-            if let Some(cursor) = curvy::event_cursor(after)? {
-                if cursor.block_hash.is_some() {
-                    let anchored = curvy_committed_nullifier::Entity::find()
-                        .filter(curvy_committed_nullifier::Column::PublishedBlock.eq(cursor.block))
-                        .filter(curvy_committed_nullifier::Column::PublishedTxIndex.eq(cursor.transaction_index))
-                        .filter(curvy_committed_nullifier::Column::PublishedLogIndex.eq(cursor.log_index))
-                        .filter(curvy_committed_nullifier::Column::EventItemIndex.eq(cursor.event_item_index))
-                        .one(db)
-                        .await
-                        .map_err(|error| errors::query_failed("validate Curvy cursor anchor", error))?;
-                    curvy::ensure_cursor_anchor(&cursor, anchored.as_ref().map(|row| row.block_hash.as_slice()))?;
-                }
-                query = query.filter(curvy::event_cursor_condition(
-                    curvy_committed_nullifier::Column::PublishedBlock,
-                    curvy_committed_nullifier::Column::PublishedTxIndex,
-                    curvy_committed_nullifier::Column::PublishedLogIndex,
-                    curvy_committed_nullifier::Column::EventItemIndex,
-                    cursor,
-                ));
-            }
-            let nullifiers = query
-                .order_by_asc(curvy_committed_nullifier::Column::PublishedBlock)
-                .order_by_asc(curvy_committed_nullifier::Column::PublishedTxIndex)
-                .order_by_asc(curvy_committed_nullifier::Column::PublishedLogIndex)
-                .order_by_asc(curvy_committed_nullifier::Column::EventItemIndex)
-                .limit(curvy::page_limit(first)?)
-                .all(db)
-                .await
-                .map_err(|error| errors::query_failed("fetch Curvy committed nullifiers", error))?
-                .into_iter()
-                .map(curvy::committed_nullifier)
-                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let nullifiers = curvy::event_page::<curvy_committed_nullifier::Entity>(
+                db,
+                from_block,
+                after,
+                first,
+                "fetch Curvy committed nullifiers",
+            )
+            .await?
+            .into_iter()
+            .map(curvy::committed_nullifier)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
             Ok(CurvyCommittedNullifiers { nullifiers })
         }
         .await;
@@ -1418,7 +1358,14 @@ impl QueryRoot {
         CountResult::Count(blokli_api_types::Count { count })
     }
 
-    /// Retrieve a stable, paginated view of service registry entries.
+    /// Retrieve a stable, paginated view of service registry entries. With liveOnly enabled, each entry is checked
+    /// against the on-chain
+    /// NodeSafeRegistry (at most 16 RPC calls in flight). Its complexity grows
+    /// with first, so a large page can exceed the query complexity budget.
+    #[graphql(
+        complexity = "if live_only { (first.max(0) as usize).saturating_add(child_complexity) } else { \
+                      child_complexity }"
+    )]
     async fn services(
         &self,
         ctx: &Context<'_>,
@@ -1561,16 +1508,21 @@ impl QueryRoot {
                 Ok(rpc) => rpc,
                 Err(e) => return ServicesResult::QueryFailed(errors::context_error("RpcOperations", e.message)),
             };
-            let checked = try_join_all(services.into_iter().map(|entry| async {
-                let node = Address::from_hex(&entry.node).map_err(|e| errors::query_failed("parse service node", e))?;
-                HoprRpcOperations::get_safe_from_node_safe_registry_at(&**rpc, registry, node)
-                    .await
-                    .map(|safe| (!safe.is_zero()).then_some(entry))
-                    .map_err(|e| errors::query_failed("resolve service liveness", e))
-            }))
-            .await;
+            let checked =
+                collect_with_bounded_concurrency(services.into_iter().enumerate().map(|(index, entry)| async move {
+                    let node =
+                        Address::from_hex(&entry.node).map_err(|e| errors::query_failed("parse service node", e))?;
+                    HoprRpcOperations::get_safe_from_node_safe_registry_at(&**rpc, registry, node)
+                        .await
+                        .map(|safe| (index, (!safe.is_zero()).then_some(entry)))
+                        .map_err(|e| errors::query_failed("resolve service liveness", e))
+                }))
+                .await;
             services = match checked {
-                Ok(entries) => entries.into_iter().flatten().collect(),
+                Ok(mut entries) => {
+                    entries.sort_unstable_by_key(|(index, _)| *index);
+                    entries.into_iter().filter_map(|(_, entry)| entry).collect()
+                }
                 Err(e) => return ServicesResult::QueryFailed(e),
             };
         }
@@ -2836,8 +2788,10 @@ impl QueryRoot {
     /// Sum the wxHOPR token balances across indexed safe contracts.
     ///
     /// When `owner_address` is provided, restricts to safes whose indexed owner
-    /// set currently contains that address.
-    #[graphql(name = "safesBalance", complexity = 100)]
+    /// set currently contains that address. This field has a fixed complexity cost of 500, which equals the default
+    /// budget. It therefore cannot be combined with other top-level fields or
+    /// aliases under the default configuration.
+    #[graphql(name = "safesBalance", complexity = 500)]
     async fn safes_balance(
         &self,
         ctx: &Context<'_>,
@@ -2916,7 +2870,7 @@ impl QueryRoot {
             async move { rpc.get_hopr_balance(addr).await }
         });
 
-        let balances = match try_join_all(balance_futures).await {
+        let balances = match collect_with_bounded_concurrency(balance_futures).await {
             Ok(balances) => balances,
             Err(e) => return SafesBalanceResult::QueryFailed(errors::rpc_query_failed("query safe balance", e)),
         };
@@ -2958,7 +2912,7 @@ impl QueryRoot {
         let store = ctx.data::<Arc<TransactionStore>>()?;
 
         // Try to retrieve the transaction
-        match store.get(uuid) {
+        match store.get_public(uuid) {
             Ok(record) => Ok(Some(TransactionResult::Transaction(transaction_from_record(record)))),
             Err(_) => Ok(None), // Transaction not found
         }
@@ -2967,6 +2921,14 @@ impl QueryRoot {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
+
     use anyhow::anyhow;
     use async_graphql::Schema;
     use blokli_chain_types::ContractAddresses;
@@ -2987,8 +2949,8 @@ mod tests {
     };
 
     use super::{
-        QueryRoot, SAFES_BALANCE_MAX_SAFES, apply_gas_fee_floors, check_safes_balance_cap, owners_for_safe,
-        safe_from_current_row, scale_wei_by_multiplier,
+        QueryRoot, RPC_FANOUT_CONCURRENCY, SAFES_BALANCE_MAX_SAFES, apply_gas_fee_floors, check_safes_balance_cap,
+        collect_with_bounded_concurrency, owners_for_safe, safe_from_current_row, scale_wei_by_multiplier,
     };
     use crate::{
         curvy::{validate_dense_page, validate_page_start},
@@ -3211,6 +3173,58 @@ mod tests {
         let res = schema.execute(query).await;
 
         assert!(!res.errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_complexity_limit_rejects_rpc_fanout_fields() {
+        let schema = Schema::build(
+            QueryRoot,
+            async_graphql::EmptyMutation,
+            async_graphql::EmptySubscription,
+        )
+        .limit_complexity(500)
+        .finish();
+
+        let services = schema
+            .execute("{ services(first: 501, liveOnly: true) { __typename } }")
+            .await;
+        let safes_balance = schema
+            .execute("{ first: safesBalance { __typename } second: safesBalance { __typename } }")
+            .await;
+        let negative_page_size = schema
+            .execute(
+                "{ services(first: -1, liveOnly: true) { ... on ServicesList { services { node } } ... on \
+                 QueryFailedError { message } } }",
+            )
+            .await;
+
+        assert_eq!(services.errors[0].message, "Query is too complex.");
+        assert_eq!(safes_balance.errors[0].message, "Query is too complex.");
+        assert!(negative_page_size.errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_rpc_fanout_concurrency_is_bounded() -> anyhow::Result<()> {
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let request_count = RPC_FANOUT_CONCURRENCY * 2;
+        let futures = (0..request_count).map(|_| {
+            let in_flight = Arc::clone(&in_flight);
+            let peak = Arc::clone(&peak);
+            async move {
+                let current = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(current, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                in_flight.fetch_sub(1, Ordering::SeqCst);
+                Ok::<(), anyhow::Error>(())
+            }
+        });
+
+        let results = collect_with_bounded_concurrency(futures).await?;
+
+        assert_eq!(results.len(), request_count);
+        assert_eq!(peak.load(Ordering::SeqCst), RPC_FANOUT_CONCURRENCY);
+        Ok(())
     }
 
     #[tokio::test]

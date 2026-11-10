@@ -14,7 +14,7 @@ use hopr_types::{
     crypto::types::Hash,
     primitive::{primitives::Address, traits::ToHex},
 };
-use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 
 use crate::{errors, validation::validate_eth_address};
 
@@ -128,6 +128,102 @@ where
                 .add(log_index.eq(cursor.log_index))
                 .add(event_item_index.gt(cursor.event_item_index)),
         )
+}
+
+/// A Curvy event table, paged by chain position
+pub trait CurvyEventTable: EntityTrait {
+    /// The published block, transaction index, log index and event item index columns, in ordering priority
+    const POSITION: [Self::Column; 4];
+
+    /// Hash of the block the row was published in
+    fn block_hash(model: &Self::Model) -> &[u8];
+}
+
+impl CurvyEventTable for curvy_pending_note::Entity {
+    const POSITION: [Self::Column; 4] = [
+        curvy_pending_note::Column::PublishedBlock,
+        curvy_pending_note::Column::PublishedTxIndex,
+        curvy_pending_note::Column::PublishedLogIndex,
+        curvy_pending_note::Column::EventItemIndex,
+    ];
+
+    fn block_hash(model: &Self::Model) -> &[u8] {
+        &model.block_hash
+    }
+}
+
+impl CurvyEventTable for curvy_committed_note::Entity {
+    const POSITION: [Self::Column; 4] = [
+        curvy_committed_note::Column::PublishedBlock,
+        curvy_committed_note::Column::PublishedTxIndex,
+        curvy_committed_note::Column::PublishedLogIndex,
+        curvy_committed_note::Column::EventItemIndex,
+    ];
+
+    fn block_hash(model: &Self::Model) -> &[u8] {
+        &model.block_hash
+    }
+}
+
+impl CurvyEventTable for curvy_committed_nullifier::Entity {
+    const POSITION: [Self::Column; 4] = [
+        curvy_committed_nullifier::Column::PublishedBlock,
+        curvy_committed_nullifier::Column::PublishedTxIndex,
+        curvy_committed_nullifier::Column::PublishedLogIndex,
+        curvy_committed_nullifier::Column::EventItemIndex,
+    ];
+
+    fn block_hash(model: &Self::Model) -> &[u8] {
+        &model.block_hash
+    }
+}
+
+/// Reads one page of events from a Curvy event table, ordered by chain position
+///
+/// The page starts at `from_block` and strictly after `after`. A cursor anchored to a block hash is
+/// rejected when that block is no longer the one stored at the cursor position. `operation` names the
+/// page read in the error returned when it fails.
+pub async fn event_page<E: CurvyEventTable>(
+    db: &DatabaseConnection,
+    from_block: Option<UInt64>,
+    after: Option<CurvyEventCursor>,
+    first: Option<i32>,
+    operation: &str,
+) -> CurvyResult<Vec<E::Model>> {
+    let [block, transaction_index, log_index, event_item_index] = E::POSITION;
+    let mut query = E::find();
+    if let Some(from_block) = self::from_block(from_block)? {
+        query = query.filter(block.gte(from_block));
+    }
+    if let Some(cursor) = event_cursor(after)? {
+        if cursor.block_hash.is_some() {
+            let anchored = E::find()
+                .filter(block.eq(cursor.block))
+                .filter(transaction_index.eq(cursor.transaction_index))
+                .filter(log_index.eq(cursor.log_index))
+                .filter(event_item_index.eq(cursor.event_item_index))
+                .one(db)
+                .await
+                .map_err(|error| errors::query_failed("validate Curvy cursor anchor", error))?;
+            ensure_cursor_anchor(&cursor, anchored.as_ref().map(E::block_hash))?;
+        }
+        query = query.filter(event_cursor_condition(
+            block,
+            transaction_index,
+            log_index,
+            event_item_index,
+            cursor,
+        ));
+    }
+    query
+        .order_by_asc(block)
+        .order_by_asc(transaction_index)
+        .order_by_asc(log_index)
+        .order_by_asc(event_item_index)
+        .limit(page_limit(first)?)
+        .all(db)
+        .await
+        .map_err(|error| errors::query_failed(operation, error))
 }
 
 pub fn dense_start(from_index: Option<UInt64>) -> CurvyResult<i64> {

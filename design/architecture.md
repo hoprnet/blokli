@@ -122,6 +122,8 @@ BlokliChain
 
 - **Indexer Process**: Continuous blockchain event ingestion with finality awareness
 - **TransactionMonitor Process**: Background transaction confirmation tracking and status updates
+  - Retains completed transaction results only for a bounded in-memory retention window, while preserving all pending transactions until
+    they reach a terminal outcome
 
 ### 3. Indexer - Blockchain Event Processing
 
@@ -237,9 +239,8 @@ The database implements an event sourcing pattern with temporal versioning:
 
 **Database Views** (for efficient current-state access):
 
-- **account_current**: Returns one row per account with the latest `account_state`, using `ROW_NUMBER()` window function partitioned by
-  account ID and ordered by position tuple descending
-- **channel_current**: Returns one row per channel with the latest `channel_state`, using the same window function pattern
+- **account_current**: Returns one row per account with the latest `account_state`, using a position-ordered correlated lookup
+- **channel_current**: Returns one row per channel with the latest `channel_state`, using the same lookup pattern
 
 These views shift the "latest state" selection logic into the database engine, replacing application-level `ORDER BY ... LIMIT 1`
 subqueries. They simplify query code and enable the database to optimize current-state retrieval internally.
@@ -262,6 +263,7 @@ contention in SQLite's locking model.
 
 - **Event Sourcing**: State tables maintain complete version history with position-based ordering
 - **Temporal Queries**: Query state at any historical point using position coordinates
+- **Lookup Indexes**: State history indexes support both latest-state resolution and common identity predicates such as Safe-address filters
 - **Optimistic Locking**: Position-based unique constraints prevent duplicate event processing
 - **Binary Storage**: Large integers stored as binary to preserve full precision across language boundaries
 - **Watermark Pattern**: Tracks exact last processed position for reliable resume after restarts
@@ -390,9 +392,17 @@ block time for polling intervals, transaction polling configuration, finality de
 
 **Adaptive Log Range Discovery**: The configured log block range is a ceiling, not a fixed request size. The RPC layer treats real
 `eth_getLogs` requests as observations: it starts with the ceiling, records successful ranges, records rejected ranges, and uses binary
-search to converge on the largest working range. Once a stable range is found, it is reused continuously. If the endpoint later rejects that
-stable range, the previous result is discarded and the same request-driven search moves downward again. If even single-block log requests
-are rejected, the RPC layer stays in single-block mode and surfaces the underlying RPC error while warning that this mode is very slow.
+search to converge on the largest working range. Endpoints report oversized ranges in many ways (dedicated error codes, HTTP 413, gateway
+timeouts, generic server errors), so a failed multi-block request is treated as a rejection and retried with a smaller range instead of
+failing the indexer when it used the full current range or was larger than any range known to work. A failed smaller request within the
+proven range, such as one near the chain head, is first retried unchanged: if it succeeds, the failure was transient and the range is kept;
+if it fails again, it is treated as a rejection. Either way the indexer's failure handling is not involved. A failure that persists down to
+a single block indicates an outage and restarts the discovery from the ceiling instead of leaving the range at a single block. Once a stable
+range is found, it is reused continuously. If the endpoint later rejects that stable range, for example because a region of the chain
+contains many logs, the previous result is discarded and the same request-driven search moves downward again. A stable range below the
+configured ceiling is periodically probed upward again, keeping it as the known-good lower bound, so the range recovers after a dense region
+or a transient failure. If even single-block log requests are rejected with a range limit error, the RPC layer uses single-block mode until
+the next upward probe and surfaces the underlying RPC error while warning that this mode is very slow.
 
 **Retry Strategy**: Implements exponential backoff with jitter for transient failures, distinguishes between retryable errors (network, rate
 limit) and non-retryable errors (invalid transaction), and respects rate limits through request throttling.
@@ -1273,7 +1283,7 @@ minutes. Real-time indexing typically processes blocks within seconds of finalit
 
 - Required filters prevent full table scans and accidental exposure of entire dataset
 - Batch loading pattern for related entities reduces N+1 query problems
-- Temporal queries leverage indexed position columns for efficient lookups
+- Latest-state lookups at a watermark leverage indexed position columns
 - Account aggregation uses optimized join strategy with four separate queries
 - Database connection pooling amortizes connection overhead
 
