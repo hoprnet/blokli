@@ -76,6 +76,8 @@ pub struct IndexerConfig {
 impl IndexerConfig {
     /// Creates a new indexer configuration.
     ///
+    /// `additional_node_stake_factories` starts empty; set it afterwards from the resolved historical releases.
+    ///
     /// # Arguments
     ///
     /// * `start_block_number` - The block number from which to start indexing

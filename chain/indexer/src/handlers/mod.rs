@@ -152,7 +152,8 @@ where
     }
 
     fn is_node_stake_factory(&self, address: Address) -> bool {
-        address == self.addresses.node_stake_factory || self.additional_node_stake_factories.contains(&address)
+        address == self.addresses.node_stake_factory
+            || self.additional_node_stake_factories.binary_search(&address).is_ok()
     }
 
     fn is_safe_contract_topic(topic: &[u8; 32]) -> bool {
