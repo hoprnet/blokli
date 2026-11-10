@@ -1,4 +1,7 @@
-use std::{collections::HashMap, time::SystemTime};
+use std::{
+    collections::{HashMap, HashSet},
+    time::SystemTime,
+};
 
 use async_trait::async_trait;
 use blokli_db_entity::{
@@ -16,7 +19,9 @@ use hopr_types::{
         traits::IntoEndian,
     },
 };
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, DbErr, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DbErr, EntityTrait, QueryFilter, QueryOrder,
+};
 use sea_query::OnConflict;
 use tracing::instrument;
 
@@ -84,6 +89,64 @@ async fn lookup_account_addresses(
     let dest_addr = Address::try_from(dest_account.chain_key.as_slice())?;
 
     Ok((source_addr, dest_addr))
+}
+
+/// Maximum number of account IDs bound in a single `IN (...)` lookup, kept well below the
+/// bind-parameter limits of SQLite and PostgreSQL.
+const ACCOUNT_LOOKUP_CHUNK_SIZE: usize = 10_000;
+
+/// Reconstructs `ChannelEntry` values for a set of `channel_current` rows.
+///
+/// All source and destination accounts are fetched in batched queries and resolved through a
+/// `HashMap`, avoiding a per-row account lookup.
+///
+/// # Arguments
+///
+/// * `conn` - Database connection or transaction
+/// * `view_rows` - Rows from the `channel_current` view
+///
+/// # Returns
+///
+/// One `ChannelEntry` per input row, in the same order
+async fn channel_entries_from_view_rows<C: ConnectionTrait>(
+    conn: &C,
+    view_rows: &[channel_current::Model],
+) -> Result<Vec<ChannelEntry>> {
+    let all_ids: Vec<i64> = view_rows
+        .iter()
+        .flat_map(|r| [r.source, r.destination])
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    let mut account_map: HashMap<i64, Address> = HashMap::with_capacity(all_ids.len());
+    for ids in all_ids.chunks(ACCOUNT_LOOKUP_CHUNK_SIZE) {
+        let accounts = Account::find()
+            .filter(account::Column::Id.is_in(ids.iter().copied()))
+            .all(conn)
+            .await?;
+        for a in accounts {
+            account_map.insert(a.id, Address::try_from(a.chain_key.as_slice())?);
+        }
+    }
+
+    view_rows
+        .iter()
+        .map(|view_row| {
+            let source_addr = account_map.get(&view_row.source).ok_or_else(|| {
+                DbSqlError::LogicalError(format!("Source account with ID {} not found", view_row.source))
+            })?;
+
+            let dest_addr = account_map.get(&view_row.destination).ok_or_else(|| {
+                DbSqlError::LogicalError(format!(
+                    "Destination account with ID {} not found",
+                    view_row.destination
+                ))
+            })?;
+
+            reconstruct_channel_entry_from_view(view_row, *source_addr, *dest_addr)
+        })
+        .collect()
 }
 
 /// Helper function to reconstruct a ChannelEntry from channel and channel_state records
@@ -545,16 +608,7 @@ impl BlokliDbChannelOperations for BlokliDb {
                     };
 
                     // Step 3: Reconstruct ChannelEntry for each row
-                    let mut results = Vec::new();
-                    for view_row in &view_rows {
-                        let (source_addr, dest_addr) =
-                            lookup_account_addresses(tx.as_ref(), view_row.source, view_row.destination).await?;
-
-                        let entry = reconstruct_channel_entry_from_view(view_row, source_addr, dest_addr)?;
-                        results.push(entry);
-                    }
-
-                    Ok::<_, DbSqlError>(results)
+                    channel_entries_from_view_rows(tx.as_ref(), &view_rows).await
                 })
             })
             .await
@@ -569,16 +623,7 @@ impl BlokliDbChannelOperations for BlokliDb {
                     let view_rows = channel_current::Entity::find().all(tx.as_ref()).await?;
 
                     // Step 2: Reconstruct ChannelEntry for each row
-                    let mut results = Vec::new();
-                    for view_row in &view_rows {
-                        let (source_addr, dest_addr) =
-                            lookup_account_addresses(tx.as_ref(), view_row.source, view_row.destination).await?;
-
-                        let entry = reconstruct_channel_entry_from_view(view_row, source_addr, dest_addr)?;
-                        results.push(entry);
-                    }
-
-                    Ok::<_, DbSqlError>(results)
+                    channel_entries_from_view_rows(tx.as_ref(), &view_rows).await
                 })
             })
             .await
@@ -592,43 +637,11 @@ impl BlokliDbChannelOperations for BlokliDb {
             .all(db)
             .await?;
 
-        // Batch-fetch all needed accounts in one query to avoid N+1
-        let all_ids: Vec<i64> = view_rows
-            .iter()
-            .flat_map(|r| [r.source, r.destination])
-            .collect::<std::collections::HashSet<_>>()
+        let entries = channel_entries_from_view_rows(db, &view_rows)
+            .await?
             .into_iter()
-            .collect();
-
-        let accounts = Account::find()
-            .filter(account::Column::Id.is_in(all_ids))
-            .all(db)
-            .await?;
-
-        let account_map: HashMap<i64, Address> = accounts
-            .into_iter()
-            .map(|a| {
-                let addr = Address::try_from(a.chain_key.as_slice())?;
-                Ok((a.id, addr))
-            })
-            .collect::<Result<HashMap<_, _>>>()?;
-
-        let mut entries = Vec::new();
-        for view_row in &view_rows {
-            let source_addr = account_map.get(&view_row.source).ok_or_else(|| {
-                DbSqlError::LogicalError(format!("Source account with ID {} not found", view_row.source))
-            })?;
-
-            let dest_addr = account_map.get(&view_row.destination).ok_or_else(|| {
-                DbSqlError::LogicalError(format!(
-                    "Destination account with ID {} not found",
-                    view_row.destination
-                ))
-            })?;
-
-            let entry = reconstruct_channel_entry_from_view(view_row, *source_addr, *dest_addr)?;
-            entries.push(Ok(entry));
-        }
+            .map(Ok)
+            .collect::<Vec<_>>();
 
         Ok(Box::pin(futures::stream::iter(entries)))
     }
@@ -847,9 +860,13 @@ impl BlokliDbChannelOperations for BlokliDb {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, SystemTime};
+    use std::{
+        collections::HashMap,
+        time::{Duration, SystemTime},
+    };
 
     use anyhow::Context;
+    use blokli_db_entity::{account, prelude::Account, views::channel_current};
     use hopr_types::{
         crypto::{
             keypairs::{ChainKeypair, OffchainKeypair},
@@ -862,10 +879,12 @@ mod tests {
         },
         primitive::prelude::{Address, HoprBalance, U256},
     };
+    use sea_orm::{ActiveValue::Set, EntityTrait};
 
+    use super::{ACCOUNT_LOOKUP_CHUNK_SIZE, DB_STATUS_OPEN, channel_entries_from_view_rows};
     use crate::{
-        BlokliDbGeneralModelOperations, accounts::BlokliDbAccountOperations, channels::BlokliDbChannelOperations,
-        db::BlokliDb,
+        BlokliDbGeneralModelOperations, TargetDb, accounts::BlokliDbAccountOperations,
+        channels::BlokliDbChannelOperations, db::BlokliDb,
     };
 
     fn build_channel_entry(
@@ -884,6 +903,65 @@ mod tests {
             .epoch(channel_epoch)
             .build()
             .expect("valid channel entry")
+    }
+
+    #[tokio::test]
+    async fn test_channel_entries_from_view_rows_spans_multiple_lookup_chunks() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let conn = db.conn(TargetDb::Index);
+
+        // More distinct accounts than one lookup chunk holds, so the batching loop runs twice.
+        let account_count = ACCOUNT_LOOKUP_CHUNK_SIZE + 1;
+        let addresses: Vec<Address> = (0..account_count).map(|_| Address::from(random_bytes())).collect();
+        for (chunk_index, chunk) in addresses.chunks(1_000).enumerate() {
+            let models = chunk.iter().enumerate().map(|(i, addr)| account::ActiveModel {
+                chain_key: Set(addr.as_ref().to_vec()),
+                packet_key: Set(format!("{:064x}", chunk_index * 1_000 + i)),
+                ..Default::default()
+            });
+            Account::insert_many(models).exec(conn).await?;
+        }
+        let id_by_address: HashMap<Address, i64> = Account::find()
+            .all(conn)
+            .await?
+            .into_iter()
+            .map(|a| Ok((Address::try_from(a.chain_key.as_slice())?, a.id)))
+            .collect::<anyhow::Result<_>>()?;
+
+        // Every account is the source of one row and the destination of another, so endpoints repeat.
+        let view_rows: Vec<channel_current::Model> = (0..account_count)
+            .map(|i| {
+                let row_id = i64::try_from(i)?;
+                Ok(channel_current::Model {
+                    id: row_id,
+                    channel_id: row_id,
+                    concrete_channel_id: String::new(),
+                    source: id_by_address[&addresses[i]],
+                    destination: id_by_address[&addresses[(i + 1) % account_count]],
+                    balance: vec![0; 12],
+                    status: DB_STATUS_OPEN,
+                    epoch: 1,
+                    ticket_index: row_id,
+                    closure_time: None,
+                    corrupted_state: false,
+                    published_block: 1,
+                    published_tx_index: 0,
+                    published_log_index: 0,
+                    reorg_correction: false,
+                })
+            })
+            .collect::<anyhow::Result<_>>()?;
+
+        let entries = channel_entries_from_view_rows(conn, &view_rows).await?;
+
+        assert_eq!(entries.len(), account_count);
+        for (i, entry) in entries.iter().enumerate() {
+            assert_eq!(entry.source, addresses[i]);
+            assert_eq!(entry.destination, addresses[(i + 1) % account_count]);
+            assert_eq!(entry.ticket_index, i as u64);
+        }
+
+        Ok(())
     }
 
     #[tokio::test]
