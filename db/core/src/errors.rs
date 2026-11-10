@@ -28,6 +28,9 @@ pub enum DbSqlError {
     #[error("account entry for announcement not found")]
     MissingAccount,
 
+    #[error("account {0} is already bound to a different packet key")]
+    KeyRebinding(Address),
+
     #[error("channel not found: {0}")]
     ChannelNotFound(Hash),
 

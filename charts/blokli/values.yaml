@@ -498,10 +498,6 @@ config:
       ##
       # Typically a small value is sufficient
       shutdownSignalCapacity: 10
-      ## @param config.indexer.subscription.batchSize Batch size for Phase 1 historical channel queries
-      ##
-      # Higher values fetch more data per query but may increase latency
-      batchSize: 100
   # API server configuration
   api:
     ## @param config.api.enabled Enable or disable the GraphQL API server
