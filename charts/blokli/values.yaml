@@ -485,6 +485,9 @@ config:
     ## @param config.indexer.logsSnapshotUrl URL for logs snapshot download (required when enableLogsSnapshot is true)
     ##
     logsSnapshotUrl: ""
+    ## @param config.indexer.additionalNodeStakeFactoryReleases Historical contract release tags whose StakeFactory deployments are also indexed (catalog is empty by default; needs a fresh database and no logs snapshot)
+    ##
+    additionalNodeStakeFactoryReleases: []
     # Subscription behavior configuration
     subscription:
       ## @param config.indexer.subscription.eventBusCapacity Capacity of the event bus buffer for channel events
