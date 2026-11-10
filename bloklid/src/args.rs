@@ -312,11 +312,22 @@ impl Args {
             ))
         })?;
 
+        if config.indexer.enable_logs_snapshot && !config.indexer.additional_node_stake_factory_releases.is_empty() {
+            return Err(BloklidError::NonSpecific(
+                "indexer.enable_logs_snapshot cannot be combined with indexer.additional_node_stake_factory_releases: \
+                 a logs snapshot does not cover the additional StakeFactory deployments. Disable the snapshot and \
+                 sync from scratch."
+                    .to_string(),
+            ));
+        }
+
         let mut additional_stake_factory_deployments = Vec::new();
         for release in &config.indexer.additional_node_stake_factory_releases {
             let deployment = resolve_stake_factory(release, config.network.as_str()).ok_or_else(|| {
                 BloklidError::NonSpecific(format!(
-                    "Historical contracts release '{}' is not supported for network '{}'",
+                    "Historical contracts release '{}' is not supported for network '{}': the catalog of historical \
+                     releases is empty unless an exactly pinned `hopr-bindings` alias is added (see README, 'Adding a \
+                     historical StakeFactory release')",
                     release, config.network
                 ))
             })?;
@@ -585,6 +596,35 @@ mod tests {
 
         assert!(error.to_string().contains("v1.2.3"));
         assert!(error.to_string().contains("not supported"));
+    }
+
+    #[test]
+    fn test_logs_snapshot_with_additional_releases_is_rejected() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "jura-dev"
+            rpc_url = "http://localhost:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+            [indexer]
+            enable_logs_snapshot = true
+            logs_snapshot_url = "https://example.com/s.tar.xz"
+            additional_node_stake_factory_releases = ["v1.2.3"]
+        "#
+        )
+        .unwrap();
+        let args = Args {
+            verbose: 0,
+            config: Some(file.path().to_path_buf()),
+            command: None,
+        };
+
+        let error = args.load_config(false).expect_err("snapshot combination should fail");
+
+        assert!(error.to_string().contains("enable_logs_snapshot"));
     }
 
     #[test]
