@@ -130,7 +130,9 @@ enable_safe_indexing = false
 
 # Additional historical HoprNodeStakeFactory deployments to index. Only release
 # tags compiled into Blokli are accepted; an unknown tag is rejected at startup.
-# Naming the current release is a no-op, since that factory is already indexed.
+# The catalog is empty by default (see README, "Adding a historical StakeFactory
+# release"). Enabling or changing releases on an existing database requires
+# wiping it and re-syncing. Cannot be combined with enable_logs_snapshot.
 # additional_node_stake_factory_releases = []
 
 # Enable note/nullifier indexing from the configured Curvy Aggregator.

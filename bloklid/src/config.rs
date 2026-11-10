@@ -476,7 +476,10 @@ pub struct IndexerConfig {
     #[serde(default)]
     pub logs_snapshot_url: Option<String>,
 
-    /// Contracts releases containing historical StakeFactory deployments to index.
+    /// Contract releases containing historical StakeFactory deployments to index.
+    ///
+    /// Empty by default. Changing this on an existing database requires wiping it, and it cannot be combined with
+    /// `enable_logs_snapshot`.
     #[serde(default)]
     pub additional_node_stake_factory_releases: Vec<ContractsRelease>,
 

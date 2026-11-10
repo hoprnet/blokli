@@ -203,7 +203,7 @@ RPC Endpoint
 
 Blokli distinguishes the active StakeFactory from historical StakeFactory deployments. The active address comes from the current bindings
 and remains the target for contract calls. Historical addresses and safe scan boundaries are resolved from explicitly supported, pinned
-contracts releases and are added only to the event-filtering and dispatch paths.
+contract releases and are added only to the event-filtering and dispatch paths.
 
 ### 4. Database Layer
 
