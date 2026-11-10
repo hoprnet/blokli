@@ -1390,8 +1390,6 @@ where
     /// # See Also
     ///
     /// - [`ReorgInfo`] - Structure containing reorg detection information
-    /// - [`get_channel_state_at`](blokli_db::state_queries::get_channel_state_at) - Temporal queries that work with
-    ///   corrective states
     /// - Design document section 6.5 - Detailed reorg handling specification
     async fn handle_reorg(
         logs_handler: &U,
@@ -3441,7 +3439,7 @@ mod tests {
             return Ok(());
         }
 
-        // Create source and destination accounts if they don't exist
+        // Create source and destination accounts if they don't exist; each gets its own chain key
         let source_id: i64 = channel_id * 10;
         let dest_id: i64 = channel_id * 10 + 1;
 
@@ -3449,7 +3447,7 @@ mod tests {
         if !source_exists {
             let source_account = account::ActiveModel {
                 id: Set(source_id),
-                chain_key: Set(vec![1u8; 20]),
+                chain_key: Set([source_id.to_be_bytes().to_vec(), vec![1u8; 12]].concat()),
                 packet_key: Set(format!("source_packet_key_{}", channel_id)),
                 published_block: Set(1),
                 published_tx_index: Set(0),
@@ -3462,7 +3460,7 @@ mod tests {
         if !dest_exists {
             let dest_account = account::ActiveModel {
                 id: Set(dest_id),
-                chain_key: Set(vec![3u8; 20]),
+                chain_key: Set([dest_id.to_be_bytes().to_vec(), vec![3u8; 12]].concat()),
                 packet_key: Set(format!("dest_packet_key_{}", channel_id)),
                 published_block: Set(1),
                 published_tx_index: Set(0),
@@ -4243,16 +4241,11 @@ mod tests {
         )
         .await?;
 
-        let conn = db.conn(TargetDb::Index);
-
-        // Query at exact corrective state position (200, 0, 0)
-        let position = BlockPosition {
-            block: 200,
-            tx_index: 0,
-            log_index: 0,
-        };
-
-        let state = get_channel_state_at(conn, 1, position).await?;
+        // Latest state at or before the exact corrective state position (200, 0, 0)
+        let states = get_channel_states(&db, 1).await?;
+        let state = states
+            .into_iter()
+            .rfind(|s| (s.published_block, s.published_tx_index, s.published_log_index) <= (200, 0, 0));
         assert!(state.is_some(), "Should find corrective state");
 
         let found_state = state.unwrap();
