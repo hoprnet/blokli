@@ -1124,7 +1124,7 @@ where
 
         if logs_handler.supports_atomic_batches() && !logs_to_process.is_empty() {
             match logs_handler
-                .collect_log_events(logs_to_process.clone(), is_synced, prefetched)
+                .collect_log_events(logs_to_process.clone(), is_synced, prefetched.clone())
                 .await
             {
                 Ok(()) => {
@@ -1146,8 +1146,14 @@ where
                 Err(CoreEthereumIndexerError::ProcessError(error)) => {
                     error!(block_id, %error, "failed to process batched logs, retrying individually");
 
+                    // Each log is replayed as an atomic batch of its own, handed the block's
+                    // pre-fetched chain data: it is keyed by transaction hash and by Safe discovery
+                    // block, so it holds exactly what the replayed log would otherwise fetch again.
                     for log in logs_to_process {
-                        match logs_handler.collect_log_event(log.clone(), is_synced).await {
+                        match logs_handler
+                            .collect_log_events(vec![log.clone()], is_synced, prefetched.clone())
+                            .await
+                        {
                             Ok(()) => match db.set_log_processed(log).await {
                                 Ok(_) => {}
                                 Err(error) => {
@@ -1600,7 +1606,7 @@ mod tests {
     };
 
     use async_trait::async_trait;
-    use blokli_chain_rpc::BlockWithLogs;
+    use blokli_chain_rpc::{BlockWithLogs, Log as RpcLog, errors::Result as RpcResult};
     use blokli_chain_types::{ContractAddresses, chain_events::ChainEventType};
     use blokli_db::{
         TargetDb, accounts::BlokliDbAccountOperations, db::BlokliDb, errors::DbSqlError,
@@ -1616,7 +1622,9 @@ mod tests {
         exports::alloy::{
             dyn_abi::DynSolValue,
             primitives::{Address as AlloyAddress, B256},
+            sol_types::private::IntoLogData,
         },
+        hopr_node_safe_registry::HoprNodeSafeRegistry::RegisteredNodeSafe,
         hopr_token::HoprToken::{Approval, Transfer},
     };
     use hopr_types::{
@@ -1631,7 +1639,12 @@ mod tests {
     use multiaddr::Multiaddr;
 
     use super::*;
-    use crate::traits::{ChainLogHandler, MockChainLogHandler, PrefetchedTransactions};
+    use crate::{
+        SafeTxPrefetchConfig,
+        custom_abis::safe_contract_events::SafeContract::ExecutionFromModuleFailure,
+        handlers::ContractEventHandlers,
+        traits::{ChainLogHandler, MockChainLogHandler, PrefetchedTransactions},
+    };
 
     lazy_static::lazy_static! {
         static ref ALICE_OKP: OffchainKeypair = OffchainKeypair::random();
@@ -1698,6 +1711,7 @@ mod tests {
             async fn block_number(&self) -> blokli_chain_rpc::errors::Result<u64>;
             async fn get_transaction_sender(&self, tx_hash: hopr_types::crypto::types::Hash) -> blokli_chain_rpc::errors::Result<Address>;
             async fn get_transaction_bytes(&self, tx_hash: hopr_types::crypto::types::Hash) -> blokli_chain_rpc::errors::Result<Vec<u8>>;
+            async fn get_transaction_bytes_batch(&self, tx_hashes: &[hopr_types::crypto::types::Hash]) -> Vec<blokli_chain_rpc::errors::Result<Vec<u8>>>;
 
             fn try_stream_logs<'a>(
                 &'a self,
@@ -1722,6 +1736,157 @@ mod tests {
             async fn get_channel_closure_notice_period(&self) -> blokli_chain_rpc::errors::Result<std::time::Duration>;
             async fn get_hopr_module_from_safe(&self, safe_address: Address) -> blokli_chain_rpc::errors::Result<Option<Address>>;
         }
+    }
+
+    /// Shares one [`MockHoprIndexerOps`] between clones, since the contract handlers require a
+    /// `Clone` RPC client. Every call is forwarded, so the mock's expectations see each request.
+    #[derive(Clone)]
+    struct SharedIndexerOps(Arc<MockHoprIndexerOps>);
+
+    #[async_trait]
+    impl HoprIndexerRpcOperations for SharedIndexerOps {
+        async fn block_number(&self) -> RpcResult<u64> {
+            self.0.block_number().await
+        }
+
+        async fn get_transaction_sender(&self, tx_hash: Hash) -> RpcResult<Address> {
+            self.0.get_transaction_sender(tx_hash).await
+        }
+
+        async fn get_transaction_bytes(&self, tx_hash: Hash) -> RpcResult<Vec<u8>> {
+            self.0.get_transaction_bytes(tx_hash).await
+        }
+
+        async fn get_transaction_bytes_batch(&self, tx_hashes: &[Hash]) -> Vec<RpcResult<Vec<u8>>> {
+            self.0.get_transaction_bytes_batch(tx_hashes).await
+        }
+
+        fn try_stream_logs<'a>(
+            &'a self,
+            start_block_number: u64,
+            filters: FilterSet,
+            is_synced: bool,
+        ) -> RpcResult<Pin<Box<dyn Stream<Item = BlockWithLogs> + Send + 'a>>> {
+            self.0.try_stream_logs(start_block_number, filters, is_synced)
+        }
+
+        async fn get_logs_for_address(
+            &self,
+            address: Address,
+            topics: Vec<B256>,
+            from_block: u64,
+            to_block: u64,
+        ) -> RpcResult<Vec<RpcLog>> {
+            self.0.get_logs_for_address(address, topics, from_block, to_block).await
+        }
+
+        async fn get_xdai_balance(&self, address: Address) -> RpcResult<XDaiBalance> {
+            self.0.get_xdai_balance(address).await
+        }
+
+        async fn get_hopr_balance(&self, address: Address) -> RpcResult<HoprBalance> {
+            self.0.get_hopr_balance(address).await
+        }
+
+        async fn get_xhopr_balance(&self, address: Address) -> RpcResult<XHoprBalance> {
+            self.0.get_xhopr_balance(address).await
+        }
+
+        async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> RpcResult<HoprBalance> {
+            self.0.get_hopr_allowance(owner, spender).await
+        }
+
+        async fn get_transaction_count(&self, address: Address) -> RpcResult<u64> {
+            self.0.get_transaction_count(address).await
+        }
+
+        async fn get_channel_closure_notice_period(&self) -> RpcResult<Duration> {
+            self.0.get_channel_closure_notice_period().await
+        }
+
+        async fn get_hopr_module_from_safe(&self, safe_address: Address) -> RpcResult<Option<Address>> {
+            self.0.get_hopr_module_from_safe(safe_address).await
+        }
+    }
+
+    const SAFE_BLOCK: u64 = 120;
+
+    fn safe_block_registry() -> Address {
+        Address::new(b"block test registry!")
+    }
+
+    /// Real contract handlers with Safe indexing enabled, backed by the given RPC mock.
+    fn safe_block_handlers(
+        rpc: MockHoprIndexerOps,
+        db: &BlokliDb,
+    ) -> ContractEventHandlers<SharedIndexerOps, BlokliDb> {
+        ContractEventHandlers::new(
+            ContractAddresses {
+                node_safe_registry: safe_block_registry(),
+                ..Default::default()
+            },
+            db.clone(),
+            SharedIndexerOps(Arc::new(rpc)),
+            IndexerState::default(),
+            true,
+            false,
+            SafeTxPrefetchConfig::default(),
+        )
+    }
+
+    /// Encodes `event` as a log of `address` in [`SAFE_BLOCK`], in a transaction of its own.
+    fn safe_block_log<E: IntoLogData>(event: E, address: Address, log_index: u64) -> SerializableLog {
+        let log_data = event.to_log_data();
+        SerializableLog {
+            address,
+            topics: log_data.topics().iter().map(|topic| topic.0).collect(),
+            data: log_data.data.to_vec(),
+            tx_hash: Hash::create(&[format!("safe block tx {log_index}").as_bytes()]).into(),
+            block_hash: Hash::create(&[b"safe block hash"]).into(),
+            tx_index: log_index,
+            block_number: SAFE_BLOCK,
+            log_index,
+            ..Default::default()
+        }
+    }
+
+    /// Stores the logs, then runs them as one synced block through the indexer's pre-fetch
+    /// pipeline and `process_block`, as the live indexing loop does.
+    async fn prefetch_and_process_safe_block(
+        db: &BlokliDb,
+        handlers: &ContractEventHandlers<SharedIndexerOps, BlokliDb>,
+        logs: Vec<SerializableLog>,
+    ) -> anyhow::Result<Option<()>> {
+        db.store_logs(logs.clone()).await?;
+
+        let block = BlockWithLogs {
+            block_id: SAFE_BLOCK,
+            logs: logs.into_iter().collect(),
+        };
+        let mut prefetched_blocks = Box::pin(Indexer::<
+            MockHoprIndexerOps,
+            ContractEventHandlers<SharedIndexerOps, BlokliDb>,
+            BlokliDb,
+        >::prefetch_block_data(
+            handlers, futures::stream::iter([block]), true
+        ));
+        let Some((block, prefetched)) = prefetched_blocks.next().await else {
+            anyhow::bail!("the pre-fetch pipeline yielded no block");
+        };
+
+        Ok(
+            Indexer::<MockHoprIndexerOps, ContractEventHandlers<SharedIndexerOps, BlokliDb>, BlokliDb>::process_block(
+                db,
+                handlers,
+                block,
+                false,
+                true,
+                &IndexerState::default(),
+                false,
+                prefetched,
+            )
+            .await,
+        )
     }
 
     #[derive(Clone)]
@@ -1953,7 +2118,8 @@ mod tests {
         }
     }
 
-    /// Handler whose atomic batch always fails, to exercise the fallback in `process_block`.
+    /// Handler whose multi-log atomic batch always fails, to exercise the fallback in
+    /// `process_block`; the single-log batches of the fallback succeed and are counted.
     #[derive(Clone)]
     struct FailingBatchLogHandler {
         single_log_calls: Arc<StdAtomicUsize>,
@@ -1986,11 +2152,16 @@ mod tests {
 
         async fn collect_log_events(
             &self,
-            _logs: Vec<SerializableLog>,
+            logs: Vec<SerializableLog>,
             _is_synced: bool,
             _prefetched: PrefetchedLogData,
         ) -> crate::errors::Result<()> {
-            Err((self.error)())
+            if logs.len() > 1 {
+                return Err((self.error)());
+            }
+
+            self.single_log_calls.fetch_add(1, StdOrdering::SeqCst);
+            Ok(())
         }
     }
 
@@ -2446,6 +2617,77 @@ mod tests {
                 .processed,
             Some(true)
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_block_fallback_reuses_the_block_prefetch() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let known_safe = Address::new(b"block test safe addr");
+        let new_safe = Address::new(b"block test new safe!");
+        let node = Address::new(b"block test node addr");
+        let module = Address::new(b"block test module ad");
+        db.create_safe_contract(None, known_safe, module, node, 1, 0, 0).await?;
+
+        // Every lookup below happens once, in the block pre-fetch. Replaying the logs one by one
+        // after the batch rolled back must reuse that data instead of going to the chain again.
+        let mut rpc = MockHoprIndexerOps::new();
+        rpc.expect_get_transaction_bytes_batch()
+            .times(1)
+            .withf(|tx_hashes| tx_hashes.len() == 2)
+            .returning(|tx_hashes| tx_hashes.iter().map(|_| Ok(Vec::new())).collect());
+        rpc.expect_get_transaction_bytes().never();
+        rpc.expect_get_logs_for_address()
+            .times(1)
+            .returning(|_, _, _, _| Ok(Vec::new()));
+        // Read inside the transaction by the registration handler, not pre-fetched.
+        rpc.expect_get_hopr_module_from_safe().returning(|_| Ok(None));
+        let handlers = safe_block_handlers(rpc, &db);
+
+        let failure = || ExecutionFromModuleFailure {
+            module: AlloyAddress::from_hopr_address(module),
+        };
+        let first_failure = safe_block_log(failure(), known_safe, 0);
+        let second_failure = safe_block_log(failure(), known_safe, 1);
+        let registration = safe_block_log(
+            RegisteredNodeSafe {
+                safeAddress: AlloyAddress::from_hopr_address(new_safe),
+                nodeAddress: AlloyAddress::from_hopr_address(node),
+            },
+            safe_block_registry(),
+            2,
+        );
+        // More than four topics cannot form a log, so this one fails the batch with a
+        // `ProcessError` after the others were applied, forcing the per-log replay.
+        let undecodable = SerializableLog {
+            topics: vec![[7_u8; 32]; 5],
+            ..safe_block_log(failure(), known_safe, 3)
+        };
+        let logs = vec![
+            first_failure.clone(),
+            second_failure.clone(),
+            registration.clone(),
+            undecodable.clone(),
+        ];
+
+        assert!(prefetch_and_process_safe_block(&db, &handlers, logs).await?.is_some());
+
+        for log in [&first_failure, &second_failure, &registration] {
+            assert_eq!(
+                db.get_log(log.block_number, log.tx_index, log.log_index)
+                    .await?
+                    .processed,
+                Some(true)
+            );
+        }
+        assert_ne!(
+            db.get_log(undecodable.block_number, undecodable.tx_index, undecodable.log_index)
+                .await?
+                .processed,
+            Some(true)
+        );
+        assert!(db.get_safe_contract_by_address(None, new_safe).await?.is_some());
 
         Ok(())
     }
