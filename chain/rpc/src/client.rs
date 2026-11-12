@@ -458,17 +458,20 @@ fn retryable_batch_error<P: RetryPolicy>(policy: &P, items: &[Response]) -> Opti
     first_error
 }
 
+/// Label under which a batch packet is recorded.
+const BATCH_METRIC_LABEL: &str = "batch";
+
+/// Records the retries of one packet: once per packet, labelled by method for a single request
+/// and by [`BATCH_METRIC_LABEL`] for a batch.
 #[cfg(all(feature = "telemetry", not(test)))]
-fn record_rpc_retries(method_names: &[String], retry_count: u32) {
+fn record_rpc_retries(label: &str, retry_count: u32) {
     if let Some(metric) = METRIC_RETRIES_PER_RPC_CALL.as_ref() {
-        for method_name in method_names {
-            metric.observe(&[method_name], f64::from(retry_count));
-        }
+        metric.observe(&[label], f64::from(retry_count));
     }
 }
 
 #[cfg(not(all(feature = "telemetry", not(test))))]
-fn record_rpc_retries(_method_names: &[String], _retry_count: u32) {}
+fn record_rpc_retries(_label: &str, _retry_count: u32) {}
 
 impl<S, P> Service<RequestPacket> for InstrumentedRetryBackoffService<S, P>
 where
@@ -484,9 +487,9 @@ where
     }
 
     fn call(&mut self, request: RequestPacket) -> Self::Future {
-        let method_names = match request.clone() {
-            RequestPacket::Single(single_request) => vec![single_request.method().to_owned()],
-            RequestPacket::Batch(requests) => requests.iter().map(|request| request.method().to_owned()).collect(),
+        let metric_label = match &request {
+            RequestPacket::Single(single_request) => single_request.method().to_owned(),
+            RequestPacket::Batch(_) => BATCH_METRIC_LABEL.to_owned(),
         };
         let inner = self.inner.clone();
         let this = self.clone();
@@ -509,7 +512,7 @@ where
                         match error {
                             Some(error) => error,
                             None => {
-                                record_rpc_retries(&method_names, retry_count);
+                                record_rpc_retries(&metric_label, retry_count);
                                 return Ok(response);
                             }
                         }
@@ -518,12 +521,12 @@ where
                 };
 
                 if !this.policy.should_retry(&error) {
-                    record_rpc_retries(&method_names, retry_count);
+                    record_rpc_retries(&metric_label, retry_count);
                     return Err(error);
                 }
 
                 if retry_count >= this.max_rate_limit_retries {
-                    record_rpc_retries(&method_names, retry_count);
+                    record_rpc_retries(&metric_label, retry_count);
                     return Err(TransportErrorKind::custom_str(&format!("Max retries exceeded {error}")));
                 }
                 retry_count += 1;
