@@ -182,6 +182,7 @@ impl BlokliDbLogOperations for BlokliDb {
                     // processed flag) forever, so the position would never be applied again.
                     let positions = status_models.iter().map(|(position, _)| *position).collect::<Vec<_>>();
                     let mut orphaned = HashMap::new();
+                    let mut already_stored = HashSet::with_capacity(positions.len());
 
                     for chunk in positions.chunks(log_position_chunk_size(backend, 0)) {
                         let stored = Log::find()
@@ -204,6 +205,7 @@ impl BlokliDbLogOperations for BlokliDb {
 
                         for row in stored {
                             let position = (row.block_number, row.tx_index, row.log_index);
+                            already_stored.insert(position);
                             if incoming_hashes
                                 .get(&position)
                                 .is_some_and(|hash| *hash != row.block_hash)
@@ -254,16 +256,27 @@ impl BlokliDbLogOperations for BlokliDb {
                         earliest_replaced = Some(earliest_replaced.map_or(block_number, |b| b.min(block_number)));
                     }
 
-                    // Checksums form a hash chain, so every checksum from the earliest replaced
-                    // block onwards is stale and is recomputed by the next checksum pass.
-                    if let Some(block_number) = earliest_replaced {
+                    // Checksums form a hash chain that the checksum pass extends from its highest
+                    // checksummed row, so every checksum from the earliest block this batch changes
+                    // onwards is stale: the block of a replaced position, and the block of a new
+                    // position, which the pass would otherwise append after later blocks' checksums.
+                    // On the live path the new positions sit above every checksummed row and the
+                    // statement matches nothing.
+                    let earliest_new = positions
+                        .iter()
+                        .filter(|position| !already_stored.contains(*position))
+                        .map(|(block_number, ..)| *block_number)
+                        .min();
+                    let earliest_changed = earliest_replaced.into_iter().chain(earliest_new).min();
+                    if let Some(block_number) = earliest_changed {
                         LogStatus::update_many()
                             .col_expr(log_status::Column::Checksum, Expr::value(Value::Bytes(None)))
                             .filter(log_status::Column::BlockNumber.gte(block_number))
+                            .filter(log_status::Column::Checksum.is_not_null())
                             .exec(tx.as_ref())
                             .await
                             .map_err(|e| {
-                                error!(error = ?e, "failed to invalidate checksums after a reorganised log");
+                                error!(error = ?e, "failed to invalidate checksums from the earliest changed block");
                                 DbError::General(e.to_string())
                             })?;
                     }
@@ -1007,6 +1020,61 @@ mod tests {
 
         // The later log's checksum must have moved: it depended on the log that was replaced.
         assert_ne!(db.get_log(2, 0, 0).await?.checksum, second_before);
+
+        Ok(())
+    }
+
+    /// Stores the logs in the given batches, computing checksums after each one, and returns
+    /// every stored checksum in chain order.
+    async fn checksums_after_batches(batches: Vec<Vec<SerializableLog>>) -> anyhow::Result<Vec<Option<String>>> {
+        let db = BlokliDb::new_in_memory().await?;
+        for batch in batches {
+            db.store_logs(batch).await?;
+            db.update_logs_checksums().await?;
+        }
+
+        Ok(db
+            .get_logs(None, None)
+            .await?
+            .into_iter()
+            .map(|log| log.checksum)
+            .collect())
+    }
+
+    #[tokio::test]
+    async fn test_new_log_below_the_checksum_head_rebuilds_the_chain_suffix() -> anyhow::Result<()> {
+        let logs = [1_u64, 2, 3].map(|block_number| SerializableLog {
+            block_hash: Hash::create(&[format!("block {block_number}").as_bytes()]).into(),
+            tx_hash: Hash::create(&[format!("tx {block_number}").as_bytes()]).into(),
+            ..test_log(block_number, 0, 0)
+        });
+        let [first, second, third] = logs.clone();
+
+        let expected = checksums_after_batches(vec![logs.to_vec()]).await?;
+        assert!(expected.iter().all(Option::is_some));
+
+        // Block 2's log arrives only after block 3 was checksummed: it is a new position, not a
+        // replacement, yet every checksum from block 2 onward must be rebuilt around it.
+        let actual = checksums_after_batches(vec![vec![first, third], vec![second]]).await?;
+
+        assert_eq!(actual, expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_new_logs_above_the_checksum_head_keep_existing_checksums() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        db.store_logs(vec![test_log(1, 0, 0)]).await?;
+        db.update_logs_checksums().await?;
+        let first_checksum = db.get_log(1, 0, 0).await?.checksum;
+        assert!(first_checksum.is_some());
+
+        // The live path: the next block's logs sit above every checksummed row and must not
+        // invalidate any of them.
+        db.store_logs(vec![test_log(2, 0, 0), test_log(2, 0, 1)]).await?;
+
+        assert_eq!(db.get_log(1, 0, 0).await?.checksum, first_checksum);
 
         Ok(())
     }

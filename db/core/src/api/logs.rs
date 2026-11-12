@@ -40,8 +40,10 @@ pub trait BlokliDbLogOperations {
     /// A log already stored at a position under the same block hash is left untouched, and a
     /// position repeated within `logs` is stored once. A position stored under a different block
     /// hash is treated as a reorganisation orphan: it is replaced, its status is reset and the
-    /// checksums from that block onwards are cleared. There is deliberately no per-log outcome:
-    /// a single log cannot fail on its own.
+    /// checksums from that block onwards are cleared. A new position stored at or below an already
+    /// checksummed block clears the checksums from its block onwards in the same way, so that the
+    /// next checksum pass rebuilds the chain in block order. There is deliberately no per-log
+    /// outcome: a single log cannot fail on its own.
     ///
     /// # Arguments
     ///
