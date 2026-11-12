@@ -28,7 +28,7 @@ use crate::{
     db::BlokliDb,
     errors::DbSqlError,
     numeric::{block_range_to_i64, i64_to_u64, log_position_to_i64, u64_to_i64},
-    snapshot::{LOG_INSERT_COLUMNS, LOG_STATUS_INSERT_COLUMNS, import_batch_size},
+    snapshot::{LOG_INSERT_COLUMNS, LOG_STATUS_INSERT_COLUMNS, SQLITE_MAX_VARIABLE_NUMBER},
 };
 
 /// Number of bound values a single log position contributes to a statement.
@@ -38,18 +38,44 @@ const LOG_POSITION_COLUMNS: usize = 3;
 /// `processed_at`.
 const LOG_STATUS_UPDATE_FIXED_BINDS: usize = 2;
 
+/// Bind variables PostgreSQL accepts in a single statement: its wire protocol carries the
+/// parameter count in a 16-bit field.
+const POSTGRES_MAX_BIND_VARIABLES: usize = 65_535;
+
+/// Upper bound on the rows, or filtered positions, of a single statement on any backend.
+///
+/// PostgreSQL would accept over twenty thousand positions in one statement, but planning an
+/// OR-chain or a `VALUES` list of that size costs more than the round-trips it saves.
+const MAX_ROWS_PER_STATEMENT: usize = 1_000;
+
+/// Bind variables the backend accepts in a single statement.
+///
+/// Backends the logs database does not run on fall back to the most restrictive known limit.
+fn max_bind_variables(backend: DatabaseBackend) -> usize {
+    match backend {
+        DatabaseBackend::Postgres => POSTGRES_MAX_BIND_VARIABLES,
+        _ => SQLITE_MAX_VARIABLE_NUMBER,
+    }
+}
+
+/// Number of rows of `binds_per_row` values that fit in a statement next to `reserved_binds`
+/// other values without exceeding `max_binds`, capped at [`MAX_ROWS_PER_STATEMENT`].
+fn rows_within_bind_limit(max_binds: usize, binds_per_row: usize, reserved_binds: usize) -> usize {
+    (max_binds.saturating_sub(reserved_binds) / binds_per_row.max(1)).clamp(1, MAX_ROWS_PER_STATEMENT)
+}
+
+/// Number of rows of `binds_per_row` values a single statement may carry on `backend`.
+fn statement_row_limit(backend: DatabaseBackend, binds_per_row: usize) -> usize {
+    rows_within_bind_limit(max_bind_variables(backend), binds_per_row, 0)
+}
+
 /// Number of log positions a single statement may filter on.
 ///
 /// `reserved_binds` accounts for values the statement binds outside the position filter, so that
 /// the total stays within the backend's bind-variable limit: without it a statement sized purely
 /// by the filter would overshoot (on SQLite, `3 * 333 + 2` exceeds the 999-variable limit).
 fn log_position_chunk_size(backend: DatabaseBackend, reserved_binds: usize) -> usize {
-    let positions = import_batch_size(backend, LOG_POSITION_COLUMNS);
-
-    // Dropping one position frees LOG_POSITION_COLUMNS bind slots.
-    positions
-        .saturating_sub(reserved_binds.div_ceil(LOG_POSITION_COLUMNS))
-        .max(1)
+    rows_within_bind_limit(max_bind_variables(backend), LOG_POSITION_COLUMNS, reserved_binds)
 }
 
 /// Builds a condition matching exactly the given `(block_number, tx_index, log_index)` positions.
@@ -244,7 +270,7 @@ impl BlokliDbLogOperations for BlokliDb {
 
                     // Insert the batch with as few statements as the backend's bind-parameter
                     // limit allows, leaving already stored logs untouched.
-                    let log_chunk_size = import_batch_size(backend, LOG_INSERT_COLUMNS);
+                    let log_chunk_size = statement_row_limit(backend, LOG_INSERT_COLUMNS);
                     while !log_models.is_empty() {
                         // Draining hands the statement owned models; chunking the vector in place
                         // and calling `to_vec` would clone every model on the way to the database.
@@ -318,7 +344,7 @@ impl BlokliDbLogOperations for BlokliDb {
 
                     // Statuses of logs already present must not be reset, hence the same
                     // do-nothing conflict handling as before.
-                    let status_chunk_size = import_batch_size(backend, LOG_STATUS_INSERT_COLUMNS);
+                    let status_chunk_size = statement_row_limit(backend, LOG_STATUS_INSERT_COLUMNS);
                     while !status_models_with_ids.is_empty() {
                         let chunk = status_models_with_ids
                             .drain(..status_chunk_size.min(status_models_with_ids.len()))
@@ -823,7 +849,6 @@ mod tests {
     use hopr_types::crypto::prelude::Hash;
 
     use super::*;
-    use crate::snapshot::SQLITE_MAX_VARIABLE_NUMBER;
 
     fn test_log(block_number: u64, tx_index: u64, log_index: u64) -> SerializableLog {
         SerializableLog {
@@ -1143,18 +1168,60 @@ mod tests {
 
     #[test]
     fn test_log_position_chunk_size_leaves_room_for_extra_binds() {
-        let positions = log_position_chunk_size(DatabaseBackend::Sqlite, LOG_STATUS_UPDATE_FIXED_BINDS);
-        let bound_values = positions * LOG_POSITION_COLUMNS + LOG_STATUS_UPDATE_FIXED_BINDS;
+        for (backend, limit) in [
+            (DatabaseBackend::Sqlite, SQLITE_MAX_VARIABLE_NUMBER),
+            (DatabaseBackend::Postgres, POSTGRES_MAX_BIND_VARIABLES),
+        ] {
+            let positions = log_position_chunk_size(backend, LOG_STATUS_UPDATE_FIXED_BINDS);
+            let bound_values = positions * LOG_POSITION_COLUMNS + LOG_STATUS_UPDATE_FIXED_BINDS;
 
-        assert!(
-            bound_values <= SQLITE_MAX_VARIABLE_NUMBER,
-            "a chunk binds {bound_values} values, over the SQLite limit of {SQLITE_MAX_VARIABLE_NUMBER}"
+            assert!(
+                bound_values <= limit,
+                "a {backend:?} chunk binds {bound_values} values, over the limit of {limit}"
+            );
+
+            // Without reserved binds the whole allowance goes to positions.
+            let unreserved = log_position_chunk_size(backend, 0);
+            assert!(unreserved * LOG_POSITION_COLUMNS <= limit);
+            assert!(unreserved >= positions);
+        }
+    }
+
+    #[test]
+    fn test_statement_row_limit_stays_within_each_backend_bind_limit() {
+        for (backend, limit) in [
+            (DatabaseBackend::Sqlite, SQLITE_MAX_VARIABLE_NUMBER),
+            (DatabaseBackend::Postgres, POSTGRES_MAX_BIND_VARIABLES),
+        ] {
+            for binds_per_row in [LOG_INSERT_COLUMNS, LOG_STATUS_INSERT_COLUMNS, LOG_POSITION_COLUMNS] {
+                let rows = statement_row_limit(backend, binds_per_row);
+                assert!(
+                    rows * binds_per_row <= limit,
+                    "{rows} rows of {binds_per_row} values exceed the {backend:?} limit of {limit}"
+                );
+                assert!((1..=MAX_ROWS_PER_STATEMENT).contains(&rows));
+            }
+        }
+    }
+
+    #[test]
+    fn test_rows_within_bind_limit_is_derived_from_the_limit() {
+        // A limit below what the row cap would bind must shrink the statement, not overshoot it.
+        let rows = rows_within_bind_limit(3_000, LOG_POSITION_COLUMNS, LOG_STATUS_UPDATE_FIXED_BINDS);
+        assert_eq!(rows, 999);
+        assert!(rows * LOG_POSITION_COLUMNS + LOG_STATUS_UPDATE_FIXED_BINDS <= 3_000);
+
+        // A generous limit is capped, so a statement never grows without bound.
+        assert_eq!(
+            rows_within_bind_limit(POSTGRES_MAX_BIND_VARIABLES, LOG_POSITION_COLUMNS, 0),
+            MAX_ROWS_PER_STATEMENT
         );
 
-        // Without reserved binds the whole allowance goes to positions.
-        let unreserved = log_position_chunk_size(DatabaseBackend::Sqlite, 0);
-        assert!(unreserved * LOG_POSITION_COLUMNS <= SQLITE_MAX_VARIABLE_NUMBER);
-        assert!(unreserved >= positions);
+        // A limit too small for even one row still makes progress one row at a time.
+        assert_eq!(
+            rows_within_bind_limit(2, LOG_POSITION_COLUMNS, LOG_STATUS_UPDATE_FIXED_BINDS),
+            1
+        );
     }
 
     #[tokio::test]
