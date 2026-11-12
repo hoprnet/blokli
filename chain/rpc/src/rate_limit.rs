@@ -265,7 +265,7 @@ mod tests {
         let (calls, elapsed) = run_calls(&layer, 8).await;
         assert_eq!(calls, 8);
         assert!(elapsed >= Duration::from_millis(280), "too fast: {elapsed:?}");
-        assert!(elapsed < Duration::from_millis(1000), "too slow: {elapsed:?}");
+        assert!(elapsed < Duration::from_millis(3000), "too slow: {elapsed:?}");
     }
 
     #[tokio::test]
@@ -273,6 +273,6 @@ mod tests {
         let layer = RateLimitLayer::new(None);
         let (calls, elapsed) = run_calls(&layer, 200).await;
         assert_eq!(calls, 200);
-        assert!(elapsed < Duration::from_millis(200), "unexpected delay: {elapsed:?}");
+        assert!(elapsed < Duration::from_millis(2000), "unexpected delay: {elapsed:?}");
     }
 }

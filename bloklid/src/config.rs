@@ -1170,6 +1170,9 @@ mod tests {
                 16
             )
         );
+        // An omitted rate limit stays `None`, which resolves to the 100 req/s default downstream.
+        assert_eq!(config.max_rpc_requests_per_sec, None);
+
         // The serde defaults and `Default` must agree.
         let default = TransactionConfig::default();
         assert_eq!(default.request_timeout, tx.request_timeout);
