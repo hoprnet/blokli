@@ -14,7 +14,9 @@ network = "jura-dev"
 # If not specified, uses the network's default RPC endpoint (default: http://localhost:8545)
 rpc_url = "http://localhost:8545"
 
-# Maximum number of RPC requests per second (0 for unlimited)
+# Hard cap on RPC requests per second, enforced by a token bucket on the shared RPC client
+# (indexer, transaction executor, transaction monitor and API all share this budget).
+# Retried requests count towards the cap. A burst of up to a tenth of the rate (at least 1 request) is allowed.
 # If omitted, defaults to 100 req/sec. Set to 0 for unlimited, or a positive value to override the default.
 max_rpc_requests_per_sec = 0
 

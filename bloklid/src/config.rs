@@ -263,6 +263,7 @@ pub struct Config {
     #[serde(default = "default_rpc_url")]
     pub rpc_url: String,
 
+    /// Hard cap on RPC requests per second (`None` = 100, `Some(0)` = unlimited).
     #[serde(default)]
     pub max_rpc_requests_per_sec: Option<u32>,
 

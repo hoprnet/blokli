@@ -35,6 +35,7 @@ use crate::{RetryAction::NoRetry, errors::Result};
 pub mod client;
 pub mod errors;
 pub mod indexer;
+pub mod rate_limit;
 pub mod rpc;
 pub mod transport;
 
@@ -231,8 +232,9 @@ pub struct HttpPostRequestorConfig {
     pub max_redirects: u8,
 
     /// Maximum number of requests per second.
-    /// If set to Some(0) or `None`, there will be no limit.
     ///
+    /// Not read by the shared RPC client: its request rate is enforced by
+    /// [`rate_limit::RateLimitLayer`], built from `ChainConfig::max_requests_per_sec`.
     /// Defaults to 10
     #[default(Some(10))]
     pub max_requests_per_sec: Option<u32>,
