@@ -3,7 +3,11 @@
 //! This module provides a background task that monitors submitted transactions
 //! and updates their status based on on-chain confirmation.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex, PoisonError},
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use futures::{StreamExt, stream};
@@ -239,9 +243,6 @@ pub struct TransactionMonitorConfig {
     pub terminal_transaction_ttl: Duration,
     /// Maximum terminal transaction records to retain. `0` means unbounded.
     pub max_terminal_transactions: usize,
-    /// Delay between RPC calls when checking multiple transactions
-    /// This prevents overwhelming the RPC endpoint with burst requests
-    pub per_transaction_delay: Duration,
     /// Maximum time allowed for one receipt RPC request
     pub request_timeout: Duration,
     /// Maximum time allowed to determine a Safe transaction's inner outcome
@@ -281,7 +282,6 @@ impl Default for TransactionMonitorConfig {
             timeout: Duration::from_secs(300), // 5 minutes
             terminal_transaction_ttl: Duration::from_secs(24 * 60 * 60),
             max_terminal_transactions: 10_000,
-            per_transaction_delay: Duration::from_millis(100),
             request_timeout: Duration::from_secs(30),
             safe_inspection_timeout: Duration::from_secs(30),
             revert_reason_timeout: Duration::from_secs(30),
@@ -300,6 +300,78 @@ pub struct TransactionMonitor<R: ReceiptProvider, S: SafeAddressChecker> {
     safe_checker: Option<Arc<S>>,
     config: TransactionMonitorConfig,
     trace_jobs: mpsc::Sender<TraceJob>,
+    schedule: CheckSchedule,
+}
+
+/// Age step after which the check interval of a pending transaction doubles.
+const BACKOFF_AGE_STEP: Duration = Duration::from_secs(30);
+/// Longest interval between two checks of a pending transaction caused by its age alone.
+const MAX_BACKOFF_INTERVAL: Duration = Duration::from_secs(30);
+/// Upper bound for receipt checks per second issued by the monitor, however many transactions are in flight.
+///
+/// The check interval of every record is stretched to at least `in_flight / MAX_CHECKS_PER_SEC`. With the default
+/// 5 s poll interval this only takes effect above 200 in-flight transactions. The limit is below the ceiling of
+/// the former fixed per-check sleep (16 slots / (100 ms + RTT)) for round trips up to about 300 ms, so removing the
+/// sleep does not raise the monitor's RPC load.
+const MAX_CHECKS_PER_SEC: u32 = 40;
+
+/// Time between two checks of a pending transaction.
+///
+/// The interval starts at `poll_interval` and doubles every [`BACKOFF_AGE_STEP`] of age, capped at
+/// [`MAX_BACKOFF_INTERVAL`] (or `poll_interval` if that is larger). It is then stretched so that `in_flight`
+/// transactions cannot produce more than [`MAX_CHECKS_PER_SEC`] checks per second.
+fn check_interval(poll_interval: Duration, age: Duration, in_flight: usize) -> Duration {
+    let doublings = u32::try_from(age.as_secs() / BACKOFF_AGE_STEP.as_secs()).unwrap_or(u32::MAX);
+    let cap = MAX_BACKOFF_INTERVAL.max(poll_interval);
+    let aged = poll_interval
+        .checked_mul(2u32.saturating_pow(doublings.min(16)))
+        .map_or(cap, |interval| interval.min(cap));
+    let load_floor = Duration::from_secs_f64(in_flight as f64 / f64::from(MAX_CHECKS_PER_SEC));
+    aged.max(load_floor)
+}
+
+/// Next-check times of pending transactions, kept outside the transaction store.
+#[derive(Debug, Default)]
+struct CheckSchedule {
+    due: Mutex<HashMap<uuid::Uuid, Instant>>,
+}
+
+impl CheckSchedule {
+    /// Drops entries of records that are no longer pending, then returns the records that are due at `now` and
+    /// schedules their next check. Records that were never seen are due immediately.
+    fn take_due(
+        &self,
+        pending: Vec<crate::transaction_store::TransactionRecord>,
+        poll_interval: Duration,
+        now: Instant,
+    ) -> Vec<crate::transaction_store::TransactionRecord> {
+        let in_flight = pending.len();
+        let now_utc = chrono::Utc::now();
+        let mut due = self.due.lock().unwrap_or_else(PoisonError::into_inner);
+
+        let pending_ids: HashSet<uuid::Uuid> = pending.iter().map(|record| record.id).collect();
+        due.retain(|id, _| pending_ids.contains(id));
+
+        pending
+            .into_iter()
+            .filter(|record| {
+                if due.get(&record.id).is_some_and(|next| *next > now) {
+                    return false;
+                }
+                let age = now_utc
+                    .signed_duration_since(record.submitted_at)
+                    .to_std()
+                    .unwrap_or_default();
+                due.insert(record.id, now + check_interval(poll_interval, age, in_flight));
+                true
+            })
+            .collect()
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.due.lock().unwrap_or_else(PoisonError::into_inner).len()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -367,6 +439,7 @@ impl<R: ReceiptProvider + 'static, S: SafeAddressChecker> TransactionMonitor<R, 
                 safe_checker,
                 config,
                 trace_jobs,
+                schedule: CheckSchedule::default(),
             }
         } else {
             Self {
@@ -375,6 +448,7 @@ impl<R: ReceiptProvider + 'static, S: SafeAddressChecker> TransactionMonitor<R, 
                 safe_checker,
                 config,
                 trace_jobs,
+                schedule: CheckSchedule::default(),
             }
         }
     }
@@ -395,11 +469,15 @@ impl<R: ReceiptProvider + 'static, S: SafeAddressChecker> TransactionMonitor<R, 
         }
     }
 
-    /// Perform a single poll of all submitted transactions
+    /// Perform a single poll: check the submitted transactions that are due
     async fn poll_once(&self) -> Result<(), String> {
         let submitted = self.transaction_store.list_submitted_fair();
+        let total = submitted.len();
+        let submitted = self
+            .schedule
+            .take_due(submitted, self.config.poll_interval, Instant::now());
 
-        debug!("Polling {} submitted transactions", submitted.len());
+        debug!(total, due = submitted.len(), "Polling submitted transactions");
 
         stream::iter(submitted)
             .for_each_concurrent(self.config.max_concurrent_checks.max(1), |record| async move {
@@ -550,9 +628,6 @@ impl<R: ReceiptProvider + 'static, S: SafeAddressChecker> TransactionMonitor<R, 
                 );
             }
         }
-
-        // Retain a small delay per check in addition to the RPC client's global rate limiter.
-        sleep(self.config.per_transaction_delay).await;
     }
 
     async fn try_inspect_safe_execution(
@@ -778,6 +853,8 @@ mod tests {
         // Next nonce per signer including the mempool (absent = mined nonce)
         pending_nonces: Arc<DashMap<[u8; 20], u64>>,
         receipt_calls: Arc<AtomicUsize>,
+        // Artificial latency of every receipt lookup
+        receipt_latency: Duration,
     }
 
     impl MockReceiptProvider {
@@ -792,7 +869,13 @@ mod tests {
                 mined_nonces: Arc::new(DashMap::new()),
                 pending_nonces: Arc::new(DashMap::new()),
                 receipt_calls: Arc::new(AtomicUsize::new(0)),
+                receipt_latency: Duration::ZERO,
             }
+        }
+
+        fn with_receipt_latency(mut self, latency: Duration) -> Self {
+            self.receipt_latency = latency;
+            self
         }
 
         fn set_known(&self, tx_hash: Hash) {
@@ -831,6 +914,10 @@ mod tests {
             self.hanging_revert_reasons.insert(tx_hash, ());
         }
 
+        fn receipt_call_counter(&self) -> Arc<AtomicUsize> {
+            self.receipt_calls.clone()
+        }
+
         fn receipt_call_count(&self) -> usize {
             self.receipt_calls.load(Ordering::Relaxed)
         }
@@ -840,6 +927,9 @@ mod tests {
     impl ReceiptProvider for MockReceiptProvider {
         async fn get_transaction_receipt(&self, tx_hash: Hash) -> Result<Option<TransactionReceipt>, String> {
             self.receipt_calls.fetch_add(1, Ordering::Relaxed);
+            if !self.receipt_latency.is_zero() {
+                sleep(self.receipt_latency).await;
+            }
             if self.hanging_statuses.contains_key(&tx_hash) {
                 return pending().await;
             }
@@ -962,6 +1052,226 @@ mod tests {
         let mut encoded = Vec::new();
         signed_tx.encode_2718(&mut encoded);
         encoded
+    }
+
+    fn submitted_record(id: u128, age: Duration) -> TransactionRecord {
+        TransactionRecord {
+            id: Uuid::from_u128(id),
+            raw_transaction: vec![0x01],
+            transaction_hash: Hash::from(
+                Uuid::from_u128(id)
+                    .as_u128()
+                    .to_be_bytes()
+                    .repeat(2)
+                    .try_into()
+                    .unwrap_or([0u8; 32]),
+            ),
+            status: TransactionStatus::Submitted,
+            submitted_at: Utc::now() - chrono::Duration::from_std(age).unwrap(),
+            confirmed_at: None,
+            error_message: None,
+            safe_execution: None,
+        }
+    }
+
+    const POLL: Duration = Duration::from_secs(5);
+
+    #[test]
+    fn check_interval_backs_off_with_age_and_is_capped() {
+        let intervals: Vec<u64> = [0u64, 29, 30, 59, 60, 90, 600, 100_000]
+            .iter()
+            .map(|age| check_interval(POLL, Duration::from_secs(*age), 1).as_secs())
+            .collect();
+        insta::assert_yaml_snapshot!(intervals);
+    }
+
+    #[test]
+    fn check_interval_cap_never_below_poll_interval() {
+        let poll = Duration::from_secs(60);
+        assert_eq!(check_interval(poll, Duration::ZERO, 1), poll);
+        assert_eq!(check_interval(poll, Duration::from_secs(3600), 1), poll);
+    }
+
+    #[test]
+    fn check_interval_scales_with_in_flight_count() {
+        let intervals: Vec<f64> = [1usize, 200, 201, 500, 1024]
+            .iter()
+            .map(|n| check_interval(POLL, Duration::ZERO, *n).as_secs_f64())
+            .collect();
+        insta::assert_yaml_snapshot!(intervals);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn schedule_selects_only_due_records() {
+        let schedule = CheckSchedule::default();
+        let records = vec![submitted_record(1, Duration::ZERO), submitted_record(2, Duration::ZERO)];
+        let now = Instant::now();
+
+        // Unknown records are due immediately.
+        assert_eq!(schedule.take_due(records.clone(), POLL, now).len(), 2);
+        // Right after, nothing is due.
+        assert!(schedule.take_due(records.clone(), POLL, now).is_empty());
+        assert!(
+            schedule
+                .take_due(records.clone(), POLL, now + POLL - Duration::from_millis(1))
+                .is_empty()
+        );
+        // At the due time both are due again.
+        assert_eq!(schedule.take_due(records.clone(), POLL, now + POLL).len(), 2);
+
+        // A record first seen later is due immediately while the others are not.
+        let mut with_new = records;
+        with_new.push(submitted_record(3, Duration::ZERO));
+        let due: Vec<Uuid> = schedule
+            .take_due(with_new, POLL, now + POLL + Duration::from_secs(1))
+            .iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(due, vec![Uuid::from_u128(3)]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn schedule_backs_off_older_records() {
+        let schedule = CheckSchedule::default();
+        let young = submitted_record(1, Duration::ZERO);
+        let old = submitted_record(2, Duration::from_secs(600));
+        let now = Instant::now();
+        let records = vec![young, old];
+
+        assert_eq!(schedule.take_due(records.clone(), POLL, now).len(), 2);
+        let due: Vec<Uuid> = schedule
+            .take_due(records.clone(), POLL, now + POLL)
+            .iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(due, vec![Uuid::from_u128(1)]);
+        // The old record waits for the 30 s cap.
+        let due: Vec<Uuid> = schedule
+            .take_due(records, POLL, now + MAX_BACKOFF_INTERVAL)
+            .iter()
+            .map(|r| r.id)
+            .collect();
+        assert!(due.contains(&Uuid::from_u128(2)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn schedule_prunes_departed_records() {
+        let schedule = CheckSchedule::default();
+        let records: Vec<TransactionRecord> = (1..=10).map(|id| submitted_record(id, Duration::ZERO)).collect();
+        let now = Instant::now();
+
+        schedule.take_due(records.clone(), POLL, now);
+        assert_eq!(schedule.len(), 10);
+
+        schedule.take_due(records[..3].to_vec(), POLL, now);
+        assert_eq!(schedule.len(), 3);
+
+        schedule.take_due(Vec::new(), POLL, now);
+        assert_eq!(schedule.len(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn poll_once_does_not_recheck_records_that_are_not_due() {
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+        let calls = provider.receipt_call_counter();
+        store.insert(submitted_record(1, Duration::ZERO)).unwrap();
+        let monitor = create_monitor(store.clone(), provider);
+
+        monitor.poll_once().await.unwrap();
+        monitor.poll_once().await.unwrap();
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+
+        tokio::time::advance(POLL).await;
+        monitor.poll_once().await.unwrap();
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn poll_once_prunes_schedule_for_confirmed_records() {
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+        let record = submitted_record(1, Duration::ZERO);
+        provider.set_status(record.transaction_hash, Some(true));
+        store.insert(record).unwrap();
+        let monitor = create_monitor(store.clone(), provider);
+
+        monitor.poll_once().await.unwrap();
+        assert_eq!(
+            store.get(Uuid::from_u128(1)).unwrap().status,
+            TransactionStatus::Confirmed
+        );
+        assert_eq!(monitor.schedule.len(), 1);
+
+        tokio::time::advance(POLL).await;
+        monitor.poll_once().await.unwrap();
+        assert_eq!(monitor.schedule.len(), 0);
+    }
+
+    /// Scenario from #642: 1024 submitted transactions behind a 200 ms receipt provider.
+    ///
+    /// One receipt becomes available mid-run; it must be noticed within the bounded delay, and the monitor must not
+    /// issue more receipt calls than the former implementation (fixed 100 ms sleep per check, 16 concurrent checks).
+    #[tokio::test(start_paused = true)]
+    async fn many_submitted_records_are_confirmed_within_bounded_delay_at_bounded_load() {
+        const RECORDS: u128 = 1024;
+        const LATENCY: Duration = Duration::from_millis(200);
+        const WINDOW: Duration = Duration::from_secs(120);
+
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new().with_receipt_latency(LATENCY);
+        let calls = provider.receipt_call_counter();
+        let statuses = provider.statuses.clone();
+        let mut watched_hash = Hash::default();
+        for id in 1..=RECORDS {
+            let record = submitted_record(id, Duration::ZERO);
+            if id == RECORDS / 2 {
+                watched_hash = record.transaction_hash;
+            }
+            store.insert(record).unwrap();
+        }
+
+        let monitor = Arc::new(TransactionMonitor::new(
+            store.clone(),
+            provider,
+            TransactionMonitorConfig::default(),
+            None::<Arc<NoSafeEnrichment>>,
+        ));
+        let task = tokio::spawn(monitor.clone().start());
+
+        // Let the first full round finish, then make the receipt available.
+        sleep(Duration::from_secs(40)).await;
+        statuses.insert(watched_hash, Some(true));
+        let available_at = Instant::now();
+
+        let watched_id = Uuid::from_u128(RECORDS / 2);
+        let noticed_after = loop {
+            if store.get(watched_id).unwrap().status == TransactionStatus::Confirmed {
+                break available_at.elapsed();
+            }
+            assert!(
+                available_at.elapsed() < Duration::from_secs(40),
+                "receipt was never noticed"
+            );
+            sleep(Duration::from_millis(100)).await;
+        };
+        assert!(
+            noticed_after <= Duration::from_secs(30),
+            "noticed after {noticed_after:?}"
+        );
+
+        let remaining = WINDOW.saturating_sub(Duration::from_secs(40) + noticed_after);
+        sleep(remaining).await;
+        task.abort();
+
+        // Old behaviour: a full pass over N records takes N / 16 * (RTT + 100 ms) plus the 5 s poll interval.
+        let old_pass = 5.0 + (RECORDS as f64 / 16.0) * (LATENCY.as_secs_f64() + 0.1);
+        let old_calls = (WINDOW.as_secs_f64() / old_pass * RECORDS as f64).ceil() as usize;
+        let new_calls = calls.load(Ordering::Relaxed);
+        assert!(
+            new_calls <= old_calls,
+            "{new_calls} calls in window exceeds old estimate {old_calls}"
+        );
     }
 
     fn create_monitor(
@@ -1380,7 +1690,6 @@ mod tests {
 
         let config = TransactionMonitorConfig {
             request_timeout: Duration::from_millis(50),
-            per_transaction_delay: Duration::ZERO,
             max_concurrent_checks: 2,
             ..Default::default()
         };
@@ -1417,7 +1726,6 @@ mod tests {
 
         let config = TransactionMonitorConfig {
             safe_inspection_timeout: Duration::from_millis(50),
-            per_transaction_delay: Duration::ZERO,
             ..Default::default()
         };
         let monitor = TransactionMonitor::new(
@@ -1507,7 +1815,6 @@ mod tests {
         safe_checker.add_safe(safe_address);
         let config = TransactionMonitorConfig {
             revert_reason_timeout: Duration::from_millis(50),
-            per_transaction_delay: Duration::ZERO,
             ..Default::default()
         };
         let monitor = TransactionMonitor::new(store.clone(), provider, config, Some(Arc::new(safe_checker)));
