@@ -2,8 +2,9 @@
 //! and parameters of client layers. The underlying HTTP transport layer is defined in `transport.rs`.
 //!
 //! Extended layers of RPC clients:
-//! - Replace the legacy retry backoff layer with the default [`RetryBackoffService`]. However the backoff calculation
-//!   still needs to be improved, as the number of retries is not passed to the `backoff_hint` method.
+//! - Replace the legacy retry backoff layer with [`InstrumentedRetryBackoffLayer`], which records the number of retries
+//!   per packet. The backoff calculation still needs to be improved, as the number of retries is not passed to the
+//!   `backoff_hint` method.
 //! - Add Metrics Layer
 //! - Add Snapshot Layer
 //! - Use tokio runtime for most of the tests
@@ -143,26 +144,22 @@ lazy_static::lazy_static! {
 /// - Transport error (e.g. connection timeout)
 /// - Serde error (some of these are treated as JSON RPC error above, if an error code can be obtained).
 ///
-/// The standard `RetryBackoffLayer` defines the following properties:
-/// - `max_rate_limit_retries`: (u32) The maximum number of retries for rate limit errors. Different from the legacy
-///   implementation, there is always an upper limit.
-/// - `initial_backoff`: (u64) The initial backoff in milliseconds
-/// - `compute_units_per_second`: (u64) The number of compute units per second for this service
+/// Only part of this policy is used by [`InstrumentedRetryBackoffLayer`]:
+/// - `retryable_json_rpc_errors` and `retryable_http_errors` (plus transport errors) decide whether a failure is
+///   retried, through [`RetryPolicy::should_retry`].
 ///
-/// The policy will make up to `max_retries` once a JSON RPC request fails.
-/// The minimum number of retries `min_retries` can be also specified and applies to any type of error regardless.
-/// Each retry `k > 0` will be separated by a delay of `initial_backoff * (1 + backoff_coefficient)^(k - 1)`,
-/// namely all the JSON RPC error codes specified in `retryable_json_rpc_errors` and all the HTTP errors
-/// specified in `retryable_http_errors`.
+/// The retry count, the fixed delay between retries and the compute-unit pacing come from the layer arguments
+/// (`max_rate_limit_retries`, `initial_backoff`, `compute_units_per_second`). [`RetryPolicy::backoff_hint`] currently
+/// returns `None`, so the delay is always the layer's `initial_backoff`. `min_retries`, `initial_backoff`,
+/// `backoff_coefficient`, `max_backoff`, `max_retry_queue_size` and `backoff_on_transport_errors` of this struct are
+/// kept for configuration compatibility but have no effect in this layer: there is no exponential backoff, and
+/// transport errors are retried with the same fixed delay as any other retryable error.
 ///
-/// The total wait time will be `(initial_backoff/backoff_coefficient) * ((1 + backoff_coefficient)^max_retries - 1)`.
-/// or `max_backoff`, whatever is lower.
-///
-/// Transport and connection errors (such as connection timeouts) are retried without backoff
-/// at a constant delay of `initial_backoff` if `backoff_on_transport_errors` is not set.
-///
-/// No more additional retries are allowed on new requests, if the maximum number of concurrent
-/// requests being retried has reached `max_retry_queue_size`.
+/// Batch retry semantics differ from alloy 2.5.0's `RetryBackoffLayer`, so the two layers are not interchangeable.
+/// A batch response is retried only when every item failed with a retryable error. A mixed batch (any item succeeded
+/// or failed with a non-retryable error) is returned intact after one attempt, and never contributes retries to the
+/// metric. Alloy instead retries when the first in-order item error is retryable, and drops the successful items once
+/// the retries are exhausted.
 #[serde_as]
 #[derive(Clone, Debug, PartialEq, smart_default::SmartDefault, Serialize, Deserialize, Validate)]
 pub struct DefaultRetryPolicy {
@@ -307,8 +304,9 @@ impl RetryPolicy for ZeroRetryPolicy {
     }
 }
 
-/// Retry layer that preserves Alloy's retry and compute-budget behavior while recording the
-/// number of retries for each completed JSON-RPC request.
+/// Retry layer that follows Alloy's retry and compute-budget behavior for single requests while
+/// recording the number of retries for each completed packet (one observation per single request,
+/// one labelled `batch` per batch). Batch retry semantics differ, see [`DefaultRetryPolicy`].
 #[derive(Debug, Clone)]
 pub struct InstrumentedRetryBackoffLayer<P> {
     max_rate_limit_retries: u32,
@@ -377,7 +375,7 @@ where
 /// This is not constructed directly; it is the layer's associated service type, produced by
 /// [`Layer::layer`] and named here only because it appears in that public signature. It retries
 /// requests the policy considers retryable, paces those retries against the provider's compute
-/// budget, and records the retry count for each completed request.
+/// budget, and records the retry count once for each completed packet.
 ///
 /// A batch response is retried as a whole only when every item failed with a retryable error.
 /// Otherwise the packet is returned intact and each call reads its own response, so a failing
