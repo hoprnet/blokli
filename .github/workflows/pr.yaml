@@ -53,7 +53,8 @@ jobs:
             ignore-semantic-pull-request
   label:
     name: Add labels
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    # Fork PRs get a read-only token and cannot write labels; stay green so the gate passes.
     continue-on-error: true
     runs-on: depot-ubuntu-24.04-2
     permissions:
@@ -142,9 +143,9 @@ jobs:
     # enable booleans turned off there: the work is skipped while each `Check / *`
     # still reports (green). Only Integration throughput does real work in the
     # queue (see merge-queue.yaml). `!= 'merge_group'` keeps PR behaviour intact.
-    uses: hoprnet/hopr-workflows/.github/workflows/checks.yaml@3ee95c480962bb3c1fc0061887da9ba735f537c7 # workflow-checks-v2.1.1
+    uses: hoprnet/hopr-workflows/.github/workflows/checks.yaml@43c833e72dffe4f2f3be60193733e5657f8aa0d7 # workflow-checks-v3.0.0
     with:
-      source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
+      repo_sha: ${{ github.event.pull_request.head.sha || github.sha }}
       cachix_cache_name: blokli
       format: ${{ github.event_name != 'merge_group' }}
       pre_commit: ${{ github.event_name != 'merge_group' }}
@@ -169,12 +170,12 @@ jobs:
     # Runs on merge_group too, but coverage is disabled there so `Test / Coverage /
     # Unit` reports (skipped) without re-running (see `checks`). The other Test
     # contexts are already skipped on every event.
-    uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@2f28adfb7c34a9f18087d8646e190b6aafcd4b52 # workflow-tests-v6.1.2
+    uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@43c833e72dffe4f2f3be60193733e5657f8aa0d7 # workflow-tests-v7.0.0
     permissions:
       contents: read
       id-token: write # Codecov OIDC upload in the coverage job
     with:
-      source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
+      repo_sha: ${{ github.event.pull_request.head.sha || github.sha }}
       cachix_cache_name: blokli
       enable_unit_tests: false
       enable_unit_coverage: ${{ github.event_name != 'merge_group' && needs.changes.outputs.rust == 'true' }}
@@ -245,12 +246,12 @@ jobs:
             runner: depot-macos-15
             build_command: nix build -L .#binary-bloklid-aarch64-darwin
             required_label: "binary:aarch64-darwin"
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@45221eb1aadfc5c46751306c5c7d6d291c8a24b3 # build-binaries-v3.1.2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@43c833e72dffe4f2f3be60193733e5657f8aa0d7 # build-binaries-v4.0.0
     permissions:
       contents: read
       id-token: write
     with:
-      source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
+      repo_sha: ${{ github.event.pull_request.head.sha || github.sha }}
       version_type: commit
       architecture: ${{ matrix.architecture }}
       cachix_cache_name: blokli
@@ -269,14 +270,13 @@ jobs:
     # skip input, so this stays skipped on merge_group; the required `Docker / *`
     # contexts are reported (green) by merge-queue-docker.yaml instead.
     if: ${{ !cancelled() && !failure() && github.event_name == 'pull_request' }}
-    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@25898d13dab1b3fbf4c33c394e7c581578a2b0d7 # build-docker-v3.2.0
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@43c833e72dffe4f2f3be60193733e5657f8aa0d7 # build-docker-v4.0.0
     needs: [changes, checks, tests, schema-validation, postgres-schema, build-binaries]
     permissions:
       contents: read
-      pull-requests: write
       id-token: write
     with:
-      source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
+      repo_sha: ${{ github.event.pull_request.head.sha || github.sha }}
       version_type: commit
       build_matrix: >-
         [
@@ -298,14 +298,13 @@ jobs:
     name: Docker anvil
     # Not a required check; skip in the merge queue.
     if: ${{ !cancelled() && !failure() && github.event_name == 'pull_request' }}
-    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@25898d13dab1b3fbf4c33c394e7c581578a2b0d7 # build-docker-v3.2.0
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@43c833e72dffe4f2f3be60193733e5657f8aa0d7 # build-docker-v4.0.0
     needs: [changes, checks, tests, schema-validation, postgres-schema, build-binaries]
     permissions:
       contents: read
-      pull-requests: write
       id-token: write
     with:
-      source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
+      repo_sha: ${{ github.event.pull_request.head.sha || github.sha }}
       version_type: commit
       build_matrix: >-
         [
@@ -357,4 +356,4 @@ jobs:
           # is false; `build-binaries` when the rust filter is false. The Docker
           # builds never skip on a pull request. A failed job reds the gate in
           # every case.
-          allowed-skips: ${{ github.event_name == 'merge_group' && 'validate-pr-title, label, checks, tests, schema-validation, postgres-schema, build-binaries, build-docker, build-docker-with-anvil' || format('schema-validation, postgres-schema{0}{1}', (github.event.pull_request.draft || needs.changes.outputs.rust != 'true') && ', tests' || '', needs.changes.outputs.rust != 'true' && ', build-binaries' || '') }}
+          allowed-skips: ${{ github.event_name == 'merge_group' && 'validate-pr-title, label, checks, tests, schema-validation, postgres-schema, build-binaries, build-docker, build-docker-with-anvil' || format('label, schema-validation, postgres-schema{0}{1}', (github.event.pull_request.draft || needs.changes.outputs.rust != 'true') && ', tests' || '', needs.changes.outputs.rust != 'true' && ', build-binaries' || '') }}
