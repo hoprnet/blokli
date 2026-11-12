@@ -246,9 +246,10 @@ jobs:
             runner: depot-macos-15
             build_command: nix build -L .#binary-bloklid-aarch64-darwin
             required_label: "binary:aarch64-darwin"
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@43c833e72dffe4f2f3be60193733e5657f8aa0d7 # build-binaries-v4.0.0
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@3df1022f4b852f1b7acd064123ce819258a62fe3 # build-binaries-v4.0.1
     permissions:
       contents: read
+      pull-requests: read
       id-token: write
     with:
       repo_sha: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -270,10 +271,11 @@ jobs:
     # skip input, so this stays skipped on merge_group; the required `Docker / *`
     # contexts are reported (green) by merge-queue-docker.yaml instead.
     if: ${{ !cancelled() && !failure() && github.event_name == 'pull_request' }}
-    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@43c833e72dffe4f2f3be60193733e5657f8aa0d7 # build-docker-v4.0.0
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@3df1022f4b852f1b7acd064123ce819258a62fe3 # build-docker-v4.0.1
     needs: [changes, checks, tests, schema-validation, postgres-schema, build-binaries]
     permissions:
       contents: read
+      pull-requests: read
       id-token: write
     with:
       repo_sha: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -298,10 +300,11 @@ jobs:
     name: Docker anvil
     # Not a required check; skip in the merge queue.
     if: ${{ !cancelled() && !failure() && github.event_name == 'pull_request' }}
-    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@43c833e72dffe4f2f3be60193733e5657f8aa0d7 # build-docker-v4.0.0
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@3df1022f4b852f1b7acd064123ce819258a62fe3 # build-docker-v4.0.1
     needs: [changes, checks, tests, schema-validation, postgres-schema, build-binaries]
     permissions:
       contents: read
+      pull-requests: read
       id-token: write
     with:
       repo_sha: ${{ github.event.pull_request.head.sha || github.sha }}
