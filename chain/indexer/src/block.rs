@@ -1603,7 +1603,7 @@ mod tests {
     use blokli_chain_rpc::BlockWithLogs;
     use blokli_chain_types::{ContractAddresses, chain_events::ChainEventType};
     use blokli_db::{
-        TargetDb, accounts::BlokliDbAccountOperations, db::BlokliDb, errors::DbSqlError, events::BlockPosition,
+        TargetDb, accounts::BlokliDbAccountOperations, db::BlokliDb, errors::DbSqlError,
         safe_contracts::BlokliDbSafeContractOperations,
     };
     use blokli_db_entity::{
