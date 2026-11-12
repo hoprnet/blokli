@@ -470,7 +470,19 @@ fn record_rpc_retries(label: &str, retry_count: u32) {
     }
 }
 
-#[cfg(not(all(feature = "telemetry", not(test))))]
+#[cfg(test)]
+thread_local! {
+    /// Observations recorded on the current thread, as `(label, retries)`. Tests run on a
+    /// current-thread runtime, so each test sees only its own observations.
+    static RECORDED_RETRIES: std::cell::RefCell<Vec<(String, u32)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+fn record_rpc_retries(label: &str, retry_count: u32) {
+    RECORDED_RETRIES.with(|recorded| recorded.borrow_mut().push((label.to_owned(), retry_count)));
+}
+
+#[cfg(not(any(test, feature = "telemetry")))]
 fn record_rpc_retries(_label: &str, _retry_count: u32) {}
 
 impl<S, P> Service<RequestPacket> for InstrumentedRetryBackoffService<S, P>
@@ -1272,7 +1284,26 @@ mod tests {
     use serde_json::json;
     use tempfile::{NamedTempFile, tempdir};
 
-    use crate::client::{DefaultRetryPolicy, InstrumentedRetryBackoffLayer, SnapshotRequestor, ZeroRetryPolicy};
+    use crate::client::{
+        DefaultRetryPolicy, InstrumentedRetryBackoffLayer, RECORDED_RETRIES, SnapshotRequestor, ZeroRetryPolicy,
+        compute_retry_queue_delay_secs,
+    };
+
+    fn recorded_retries() -> Vec<(String, u32)> {
+        RECORDED_RETRIES.with(|recorded| recorded.borrow().clone())
+    }
+
+    #[test]
+    fn test_compute_retry_queue_delay_secs() {
+        // 330 compute units per second allows 16 requests per second.
+        assert_eq!(compute_retry_queue_delay_secs(330, 16, 100), 0);
+        assert_eq!(compute_retry_queue_delay_secs(330, 17, 100), 1);
+        assert_eq!(compute_retry_queue_delay_secs(330, 32, 100), 2);
+        // A request near the front of the queue waits less than the queue length suggests.
+        assert_eq!(compute_retry_queue_delay_secs(330, 32, 16), 1);
+        // A tiny budget never divides by zero.
+        assert_eq!(compute_retry_queue_delay_secs(0, 3, 3), 3);
+    }
 
     #[tokio::test]
     async fn test_client_should_fail_on_malformed_response() {
@@ -1684,6 +1715,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_single_request_records_its_retries_under_its_method() -> anyhow::Result<()> {
+        let mut server = mockito::Server::new_async().await;
+
+        let limited = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"jsonrpc":"2.0","id":0,"error":{"code":-32005,"message":"limit exceeded"}}"#)
+            .expect(1)
+            .create();
+        let ok = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"jsonrpc":"2.0","id":0,"result":"0x7"}"#)
+            .expect(1)
+            .create();
+
+        let transport_client = ReqwestTransport::new(url::Url::parse(&server.url())?);
+        let rpc_client = ClientBuilder::default()
+            .layer(InstrumentedRetryBackoffLayer::new_with_policy(
+                2,
+                1,
+                100,
+                DefaultRetryPolicy::default(),
+            ))
+            .transport(transport_client.clone(), transport_client.guess_local());
+        let provider = ProviderBuilder::new().connect_client(rpc_client);
+
+        let block = provider.raw_request::<(), U64>("eth_blockNumber".into(), ()).await?;
+
+        assert_eq!(block, U64::from(7));
+        limited.assert();
+        ok.assert();
+        assert_eq!(recorded_retries(), vec![("eth_blockNumber".to_owned(), 1)]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_batch_should_keep_successful_items_when_another_item_fails() -> anyhow::Result<()> {
         let mut server = mockito::Server::new_async().await;
 
@@ -1807,6 +1878,7 @@ mod tests {
             Some(-32000)
         );
         m.assert();
+        assert_eq!(recorded_retries(), vec![("batch".to_owned(), 0)]);
 
         Ok(())
     }
@@ -1867,6 +1939,7 @@ mod tests {
         assert!(first.await.is_err());
         assert!(second.await.is_err());
         m.assert();
+        assert_eq!(recorded_retries(), vec![("batch".to_owned(), 2)]);
 
         Ok(())
     }
