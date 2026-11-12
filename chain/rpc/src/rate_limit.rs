@@ -142,6 +142,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use hopr_bindings::exports::alloy::rpc::json_rpc::{Request, Response, ResponsePayload};
     use serde_json::value::RawValue;
 
@@ -212,7 +214,7 @@ mod tests {
 
     #[derive(Clone)]
     struct CountingService {
-        calls: Arc<std::sync::atomic::AtomicUsize>,
+        calls: Arc<AtomicUsize>,
     }
 
     impl Service<RequestPacket> for CountingService {
@@ -225,7 +227,7 @@ mod tests {
         }
 
         fn call(&mut self, request: RequestPacket) -> Self::Future {
-            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.calls.fetch_add(1, Ordering::SeqCst);
             let id = request.requests().first().map(|r| r.id().clone());
             Box::pin(async move {
                 let id = id.expect("request id");
@@ -243,7 +245,7 @@ mod tests {
     }
 
     async fn run_calls(layer: &RateLimitLayer, count: usize) -> (usize, Duration) {
-        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls = Arc::new(AtomicUsize::new(0));
         let service = layer.layer(CountingService { calls: calls.clone() });
         let started = Instant::now();
         let futures = (0..count).map(|_| {
@@ -253,7 +255,7 @@ mod tests {
         for result in futures::future::join_all(futures).await {
             result.expect("call succeeds");
         }
-        (calls.load(std::sync::atomic::Ordering::SeqCst), started.elapsed())
+        (calls.load(Ordering::SeqCst), started.elapsed())
     }
 
     #[tokio::test]
