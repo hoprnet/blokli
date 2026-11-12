@@ -260,6 +260,29 @@ pub struct TransactionMonitorConfig {
     pub enable_revert_reason_tracing: bool,
 }
 
+impl TransactionMonitorConfig {
+    /// Rejects values that would make every check time out or stall the monitor.
+    ///
+    /// # Errors
+    /// Returns a message naming the offending `[api.transactions]` key.
+    pub fn validate(&self) -> Result<(), String> {
+        let durations = [
+            ("request_timeout", self.request_timeout),
+            ("safe_inspection_timeout", self.safe_inspection_timeout),
+            ("revert_reason_timeout", self.revert_reason_timeout),
+        ];
+        for (key, value) in durations {
+            if value.is_zero() {
+                return Err(format!("api.transactions.{key} must be greater than zero"));
+            }
+        }
+        if self.max_concurrent_checks == 0 {
+            return Err("api.transactions.max_concurrent_checks must be greater than zero".to_string());
+        }
+        Ok(())
+    }
+}
+
 /// Translate a `0` limit into an effectively unbounded one.
 ///
 /// Tokio's channel rejects a zero buffer capacity, so unbounded is expressed as the
@@ -1272,6 +1295,35 @@ mod tests {
             new_calls <= old_calls,
             "{new_calls} calls in window exceeds old estimate {old_calls}"
         );
+    }
+
+    #[test]
+    fn config_validation_accepts_defaults() {
+        assert!(TransactionMonitorConfig::default().validate().is_ok());
+    }
+
+    #[test]
+    fn config_validation_rejects_zero_values() {
+        let configs = [
+            TransactionMonitorConfig {
+                request_timeout: Duration::ZERO,
+                ..Default::default()
+            },
+            TransactionMonitorConfig {
+                safe_inspection_timeout: Duration::ZERO,
+                ..Default::default()
+            },
+            TransactionMonitorConfig {
+                revert_reason_timeout: Duration::ZERO,
+                ..Default::default()
+            },
+            TransactionMonitorConfig {
+                max_concurrent_checks: 0,
+                ..Default::default()
+            },
+        ];
+        let errors: Vec<String> = configs.iter().map(|c| c.validate().unwrap_err()).collect();
+        insta::assert_yaml_snapshot!(errors);
     }
 
     fn create_monitor(

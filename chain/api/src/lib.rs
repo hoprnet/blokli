@@ -105,6 +105,9 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
                 "Curvy indexing is enabled but the Curvy Aggregator address is not configured".to_string(),
             ));
         }
+        transaction_monitor_config
+            .validate()
+            .map_err(BlokliChainError::Configuration)?;
         // TODO(#7140): replace this DefaultRetryPolicy with a custom one that computes backoff with the number of
         // retries
         let rpc_http_retry_policy = DefaultRetryPolicy::default();
