@@ -2622,6 +2622,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_process_block_fetches_safe_transactions_in_one_batched_call() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe = Address::new(b"block test safe addr");
+        let module = Address::new(b"block test module ad");
+        db.create_safe_contract(None, safe, module, Address::new(b"block test node addr"), 1, 0, 0)
+            .await?;
+
+        let logs = (0..3)
+            .map(|log_index| {
+                safe_block_log(
+                    ExecutionFromModuleFailure {
+                        module: AlloyAddress::from_hopr_address(module),
+                    },
+                    safe,
+                    log_index,
+                )
+            })
+            .collect::<Vec<_>>();
+        let expected_hashes = logs.iter().map(|log| Hash::from(log.tx_hash)).collect::<HashSet<_>>();
+
+        // The block's three Safe failures need three transactions: one batched request for all of
+        // them, issued by the pre-fetch, and no per-hash lookup at all.
+        let mut rpc = MockHoprIndexerOps::new();
+        rpc.expect_get_transaction_bytes_batch()
+            .times(1)
+            .withf(move |tx_hashes| {
+                tx_hashes.len() == expected_hashes.len() && tx_hashes.iter().all(|hash| expected_hashes.contains(hash))
+            })
+            .returning(|tx_hashes| tx_hashes.iter().map(|_| Ok(Vec::new())).collect());
+        rpc.expect_get_transaction_bytes().never();
+        let handlers = safe_block_handlers(rpc, &db);
+
+        assert!(
+            prefetch_and_process_safe_block(&db, &handlers, logs.clone())
+                .await?
+                .is_some()
+        );
+
+        for log in &logs {
+            assert_eq!(
+                db.get_log(log.block_number, log.tx_index, log.log_index)
+                    .await?
+                    .processed,
+                Some(true)
+            );
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_process_block_fallback_reuses_the_block_prefetch() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let known_safe = Address::new(b"block test safe addr");
