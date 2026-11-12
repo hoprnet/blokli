@@ -12,11 +12,12 @@ This is an earlier warning signal than [Blokli RPC Failure Rate High](blokli-rpc
 several retries do not count as `result="failure"`, but a rising retry count still indicates the RPC provider is flaky or being
 rate-limited, and is a leading indicator of an incoming failure-rate or latency spike.
 
-**How the metric is recorded**: `InstrumentedRetryBackoffLayer` (`chain/rpc/src/client.rs`, wired in `chain/api/src/lib.rs`) observes
-`blokli_retries_per_rpc_call` once per completed JSON-RPC request, labelled by method, with the number of retries that request took. For a
-batch, every method in the batch is observed with the retry count of the batch as a whole. The layer allows at most 2 retries per request
-(`chain/api/src/lib.rs`), so the p95 cannot exceed the default `thresholdRetries` of 3: lower the threshold below 2 for the alert to be able
-to fire.
+**How the metric is recorded**: `InstrumentedRetryBackoffLayer` (`chain/rpc/src/client.rs`, wired only in `chain/api/src/lib.rs`; the standalone
+`api` client still uses alloy's layer) observes `blokli_retries_per_rpc_call` once per packet: a single request is labelled by its method, a
+batch is one observation labelled `batch` with the retry count of the batch as a whole. A mixed batch (any item succeeded or failed with a
+non-retryable error) is returned intact after one attempt and never contributes retries. The layer allows at most 2 retries per request
+(`chain/api/src/lib.rs`), so observed values are 0..2 and, since the alert uses a strict `>`, the p95 cannot exceed the default
+`thresholdRetries` of 3: set it to 1 for the alert to be able to fire.
 
 **Known gap — fixed backoff**: `TODO(#7140)` (`chain/api/src/lib.rs`, `chain/rpc/src/client.rs`) is still open: alloy's
 `RetryPolicy::backoff_hint` doesn't receive the current retry count, so retries use a fixed delay instead of the configured exponential
