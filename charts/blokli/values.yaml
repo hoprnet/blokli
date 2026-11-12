@@ -337,7 +337,7 @@ monitoring:
         ##
         for: 10m
       rpcRetriesHigh:
-        ## @param monitoring.prometheusRule.rules.rpcRetriesHigh.enabled Enable the blokli-rpc-retries-high alert. Defaults to disabled. blokli_retries_per_rpc_call is recorded for every RPC request, but chain/api/src/lib.rs caps retries at 2 per request, so the alert only fires with thresholdRetries below 2. See runbooks/blokli-rpc-retries-high.md
+        ## @param monitoring.prometheusRule.rules.rpcRetriesHigh.enabled Enable the blokli-rpc-retries-high alert. Defaults to disabled. blokli_retries_per_rpc_call is recorded only for the client wired in chain/api/src/lib.rs (the standalone api client still uses alloy's layer), once per packet (a batch is one observation labelled batch). That client caps retries at 2 per request, so observed values are 0..2 and, as the alert uses a strict >, only thresholdRetries of 1 (or 0) can fire. See runbooks/blokli-rpc-retries-high.md
         ##
         enabled: false
         ## @param monitoring.prometheusRule.rules.rpcRetriesHigh.thresholdRetries p95 retries per RPC call before firing
