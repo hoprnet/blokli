@@ -167,8 +167,14 @@ pub trait BlokliDbLogOperations {
 
     /// Updates checksums for log entries in the database.
     ///
+    /// Logs without a checksum are processed in log order, in chunks that are each read, checksummed
+    /// and committed in their own transaction, chained onto the last checksum already stored. Must not
+    /// be called inside an open transaction.
+    ///
     /// # Returns
     ///
-    /// A `Result` which is `Ok(Hash)` if the operation succeeds or an error if it fails.
+    /// `Ok(Hash)` with the checksum of the last log, or an error if reading or writing a chunk fails.
+    /// On error the failing chunk is rolled back while the chunks before it stay committed, so the
+    /// checksummed logs remain a valid prefix of the chain and the next call resumes after it.
     async fn update_logs_checksums(&self) -> Result<Hash>;
 }
