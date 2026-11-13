@@ -34,8 +34,7 @@ pub mod topics {
     };
 
     use crate::custom_abis::safe_contract_events::SafeContract::{
-        AddedOwner, ChangedThreshold, ExecutionFailure, ExecutionFromModuleFailure, ExecutionSuccess, RemovedOwner,
-        SafeSetup,
+        AddedOwner, ChangedThreshold, ExecutionFailure, ExecutionSuccess, RemovedOwner, SafeSetup,
     };
 
     pub fn channel() -> Vec<B256> {
@@ -150,7 +149,6 @@ pub mod topics {
             ChangedThreshold::SIGNATURE_HASH,
             ExecutionSuccess::SIGNATURE_HASH,
             ExecutionFailure::SIGNATURE_HASH,
-            ExecutionFromModuleFailure::SIGNATURE_HASH,
         ]
     }
 
@@ -174,5 +172,20 @@ pub mod topics {
     /// ```
     pub fn module_implementation() -> Vec<B256> {
         vec![]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use hopr_bindings::exports::alloy::sol_types::SolEvent;
+
+    use super::topics;
+    use crate::custom_abis::safe_contract_events::SafeContract::{ExecutionFailure, ExecutionFromModuleFailure};
+
+    #[test]
+    fn safe_contract_topics_exclude_execution_from_module_failure() {
+        let topics = topics::safe_contract();
+        assert!(!topics.contains(&ExecutionFromModuleFailure::SIGNATURE_HASH));
+        assert!(topics.contains(&ExecutionFailure::SIGNATURE_HASH));
     }
 }
