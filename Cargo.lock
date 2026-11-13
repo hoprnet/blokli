@@ -2041,6 +2041,7 @@ dependencies = [
  "blokli-db",
  "blokli-db-entity",
  "blokli-db-migration",
+ "blokli-tx",
  "chrono",
  "clap",
  "criterion",
@@ -2100,7 +2101,9 @@ dependencies = [
  "blokli-chain-rpc",
  "blokli-chain-types",
  "blokli-db",
+ "blokli-tx",
  "chrono",
+ "curvy-bindings",
  "dashmap",
  "env_logger",
  "futures",
@@ -2285,6 +2288,18 @@ dependencies = [
  "hex",
  "hopr-bindings",
  "hopr-types",
+]
+
+[[package]]
+name = "blokli-tx"
+version = "0.4.0"
+dependencies = [
+ "alloy-sol-types",
+ "hex",
+ "hopr-bindings",
+ "hopr-types",
+ "insta",
+ "thiserror",
 ]
 
 [[package]]
