@@ -263,6 +263,7 @@ pub struct Config {
     #[serde(default = "default_rpc_url")]
     pub rpc_url: String,
 
+    /// Hard cap on RPC requests per second (`None` = 100, `Some(0)` = unlimited).
     #[serde(default)]
     pub max_rpc_requests_per_sec: Option<u32>,
 
@@ -384,6 +385,22 @@ impl Config {
         output.push_str(&format!(
             "  api.transactions.max_concurrent_trace_jobs: {}\n",
             self.api.transactions.max_concurrent_trace_jobs
+        ));
+        output.push_str(&format!(
+            "  api.transactions.request_timeout: {:?}\n",
+            self.api.transactions.request_timeout
+        ));
+        output.push_str(&format!(
+            "  api.transactions.safe_inspection_timeout: {:?}\n",
+            self.api.transactions.safe_inspection_timeout
+        ));
+        output.push_str(&format!(
+            "  api.transactions.revert_reason_timeout: {:?}\n",
+            self.api.transactions.revert_reason_timeout
+        ));
+        output.push_str(&format!(
+            "  api.transactions.max_concurrent_checks: {}\n",
+            self.api.transactions.max_concurrent_checks
         ));
         output.push_str(&format!(
             "  api.transactions.enable_revert_reason_tracing: {}\n",
@@ -577,6 +594,27 @@ pub struct TransactionConfig {
     #[serde(default = "default_max_concurrent_trace_jobs")]
     pub max_concurrent_trace_jobs: usize,
 
+    /// Maximum time allowed for one transaction receipt RPC request. Must be greater than `0s`.
+    #[default(_code = "Duration::from_secs(30)")]
+    #[serde(default = "default_transaction_request_timeout", with = "humantime_serde")]
+    pub request_timeout: Duration,
+
+    /// Maximum time allowed to determine the inner outcome of a confirmed Safe transaction.
+    /// Must be greater than `0s`.
+    #[default(_code = "Duration::from_secs(30)")]
+    #[serde(default = "default_safe_inspection_timeout", with = "humantime_serde")]
+    pub safe_inspection_timeout: Duration,
+
+    /// Maximum time allowed for one optional Safe revert-reason trace. Must be greater than `0s`.
+    #[default(_code = "Duration::from_secs(30)")]
+    #[serde(default = "default_revert_reason_timeout", with = "humantime_serde")]
+    pub revert_reason_timeout: Duration,
+
+    /// Maximum number of transaction receipt checks running concurrently. Must be greater than `0`.
+    #[default(16)]
+    #[serde(default = "default_max_concurrent_checks")]
+    pub max_concurrent_checks: usize,
+
     /// Whether to request optional Safe revert reasons through debug tracing.
     #[default(true)]
     #[serde(default = "default_true")]
@@ -699,6 +737,22 @@ fn default_max_submitted_transactions() -> usize {
 
 fn default_max_submitted_transactions_per_identity() -> usize {
     64
+}
+
+fn default_transaction_request_timeout() -> Duration {
+    Duration::from_secs(30)
+}
+
+fn default_safe_inspection_timeout() -> Duration {
+    Duration::from_secs(30)
+}
+
+fn default_revert_reason_timeout() -> Duration {
+    Duration::from_secs(30)
+}
+
+fn default_max_concurrent_checks() -> usize {
+    16
 }
 
 fn default_terminal_transaction_ttl() -> Duration {
@@ -1079,9 +1133,84 @@ mod tests {
         assert_eq!(config.api.max_query_depth, 8);
         assert_eq!(config.api.max_query_complexity, 500);
 
+        // Transaction monitor limits documented in the example
+        assert_eq!(config.api.transactions.request_timeout, Duration::from_secs(30));
+        assert_eq!(config.api.transactions.safe_inspection_timeout, Duration::from_secs(30));
+        assert_eq!(config.api.transactions.revert_reason_timeout, Duration::from_secs(30));
+        assert_eq!(config.api.transactions.max_concurrent_checks, 16);
+
         assert!(config.telemetry.otlp_endpoint.is_some());
         assert_eq!(config.telemetry.metric_export_interval, Duration::from_secs(60));
         assert_eq!(config.telemetry.otlp_signals, "metrics");
+    }
+
+    const MONITOR_LIMITS_DB: &str = r#"
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+    "#;
+
+    #[test]
+    fn test_transaction_monitor_limits_default_when_absent() {
+        let config: Config = toml::from_str(MONITOR_LIMITS_DB).expect("config parses");
+        let tx = &config.api.transactions;
+        let observed = (
+            tx.request_timeout,
+            tx.safe_inspection_timeout,
+            tx.revert_reason_timeout,
+            tx.max_concurrent_checks,
+        );
+        assert_eq!(
+            observed,
+            (
+                Duration::from_secs(30),
+                Duration::from_secs(30),
+                Duration::from_secs(30),
+                16
+            )
+        );
+        // An omitted rate limit stays `None`, which resolves to the 100 req/s default downstream.
+        assert_eq!(config.max_rpc_requests_per_sec, None);
+
+        // The serde defaults and `Default` must agree.
+        let default = TransactionConfig::default();
+        assert_eq!(default.request_timeout, tx.request_timeout);
+        assert_eq!(default.max_concurrent_checks, tx.max_concurrent_checks);
+    }
+
+    #[test]
+    fn test_transaction_monitor_limits_are_parsed() {
+        let config: Config = toml::from_str(&format!(
+            r#"
+            {MONITOR_LIMITS_DB}
+            [api.transactions]
+            request_timeout = "5s"
+            safe_inspection_timeout = "1m"
+            revert_reason_timeout = "250ms"
+            max_concurrent_checks = 4
+            "#
+        ))
+        .expect("config parses");
+        let tx = &config.api.transactions;
+        assert_eq!(tx.request_timeout, Duration::from_secs(5));
+        assert_eq!(tx.safe_inspection_timeout, Duration::from_secs(60));
+        assert_eq!(tx.revert_reason_timeout, Duration::from_millis(250));
+        assert_eq!(tx.max_concurrent_checks, 4);
+    }
+
+    #[test]
+    fn test_transaction_monitor_limits_reject_invalid_values() {
+        let invalid = [
+            r#"request_timeout = "soon""#,
+            r#"max_concurrent_checks = -1"#,
+            r#"max_concurrent_checks = "many""#,
+        ];
+        for entry in invalid {
+            let parsed: Result<Config, _> =
+                toml::from_str(&format!("{MONITOR_LIMITS_DB}\n[api.transactions]\n{entry}\n"));
+            assert!(parsed.is_err(), "{entry} must not parse");
+        }
     }
 
     #[test]

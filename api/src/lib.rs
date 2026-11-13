@@ -30,6 +30,7 @@ use blokli_chain_api::{
 };
 use blokli_chain_rpc::{
     client::{DefaultRetryPolicy, MetricsLayer},
+    rate_limit::{RateLimitLayer, resolve_max_requests_per_sec},
     rpc::{RpcOperations, RpcOperationsConfig},
     transport::ReqwestClient,
 };
@@ -112,13 +113,16 @@ pub async fn start_server(network: String, finality: u16, config: ApiConfig) -> 
         ))
     })?;
     let transport_client = ReqwestTransport::new(rpc_url);
+    // Standalone mode has no rate setting: apply the default cap.
+    let max_requests_per_sec = resolve_max_requests_per_sec(None);
     let rpc_client = ClientBuilder::default()
         .layer(RetryBackoffLayer::new_with_policy(
             2,
             100,
-            100,
+            max_requests_per_sec.map_or(u64::MAX, |rate| u64::from(rate.get())),
             DefaultRetryPolicy::default(),
         ))
+        .layer(RateLimitLayer::new(max_requests_per_sec))
         .layer(MetricsLayer)
         .transport(transport_client.clone(), transport_client.guess_local());
 

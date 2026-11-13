@@ -95,7 +95,8 @@ pub struct ChainConfig {
     pub block_range_reprobe_interval: u32,
     /// Starting block number for channel contract (where indexing should begin)
     pub channel_contract_deploy_block: u32,
-    /// Maximum RPC requests per second (None = default, Some(0) = unlimited)
+    /// Hard cap on RPC requests per second, enforced by a token bucket on the shared RPC client
+    /// (None = default of 100, Some(0) = unlimited). Retries count towards the cap.
     pub max_requests_per_sec: Option<u32>,
     /// Expected block time in seconds (network-specific, affects indexer polling frequency)
     pub expected_block_time: u64,
