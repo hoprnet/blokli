@@ -2,8 +2,9 @@
 //! and parameters of client layers. The underlying HTTP transport layer is defined in `transport.rs`.
 //!
 //! Extended layers of RPC clients:
-//! - Replace the legacy retry backoff layer with the default [`RetryBackoffService`]. However the backoff calculation
-//!   still needs to be improved, as the number of retries is not passed to the `backoff_hint` method.
+//! - Replace the legacy retry backoff layer with [`InstrumentedRetryBackoffLayer`], which records the number of retries
+//!   per packet. The backoff calculation still needs to be improved, as the number of retries is not passed to the
+//!   `backoff_hint` method.
 //! - Add Metrics Layer
 //! - Add Snapshot Layer
 //! - Use tokio runtime for most of the tests
@@ -17,13 +18,14 @@ use std::{
     io::{BufWriter, Error, ErrorKind, Write},
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
     },
     task::{Context, Poll},
     time::{Duration, Instant},
 };
 
 use futures::{FutureExt, StreamExt};
+use futures_timer::Delay;
 /// as GasOracleMiddleware middleware is migrated to GasFiller
 use hopr_bindings::exports::alloy::eips::eip1559::Eip1559Estimation;
 use hopr_bindings::exports::alloy::{
@@ -39,7 +41,7 @@ use hopr_bindings::exports::alloy::{
     },
     rpc::{
         client::ClientBuilder,
-        json_rpc::{ErrorPayload, RequestPacket, ResponsePacket, ResponsePayload},
+        json_rpc::{ErrorPayload, RequestPacket, Response, ResponsePacket, ResponsePayload},
     },
     signers::local::PrivateKeySigner,
     transports::{
@@ -142,26 +144,22 @@ lazy_static::lazy_static! {
 /// - Transport error (e.g. connection timeout)
 /// - Serde error (some of these are treated as JSON RPC error above, if an error code can be obtained).
 ///
-/// The standard `RetryBackoffLayer` defines the following properties:
-/// - `max_rate_limit_retries`: (u32) The maximum number of retries for rate limit errors. Different from the legacy
-///   implementation, there is always an upper limit.
-/// - `initial_backoff`: (u64) The initial backoff in milliseconds
-/// - `compute_units_per_second`: (u64) The number of compute units per second for this service
+/// Only part of this policy is used by [`InstrumentedRetryBackoffLayer`]:
+/// - `retryable_json_rpc_errors` and `retryable_http_errors` (plus transport errors) decide whether a failure is
+///   retried, through [`RetryPolicy::should_retry`].
 ///
-/// The policy will make up to `max_retries` once a JSON RPC request fails.
-/// The minimum number of retries `min_retries` can be also specified and applies to any type of error regardless.
-/// Each retry `k > 0` will be separated by a delay of `initial_backoff * (1 + backoff_coefficient)^(k - 1)`,
-/// namely all the JSON RPC error codes specified in `retryable_json_rpc_errors` and all the HTTP errors
-/// specified in `retryable_http_errors`.
+/// The retry count, the fixed delay between retries and the compute-unit pacing come from the layer arguments
+/// (`max_rate_limit_retries`, `initial_backoff`, `compute_units_per_second`). [`RetryPolicy::backoff_hint`] currently
+/// returns `None`, so the delay is always the layer's `initial_backoff`. `min_retries`, `initial_backoff`,
+/// `backoff_coefficient`, `max_backoff`, `max_retry_queue_size` and `backoff_on_transport_errors` of this struct are
+/// kept for configuration compatibility but have no effect in this layer: there is no exponential backoff, and
+/// transport errors are retried with the same fixed delay as any other retryable error.
 ///
-/// The total wait time will be `(initial_backoff/backoff_coefficient) * ((1 + backoff_coefficient)^max_retries - 1)`.
-/// or `max_backoff`, whatever is lower.
-///
-/// Transport and connection errors (such as connection timeouts) are retried without backoff
-/// at a constant delay of `initial_backoff` if `backoff_on_transport_errors` is not set.
-///
-/// No more additional retries are allowed on new requests, if the maximum number of concurrent
-/// requests being retried has reached `max_retry_queue_size`.
+/// Batch retry semantics differ from alloy 2.5.0's `RetryBackoffLayer`, so the two layers are not interchangeable.
+/// A batch response is retried only when every item failed with a retryable error. A mixed batch (any item succeeded
+/// or failed with a non-retryable error) is returned intact after one attempt, and never contributes retries to the
+/// metric. Alloy instead retries when the first in-order item error is retryable, and drops the successful items once
+/// the retries are exhausted.
 #[serde_as]
 #[derive(Clone, Debug, PartialEq, smart_default::SmartDefault, Serialize, Deserialize, Validate)]
 pub struct DefaultRetryPolicy {
@@ -303,6 +301,267 @@ impl RetryPolicy for ZeroRetryPolicy {
 
     fn backoff_hint(&self, _error: &TransportError) -> Option<Duration> {
         None
+    }
+}
+
+/// Retry layer that follows Alloy's retry and compute-budget behavior for single requests while
+/// recording the number of retries for each completed packet (one observation per single request,
+/// one labelled `batch` per batch). Batch retry semantics differ, see [`DefaultRetryPolicy`].
+#[derive(Debug, Clone)]
+pub struct InstrumentedRetryBackoffLayer<P> {
+    max_rate_limit_retries: u32,
+    initial_backoff: u64,
+    compute_units_per_second: u64,
+    policy: P,
+}
+
+impl<P> InstrumentedRetryBackoffLayer<P> {
+    /// Builds the layer from an explicit retry policy.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_rate_limit_retries` - How many times a retryable request is retried before failing
+    /// * `initial_backoff` - Fallback delay in milliseconds when the policy offers no backoff hint
+    /// * `compute_units_per_second` - Provider compute budget used to pace queued retries
+    /// * `policy` - Decides which transport errors are worth retrying
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # use blokli_chain_rpc::client::{DefaultRetryPolicy, InstrumentedRetryBackoffLayer};
+    /// let layer = InstrumentedRetryBackoffLayer::new_with_policy(
+    ///     5,
+    ///     100,
+    ///     100,
+    ///     DefaultRetryPolicy::default(),
+    /// );
+    /// let client = ClientBuilder::default().layer(layer).transport(transport, false);
+    /// ```
+    pub const fn new_with_policy(
+        max_rate_limit_retries: u32,
+        initial_backoff: u64,
+        compute_units_per_second: u64,
+        policy: P,
+    ) -> Self {
+        Self {
+            max_rate_limit_retries,
+            initial_backoff,
+            compute_units_per_second,
+            policy,
+        }
+    }
+}
+
+impl<S, P> Layer<S> for InstrumentedRetryBackoffLayer<P>
+where
+    P: RetryPolicy + Clone,
+{
+    type Service = InstrumentedRetryBackoffService<S, P>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        InstrumentedRetryBackoffService {
+            inner,
+            max_rate_limit_retries: self.max_rate_limit_retries,
+            initial_backoff: self.initial_backoff,
+            compute_units_per_second: self.compute_units_per_second,
+            policy: self.policy.clone(),
+            requests_enqueued: Arc::new(AtomicU32::new(0)),
+        }
+    }
+}
+
+/// The [`tower::Service`] that [`InstrumentedRetryBackoffLayer`] wraps around a transport.
+///
+/// This is not constructed directly; it is the layer's associated service type, produced by
+/// [`Layer::layer`] and named here only because it appears in that public signature. It retries
+/// requests the policy considers retryable, paces those retries against the provider's compute
+/// budget, and records the retry count once for each completed packet.
+///
+/// A batch response is retried as a whole only when every item failed with a retryable error.
+/// Otherwise the packet is returned intact and each call reads its own response, so a failing
+/// item does not fail the rest of the batch. Retryable item errors in such a mixed batch are not
+/// retried and reach their calls as is.
+///
+/// # Examples
+///
+/// ```ignore
+/// # use blokli_chain_rpc::client::{DefaultRetryPolicy, InstrumentedRetryBackoffLayer};
+/// // Obtained by applying the layer, never built by hand:
+/// let client = ClientBuilder::default()
+///     .layer(InstrumentedRetryBackoffLayer::new_with_policy(5, 100, 100, DefaultRetryPolicy::default()))
+///     .transport(transport, false);
+/// ```
+#[derive(Debug, Clone)]
+pub struct InstrumentedRetryBackoffService<S, P> {
+    inner: S,
+    max_rate_limit_retries: u32,
+    initial_backoff: u64,
+    compute_units_per_second: u64,
+    policy: P,
+    requests_enqueued: Arc<AtomicU32>,
+}
+
+#[derive(Debug)]
+struct QueuedRetryRequest {
+    requests_enqueued: Arc<AtomicU32>,
+}
+
+impl QueuedRetryRequest {
+    fn new(requests_enqueued: Arc<AtomicU32>) -> (Self, u64) {
+        let ahead_in_queue = requests_enqueued.fetch_add(1, Ordering::SeqCst) as u64;
+        (Self { requests_enqueued }, ahead_in_queue)
+    }
+}
+
+impl Drop for QueuedRetryRequest {
+    fn drop(&mut self) {
+        self.requests_enqueued.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+fn compute_retry_queue_delay_secs(
+    compute_units_per_second: u64,
+    current_queued_requests: u64,
+    ahead_in_queue: u64,
+) -> u64 {
+    const AVERAGE_REQUEST_COST: u64 = 20;
+
+    let request_capacity_per_second = compute_units_per_second.saturating_div(AVERAGE_REQUEST_COST).max(1);
+    if current_queued_requests > request_capacity_per_second {
+        current_queued_requests
+            .min(ahead_in_queue)
+            .saturating_div(request_capacity_per_second)
+    } else {
+        0
+    }
+}
+
+/// Returns the error to retry a batch response on, or `None` to hand the packet back as is.
+///
+/// A batch is retried only when every item failed with a retryable error, which is what a
+/// rate-limited batch looks like. As soon as one item succeeded or failed with a non-retryable
+/// error, the packet is returned intact so each call reads its own response: retrying would
+/// resend the items that already got an answer, and exhausting the retries would replace their
+/// results with the retry error. Checking every item keeps the outcome independent of the
+/// order in which the provider lists them.
+fn retryable_batch_error<P: RetryPolicy>(policy: &P, items: &[Response]) -> Option<TransportError> {
+    let mut first_error = None;
+    for item in items {
+        let error = TransportError::ErrorResp(item.payload.as_error()?.clone());
+        if !policy.should_retry(&error) {
+            return None;
+        }
+        first_error.get_or_insert(error);
+    }
+    first_error
+}
+
+/// Label under which a batch packet is recorded.
+const BATCH_METRIC_LABEL: &str = "batch";
+
+/// Records the retries of one packet: once per packet, labelled by method for a single request
+/// and by [`BATCH_METRIC_LABEL`] for a batch.
+#[cfg(all(feature = "telemetry", not(test)))]
+fn record_rpc_retries(label: &str, retry_count: u32) {
+    if let Some(metric) = METRIC_RETRIES_PER_RPC_CALL.as_ref() {
+        metric.observe(&[label], f64::from(retry_count));
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Observations recorded on the current thread, as `(label, retries)`. Tests run on a
+    /// current-thread runtime, so each test sees only its own observations.
+    static RECORDED_RETRIES: std::cell::RefCell<Vec<(String, u32)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+fn record_rpc_retries(label: &str, retry_count: u32) {
+    RECORDED_RETRIES.with(|recorded| recorded.borrow_mut().push((label.to_owned(), retry_count)));
+}
+
+#[cfg(not(any(test, feature = "telemetry")))]
+fn record_rpc_retries(_label: &str, _retry_count: u32) {}
+
+impl<S, P> Service<RequestPacket> for InstrumentedRetryBackoffService<S, P>
+where
+    S: Service<RequestPacket, Future = TransportFut<'static>, Error = TransportError> + Send + 'static + Clone,
+    P: RetryPolicy + Clone + 'static,
+{
+    type Error = TransportError;
+    type Future = TransportFut<'static>;
+    type Response = ResponsePacket;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, request: RequestPacket) -> Self::Future {
+        let metric_label = match &request {
+            RequestPacket::Single(single_request) => single_request.method().to_owned(),
+            RequestPacket::Batch(_) => BATCH_METRIC_LABEL.to_owned(),
+        };
+        let inner = self.inner.clone();
+        let this = self.clone();
+        let mut inner = std::mem::replace(&mut self.inner, inner);
+
+        Box::pin(async move {
+            let (_queued_request, ahead_in_queue) = QueuedRetryRequest::new(this.requests_enqueued.clone());
+            let mut retry_count = 0;
+
+            loop {
+                let error = match inner.call(request.clone()).await {
+                    Ok(response) => {
+                        let error = match &response {
+                            ResponsePacket::Single(_) => response
+                                .as_error()
+                                .map(|error| TransportError::ErrorResp(error.clone())),
+                            ResponsePacket::Batch(items) => retryable_batch_error(&this.policy, items),
+                        };
+
+                        match error {
+                            Some(error) => error,
+                            None => {
+                                record_rpc_retries(&metric_label, retry_count);
+                                return Ok(response);
+                            }
+                        }
+                    }
+                    Err(error) => error,
+                };
+
+                if !this.policy.should_retry(&error) {
+                    record_rpc_retries(&metric_label, retry_count);
+                    return Err(error);
+                }
+
+                if retry_count >= this.max_rate_limit_retries {
+                    record_rpc_retries(&metric_label, retry_count);
+                    return Err(TransportErrorKind::custom_str(&format!("Max retries exceeded {error}")));
+                }
+                retry_count += 1;
+
+                let current_queued_requests = this.requests_enqueued.load(Ordering::SeqCst) as u64;
+                let retry_delay = this
+                    .policy
+                    .backoff_hint(&error)
+                    .unwrap_or_else(|| Duration::from_millis(this.initial_backoff));
+                let queue_delay = Duration::from_secs(compute_retry_queue_delay_secs(
+                    this.compute_units_per_second,
+                    current_queued_requests,
+                    ahead_in_queue,
+                ));
+
+                trace!(
+                    %error,
+                    retry_count,
+                    retry_delay_ms = retry_delay.as_millis(),
+                    queue_delay_ms = queue_delay.as_millis(),
+                    "retrying RPC request"
+                );
+                Delay::new(retry_delay.saturating_add(queue_delay)).await;
+            }
+        })
     }
 }
 
@@ -1017,13 +1276,32 @@ mod tests {
     use hopr_bindings::exports::alloy::{
         primitives::U64,
         providers::{Provider, ProviderBuilder},
-        rpc::client::ClientBuilder,
+        rpc::client::{BatchRequest, ClientBuilder},
         transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
     };
     use serde_json::json;
     use tempfile::{NamedTempFile, tempdir};
 
-    use crate::client::{DefaultRetryPolicy, SnapshotRequestor, ZeroRetryPolicy};
+    use crate::client::{
+        DefaultRetryPolicy, InstrumentedRetryBackoffLayer, RECORDED_RETRIES, SnapshotRequestor, ZeroRetryPolicy,
+        compute_retry_queue_delay_secs,
+    };
+
+    fn recorded_retries() -> Vec<(String, u32)> {
+        RECORDED_RETRIES.with(|recorded| recorded.borrow().clone())
+    }
+
+    #[test]
+    fn test_compute_retry_queue_delay_secs() {
+        // 330 compute units per second allows 16 requests per second.
+        assert_eq!(compute_retry_queue_delay_secs(330, 16, 100), 0);
+        assert_eq!(compute_retry_queue_delay_secs(330, 17, 100), 1);
+        assert_eq!(compute_retry_queue_delay_secs(330, 32, 100), 2);
+        // A request near the front of the queue waits less than the queue length suggests.
+        assert_eq!(compute_retry_queue_delay_secs(330, 32, 16), 1);
+        // A tiny budget never divides by zero.
+        assert_eq!(compute_retry_queue_delay_secs(0, 3, 3), 3);
+    }
 
     #[tokio::test]
     async fn test_client_should_fail_on_malformed_response() {
@@ -1177,7 +1455,7 @@ mod tests {
             ..DefaultRetryPolicy::default()
         };
         let rpc_client = ClientBuilder::default()
-            .layer(RetryBackoffLayer::new_with_policy(
+            .layer(InstrumentedRetryBackoffLayer::new_with_policy(
                 2,
                 1,
                 1,
@@ -1432,5 +1710,235 @@ mod tests {
         let error_text = error.to_string();
         assert!(error_text.contains("failed to create snapshot file"));
         assert!(error_text.contains(&path));
+    }
+
+    #[tokio::test]
+    async fn test_single_request_records_its_retries_under_its_method() -> anyhow::Result<()> {
+        let mut server = mockito::Server::new_async().await;
+
+        let limited = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"jsonrpc":"2.0","id":0,"error":{"code":-32005,"message":"limit exceeded"}}"#)
+            .expect(1)
+            .create();
+        let ok = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"jsonrpc":"2.0","id":0,"result":"0x7"}"#)
+            .expect(1)
+            .create();
+
+        let transport_client = ReqwestTransport::new(url::Url::parse(&server.url())?);
+        let rpc_client = ClientBuilder::default()
+            .layer(InstrumentedRetryBackoffLayer::new_with_policy(
+                2,
+                1,
+                100,
+                DefaultRetryPolicy::default(),
+            ))
+            .transport(transport_client.clone(), transport_client.guess_local());
+        let provider = ProviderBuilder::new().connect_client(rpc_client);
+
+        let block = provider.raw_request::<(), U64>("eth_blockNumber".into(), ()).await?;
+
+        assert_eq!(block, U64::from(7));
+        limited.assert();
+        ok.assert();
+        assert_eq!(recorded_retries(), vec![("eth_blockNumber".to_owned(), 1)]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_batch_should_keep_successful_items_when_another_item_fails() -> anyhow::Result<()> {
+        let mut server = mockito::Server::new_async().await;
+
+        // Answer the batch by echoing back the ids the client chose, in reverse order: responses
+        // are matched by id, not by position.
+        let m = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body_from_request(|request| {
+                let body: serde_json::Value = serde_json::from_slice(request.body().unwrap()).unwrap();
+                let responses = body
+                    .as_array()
+                    .expect("a batch request is a JSON array")
+                    .iter()
+                    .map(|call| match call["method"].as_str() {
+                        Some("eth_blockNumber") => json!({"jsonrpc":"2.0","id":call["id"],"result":"0x7"}),
+                        _ => json!({"jsonrpc":"2.0","id":call["id"],"error":{"code":-32000,"message":"unavailable"}}),
+                    })
+                    .rev()
+                    .collect::<Vec<_>>();
+                serde_json::to_vec(&responses).unwrap()
+            })
+            // The item error is not retryable, so the batch is sent exactly once.
+            .expect(1)
+            .create();
+
+        let transport_client = ReqwestTransport::new(url::Url::parse(&server.url())?);
+        let rpc_client = ClientBuilder::default()
+            .layer(InstrumentedRetryBackoffLayer::new_with_policy(
+                2,
+                1,
+                100,
+                DefaultRetryPolicy {
+                    retryable_json_rpc_errors: vec![],
+                    ..DefaultRetryPolicy::default()
+                },
+            ))
+            .transport(transport_client.clone(), transport_client.guess_local());
+        let provider = ProviderBuilder::new().connect_client(rpc_client);
+
+        let mut batch = BatchRequest::new(provider.client());
+        let succeeding = batch.add_call::<_, U64>("eth_blockNumber", &())?;
+        let failing = batch.add_call::<_, U64>("eth_chainId", &())?;
+
+        batch.send().await?;
+
+        assert_eq!(succeeding.await?, U64::from(7));
+        assert!(failing.await.is_err(), "the failing item must report its own error");
+        m.assert();
+
+        Ok(())
+    }
+
+    /// Sends a batch with one successful, one retryable (-32005) and one non-retryable (-32000)
+    /// item, with the provider listing the two errors in the given order, and checks that the
+    /// packet is returned intact after a single attempt.
+    async fn assert_mixed_batch_is_returned_intact(retryable_error_first: bool) -> anyhow::Result<()> {
+        let mut server = mockito::Server::new_async().await;
+
+        let m = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body_from_request(move |request| {
+                let body: serde_json::Value = serde_json::from_slice(request.body().unwrap()).unwrap();
+                let calls = body.as_array().expect("a batch request is a JSON array");
+                let response_for = |method: &str| {
+                    let call = calls
+                        .iter()
+                        .find(|call| call["method"] == method)
+                        .expect("the batch contains every method");
+                    match method {
+                        "eth_blockNumber" => json!({"jsonrpc":"2.0","id":call["id"],"result":"0x7"}),
+                        "eth_chainId" => {
+                            json!({"jsonrpc":"2.0","id":call["id"],"error":{"code":-32005,"message":"limit exceeded"}})
+                        }
+                        _ => json!({"jsonrpc":"2.0","id":call["id"],"error":{"code":-32000,"message":"unavailable"}}),
+                    }
+                };
+                let order = if retryable_error_first {
+                    ["eth_chainId", "eth_gasPrice", "eth_blockNumber"]
+                } else {
+                    ["eth_gasPrice", "eth_chainId", "eth_blockNumber"]
+                };
+                let responses = order.iter().map(|method| response_for(method)).collect::<Vec<_>>();
+                serde_json::to_vec(&responses).unwrap()
+            })
+            // Part of the batch got an answer, so it is not resent whatever the error order.
+            .expect(1)
+            .create();
+
+        let transport_client = ReqwestTransport::new(url::Url::parse(&server.url())?);
+        let rpc_client = ClientBuilder::default()
+            .layer(InstrumentedRetryBackoffLayer::new_with_policy(
+                2,
+                1,
+                100,
+                DefaultRetryPolicy::default(),
+            ))
+            .transport(transport_client.clone(), transport_client.guess_local());
+        let provider = ProviderBuilder::new().connect_client(rpc_client);
+
+        let mut batch = BatchRequest::new(provider.client());
+        let succeeding = batch.add_call::<_, U64>("eth_blockNumber", &())?;
+        let retryable = batch.add_call::<_, U64>("eth_chainId", &())?;
+        let non_retryable = batch.add_call::<_, U64>("eth_gasPrice", &())?;
+
+        batch.send().await?;
+
+        assert_eq!(succeeding.await?, U64::from(7));
+        let retryable_error = retryable
+            .await
+            .expect_err("the retryable item must report its own error");
+        assert_eq!(retryable_error.as_error_resp().map(|error| error.code), Some(-32005));
+        let non_retryable_error = non_retryable
+            .await
+            .expect_err("the non-retryable item must report its own error");
+        assert_eq!(
+            non_retryable_error.as_error_resp().map(|error| error.code),
+            Some(-32000)
+        );
+        m.assert();
+        assert_eq!(recorded_retries(), vec![("batch".to_owned(), 0)]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_mixed_batch_with_retryable_error_first_is_returned_intact() -> anyhow::Result<()> {
+        assert_mixed_batch_is_returned_intact(true).await
+    }
+
+    #[tokio::test]
+    async fn test_mixed_batch_with_non_retryable_error_first_is_returned_intact() -> anyhow::Result<()> {
+        assert_mixed_batch_is_returned_intact(false).await
+    }
+
+    #[tokio::test]
+    async fn test_batch_should_be_retried_when_every_item_failed_with_retryable_error() -> anyhow::Result<()> {
+        let mut server = mockito::Server::new_async().await;
+
+        let m = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body_from_request(|request| {
+                let body: serde_json::Value = serde_json::from_slice(request.body().unwrap()).unwrap();
+                let responses = body
+                    .as_array()
+                    .expect("a batch request is a JSON array")
+                    .iter()
+                    .map(|call| {
+                        json!({"jsonrpc":"2.0","id":call["id"],"error":{"code":-32005,"message":"limit exceeded"}})
+                    })
+                    .collect::<Vec<_>>();
+                serde_json::to_vec(&responses).unwrap()
+            })
+            // The first attempt plus two retries.
+            .expect(3)
+            .create();
+
+        let transport_client = ReqwestTransport::new(url::Url::parse(&server.url())?);
+        let rpc_client = ClientBuilder::default()
+            .layer(InstrumentedRetryBackoffLayer::new_with_policy(
+                2,
+                1,
+                100,
+                DefaultRetryPolicy::default(),
+            ))
+            .transport(transport_client.clone(), transport_client.guess_local());
+        let provider = ProviderBuilder::new().connect_client(rpc_client);
+
+        let mut batch = BatchRequest::new(provider.client());
+        let first = batch.add_call::<_, U64>("eth_blockNumber", &())?;
+        let second = batch.add_call::<_, U64>("eth_chainId", &())?;
+
+        assert!(
+            batch.send().await.is_err(),
+            "the batch must fail once retries are exhausted"
+        );
+        assert!(first.await.is_err());
+        assert!(second.await.is_err());
+        m.assert();
+        assert_eq!(recorded_retries(), vec![("batch".to_owned(), 2)]);
+
+        Ok(())
     }
 }

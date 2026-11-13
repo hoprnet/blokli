@@ -12,13 +12,16 @@ This is an earlier warning signal than [Blokli RPC Failure Rate High](blokli-rpc
 several retries do not count as `result="failure"`, but a rising retry count still indicates the RPC provider is flaky or being
 rate-limited, and is a leading indicator of an incoming failure-rate or latency spike.
 
-**Known gap — currently never fires**: unlike `blokli_rpc_call_count`/`blokli_rpc_call_time_sec` (see
-[Blokli RPC Call Latency High](blokli-rpc-call-latency-high.md)), `blokli_retries_per_rpc_call` has no code path that ever calls
-`.observe()` on it anywhere in the codebase, in production or in tests — it isn't just unwired, it's unimplemented. The blocker is
-`TODO(#7140)` (`chain/api/src/lib.rs`, `chain/rpc/src/client.rs`): alloy's `RetryPolicy::backoff_hint` doesn't receive the current retry
-count, so there is no hook available yet to know how many retries a given call took. Until #7140 lands, treat this alert as a placeholder —
-it will not fire regardless of the threshold. [Blokli RPC Failure Rate High](blokli-rpc-failure-rate-high.md) is the closest live signal in
-the meantime.
+**How the metric is recorded**: `InstrumentedRetryBackoffLayer` (`chain/rpc/src/client.rs`, wired only in `chain/api/src/lib.rs`; the
+standalone `api` client still uses alloy's layer) observes `blokli_retries_per_rpc_call` once per packet: a single request is labelled by
+its method, a batch is one observation labelled `batch` with the retry count of the batch as a whole. A mixed batch (any item succeeded or
+failed with a non-retryable error) is returned intact after one attempt and never contributes retries. The layer allows at most 2 retries
+per request (`chain/api/src/lib.rs`), so observed values are 0..2 and, since the alert uses a strict `>`, the p95 cannot exceed the default
+`thresholdRetries` of 3: set it to 1 for the alert to be able to fire.
+
+**Known gap — fixed backoff**: `TODO(#7140)` (`chain/api/src/lib.rs`, `chain/rpc/src/client.rs`) is still open: alloy's
+`RetryPolicy::backoff_hint` doesn't receive the current retry count, so retries use a fixed delay instead of the configured exponential
+backoff. This does not affect the metric, which counts retries in the layer itself.
 
 ## Impact
 
