@@ -9,6 +9,7 @@ use validator::Validate;
 use crate::{
     config::Config,
     errors::{self, BloklidError, ConfigError},
+    historical_bindings::resolve_stake_factory,
     network::Network,
 };
 
@@ -311,13 +312,55 @@ impl Args {
             ))
         })?;
 
+        if config.indexer.enable_logs_snapshot && !config.indexer.additional_node_stake_factory_releases.is_empty() {
+            return Err(BloklidError::NonSpecific(
+                "indexer.enable_logs_snapshot cannot be combined with indexer.additional_node_stake_factory_releases: \
+                 a logs snapshot does not cover the additional StakeFactory deployments. Disable the snapshot and \
+                 sync from scratch."
+                    .to_string(),
+            ));
+        }
+
+        let mut additional_stake_factory_deployments = Vec::new();
+        for release in &config.indexer.additional_node_stake_factory_releases {
+            let deployment = resolve_stake_factory(release, config.network.as_str()).ok_or_else(|| {
+                BloklidError::NonSpecific(format!(
+                    "Historical contracts release '{}' is not supported for network '{}': the catalog of historical \
+                     releases is empty unless an exactly pinned `hopr-bindings` alias is added (see README, 'Adding a \
+                     historical StakeFactory release')",
+                    release, config.network
+                ))
+            })?;
+
+            if deployment.chain_id != network_config.chain_id {
+                return Err(BloklidError::NonSpecific(format!(
+                    "Historical contracts release '{}' resolves network '{}' to chain ID {}, expected {}",
+                    release, config.network, deployment.chain_id, network_config.chain_id
+                )));
+            }
+            if deployment.address == Address::default() {
+                return Err(ConfigError::Parse(format!(
+                    "Historical contracts release '{}' resolves network '{}' to the zero StakeFactory address",
+                    release, config.network
+                ))
+                .into());
+            }
+
+            additional_stake_factory_deployments.push(deployment);
+        }
+
+        let indexer_start_block_number = additional_stake_factory_deployments
+            .iter()
+            .map(|deployment| deployment.indexer_start_block_number)
+            .fold(network_config.indexer_start_block_number, u32::min);
+
         let chain_config = ChainConfig {
             chain_id: network_config.chain_id,
             tx_polling_interval: config.network.tx_polling_interval(),
             confirmations: config.network.confirmations(),
             max_block_range: config.max_block_range,
             block_range_reprobe_interval: config.block_range_reprobe_interval,
-            channel_contract_deploy_block: network_config.indexer_start_block_number,
+            indexer_start_block_number,
             max_requests_per_sec: config.max_rpc_requests_per_sec,
             expected_block_time: config.network.expected_block_time(),
         };
@@ -352,10 +395,46 @@ impl Args {
             contracts.curvy_aggregator = curvy_aggregator;
         }
 
+        let mut additional_node_stake_factories = additional_stake_factory_deployments
+            .into_iter()
+            .map(|deployment| deployment.address)
+            .filter(|address| *address != contracts.node_stake_factory)
+            .collect::<Vec<_>>();
+        additional_node_stake_factories.sort_unstable();
+        additional_node_stake_factories.dedup();
+
+        let non_factory_contracts = [
+            contracts.token,
+            contracts.channels,
+            contracts.announcements,
+            contracts.module_implementation,
+            contracts.node_safe_migration,
+            contracts.node_safe_registry,
+            contracts.ticket_price_oracle,
+            contracts.winning_probability_oracle,
+            contracts.xhopr_token,
+            contracts.curvy_aggregator,
+            contracts.curvy_vault,
+            contracts.curvy_portal_factory,
+            contracts.service_registry,
+        ];
+        if let Some(conflicting_address) = additional_node_stake_factories
+            .iter()
+            .find(|address| non_factory_contracts.contains(address))
+        {
+            return Err(ConfigError::Parse(format!(
+                "Historical StakeFactory address '{}' conflicts with another configured contract",
+                conflicting_address
+            ))
+            .into());
+        }
+        config.indexer.resolved_additional_node_stake_factories = additional_node_stake_factories;
+
         config.contracts = contracts;
 
         tracing::info!(
             contract_addresses = ?config.contracts,
+            additional_node_stake_factories = ?config.indexer.resolved_additional_node_stake_factories,
             "Resolved contract addresses",
         );
 
@@ -489,6 +568,63 @@ mod tests {
 
         assert!(config.contracts_override.is_none());
         assert_eq!(config.contracts.curvy_aggregator, Address::from([0xbb; 20]));
+    }
+
+    #[test]
+    fn test_unsupported_historical_contracts_release_is_rejected() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "jura-dev"
+            rpc_url = "http://localhost:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+            [indexer]
+            additional_node_stake_factory_releases = ["v1.2.3"]
+        "#
+        )
+        .unwrap();
+        let args = Args {
+            verbose: 0,
+            config: Some(file.path().to_path_buf()),
+            command: None,
+        };
+
+        let error = args.load_config(false).expect_err("unsupported release should fail");
+
+        assert!(error.to_string().contains("v1.2.3"));
+        assert!(error.to_string().contains("not supported"));
+    }
+
+    #[test]
+    fn test_logs_snapshot_with_additional_releases_is_rejected() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "jura-dev"
+            rpc_url = "http://localhost:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+            [indexer]
+            enable_logs_snapshot = true
+            logs_snapshot_url = "https://example.com/s.tar.xz"
+            additional_node_stake_factory_releases = ["v1.2.3"]
+        "#
+        )
+        .unwrap();
+        let args = Args {
+            verbose: 0,
+            config: Some(file.path().to_path_buf()),
+            command: None,
+        };
+
+        let error = args.load_config(false).expect_err("snapshot combination should fail");
+
+        assert!(error.to_string().contains("enable_logs_snapshot"));
     }
 
     #[test]

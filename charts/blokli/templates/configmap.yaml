@@ -44,6 +44,9 @@ data:
     {{- if .Values.config.indexer.enableLogsSnapshot }}
     logs_snapshot_url = "{{ required "config.indexer.logsSnapshotUrl is required" .Values.config.indexer.logsSnapshotUrl }}"
     {{- end }}
+    {{- with .Values.config.indexer.additionalNodeStakeFactoryReleases }}
+    additional_node_stake_factory_releases = [{{ range $i, $r := . }}{{ if $i }}, {{ end }}{{ $r | quote }}{{ end }}]
+    {{- end }}
 
     # Indexer subscription configuration
     [indexer.subscription]

@@ -167,6 +167,13 @@
             "logsSnapshotUrl": {
               "type": "string",
               "description": "URL for logs snapshot download"
+            },
+            "additionalNodeStakeFactoryReleases": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Historical contract release tags whose StakeFactory deployments are also indexed"
             }
           }
         },
