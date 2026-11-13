@@ -143,7 +143,7 @@ impl MutationRoot {
     /// Submit a transaction synchronously
     ///
     /// Validates the pre-signed raw transaction data, submits it to the chain, and waits for
-    /// the specified number of confirmations (default: 3 blocks) before returning.
+    /// the specified number of confirmations (default: 3 blocks, max: 64) before returning.
     /// Transaction is persisted to store and can be queried later.
     #[graphql(name = "sendTransactionSync")]
     async fn send_transaction_sync(
@@ -160,22 +160,27 @@ impl MutationRoot {
         let raw_tx = hex_to_bytes(&input.raw_transaction)?;
 
         // Validate and convert confirmations value
-        let confirmations = match confirmations {
-            Some(c) if c < 0 => {
-                return Err(async_graphql::Error::new(format!(
-                    "Invalid confirmations value: {}. Must be non-negative (default: 3, max: 64)",
-                    c
-                )));
-            }
-            Some(c) => Some(u64::try_from(c).unwrap()), // Safe: already validated c >= 0
-            None => None,
-        };
+        let confirmations = validate_sync_confirmations(confirmations)?;
 
         // Execute transaction in sync mode
         match executor.send_raw_transaction_sync(raw_tx, confirmations).await {
             Ok(record) => Ok(SendTransactionSyncResult::Transaction(transaction_from_record(record))),
             Err(e) => Ok(executor_error_to_sync_result(e)),
         }
+    }
+}
+
+/// Maximum number of confirmations `sendTransactionSync` will wait for.
+const MAX_SYNC_CONFIRMATIONS: u64 = 64;
+
+/// Validate the requested confirmations: non-negative and at most [`MAX_SYNC_CONFIRMATIONS`].
+fn validate_sync_confirmations(confirmations: Option<i32>) -> Result<Option<u64>> {
+    let Some(c) = confirmations else {
+        return Ok(None);
+    };
+    match u64::try_from(c) {
+        Ok(v) if v <= MAX_SYNC_CONFIRMATIONS => Ok(Some(v)),
+        _ => Err(errors::invalid_confirmations(c, MAX_SYNC_CONFIRMATIONS)),
     }
 }
 
@@ -293,5 +298,22 @@ fn executor_error_to_sync_result(error: TransactionExecutorError) -> SendTransac
         )),
         TransactionExecutorError::Timeout(msg) => SendTransactionSyncResult::Timeout(errors::timeout_error(msg)),
         _ => SendTransactionSyncResult::RpcError(errors::rpc_internal_error(&error)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sync_confirmations_bounds() {
+        assert_eq!(validate_sync_confirmations(None).unwrap(), None);
+        assert_eq!(validate_sync_confirmations(Some(0)).unwrap(), Some(0));
+        assert_eq!(validate_sync_confirmations(Some(64)).unwrap(), Some(64));
+
+        let too_high = validate_sync_confirmations(Some(65)).unwrap_err();
+        assert!(too_high.message.contains("64"));
+        assert!(validate_sync_confirmations(Some(-1)).is_err());
+        assert!(validate_sync_confirmations(Some(i32::MAX)).is_err());
     }
 }
