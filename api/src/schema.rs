@@ -14,7 +14,10 @@ use futures::Stream;
 use sea_orm::DatabaseConnection;
 
 use crate::{
-    cache::FeeEstimateCache, mutation::MutationRoot, query::QueryRoot, readiness::ReadinessChecker,
+    cache::{ChannelStatsCache, FeeEstimateCache},
+    mutation::MutationRoot,
+    query::QueryRoot,
+    readiness::ReadinessChecker,
     subscription::SubscriptionRoot,
 };
 
@@ -197,6 +200,7 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
         .data(GasMultiplier(gas_multiplier))
         .data(gas_fee_floors)
         .data(FeeEstimateCache::new(Duration::from_secs(expected_block_time)))
+        .data(ChannelStatsCache::default())
         .data(indexer_state)
         .data(transaction_executor)
         .data(transaction_store)

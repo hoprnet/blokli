@@ -53,7 +53,7 @@ use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, Quer
 use tracing::warn;
 
 use crate::{
-    cache::FeeEstimateCache,
+    cache::{ChannelStatsCache, ChannelStatsKey, FeeEstimateCache},
     conversions::{
         service_entry_from_aggregate, service_registry_config_from_model, service_type_from_aggregate,
         transaction_from_record,
@@ -1804,15 +1804,43 @@ impl QueryRoot {
 
         let status_i16: Option<i16> = status.map(|s| s.into());
 
-        let stats = match fetch_channel_stats_db(
-            db,
+        // Read the indexed block before the aggregate: the indexer advances it after committing a block's channel
+        // writes, so a result computed afterwards is at least as new as the block it is stored under.
+        let last_indexed_block = match chain_info::Entity::find_by_id(1).one(db).await {
+            Ok(Some(info)) => info.last_indexed_block,
+            Ok(None) => {
+                return ChannelStatsResult::QueryFailed(errors::not_found("chain info", "database"));
+            }
+            Err(e) => {
+                return ChannelStatsResult::QueryFailed(errors::query_failed("fetch chain info", e));
+            }
+        };
+
+        let cache = ctx.data_opt::<ChannelStatsCache>().cloned().unwrap_or_default();
+        let key = ChannelStatsKey {
+            block: last_indexed_block,
             source_key_id,
             destination_key_id,
-            concrete_channel_id,
-            status_i16,
-            parsed_safe_address,
-        )
-        .await
+            concrete_channel_id: concrete_channel_id
+                .as_deref()
+                .map(|id| id.strip_prefix("0x").unwrap_or(id).to_string()),
+            status: status_i16,
+            safe_address: parsed_safe_address.map(|addr| addr.as_ref().to_vec()),
+        };
+
+        let stats = match cache
+            .get_or_fetch(
+                key,
+                fetch_channel_stats_db(
+                    db,
+                    source_key_id,
+                    destination_key_id,
+                    concrete_channel_id,
+                    status_i16,
+                    parsed_safe_address,
+                ),
+            )
+            .await
         {
             Ok(s) => s,
             Err(e) => {
