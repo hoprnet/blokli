@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
 use blokli_db_entity::{
@@ -6,14 +6,13 @@ use blokli_db_entity::{
     log, log_status, log_topic_info,
     prelude::{Log, LogStatus, LogTopicInfo},
 };
-use futures::{StreamExt, stream};
 use hopr_types::{
     crypto::prelude::Hash,
     primitive::prelude::{Address, DateTime, SerializableLog, ToHex, Utc},
 };
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, FromQueryResult, IntoActiveModel, PaginatorTrait, QueryFilter,
-    QueryOrder, QuerySelect,
+    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseBackend, DbErr, EntityTrait, FromQueryResult,
+    IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
     entity::{Set, Unchanged},
     query::QueryTrait,
     sea_query::{Expr, OnConflict, Value},
@@ -29,11 +28,97 @@ use crate::{
     db::BlokliDb,
     errors::DbSqlError,
     numeric::{block_range_to_i64, i64_to_u64, log_position_to_i64, u64_to_i64},
+    snapshot::{LOG_INSERT_COLUMNS, LOG_STATUS_INSERT_COLUMNS, SQLITE_MAX_VARIABLE_NUMBER},
 };
+
+/// Number of bound values a single log position contributes to a statement.
+const LOG_POSITION_COLUMNS: usize = 3;
+
+/// Values the processed-flag update binds outside its position filter: `processed` and
+/// `processed_at`.
+const LOG_STATUS_UPDATE_FIXED_BINDS: usize = 2;
+
+/// Bind variables PostgreSQL accepts in a single statement: its wire protocol carries the
+/// parameter count in a 16-bit field.
+const POSTGRES_MAX_BIND_VARIABLES: usize = 65_535;
+
+/// Upper bound on the rows, or filtered positions, of a single statement on any backend.
+///
+/// PostgreSQL would accept over twenty thousand positions in one statement, but planning an
+/// OR-chain or a `VALUES` list of that size costs more than the round-trips it saves.
+const MAX_ROWS_PER_STATEMENT: usize = 1_000;
+
+/// Bind variables the backend accepts in a single statement.
+///
+/// Backends the logs database does not run on fall back to the most restrictive known limit.
+fn max_bind_variables(backend: DatabaseBackend) -> usize {
+    match backend {
+        DatabaseBackend::Postgres => POSTGRES_MAX_BIND_VARIABLES,
+        _ => SQLITE_MAX_VARIABLE_NUMBER,
+    }
+}
+
+/// Number of rows of `binds_per_row` values that fit in a statement next to `reserved_binds`
+/// other values without exceeding `max_binds`, capped at [`MAX_ROWS_PER_STATEMENT`].
+fn rows_within_bind_limit(max_binds: usize, binds_per_row: usize, reserved_binds: usize) -> usize {
+    (max_binds.saturating_sub(reserved_binds) / binds_per_row.max(1)).clamp(1, MAX_ROWS_PER_STATEMENT)
+}
+
+/// Number of rows of `binds_per_row` values a single statement may carry on `backend`.
+fn statement_row_limit(backend: DatabaseBackend, binds_per_row: usize) -> usize {
+    rows_within_bind_limit(max_bind_variables(backend), binds_per_row, 0)
+}
+
+/// Number of log positions a single statement may filter on.
+///
+/// `reserved_binds` accounts for values the statement binds outside the position filter, so that
+/// the total stays within the backend's bind-variable limit: without it a statement sized purely
+/// by the filter would overshoot (on SQLite, `3 * 333 + 2` exceeds the 999-variable limit).
+fn log_position_chunk_size(backend: DatabaseBackend, reserved_binds: usize) -> usize {
+    rows_within_bind_limit(max_bind_variables(backend), LOG_POSITION_COLUMNS, reserved_binds)
+}
+
+/// Builds a condition matching exactly the given `(block_number, tx_index, log_index)` positions.
+fn log_positions_condition(positions: &[(i64, i64, i64)]) -> Condition {
+    positions
+        .iter()
+        .fold(Condition::any(), |condition, (block_number, tx_index, log_index)| {
+            condition.add(
+                Condition::all()
+                    .add(log_status::Column::BlockNumber.eq(*block_number))
+                    .add(log_status::Column::TxIndex.eq(*tx_index))
+                    .add(log_status::Column::LogIndex.eq(*log_index)),
+            )
+        })
+}
+
+/// Same as [`log_positions_condition`], for the `log` table.
+fn log_table_positions_condition(positions: &[(i64, i64, i64)]) -> Condition {
+    positions
+        .iter()
+        .fold(Condition::any(), |condition, (block_number, tx_index, log_index)| {
+            condition.add(
+                Condition::all()
+                    .add(log::Column::BlockNumber.eq(*block_number))
+                    .add(log::Column::TxIndex.eq(*tx_index))
+                    .add(log::Column::LogIndex.eq(*log_index)),
+            )
+        })
+}
 
 #[derive(FromQueryResult)]
 struct BlockNumber {
     block_number: i64,
+}
+
+/// Identifier of a stored log together with the position and block hash it was stored under.
+#[derive(FromQueryResult)]
+struct StoredLogPosition {
+    id: i64,
+    block_number: i64,
+    tx_index: i64,
+    log_index: i64,
+    block_hash: Vec<u8>,
 }
 
 #[derive(FromQueryResult)]
@@ -46,41 +131,166 @@ struct LogIdentity {
 #[async_trait]
 impl BlokliDbLogOperations for BlokliDb {
     async fn store_log<'a>(&'a self, log: SerializableLog) -> Result<()> {
-        match self.store_logs([log].to_vec()).await {
-            Ok(results) => {
-                if let Some(result) = results.into_iter().next() {
-                    result
-                } else {
-                    panic!("when inserting a log into the db, the result should be a single item")
-                }
-            }
-            Err(e) => Err(e),
-        }
+        self.store_logs(vec![log]).await
     }
 
-    async fn store_logs(&self, logs: Vec<SerializableLog>) -> Result<Vec<Result<()>>> {
+    async fn store_logs(&self, logs: Vec<SerializableLog>) -> Result<()> {
+        let log_count = logs.len();
+        if logs.is_empty() {
+            return Ok(());
+        }
+
+        let mut log_models = Vec::with_capacity(log_count);
+        let mut status_models = Vec::with_capacity(log_count);
+        let mut incoming_hashes = HashMap::with_capacity(log_count);
+        let mut seen_positions = HashSet::with_capacity(log_count);
+
+        for log in logs {
+            let position = log_position_to_i64(log.block_number, log.tx_index, log.log_index).map_err(DbError::from)?;
+
+            // A position repeated inside one call would be collapsed by the database anyway;
+            // dropping it before the conversions below keeps the log_status rows unambiguous and
+            // spares the duplicate the cost of building two ActiveModels it would never use.
+            if !seen_positions.insert(position) {
+                continue;
+            }
+
+            incoming_hashes.insert(position, log.block_hash.to_vec());
+
+            // Build both ActiveModels together so a conversion failure cannot leave an orphaned
+            // log row without a matching log_status.
+            let log_model = log::ActiveModel::try_from(log.clone())
+                .map_err(DbSqlError::from)
+                .map_err(DbError::from)?;
+            let status_model = log_status::ActiveModel::try_from(log)
+                .map_err(DbSqlError::from)
+                .map_err(DbError::from)?;
+
+            log_models.push((position, log_model));
+            status_models.push((position, status_model));
+        }
+
         self.nest_transaction_in_db(None, TargetDb::Logs)
             .await?
             .perform(|tx| {
                 Box::pin(async move {
-                    let results = stream::iter(logs).then(|log| async {
-                        let log_id = log.to_string();
-                        let (block_number, tx_index, log_index) =
-                            log_position_to_i64(log.block_number, log.tx_index, log.log_index)
-                                .map_err(DbError::from)?;
+                    let backend = tx.as_ref().get_database_backend();
 
-                        let block_hash = log.block_hash.to_vec();
+                    // A log already stored at one of these positions under another block hash was
+                    // orphaned by a reorganisation, and the incoming log is its canonical
+                    // replacement: leaving the stored row would keep the orphaned identity (and its
+                    // processed flag) forever, so the position would never be applied again.
+                    let positions = status_models.iter().map(|(position, _)| *position).collect::<Vec<_>>();
+                    let mut orphaned = HashMap::new();
+                    let mut already_stored = HashSet::with_capacity(positions.len());
 
-                        // Build both ActiveModels up front so a conversion failure
-                        // cannot leave an orphaned log row without a matching log_status.
-                        let log_model = log::ActiveModel::try_from(log.clone())
-                            .map_err(DbSqlError::from)
-                            .map_err(DbError::from)?;
-                        let replacement_model = log_model.clone();
-                        let mut status_model = log_status::ActiveModel::try_from(log)
-                            .map_err(DbSqlError::from)
-                            .map_err(DbError::from)?;
-                        let log_result = Log::insert(log_model)
+                    for chunk in positions.chunks(log_position_chunk_size(backend, 0)) {
+                        let stored = Log::find()
+                            .select_only()
+                            .columns([
+                                log::Column::Id,
+                                log::Column::BlockNumber,
+                                log::Column::TxIndex,
+                                log::Column::LogIndex,
+                                log::Column::BlockHash,
+                            ])
+                            .filter(log_table_positions_condition(chunk))
+                            .into_model::<StoredLogPosition>()
+                            .all(tx.as_ref())
+                            .await
+                            .map_err(|e| {
+                                error!(error = ?e, "failed to read back stored logs to detect reorganised ones");
+                                DbError::General(e.to_string())
+                            })?;
+
+                        for row in stored {
+                            let position = (row.block_number, row.tx_index, row.log_index);
+                            already_stored.insert(position);
+                            if incoming_hashes
+                                .get(&position)
+                                .is_some_and(|hash| *hash != row.block_hash)
+                            {
+                                orphaned.insert(position, row.id);
+                            }
+                        }
+                    }
+
+                    // Reorganised positions are rare, so each is replaced on its own; everything
+                    // else keeps going through the batched insert below.
+                    let (replacements, fresh): (Vec<_>, Vec<_>) = log_models
+                        .into_iter()
+                        .partition(|(position, _)| orphaned.contains_key(position));
+                    let mut log_models = fresh.into_iter().map(|(_, model)| model).collect::<Vec<_>>();
+                    let mut earliest_replaced: Option<i64> = None;
+
+                    for (position, mut replacement) in replacements {
+                        let (block_number, tx_index, log_index) = position;
+                        let Some(log_id) = orphaned.get(&position).copied() else {
+                            continue;
+                        };
+
+                        replacement.id = Unchanged(log_id);
+                        replacement.update(tx.as_ref()).await.map_err(|e| {
+                            error!(%log_id, error = ?e, "failed to replace reorganised log in db");
+                            DbError::General(e.to_string())
+                        })?;
+
+                        LogStatus::update_many()
+                            .col_expr(log_status::Column::Processed, Expr::value(Value::Bool(Some(false))))
+                            .col_expr(
+                                log_status::Column::ProcessedAt,
+                                Expr::value(Value::ChronoDateTimeUtc(None)),
+                            )
+                            .col_expr(log_status::Column::Checksum, Expr::value(Value::Bytes(None)))
+                            .filter(log_status::Column::BlockNumber.eq(block_number))
+                            .filter(log_status::Column::TxIndex.eq(tx_index))
+                            .filter(log_status::Column::LogIndex.eq(log_index))
+                            .exec(tx.as_ref())
+                            .await
+                            .map_err(|e| {
+                                error!(%log_id, error = ?e, "failed to reset status of reorganised log");
+                                DbError::General(e.to_string())
+                            })?;
+
+                        trace!(%log_id, "replaced reorganised log in the DB");
+                        earliest_replaced = Some(earliest_replaced.map_or(block_number, |b| b.min(block_number)));
+                    }
+
+                    // Checksums form a hash chain that the checksum pass extends from its highest
+                    // checksummed row, so every checksum from the earliest block this batch changes
+                    // onwards is stale: the block of a replaced position, and the block of a new
+                    // position, which the pass would otherwise append after later blocks' checksums.
+                    // On the live path the new positions sit above every checksummed row and the
+                    // statement matches nothing.
+                    let earliest_new = positions
+                        .iter()
+                        .filter(|position| !already_stored.contains(*position))
+                        .map(|(block_number, ..)| *block_number)
+                        .min();
+                    let earliest_changed = earliest_replaced.into_iter().chain(earliest_new).min();
+                    if let Some(block_number) = earliest_changed {
+                        LogStatus::update_many()
+                            .col_expr(log_status::Column::Checksum, Expr::value(Value::Bytes(None)))
+                            .filter(log_status::Column::BlockNumber.gte(block_number))
+                            .filter(log_status::Column::Checksum.is_not_null())
+                            .exec(tx.as_ref())
+                            .await
+                            .map_err(|e| {
+                                error!(error = ?e, "failed to invalidate checksums from the earliest changed block");
+                                DbError::General(e.to_string())
+                            })?;
+                    }
+
+                    // Insert the batch with as few statements as the backend's bind-parameter
+                    // limit allows, leaving already stored logs untouched.
+                    let log_chunk_size = statement_row_limit(backend, LOG_INSERT_COLUMNS);
+                    while !log_models.is_empty() {
+                        // Draining hands the statement owned models; chunking the vector in place
+                        // and calling `to_vec` would clone every model on the way to the database.
+                        let chunk = log_models
+                            .drain(..log_chunk_size.min(log_models.len()))
+                            .collect::<Vec<_>>();
+                        match Log::insert_many(chunk)
                             .on_conflict(
                                 OnConflict::columns([
                                     log::Column::LogIndex,
@@ -90,141 +300,90 @@ impl BlokliDbLogOperations for BlokliDb {
                                 .do_nothing()
                                 .to_owned(),
                             )
-                            .exec(tx.as_ref())
-                            .await;
-
-                        match log_result {
-                            Ok(insert_result) => {
-                                // Log was inserted successfully, now insert LogStatus with the log_id
-                                status_model.log_id = Set(insert_result.last_insert_id);
-
-                                match LogStatus::insert(status_model)
-                                    .on_conflict(
-                                        OnConflict::columns([
-                                            log_status::Column::LogIndex,
-                                            log_status::Column::TxIndex,
-                                            log_status::Column::BlockNumber,
-                                        ])
-                                        .do_nothing()
-                                        .to_owned(),
-                                    )
-                                    .exec(tx.as_ref())
-                                    .await
-                                {
-                                    Ok(_) => Ok(()),
-                                    Err(DbErr::RecordNotInserted) => {
-                                        // LogStatus already exists - idempotent success
-                                        trace!(log_id, "log status already in the DB");
-                                        Ok(())
-                                    }
-                                    Err(e) => {
-                                        error!(%log_id, error = ?e, "failed to insert log status into db");
-                                        Err(DbError::General(e.to_string()))
-                                    }
-                                }
-                            }
-                            Err(DbErr::RecordNotInserted) => {
-                                // Log already exists, need to find it to get its ID for LogStatus
-                                match Log::find()
-                                    .filter(log::Column::BlockNumber.eq(block_number))
-                                    .filter(log::Column::TxIndex.eq(tx_index))
-                                    .filter(log::Column::LogIndex.eq(log_index))
-                                    .one(tx.as_ref())
-                                    .await
-                                {
-                                    Ok(Some(existing_log)) => {
-                                        if existing_log.block_hash != block_hash {
-                                            let mut replacement = replacement_model;
-                                            replacement.id = Unchanged(existing_log.id);
-
-                                            if let Err(e) = replacement.update(tx.as_ref()).await {
-                                                error!(%log_id, error = ?e, "failed to replace reorganised log in db");
-                                                return Err(DbError::General(e.to_string()));
-                                            }
-
-                                            if let Err(e) = LogStatus::update_many()
-                                                .col_expr(
-                                                    log_status::Column::Processed,
-                                                    Expr::value(Value::Bool(Some(false))),
-                                                )
-                                                .col_expr(
-                                                    log_status::Column::ProcessedAt,
-                                                    Expr::value(Value::ChronoDateTimeUtc(None)),
-                                                )
-                                                .col_expr(
-                                                    log_status::Column::Checksum,
-                                                    Expr::value(Value::Bytes(None)),
-                                                )
-                                                .filter(log_status::Column::BlockNumber.eq(block_number))
-                                                .filter(log_status::Column::TxIndex.eq(tx_index))
-                                                .filter(log_status::Column::LogIndex.eq(log_index))
-                                                .exec(tx.as_ref())
-                                                .await
-                                            {
-                                                error!(%log_id, error = ?e, "failed to reset status of reorganised log");
-                                                return Err(DbError::General(e.to_string()));
-                                            }
-
-                                            if let Err(e) = LogStatus::update_many()
-                                                .col_expr(
-                                                    log_status::Column::Checksum,
-                                                    Expr::value(Value::Bytes(None)),
-                                                )
-                                                .filter(log_status::Column::BlockNumber.gte(block_number))
-                                                .exec(tx.as_ref())
-                                                .await
-                                            {
-                                                error!(%log_id, error = ?e, "failed to invalidate checksums after a reorganised log");
-                                                return Err(DbError::General(e.to_string()));
-                                            }
-
-                                            trace!(log_id, "replaced reorganised log in the DB");
-                                        }
-
-                                        // Found existing log, reuse the pre-built status model with its ID
-                                        status_model.log_id = Set(existing_log.id);
-
-                                        match LogStatus::insert(status_model)
-                                            .on_conflict(
-                                                OnConflict::columns([
-                                                    log_status::Column::LogIndex,
-                                                    log_status::Column::TxIndex,
-                                                    log_status::Column::BlockNumber,
-                                                ])
-                                                .do_nothing()
-                                                .to_owned(),
-                                            )
-                                            .exec(tx.as_ref())
-                                            .await
-                                        {
-                                            Ok(_) | Err(DbErr::RecordNotInserted) => {
-                                                // Both Log and LogStatus exist - idempotent success
-                                                trace!(log_id, "log already in the DB");
-                                                Ok(())
-                                            }
-                                            Err(e) => {
-                                                error!(%log_id, error = ?e, "failed to insert log status into db");
-                                                Err(DbError::General(e.to_string()))
-                                            }
-                                        }
-                                    }
-                                    Ok(None) => {
-                                        error!(%log_id, "Log not found after RecordNotInserted error");
-                                        Err(DbError::General(format!("Log not found: {log_id}")))
-                                    }
-                                    Err(e) => {
-                                        error!(%log_id, error = ?e, "failed to find existing log");
-                                        Err(DbError::General(e.to_string()))
-                                    }
-                                }
-                            }
+                            .exec_without_returning(tx.as_ref())
+                            .await
+                        {
+                            Ok(_) | Err(DbErr::RecordNotInserted) => {}
                             Err(e) => {
-                                error!(error = ?e, "failed to insert log into db");
-                                Err(DbError::General(e.to_string()))
+                                error!(error = ?e, "failed to insert logs into db");
+                                return Err(DbError::General(e.to_string()));
                             }
                         }
-                    });
-                    Ok(results.collect::<Vec<_>>().await)
+                    }
+
+                    // Read the identifiers back for exactly the positions of this batch. This
+                    // covers both the rows just inserted and the ones that were already stored, so
+                    // the log_status rows below always point at the right log.
+                    let mut log_ids = HashMap::with_capacity(positions.len());
+
+                    for chunk in positions.chunks(log_position_chunk_size(backend, 0)) {
+                        let stored = Log::find()
+                            .select_only()
+                            .columns([
+                                log::Column::Id,
+                                log::Column::BlockNumber,
+                                log::Column::TxIndex,
+                                log::Column::LogIndex,
+                                log::Column::BlockHash,
+                            ])
+                            .filter(log_table_positions_condition(chunk))
+                            .into_model::<StoredLogPosition>()
+                            .all(tx.as_ref())
+                            .await
+                            .map_err(|e| {
+                                error!(error = ?e, "failed to read back stored log identifiers");
+                                DbError::General(e.to_string())
+                            })?;
+
+                        log_ids.extend(
+                            stored
+                                .into_iter()
+                                .map(|row| ((row.block_number, row.tx_index, row.log_index), row.id)),
+                        );
+                    }
+
+                    let mut status_models_with_ids = Vec::with_capacity(status_models.len());
+                    for (position, mut status_model) in status_models {
+                        let Some(log_id) = log_ids.get(&position).copied() else {
+                            let (block_number, tx_index, log_index) = position;
+                            error!(block_number, tx_index, log_index, "log not found after insert");
+                            return Err(DbError::General(format!(
+                                "Log not found: block {block_number}, tx {tx_index}, log {log_index}"
+                            )));
+                        };
+                        status_model.log_id = Set(log_id);
+                        status_models_with_ids.push(status_model);
+                    }
+
+                    // Statuses of logs already present must not be reset, hence the same
+                    // do-nothing conflict handling as before.
+                    let status_chunk_size = statement_row_limit(backend, LOG_STATUS_INSERT_COLUMNS);
+                    while !status_models_with_ids.is_empty() {
+                        let chunk = status_models_with_ids
+                            .drain(..status_chunk_size.min(status_models_with_ids.len()))
+                            .collect::<Vec<_>>();
+                        match LogStatus::insert_many(chunk)
+                            .on_conflict(
+                                OnConflict::columns([
+                                    log_status::Column::LogIndex,
+                                    log_status::Column::TxIndex,
+                                    log_status::Column::BlockNumber,
+                                ])
+                                .do_nothing()
+                                .to_owned(),
+                            )
+                            .exec_without_returning(tx.as_ref())
+                            .await
+                        {
+                            Ok(_) | Err(DbErr::RecordNotInserted) => {}
+                            Err(e) => {
+                                error!(error = ?e, "failed to insert log statuses into db");
+                                return Err(DbError::General(e.to_string()));
+                            }
+                        }
+                    }
+
+                    Ok(())
                 })
             })
             .await
@@ -439,6 +598,53 @@ impl BlokliDbLogOperations for BlokliDb {
                 Err(DbError::from(DbSqlError::from(e)))
             }
         }
+    }
+
+    async fn set_log_batch_processed(&self, logs: Vec<SerializableLog>) -> Result<()> {
+        let mut seen_positions = HashSet::with_capacity(logs.len());
+        let mut positions = Vec::with_capacity(logs.len());
+
+        for log in logs {
+            let position = log_position_to_i64(log.block_number, log.tx_index, log.log_index).map_err(DbError::from)?;
+            // A repeated position would only grow the condition and force extra statements.
+            if seen_positions.insert(position) {
+                positions.push(position);
+            }
+        }
+
+        if positions.is_empty() {
+            return Ok(());
+        }
+        let now = Utc::now();
+
+        self.nest_transaction_in_db(None, TargetDb::Logs)
+            .await?
+            .perform(|tx| {
+                Box::pin(async move {
+                    // One statement per chunk instead of one per log. The chunking keeps the
+                    // position filter *and* the two SET values within the backend's bind-parameter
+                    // limit.
+                    let chunk_size =
+                        log_position_chunk_size(tx.as_ref().get_database_backend(), LOG_STATUS_UPDATE_FIXED_BINDS);
+
+                    for chunk in positions.chunks(chunk_size) {
+                        LogStatus::update_many()
+                            .col_expr(log_status::Column::Processed, Expr::value(Value::Bool(Some(true))))
+                            .col_expr(
+                                log_status::Column::ProcessedAt,
+                                Expr::value(Value::ChronoDateTimeUtc(Some(now))),
+                            )
+                            .filter(log_positions_condition(chunk))
+                            .exec(tx.as_ref())
+                            .await
+                            .map_err(DbSqlError::from)
+                            .map_err(DbError::from)?;
+                    }
+
+                    Ok(())
+                })
+            })
+            .await
     }
 
     async fn set_logs_unprocessed(&self, block_number: Option<u64>, block_offset: Option<u64>) -> Result<()> {
@@ -657,6 +863,21 @@ mod tests {
 
     use super::*;
 
+    fn test_log(block_number: u64, tx_index: u64, log_index: u64) -> SerializableLog {
+        SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: [Hash::create(&[b"my topic"]).into()].into(),
+            data: vec![block_number as u8, tx_index as u8, log_index as u8],
+            block_hash: Hash::create(&[b"my block hash"]).into(),
+            tx_hash: Hash::create(&[b"my tx hash"]).into(),
+            block_number,
+            tx_index,
+            log_index,
+            removed: false,
+            ..Default::default()
+        }
+    }
+
     #[tokio::test]
     async fn test_store_single_log() {
         let db = BlokliDb::new_in_memory().await.unwrap();
@@ -803,6 +1024,61 @@ mod tests {
         Ok(())
     }
 
+    /// Stores the logs in the given batches, computing checksums after each one, and returns
+    /// every stored checksum in chain order.
+    async fn checksums_after_batches(batches: Vec<Vec<SerializableLog>>) -> anyhow::Result<Vec<Option<String>>> {
+        let db = BlokliDb::new_in_memory().await?;
+        for batch in batches {
+            db.store_logs(batch).await?;
+            db.update_logs_checksums().await?;
+        }
+
+        Ok(db
+            .get_logs(None, None)
+            .await?
+            .into_iter()
+            .map(|log| log.checksum)
+            .collect())
+    }
+
+    #[tokio::test]
+    async fn test_new_log_below_the_checksum_head_rebuilds_the_chain_suffix() -> anyhow::Result<()> {
+        let logs = [1_u64, 2, 3].map(|block_number| SerializableLog {
+            block_hash: Hash::create(&[format!("block {block_number}").as_bytes()]).into(),
+            tx_hash: Hash::create(&[format!("tx {block_number}").as_bytes()]).into(),
+            ..test_log(block_number, 0, 0)
+        });
+        let [first, second, third] = logs.clone();
+
+        let expected = checksums_after_batches(vec![logs.to_vec()]).await?;
+        assert!(expected.iter().all(Option::is_some));
+
+        // Block 2's log arrives only after block 3 was checksummed: it is a new position, not a
+        // replacement, yet every checksum from block 2 onward must be rebuilt around it.
+        let actual = checksums_after_batches(vec![vec![first, third], vec![second]]).await?;
+
+        assert_eq!(actual, expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_new_logs_above_the_checksum_head_keep_existing_checksums() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        db.store_logs(vec![test_log(1, 0, 0)]).await?;
+        db.update_logs_checksums().await?;
+        let first_checksum = db.get_log(1, 0, 0).await?.checksum;
+        assert!(first_checksum.is_some());
+
+        // The live path: the next block's logs sit above every checksummed row and must not
+        // invalidate any of them.
+        db.store_logs(vec![test_log(2, 0, 0), test_log(2, 0, 1)]).await?;
+
+        assert_eq!(db.get_log(1, 0, 0).await?.checksum, first_checksum);
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_store_log_replaces_a_reorganised_position() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
@@ -879,6 +1155,166 @@ mod tests {
         let logs = db.get_logs(None, None).await.unwrap();
 
         assert_eq!(logs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_store_logs_batch_mixes_new_and_existing_without_resetting_status() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+
+        let existing = test_log(1, 1, 1);
+        let fresh = test_log(1, 1, 2);
+
+        db.store_log(existing.clone()).await.unwrap();
+        db.set_log_processed(existing.clone()).await.unwrap();
+
+        // The batch mixes an already stored (and processed) log with a new one: the new log must
+        // be inserted with its own status, and the existing status must survive untouched.
+        db.store_logs(vec![existing.clone(), fresh.clone()]).await.unwrap();
+
+        let logs = db.get_logs(None, None).await.unwrap();
+        assert_eq!(logs.len(), 2);
+
+        let existing_db = db
+            .get_log(existing.block_number, existing.tx_index, existing.log_index)
+            .await
+            .unwrap();
+        assert_eq!(existing_db.processed, Some(true));
+        assert!(existing_db.processed_at.is_some());
+        assert_eq!(existing_db.data, existing.data);
+
+        let fresh_db = db
+            .get_log(fresh.block_number, fresh.tx_index, fresh.log_index)
+            .await
+            .unwrap();
+        assert_eq!(fresh_db.processed, Some(false));
+        assert_eq!(fresh_db.processed_at, None);
+    }
+
+    #[tokio::test]
+    async fn test_store_logs_collapses_repeated_positions() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+
+        let log = test_log(1, 1, 1);
+
+        // A repeated position is stored once and is not an error: the batch succeeds as a whole.
+        db.store_logs(vec![log.clone(), log.clone()]).await.unwrap();
+
+        let logs = db.get_logs(None, None).await.unwrap();
+        assert_eq!(logs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_set_log_batch_processed_marks_only_the_given_logs() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+
+        let all_logs = vec![
+            test_log(1, 0, 0),
+            test_log(1, 0, 1),
+            test_log(2, 0, 0),
+            test_log(2, 1, 0),
+        ];
+        db.store_logs(all_logs.clone()).await.unwrap();
+
+        // Two logs, from two different blocks, must be marked without touching their neighbours.
+        let marked = vec![all_logs[0].clone(), all_logs[3].clone()];
+        db.set_log_batch_processed(marked).await.unwrap();
+
+        let expected = [true, false, false, true];
+        for (log, expected_processed) in all_logs.iter().zip(expected) {
+            let stored = db.get_log(log.block_number, log.tx_index, log.log_index).await.unwrap();
+            assert_eq!(
+                stored.processed,
+                Some(expected_processed),
+                "unexpected processed flag for block {} tx {} log {}",
+                log.block_number,
+                log.tx_index,
+                log.log_index
+            );
+            assert_eq!(stored.processed_at.is_some(), expected_processed);
+        }
+    }
+
+    #[test]
+    fn test_log_position_chunk_size_leaves_room_for_extra_binds() {
+        for (backend, limit) in [
+            (DatabaseBackend::Sqlite, SQLITE_MAX_VARIABLE_NUMBER),
+            (DatabaseBackend::Postgres, POSTGRES_MAX_BIND_VARIABLES),
+        ] {
+            let positions = log_position_chunk_size(backend, LOG_STATUS_UPDATE_FIXED_BINDS);
+            let bound_values = positions * LOG_POSITION_COLUMNS + LOG_STATUS_UPDATE_FIXED_BINDS;
+
+            assert!(
+                bound_values <= limit,
+                "a {backend:?} chunk binds {bound_values} values, over the limit of {limit}"
+            );
+
+            // Without reserved binds the whole allowance goes to positions.
+            let unreserved = log_position_chunk_size(backend, 0);
+            assert!(unreserved * LOG_POSITION_COLUMNS <= limit);
+            assert!(unreserved >= positions);
+        }
+    }
+
+    #[test]
+    fn test_statement_row_limit_stays_within_each_backend_bind_limit() {
+        for (backend, limit) in [
+            (DatabaseBackend::Sqlite, SQLITE_MAX_VARIABLE_NUMBER),
+            (DatabaseBackend::Postgres, POSTGRES_MAX_BIND_VARIABLES),
+        ] {
+            for binds_per_row in [LOG_INSERT_COLUMNS, LOG_STATUS_INSERT_COLUMNS, LOG_POSITION_COLUMNS] {
+                let rows = statement_row_limit(backend, binds_per_row);
+                assert!(
+                    rows * binds_per_row <= limit,
+                    "{rows} rows of {binds_per_row} values exceed the {backend:?} limit of {limit}"
+                );
+                assert!((1..=MAX_ROWS_PER_STATEMENT).contains(&rows));
+            }
+        }
+    }
+
+    #[test]
+    fn test_rows_within_bind_limit_is_derived_from_the_limit() {
+        // A limit below what the row cap would bind must shrink the statement, not overshoot it.
+        let rows = rows_within_bind_limit(3_000, LOG_POSITION_COLUMNS, LOG_STATUS_UPDATE_FIXED_BINDS);
+        assert_eq!(rows, 999);
+        assert!(rows * LOG_POSITION_COLUMNS + LOG_STATUS_UPDATE_FIXED_BINDS <= 3_000);
+
+        // A generous limit is capped, so a statement never grows without bound.
+        assert_eq!(
+            rows_within_bind_limit(POSTGRES_MAX_BIND_VARIABLES, LOG_POSITION_COLUMNS, 0),
+            MAX_ROWS_PER_STATEMENT
+        );
+
+        // A limit too small for even one row still makes progress one row at a time.
+        assert_eq!(
+            rows_within_bind_limit(2, LOG_POSITION_COLUMNS, LOG_STATUS_UPDATE_FIXED_BINDS),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn test_set_log_batch_processed_spans_multiple_chunks() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        // More positions than one statement may filter on, so the update must span several
+        // chunks and still mark every log.
+        let chunk_size = log_position_chunk_size(DatabaseBackend::Sqlite, LOG_STATUS_UPDATE_FIXED_BINDS);
+        let log_count = chunk_size + 10;
+        let logs = (0..log_count as u64)
+            .map(|index| test_log(1, index / 100, index % 100))
+            .collect::<Vec<_>>();
+
+        db.store_logs(logs.clone()).await?;
+        db.set_log_batch_processed(logs.clone()).await?;
+
+        let stored = db.get_logs(None, None).await?;
+        assert_eq!(stored.len(), log_count);
+        assert!(
+            stored.iter().all(|log| log.processed == Some(true)),
+            "every log of a multi-chunk batch must be marked processed"
+        );
+
+        Ok(())
     }
 
     #[tokio::test]
@@ -1017,11 +1453,7 @@ mod tests {
             ..Default::default()
         };
 
-        db.store_logs(vec![log_1.clone(), log_2.clone()])
-            .await
-            .unwrap()
-            .into_iter()
-            .for_each(|r| assert!(r.is_ok()));
+        db.store_logs(vec![log_1.clone(), log_2.clone()]).await.unwrap();
 
         let logs = db.get_logs(Some(1), Some(0)).await.unwrap();
 
@@ -1106,9 +1538,7 @@ mod tests {
 
         db.store_logs(vec![log_1.clone(), log_2.clone(), log_3.clone()])
             .await
-            .unwrap()
-            .into_iter()
-            .for_each(|r| assert!(r.is_ok()));
+            .unwrap();
 
         let block_numbers_all = db.get_logs_block_numbers(None, None, None).await.unwrap();
         assert_eq!(block_numbers_all.len(), 3);
@@ -1168,11 +1598,7 @@ mod tests {
             ..log_1.clone()
         };
 
-        db.store_logs(vec![log_2.clone(), log_3.clone()])
-            .await
-            .unwrap()
-            .into_iter()
-            .for_each(|r| assert!(r.is_ok()));
+        db.store_logs(vec![log_2.clone(), log_3.clone()]).await.unwrap();
 
         // ensure the first log is still the last updated
         assert_eq!(
@@ -1277,6 +1703,89 @@ mod tests {
             .expect_err("expected error due to inconsistent logs in the db");
 
         db.ensure_logs_origin(vec![(addr_1, topic_1)]).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_store_logs_replaces_only_the_reorganised_positions_of_a_mixed_batch() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let before_reorg = test_log(1, 0, 0);
+        let replaced_early = test_log(2, 0, 0);
+        let untouched_later = test_log(3, 0, 0);
+        let replaced_late = test_log(4, 0, 0);
+        let initial = vec![
+            before_reorg.clone(),
+            replaced_early.clone(),
+            untouched_later.clone(),
+            replaced_late.clone(),
+        ];
+
+        db.store_logs(initial.clone()).await?;
+        db.set_log_batch_processed(initial).await?;
+        db.update_logs_checksums().await?;
+
+        for block_number in 1..=4 {
+            let stored = db.get_log(block_number, 0, 0).await?;
+            assert_eq!(stored.processed, Some(true));
+            assert!(stored.checksum.is_some());
+        }
+
+        // One batch carries two logs that a reorganisation put at already stored positions in
+        // different blocks, one log that is unchanged, and one that is new.
+        let canonical_early = SerializableLog {
+            block_hash: Hash::create(&[b"canonical block 2"]).into(),
+            data: vec![20, 21],
+            ..replaced_early.clone()
+        };
+        let canonical_late = SerializableLog {
+            block_hash: Hash::create(&[b"canonical block 4"]).into(),
+            data: vec![40, 41],
+            ..replaced_late.clone()
+        };
+        let fresh = SerializableLog {
+            data: vec![50, 51],
+            ..test_log(5, 0, 0)
+        };
+
+        db.store_logs(vec![
+            canonical_late.clone(),
+            fresh.clone(),
+            untouched_later.clone(),
+            canonical_early.clone(),
+        ])
+        .await?;
+
+        // The replaced positions carry the canonical log and are unprocessed again.
+        for (canonical, block_number) in [(&canonical_early, 2), (&canonical_late, 4)] {
+            let stored = db.get_log(block_number, 0, 0).await?;
+            assert_eq!(stored.block_hash, canonical.block_hash);
+            assert_eq!(stored.data, canonical.data);
+            assert_eq!(stored.processed, Some(false));
+            assert!(stored.checksum.is_none());
+        }
+
+        // A log before the earliest replaced block keeps both its status and its checksum.
+        let kept = db.get_log(1, 0, 0).await?;
+        assert_eq!(kept.processed, Some(true));
+        assert!(kept.checksum.is_some());
+
+        // An unchanged log after it stays processed, but its checksum was derived from the replaced
+        // log and has to be rebuilt.
+        let later = db.get_log(3, 0, 0).await?;
+        assert_eq!(later.block_hash, untouched_later.block_hash);
+        assert_eq!(later.processed, Some(true));
+        assert!(later.checksum.is_none());
+
+        // The new log is stored with its own data and starts unprocessed.
+        let stored_fresh = db.get_log(5, 0, 0).await?;
+        assert_eq!(stored_fresh.block_hash, fresh.block_hash);
+        assert_eq!(stored_fresh.data, fresh.data);
+        assert_eq!(stored_fresh.processed, Some(false));
+
+        // Exactly one row per position: nothing was duplicated by the batch.
+        assert_eq!(db.get_logs(None, None).await?.len(), 5);
 
         Ok(())
     }
