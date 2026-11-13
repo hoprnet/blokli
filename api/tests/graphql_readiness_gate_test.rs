@@ -84,6 +84,35 @@ async fn make_graphql_sse_request_with_accept(app: Router, query: &str, accept: 
     (status, String::from_utf8_lossy(&frame).into_owned())
 }
 
+/// POST a GraphQL request with `Accept: text/event-stream` and an optional `operationName`.
+/// Returns the status and the `content-type` header (empty when absent).
+async fn make_graphql_routing_request(app: Router, query: &str, operation_name: Option<&str>) -> (StatusCode, String) {
+    let request_body = json!({
+        "query": query,
+        "operationName": operation_name
+    });
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/graphql")
+        .header("content-type", "application/json")
+        .header("accept", "text/event-stream")
+        .body(Body::from(
+            serde_json::to_string(&request_body).expect("Failed to serialize JSON"),
+        ))
+        .expect("Failed to build request");
+
+    let response = app.oneshot(request).await.expect("Failed to execute request");
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+
+    (response.status(), content_type)
+}
+
 async fn make_graphql_sse_request(app: Router, query: &str) -> (StatusCode, String) {
     make_graphql_sse_request_with_accept(app, query, "text/event-stream").await
 }
@@ -374,6 +403,52 @@ async fn test_mixed_subscription_blocked_when_not_ready() -> anyhow::Result<()> 
 
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert!(payload.contains("not ready yet"));
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_comment_prefixed_subscription_routed_as_sse() -> anyhow::Result<()> {
+    let ctx = common::setup_http_test_environment().await?;
+
+    delete_chain_info(&ctx.db).await?;
+
+    let (status, content_type) =
+        make_graphql_routing_request(ctx.app, "# keep me\nsubscription health { health }", None).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(content_type.starts_with("text/event-stream"), "got {content_type}");
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_operation_name_selected_subscription_routed_as_sse() -> anyhow::Result<()> {
+    let ctx = common::setup_http_test_environment().await?;
+
+    delete_chain_info(&ctx.db).await?;
+
+    let query = "query Q { version } subscription Health { health }";
+    let (status, content_type) = make_graphql_routing_request(ctx.app, query, Some("Health")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(content_type.starts_with("text/event-stream"), "got {content_type}");
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_query_mentioning_subscription_routed_as_json() -> anyhow::Result<()> {
+    let ctx = common::setup_http_test_environment().await?;
+
+    update_chain_info_with_current_block(&ctx.db, &ctx.rpc_operations).await?;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    let query = "# subscription\nquery { version }";
+    let (status, content_type) = make_graphql_routing_request(ctx.app, query, None).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(content_type.starts_with("application/json"), "got {content_type}");
 
     Ok(())
 }
