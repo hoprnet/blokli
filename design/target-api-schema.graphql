@@ -1953,11 +1953,15 @@ type RedeemedStats {
 	"""
 	redemptionCount: UInt64!
 	"""
-	Total amount from matching failed ticket redemption attempts
+	Total amount from matching failed ticket redemption attempts.
+	
+	Deprecated: failed redemptions are no longer indexed, so this is 0 for newly built indexes.
 	"""
 	rejectedAmount: TokenValueString!
 	"""
-	Total number of matching failed ticket redemption attempts
+	Total number of matching failed ticket redemption attempts.
+	
+	Deprecated: failed redemptions are no longer indexed, so this is 0 for newly built indexes.
 	"""
 	rejectionCount: UInt64!
 }

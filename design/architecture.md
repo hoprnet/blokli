@@ -926,8 +926,9 @@ Clients can query Safe contracts through three methods:
    failed redemption amounts and counts for the selected Safe and/or node
 
 Successful ticket redemptions update a dedicated aggregate table keyed by `(safe_address, node_address)` during `ChannelBalanceDecreased`
-processing. Failed Safe module ticket redemptions update the same aggregate table only by incrementing aggregate counters and amounts when
-the indexer observes `ExecutionFromModuleFailure` and decodes the rejected outer transaction as a `redeemTicket` call. Query behavior is:
+processing. The rejection counters and amounts (`rejectionCount`, `rejectedAmount`) are deprecated: the indexer no longer subscribes to
+`ExecutionFromModuleFailure` (it required one `eth_getTransactionByHash` call per event), so they stay at 0 for newly built indexes. Values
+written by earlier versions remain in existing databases. Query behavior is:
 
 - safe-only filter aggregates all rows for that safe
 - node-only filter aggregates all rows for that node
@@ -941,8 +942,8 @@ The unique constraint on `(deployed_block, deployed_tx_index, deployed_log_index
 **Safe Contract Event Indexing**:
 
 In addition to HOPR contract events, the indexer subscribes to the Safe event topics `SafeSetup`, `AddedOwner`, `RemovedOwner`,
-`ChangedThreshold`, `ExecutionSuccess`, `ExecutionFailure`, and `ExecutionFromModuleFailure` through address-scoped filters built from the
-current set of indexed Safe contracts. Unknown Safe addresses are not streamed globally.
+`ChangedThreshold`, `ExecutionSuccess`, and `ExecutionFailure` through address-scoped filters built from the current set of indexed Safe
+contracts. Unknown Safe addresses are not streamed globally.
 
 When a Safe becomes known during block processing, the indexer refreshes its Safe-address filter set and performs a targeted RPC backfill
 for the discovery block so setup and owner-management events emitted earlier in that same block are still indexed. Historical Safe backfill

@@ -1421,10 +1421,14 @@ pub struct RedeemedStats {
     /// Total number of matching ticket redemption events
     #[graphql(name = "redemptionCount")]
     pub redemption_count: UInt64,
-    /// Total amount from matching failed ticket redemption attempts
+    /// Total amount from matching failed ticket redemption attempts.
+    ///
+    /// Deprecated: failed redemptions are no longer indexed, so this is 0 for newly built indexes.
     #[graphql(name = "rejectedAmount")]
     pub rejected_amount: TokenValueString,
-    /// Total number of matching failed ticket redemption attempts
+    /// Total number of matching failed ticket redemption attempts.
+    ///
+    /// Deprecated: failed redemptions are no longer indexed, so this is 0 for newly built indexes.
     #[graphql(name = "rejectionCount")]
     pub rejection_count: UInt64,
 }
