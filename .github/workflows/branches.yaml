@@ -16,12 +16,12 @@ concurrency:
 jobs:
   coverage:
     name: Coverage
-    uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@3ee95c480962bb3c1fc0061887da9ba735f537c7 # workflow-tests-v6.1.1
+    uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@43c833e72dffe4f2f3be60193733e5657f8aa0d7 # workflow-tests-v7.0.0
     permissions:
       contents: read
       id-token: write
     with:
-      source_branch: ${{ github.ref_name }}
+      repo_sha: ${{ github.sha }}
       cachix_cache_name: blokli
       enable_unit_tests: false
       enable_integration_tests: false

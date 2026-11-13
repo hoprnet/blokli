@@ -141,6 +141,7 @@ pub mod codes {
 
     /// Invalid pagination parameters
     pub const INVALID_PAGINATION: &str = "INVALID_PAGINATION";
+    pub const INVALID_CONFIRMATIONS: &str = "INVALID_CONFIRMATIONS";
 
     /// Request exceeds an allowed resource limit
     pub const LIMIT_EXCEEDED: &str = "LIMIT_EXCEEDED";
@@ -275,6 +276,14 @@ pub mod messages {
     /// Invalid pagination parameters message
     pub fn invalid_pagination(reason: &str) -> String {
         format!("Invalid pagination parameters: {}", reason)
+    }
+
+    /// Invalid confirmations value message
+    pub fn invalid_confirmations(value: impl std::fmt::Display, max: u64) -> String {
+        format!(
+            "Invalid confirmations value: {}. Must be between 0 and {} (default: 3)",
+            value, max
+        )
     }
 
     /// Subscription lag error message.
@@ -699,6 +708,12 @@ pub fn graphql_error(error: QueryFailedError) -> async_graphql::Error {
 pub fn graphql_subscription_lagged_error(stream: &str, missed: impl std::fmt::Display) -> async_graphql::Error {
     async_graphql::Error::new(messages::subscription_lagged(stream, missed))
         .extend_with(|_, extensions| extensions.set("code", codes::SUBSCRIPTION_LAGGED))
+}
+
+/// Creates an async_graphql::Error for an out-of-range confirmations value
+pub fn invalid_confirmations(value: impl std::fmt::Display, max: u64) -> async_graphql::Error {
+    async_graphql::Error::new(messages::invalid_confirmations(value, max))
+        .extend_with(|_, extensions| extensions.set("code", codes::INVALID_CONFIRMATIONS))
 }
 
 /// Creates an async_graphql::Error when an optional server feature is disabled
