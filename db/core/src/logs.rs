@@ -12,11 +12,11 @@ use hopr_types::{
     primitive::prelude::{Address, DateTime, SerializableLog, ToHex, Utc},
 };
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, FromQueryResult, IntoActiveModel, PaginatorTrait, QueryFilter,
-    QueryOrder, QuerySelect,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend, DbErr, EntityTrait, FromQueryResult,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
     entity::{Set, Unchanged},
     query::QueryTrait,
-    sea_query::{Expr, OnConflict, Value},
+    sea_query::{CaseStatement, Expr, ExprTrait, OnConflict, Value},
 };
 use tracing::{error, trace};
 
@@ -482,65 +482,12 @@ impl BlokliDbLogOperations for BlokliDb {
     }
 
     async fn update_logs_checksums(&self) -> Result<Hash> {
-        self.nest_transaction_in_db(None, TargetDb::Logs)
-            .await?
-            .perform(|tx| {
-                Box::pin(async move {
-                    let mut last_checksum = LogStatus::find()
-                        .filter(log_status::Column::Checksum.is_not_null())
-                        .order_by_desc(log_status::Column::BlockNumber)
-                        .order_by_desc(log_status::Column::TxIndex)
-                        .order_by_desc(log_status::Column::LogIndex)
-                        .one(tx.as_ref())
-                        .await
-                        .map_err(|e| DbError::from(DbSqlError::from(e)))?
-                        .and_then(|m| m.checksum)
-                        .and_then(|c| Hash::try_from(c.as_slice()).ok())
-                        .unwrap_or_default();
-
-                    let query = LogStatus::find()
-                        .filter(log_status::Column::Checksum.is_null())
-                        .order_by_asc(log_status::Column::BlockNumber)
-                        .order_by_asc(log_status::Column::TxIndex)
-                        .order_by_asc(log_status::Column::LogIndex)
-                        .find_also_related(Log);
-
-                    match query.all(tx.as_ref()).await {
-                        Ok(entries) => {
-                            let mut entries = entries.into_iter();
-                            while let Some((status, Some(log_entry))) = entries.next() {
-                                let slog = create_log(log_entry.clone(), status.clone())?;
-                                // we compute the hash of a single log as a combination of the block
-                                // hash, TX hash, and the log index
-                                let log_hash = Hash::create(&[
-                                    log_entry.block_hash.as_slice(),
-                                    log_entry.transaction_hash.as_slice(),
-                                    &i64_to_u64(log_entry.log_index, "log_index")?.to_be_bytes(),
-                                ]);
-
-                                let next_checksum = Hash::create(&[last_checksum.as_ref(), log_hash.as_ref()]);
-
-                                let mut updated_status = status.into_active_model();
-                                updated_status.checksum = Set(Some(next_checksum.as_ref().to_vec()));
-
-                                match updated_status.update(tx.as_ref()).await {
-                                    Ok(_) => {
-                                        last_checksum = next_checksum;
-                                        trace!(log = %slog, checksum = %next_checksum, "Generated log checksum");
-                                    }
-                                    Err(error) => {
-                                        error!(%error, "Failed to update log status checksum in db");
-                                        break;
-                                    }
-                                }
-                            }
-                            Ok(last_checksum)
-                        }
-                        Err(e) => Err(DbError::from(DbSqlError::from(e))),
-                    }
-                })
-            })
-            .await
+        let backend = self.conn(TargetDb::Logs).get_database_backend();
+        self.update_logs_checksums_in_chunks(
+            LOG_CHECKSUM_CHUNK_SIZE,
+            rows_within_bind_limit(backend, LOG_CHECKSUM_BINDS_PER_ROW),
+        )
+        .await
     }
 
     async fn ensure_logs_origin(&self, contract_address_topics: Vec<(Address, Hash)>) -> Result<()> {
@@ -612,6 +559,203 @@ impl BlokliDbLogOperations for BlokliDb {
             })
             .await
     }
+}
+
+impl BlokliDb {
+    /// Checksums the logs that have none yet, `chunk_size` logs per transaction.
+    ///
+    /// Chunks are read in log order with a keyset cursor and committed one by one, so the
+    /// checksummed logs always form a contiguous prefix of the chain. Each chunk is written with
+    /// one `UPDATE` per `rows_per_update` logs. If a chunk fails, it is rolled back, the chunks
+    /// before it stay committed and the error is returned; the next call resumes after them.
+    async fn update_logs_checksums_in_chunks(&self, chunk_size: u64, rows_per_update: usize) -> Result<Hash> {
+        // read inside the first chunk's transaction, so a pass with nothing to do costs one transaction
+        let mut last_checksum: Option<Hash> = None;
+        let mut cursor: Option<(i64, i64, i64)> = None;
+
+        loop {
+            let (chunk_checksum, chunk_cursor, chunk_len) = self
+                .nest_transaction_in_db(None, TargetDb::Logs)
+                .await?
+                .perform(|tx| {
+                    Box::pin(async move {
+                        let seed = match last_checksum {
+                            Some(checksum) => checksum,
+                            None => last_log_checksum(tx.as_ref()).await?,
+                        };
+                        checksum_logs_chunk(tx.as_ref(), seed, cursor, chunk_size, rows_per_update).await
+                    })
+                })
+                .await?;
+
+            match chunk_cursor {
+                Some(position) if chunk_len >= chunk_size => {
+                    last_checksum = Some(chunk_checksum);
+                    cursor = Some(position);
+                }
+                _ => return Ok(chunk_checksum),
+            }
+        }
+    }
+}
+
+/// The checksum of the last checksummed log, or the zero hash if no log has one yet.
+async fn last_log_checksum<C: ConnectionTrait>(conn: &C) -> Result<Hash> {
+    Ok(LogStatus::find()
+        .filter(log_status::Column::Checksum.is_not_null())
+        .order_by_desc(log_status::Column::BlockNumber)
+        .order_by_desc(log_status::Column::TxIndex)
+        .order_by_desc(log_status::Column::LogIndex)
+        .one(conn)
+        .await
+        .map_err(|e| DbError::from(DbSqlError::from(e)))?
+        .and_then(|m| m.checksum)
+        .and_then(|c| Hash::try_from(c.as_slice()).ok())
+        .unwrap_or_default())
+}
+
+/// Logs read and checksummed per transaction by [`BlokliDbLogOperations::update_logs_checksums`].
+const LOG_CHECKSUM_CHUNK_SIZE: u64 = 10_000;
+/// Bind parameters per log in the checksum `UPDATE`: the id and checksum in the `CASE` arm and
+/// the id in the `IN` list.
+const LOG_CHECKSUM_BINDS_PER_ROW: usize = 3;
+/// Default `SQLITE_MAX_VARIABLE_NUMBER` for SQLite builds before 3.32.
+const SQLITE_MAX_BIND_PARAMETERS: usize = 999;
+/// PostgreSQL wire protocol limit on bind parameters per statement.
+const POSTGRES_MAX_BIND_PARAMETERS: usize = 65_535;
+
+/// Number of rows that fit in one statement with `binds_per_row` bind parameters each.
+fn rows_within_bind_limit(backend: DatabaseBackend, binds_per_row: usize) -> usize {
+    let limit = if backend == DatabaseBackend::Sqlite {
+        SQLITE_MAX_BIND_PARAMETERS
+    } else {
+        POSTGRES_MAX_BIND_PARAMETERS
+    };
+    (limit / binds_per_row.max(1)).max(1)
+}
+
+/// The columns of an unchecksummed log that the checksum and the keyset cursor need.
+#[derive(FromQueryResult)]
+struct UnchecksummedLog {
+    id: i64,
+    block_number: i64,
+    tx_index: i64,
+    log_index: i64,
+    block_hash: Vec<u8>,
+    transaction_hash: Vec<u8>,
+    hashed_log_index: i64,
+}
+
+/// Checksums the next `chunk_size` unchecksummed logs after `cursor`, chained onto
+/// `last_checksum`.
+///
+/// Returns the checksum of the last log in the chunk (`last_checksum` if the chunk is empty), the
+/// position of that log and the number of logs in the chunk.
+async fn checksum_logs_chunk<C: ConnectionTrait>(
+    conn: &C,
+    mut last_checksum: Hash,
+    cursor: Option<(i64, i64, i64)>,
+    chunk_size: u64,
+    rows_per_update: usize,
+) -> Result<(Hash, Option<(i64, i64, i64)>, u64)> {
+    let position = || {
+        Expr::tuple([
+            Expr::col((LogStatus, log_status::Column::BlockNumber)),
+            Expr::col((LogStatus, log_status::Column::TxIndex)),
+            Expr::col((LogStatus, log_status::Column::LogIndex)),
+        ])
+    };
+
+    let entries = LogStatus::find()
+        .select_only()
+        .column(log_status::Column::Id)
+        .column(log_status::Column::BlockNumber)
+        .column(log_status::Column::TxIndex)
+        .column(log_status::Column::LogIndex)
+        .column_as(log::Column::BlockHash, "block_hash")
+        .column_as(log::Column::TransactionHash, "transaction_hash")
+        .column_as(log::Column::LogIndex, "hashed_log_index")
+        .inner_join(Log)
+        .filter(log_status::Column::Checksum.is_null())
+        .apply_if(cursor, |q, (block_number, tx_index, log_index)| {
+            q.filter(position().gt(Expr::tuple([
+                Expr::value(block_number),
+                Expr::value(tx_index),
+                Expr::value(log_index),
+            ])))
+        })
+        .order_by_asc(log_status::Column::BlockNumber)
+        .order_by_asc(log_status::Column::TxIndex)
+        .order_by_asc(log_status::Column::LogIndex)
+        .limit(chunk_size)
+        .into_model::<UnchecksummedLog>()
+        .all(conn)
+        .await
+        .map_err(|e| DbError::from(DbSqlError::from(e)))?;
+
+    let chunk_len = entries.len() as u64;
+    let chunk_cursor = entries.last().map(|e| (e.block_number, e.tx_index, e.log_index));
+
+    let mut checksums = Vec::with_capacity(entries.len());
+    for entry in entries {
+        if Hash::try_from(entry.block_hash.as_slice()).is_err()
+            || Hash::try_from(entry.transaction_hash.as_slice()).is_err()
+        {
+            return Err(DbSqlError::from(DbEntityError::Conversion(format!(
+                "invalid block or transaction hash length in log at {}/{}/{}",
+                entry.block_number, entry.tx_index, entry.log_index
+            )))
+            .into());
+        }
+
+        // we compute the hash of a single log as a combination of the block
+        // hash, TX hash, and the log index
+        let log_hash = Hash::create(&[
+            entry.block_hash.as_slice(),
+            entry.transaction_hash.as_slice(),
+            &i64_to_u64(entry.hashed_log_index, "log_index")?.to_be_bytes(),
+        ]);
+        last_checksum = Hash::create(&[last_checksum.as_ref(), log_hash.as_ref()]);
+        trace!(
+            block_number = entry.block_number,
+            tx_index = entry.tx_index,
+            log_index = entry.log_index,
+            checksum = %last_checksum,
+            "Generated log checksum"
+        );
+        checksums.push((entry.id, last_checksum));
+    }
+
+    for batch in checksums.chunks(rows_per_update.max(1)) {
+        let checksum_by_id = batch.iter().fold(CaseStatement::new(), |case, (id, checksum)| {
+            case.case(log_status::Column::Id.eq(*id), Expr::value(checksum.as_ref().to_vec()))
+        });
+
+        let result = LogStatus::update_many()
+            .col_expr(log_status::Column::Checksum, checksum_by_id.into())
+            .filter(log_status::Column::Id.is_in(batch.iter().map(|(id, _)| *id)))
+            .exec(conn)
+            .await
+            .map_err(|error| {
+                error!(%error, "Failed to update log status checksums in db");
+                DbError::from(DbSqlError::from(error))
+            })?;
+
+        if result.rows_affected != batch.len() as u64 {
+            error!(
+                expected = batch.len(),
+                updated = result.rows_affected,
+                "Log status checksum update touched an unexpected number of rows"
+            );
+            return Err(DbError::LogicalError(format!(
+                "log status checksum update touched {} rows instead of {}",
+                result.rows_affected,
+                batch.len()
+            )));
+        }
+    }
+
+    Ok((last_checksum, chunk_cursor, chunk_len))
 }
 
 fn create_log(raw_log: log::Model, status: log_status::Model) -> crate::errors::Result<SerializableLog> {
