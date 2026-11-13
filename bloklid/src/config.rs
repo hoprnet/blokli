@@ -1,6 +1,6 @@
 use std::{fmt, time::Duration};
 
-use blokli_chain_indexer::utils::redact_url;
+use blokli_chain_indexer::{snapshot::download::normalize_sha256_hex, utils::redact_url};
 use blokli_chain_types::{ChainConfig, ContractAddresses};
 use blokli_db::utils::redact_database_url;
 use hopr_types::primitive::primitives::Address;
@@ -343,6 +343,9 @@ impl Config {
         if let Some(snapshot_url) = &self.indexer.logs_snapshot_url {
             output.push_str(&format!("  indexer.logs_snapshot_url: {}\n", redact_url(snapshot_url)));
         }
+        if let Some(snapshot_sha256) = &self.indexer.logs_snapshot_sha256 {
+            output.push_str(&format!("  indexer.logs_snapshot_sha256: {snapshot_sha256}\n"));
+        }
 
         output.push_str(&format!("  api.enabled: {}\n", self.api.enabled));
         output.push_str(&format!("  api.bind_address: {}\n", self.api.bind_address));
@@ -472,8 +475,39 @@ pub struct IndexerConfig {
     #[serde(default)]
     pub logs_snapshot_url: Option<String>,
 
+    /// Expected SHA-256 digest (64 hex characters) of the logs snapshot archive.
+    /// An archive with a different digest is rejected before extraction.
+    /// Required when `enable_logs_snapshot` is true or `logs_snapshot_url` is set.
+    #[serde(default)]
+    pub logs_snapshot_sha256: Option<String>,
+
     #[serde(default)]
     pub subscription: SubscriptionConfig,
+}
+
+impl IndexerConfig {
+    /// Validates the logs snapshot settings.
+    ///
+    /// `logs_snapshot_sha256` is required when `enable_logs_snapshot` is true or a non-empty
+    /// `logs_snapshot_url` is set, and must be a SHA-256 digest of 64 hex characters when present.
+    pub fn validate(&self) -> Result<(), String> {
+        let snapshot_url_set = self
+            .logs_snapshot_url
+            .as_deref()
+            .is_some_and(|url| !url.trim().is_empty());
+
+        match &self.logs_snapshot_sha256 {
+            None if self.enable_logs_snapshot || snapshot_url_set => Err("indexer.logs_snapshot_sha256 must be \
+                                                                          specified when \
+                                                                          indexer.enable_logs_snapshot is true or \
+                                                                          indexer.logs_snapshot_url is set"
+                .to_string()),
+            Some(digest) if normalize_sha256_hex(digest).is_none() => {
+                Err("indexer.logs_snapshot_sha256 must be a SHA-256 digest of 64 hex characters".to_string())
+            }
+            _ => Ok(()),
+        }
+    }
 }
 
 /// Configuration for GraphQL subscription behavior
@@ -1104,6 +1138,62 @@ mod tests {
         assert!(!cfg.indexer.enable_safe_indexing); // Default
         assert!(!cfg.indexer.enable_curvy_indexing); // Default
         assert_eq!(cfg.indexer.subscription.event_bus_capacity, 1000); // Default
+    }
+
+    #[test]
+    fn test_indexer_logs_snapshot_sha256() {
+        let config = r#"
+         [indexer]
+         enable_logs_snapshot = true
+         logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz"
+         logs_snapshot_sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
+        let cfg: Config = toml::from_str(config).expect("config with logs_snapshot_sha256 should parse");
+        assert_eq!(
+            cfg.indexer.logs_snapshot_sha256.as_deref(),
+            Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        );
+    }
+
+    #[test]
+    fn test_indexer_validate_requires_logs_snapshot_sha256() {
+        let digest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+        assert!(IndexerConfig::default().validate().is_ok(), "defaults need no digest");
+
+        let enabled = IndexerConfig {
+            enable_logs_snapshot: true,
+            logs_snapshot_url: Some("https://example.com/logs-snapshot.tar.xz".to_string()),
+            ..Default::default()
+        };
+        let error = enabled
+            .validate()
+            .expect_err("enabled snapshot without digest must fail");
+        assert!(error.contains("indexer.logs_snapshot_sha256"), "{error}");
+
+        let url_only = IndexerConfig {
+            logs_snapshot_url: Some("https://example.com/logs-snapshot.tar.xz".to_string()),
+            ..Default::default()
+        };
+        let error = url_only.validate().expect_err("snapshot URL without digest must fail");
+        assert!(error.contains("indexer.logs_snapshot_sha256"), "{error}");
+
+        let malformed = IndexerConfig {
+            logs_snapshot_sha256: Some("abc".to_string()),
+            ..url_only.clone()
+        };
+        let error = malformed.validate().expect_err("malformed digest must fail");
+        assert!(error.contains("indexer.logs_snapshot_sha256"), "{error}");
+
+        let valid = IndexerConfig {
+            logs_snapshot_sha256: Some(digest.to_string()),
+            ..enabled
+        };
+        assert!(valid.validate().is_ok());
     }
 
     #[test]

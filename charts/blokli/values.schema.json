@@ -167,8 +167,37 @@
             "logsSnapshotUrl": {
               "type": "string",
               "description": "URL for logs snapshot download"
+            },
+            "logsSnapshotSha256": {
+              "type": "string",
+              "description": "Expected SHA-256 hex digest of the logs snapshot archive",
+              "pattern": "^([0-9a-fA-F]{64})?$"
             }
-          }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": { "enableLogsSnapshot": { "const": true } },
+                "required": ["enableLogsSnapshot"]
+              },
+              "then": {
+                "required": ["logsSnapshotSha256"],
+                "properties": { "logsSnapshotSha256": { "minLength": 64 } }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "logsSnapshotUrl": { "type": "string", "minLength": 1 }
+                },
+                "required": ["logsSnapshotUrl"]
+              },
+              "then": {
+                "required": ["logsSnapshotSha256"],
+                "properties": { "logsSnapshotSha256": { "minLength": 64 } }
+              }
+            }
+          ]
         },
         "logging": {
           "type": "object",

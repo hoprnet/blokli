@@ -120,6 +120,7 @@ impl Args {
             ("BLOKLI_INDEXER_ENABLE_SAFE_INDEXING", "indexer.enable_safe_indexing"),
             ("BLOKLI_INDEXER_ENABLE_CURVY_INDEXING", "indexer.enable_curvy_indexing"),
             ("BLOKLI_INDEXER_LOGS_SNAPSHOT_URL", "indexer.logs_snapshot_url"),
+            ("BLOKLI_INDEXER_LOGS_SNAPSHOT_SHA256", "indexer.logs_snapshot_sha256"),
             (
                 "BLOKLI_INDEXER_SUBSCRIPTION_EVENT_BUS_CAPACITY",
                 "indexer.subscription.event_bus_capacity",
@@ -239,9 +240,14 @@ impl Args {
             "api.sse_keepalive.enabled",
         ];
 
+        // Values that must stay strings even when they look numeric (e.g. an all-digit SHA-256 digest).
+        let string_keys = ["indexer.logs_snapshot_url", "indexer.logs_snapshot_sha256"];
+
         for (env_var, config_key) in env_mappings {
             if let Ok(val) = std::env::var(env_var) {
-                let override_val: config_rs::Value = if boolean_keys.contains(&config_key) {
+                let override_val: config_rs::Value = if string_keys.contains(&config_key) {
+                    val.into()
+                } else if boolean_keys.contains(&config_key) {
                     if let Ok(flag) = val.parse::<bool>() {
                         flag.into()
                     } else if let Ok(num) = val.parse::<u64>() {
@@ -300,6 +306,8 @@ impl Args {
         if config.database.is_none() {
             return Err(ConfigError::NoDatabaseConfiguration.into());
         }
+
+        config.indexer.validate().map_err(ConfigError::Parse)?;
 
         config.validate().map_err(ConfigError::Validation)?;
 
@@ -1570,6 +1578,103 @@ mod tests {
                 assert_eq!(config.api.transactions.max_queued_trace_jobs, 50);
                 assert_eq!(config.api.transactions.max_concurrent_trace_jobs, 4);
                 assert!(config.api.transactions.enable_revert_reason_tracing);
+            },
+        );
+    }
+
+    fn snapshot_config_file(indexer: &str) -> tempfile::NamedTempFile {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "jura-dev"
+            rpc_url = "http://localhost:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+            [indexer]
+            {indexer}
+        "#
+        )
+        .unwrap();
+        file
+    }
+
+    fn assert_snapshot_sha256_rejected(file: &tempfile::NamedTempFile) {
+        let path = file.path().to_path_buf();
+        temp_env::with_vars(
+            [
+                ("BLOKLI_INDEXER_ENABLE_LOGS_SNAPSHOT", None::<&str>),
+                ("BLOKLI_INDEXER_LOGS_SNAPSHOT_URL", None),
+                ("BLOKLI_INDEXER_LOGS_SNAPSHOT_SHA256", None),
+            ],
+            || {
+                let args = Args {
+                    verbose: 0,
+                    config: Some(path),
+                    command: None,
+                };
+
+                let result = args.load_config(false);
+                assert!(
+                    matches!(
+                        &result,
+                        Err(BloklidError::Config(ConfigError::Parse(message)))
+                            if message.contains("indexer.logs_snapshot_sha256")
+                    ),
+                    "expected a logs_snapshot_sha256 error, got {result:?}"
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn test_enabled_logs_snapshot_without_sha256_is_rejected() {
+        let file = snapshot_config_file(
+            r#"enable_logs_snapshot = true
+            logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz""#,
+        );
+        assert_snapshot_sha256_rejected(&file);
+    }
+
+    #[test]
+    fn test_logs_snapshot_url_without_sha256_is_rejected() {
+        let file = snapshot_config_file(r#"logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz""#);
+        assert_snapshot_sha256_rejected(&file);
+    }
+
+    #[test]
+    fn test_malformed_logs_snapshot_sha256_is_rejected() {
+        let file = snapshot_config_file(
+            r#"logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz"
+            logs_snapshot_sha256 = "abc""#,
+        );
+        assert_snapshot_sha256_rejected(&file);
+    }
+
+    #[test]
+    fn test_all_digit_logs_snapshot_sha256_env_override_stays_a_string() {
+        let digest = "0123456789".repeat(6) + "0123";
+        let file = snapshot_config_file("enable_logs_snapshot = true");
+        let path = file.path().to_path_buf();
+
+        temp_env::with_vars(
+            [
+                (
+                    "BLOKLI_INDEXER_LOGS_SNAPSHOT_URL",
+                    Some("https://example.com/logs-snapshot.tar.xz"),
+                ),
+                ("BLOKLI_INDEXER_LOGS_SNAPSHOT_SHA256", Some(digest.as_str())),
+            ],
+            || {
+                let args = Args {
+                    verbose: 0,
+                    config: Some(path),
+                    command: None,
+                };
+
+                let config = args.load_config(false).expect("all-digit digest should load");
+                assert_eq!(config.indexer.logs_snapshot_sha256.as_deref(), Some(digest.as_str()));
             },
         );
     }
