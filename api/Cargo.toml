@@ -54,6 +54,9 @@ thiserror = { workspace = true }
 # Database
 sea-orm = { workspace = true }
 
+# Caching
+moka = { workspace = true }
+
 # Encoding
 chrono          = { workspace = true }
 hex             = { workspace = true }
