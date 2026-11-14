@@ -420,7 +420,15 @@ impl BlokliDbSafeHistoryOperations for BlokliDb {
             .from(HoprSafeContractState)
             .and_where(hopr_safe_contract_state::Column::OwnersSyncedBlock.gte(snapshot_block))
             .to_owned();
+        // A Safe identity without any state row is incomplete (no module address or chain key, and not
+        // served by the current views). There is no row to hold `owners_synced_block`, so it could never
+        // leave the pending list: it is not listed until its first state row exists.
+        let with_state = Query::select()
+            .column(hopr_safe_contract_state::Column::HoprSafeContractId)
+            .from(HoprSafeContractState)
+            .to_owned();
         let pending = HoprSafeContract::find()
+            .filter(hopr_safe_contract::Column::Id.in_subquery(with_state))
             .filter(hopr_safe_contract::Column::Id.not_in_subquery(synced))
             .order_by_asc(hopr_safe_contract::Column::Id)
             .all(nested.as_ref())
@@ -629,6 +637,24 @@ mod tests {
         assert_eq!(db.get_safe_owners(None, safe_address).await?, vec![kept]);
         assert_eq!(db.get_safe_threshold(None, safe_address).await?.as_deref(), Some("2"));
         assert_eq!(db.get_safe_owners_synced_block(None, safe_address).await?, Some(210));
+
+        Ok(())
+    }
+    #[tokio::test]
+    async fn test_safe_without_a_state_row_is_not_listed_as_pending() -> anyhow::Result<()> {
+        let (db, safe_address) = setup().await?;
+        let incomplete = random_address();
+        HoprSafeContract::insert(hopr_safe_contract::ActiveModel {
+            address: Set(incomplete.as_ref().to_vec()),
+            ..Default::default()
+        })
+        .exec(db.conn(crate::TargetDb::Index))
+        .await?;
+
+        assert_eq!(
+            db.get_safes_pending_owner_snapshot(None, 200).await?,
+            vec![safe_address]
+        );
 
         Ok(())
     }
