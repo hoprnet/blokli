@@ -2,7 +2,7 @@ use blokli_chain_rpc::Log;
 use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{BlokliDbAllOperations, OpenTransaction};
 use hopr_types::primitive::prelude::Address;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::{ContractEventHandlers, u256_to_u64};
 use crate::{custom_abis::safe_contract_events::SafeContract::SafeContractEvents, errors::Result, state::IndexerEvent};
@@ -12,20 +12,34 @@ where
     T: blokli_chain_rpc::HoprIndexerRpcOperations + Clone + Send + 'static,
     Db: BlokliDbAllOperations + Clone,
 {
-    /// Reads owners and threshold of a Safe discovered while live, pinned at the discovery block.
+    /// Reads owners and threshold of a Safe, pinned at `block`, and stores them.
     ///
-    /// Live owner and threshold events at or below `block` are covered by this snapshot and
-    /// ignored from then on.
+    /// Live owner and threshold events at or below `block` are covered by this snapshot and ignored
+    /// from then on. An RPC failure (including a registered address whose `getOwners` reverts) is
+    /// not an error for indexing: the Safe stays without a snapshot, and the background refresh
+    /// retries it. Returns whether the snapshot was stored.
     pub(super) async fn snapshot_safe_owners_at_discovery(
         &self,
         tx: &OpenTransaction,
         safe_address: Address,
         block: u64,
-    ) -> Result<()> {
-        let snapshot = self
+    ) -> Result<bool> {
+        let snapshot = match self
             ._rpc_operations
             .get_safe_owners_and_threshold(safe_address, block)
-            .await?;
+            .await
+        {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                warn!(
+                    safe_address = %safe_address,
+                    block,
+                    %error,
+                    "failed to read Safe owners, the Safe stays pending for the background refresh"
+                );
+                return Ok(false);
+            }
+        };
         self.db
             .apply_safe_owner_snapshot(
                 Some(tx),
@@ -35,16 +49,25 @@ where
                 block,
             )
             .await?;
-        Ok(())
+        Ok(true)
     }
 
-    /// Whether the owner snapshot of the Safe already covers an event in `block`.
-    async fn owner_snapshot_covers(&self, tx: &OpenTransaction, safe_address: Address, block: u64) -> Result<bool> {
-        Ok(self
-            .db
-            .get_safe_owners_synced_block(Some(tx), safe_address)
-            .await?
-            .is_some_and(|synced_block| block <= synced_block))
+    /// Whether a live owner or threshold event in `block` must not be applied.
+    ///
+    /// * Safe with a snapshot at or above `block`: the snapshot already includes the event, skip it.
+    /// * Safe with an older snapshot: apply the event on top of it.
+    /// * Safe without a snapshot: applying the event alone would produce an owner set that looks
+    ///   complete but is not. The Safe is snapshotted pinned at the event block instead, which covers
+    ///   the event and everything before it. If that read fails, the event is skipped and the Safe
+    ///   stays pending, so the background refresh reads the full set later.
+    async fn skip_owner_event(&self, tx: &OpenTransaction, safe_address: Address, block: u64) -> Result<bool> {
+        match self.db.get_safe_owners_synced_block(Some(tx), safe_address).await? {
+            Some(synced_block) => Ok(block <= synced_block),
+            None => {
+                self.snapshot_safe_owners_at_discovery(tx, safe_address, block).await?;
+                Ok(true)
+            }
+        }
     }
 
     pub(super) async fn on_safe_contract_event(
@@ -65,11 +88,11 @@ where
                 | SafeContractEvents::RemovedOwner(_)
                 | SafeContractEvents::ChangedThreshold(_)
         );
-        if owner_events && self.owner_snapshot_covers(tx, safe_address, log.block_number).await? {
+        if owner_events && self.skip_owner_event(tx, safe_address, log.block_number).await? {
             debug!(
                 safe_address = %safe_address,
                 block = log.block_number,
-                "Ignoring Safe event covered by the owner snapshot"
+                "Skipping Safe event covered by, or replaced with, an owner snapshot"
             );
             return Ok(Vec::new());
         }
@@ -240,6 +263,9 @@ mod tests {
             0,
         )
         .await?;
+        // Live events only apply on top of a snapshot.
+        db.apply_safe_owner_snapshot(None, safe_address, vec![], "1".into(), 100)
+            .await?;
         Ok(())
     }
 
@@ -400,7 +426,7 @@ mod tests {
         .await?;
 
         assert!(db.get_safe_owners(None, safe_address).await?.is_empty());
-        assert_eq!(db.get_safe_threshold(None, safe_address).await?, None);
+        assert_eq!(db.get_safe_threshold(None, safe_address).await?.as_deref(), Some("1"));
 
         let safe_count = SafeContractEntity::find()
             .filter(SafeContractColumn::Address.eq(safe_address.as_ref().to_vec()))
@@ -443,6 +469,113 @@ mod tests {
         );
         assert_eq!(db.get_safe_threshold(None, safe_address).await?.as_deref(), Some("2"));
         assert_eq!(db.get_safe_owners_synced_block(None, safe_address).await?, Some(120));
+
+        Ok(())
+    }
+    #[tokio::test]
+    async fn test_event_for_a_safe_without_snapshot_snapshots_at_the_event_block() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe_address = address_with_byte(51);
+        db.create_safe_contract(
+            None,
+            safe_address,
+            address_with_byte(2),
+            address_with_byte(3),
+            100,
+            0,
+            0,
+        )
+        .await?;
+        let (chain_owner, event_owner) = (address_with_byte(52), address_with_byte(53));
+
+        let mut rpc = MockIndexerRpcOperations::new();
+        rpc.expect_get_safe_owners_and_threshold()
+            .withf(move |safe, block| *safe == safe_address && *block == 130)
+            .times(1)
+            .returning(move |_, _| {
+                Ok(SafeOwnersSnapshot {
+                    owners: vec![chain_owner, event_owner],
+                    threshold: 2,
+                })
+            });
+        let handlers = init_handlers(ClonableMockOperations { inner: Arc::new(rpc) }, db.clone());
+
+        apply(handlers, &db, safe_address, 130, 0, added(event_owner)).await?;
+
+        // The full set from the chain, not just the owner named by the event.
+        let mut expected = vec![chain_owner, event_owner];
+        expected.sort();
+        assert_eq!(db.get_safe_owners(None, safe_address).await?, expected);
+        assert_eq!(db.get_safe_owners_synced_block(None, safe_address).await?, Some(130));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_event_for_a_safe_without_snapshot_is_skipped_when_the_read_fails() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe_address = address_with_byte(54);
+        db.create_safe_contract(
+            None,
+            safe_address,
+            address_with_byte(2),
+            address_with_byte(3),
+            100,
+            0,
+            0,
+        )
+        .await?;
+
+        let mut rpc = MockIndexerRpcOperations::new();
+        rpc.expect_get_safe_owners_and_threshold()
+            .returning(|_, _| Err(blokli_chain_rpc::errors::RpcError::Other("reverted".into())));
+        let handlers = init_handlers(ClonableMockOperations { inner: Arc::new(rpc) }, db.clone());
+
+        apply(handlers, &db, safe_address, 130, 0, added(address_with_byte(55))).await?;
+
+        assert!(
+            db.get_safe_owners(None, safe_address).await?.is_empty(),
+            "no partial owner set"
+        );
+        assert_eq!(db.get_safe_owners_synced_block(None, safe_address).await?, None);
+        assert_eq!(
+            db.get_safes_pending_owner_snapshot(None, 130).await?,
+            vec![safe_address]
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_discovery_snapshot_rpc_error_leaves_the_safe_pending() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe_address = address_with_byte(56);
+        db.create_safe_contract(
+            None,
+            safe_address,
+            address_with_byte(2),
+            address_with_byte(3),
+            100,
+            0,
+            0,
+        )
+        .await?;
+
+        let mut rpc = MockIndexerRpcOperations::new();
+        rpc.expect_get_safe_owners_and_threshold()
+            .returning(|_, _| Err(blokli_chain_rpc::errors::RpcError::Other("execution reverted".into())));
+        let handlers = init_handlers(ClonableMockOperations { inner: Arc::new(rpc) }, db.clone());
+
+        let stored = db
+            .begin_transaction()
+            .await?
+            .perform(|tx| {
+                Box::pin(async move { handlers.snapshot_safe_owners_at_discovery(tx, safe_address, 120).await })
+            })
+            .await?;
+
+        assert!(!stored);
+        assert_eq!(db.get_safe_owners_synced_block(None, safe_address).await?, None);
 
         Ok(())
     }

@@ -171,6 +171,9 @@ mod tests {
              (1, x'0202020202020202020202020202020202020202', 1, 10, 0, 0), \
              (1, x'0202020202020202020202020202020202020202', 0, 20, 0, 0), \
              (1, x'0303030303030303030303030303030303030303', 1, 15, 0, 0)",
+            "INSERT INTO hopr_safe_contract_state (hopr_safe_contract_id, module_address, chain_key, published_block, \
+             published_tx_index, published_log_index) VALUES (1, x'0505050505050505050505050505050505050505', \
+             x'0606060606060606060606060606060606060606', 5, 0, 0)",
             "INSERT INTO hopr_safe_threshold_state (hopr_safe_contract_id, threshold, published_block, \
              published_tx_index, published_log_index) VALUES (1, '1', 10, 0, 0), (1, '2', 30, 0, 0)",
         ] {
@@ -211,7 +214,7 @@ mod tests {
         );
         assert_eq!(
             count("SELECT COUNT(*) AS n FROM hopr_safe_contract_state WHERE owners_synced_block IS NULL").await,
-            0
+            1
         );
     }
 

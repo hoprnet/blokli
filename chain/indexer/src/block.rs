@@ -7,9 +7,10 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
+    time::Duration,
 };
 
-use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
+use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations, SafeOwnersSnapshot};
 use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{
     BlokliDbGeneralModelOperations, TargetDb, api::logs::BlokliDbLogOperations, info::BlokliDbInfoOperations,
@@ -17,7 +18,7 @@ use blokli_db::{
 };
 use blokli_db_entity::{channel_state, prelude::ChannelState};
 use futures::{
-    FutureExt, StreamExt,
+    FutureExt, SinkExt, StreamExt,
     channel::mpsc::channel,
     future::{AbortHandle, abortable},
 };
@@ -48,6 +49,18 @@ use crate::{
 
 /// Maximum number of concurrent `getOwners`/`getThreshold` reads during the Safe owner refresh.
 const SAFE_SNAPSHOT_CONCURRENCY: usize = 8;
+
+/// Initial and maximum wait between retry rounds of the Safe owner refresh.
+const SAFE_SNAPSHOT_RETRY_MIN: Duration = Duration::from_secs(1);
+const SAFE_SNAPSHOT_RETRY_MAX: Duration = Duration::from_secs(60);
+
+/// A Safe owner snapshot read from the chain, waiting to be stored by the main indexing loop.
+#[derive(Debug)]
+struct SafeSnapshotRead {
+    safe_address: Address,
+    block: u64,
+    snapshot: SafeOwnersSnapshot,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Display)]
 enum LogFilterPhase {
@@ -460,20 +473,33 @@ where
             }
             let mut safe_filter_epoch = indexer_state.safe_filter_epoch();
 
-            // Owners and threshold come from the chain at the last processed block. Live events above
-            // that block are applied on top; the refresh runs next to the continuous stream.
-            let snapshot_block = stream_start_block.saturating_sub(1);
+            // Owners and threshold come from the chain. The refresh task only performs RPC reads (it never
+            // holds a database transaction) and hands the results to this loop, which stores them between
+            // blocks. Pending Safes are retried with backoff until none is left.
+            let refresh_goal_block = stream_start_block.saturating_sub(1);
+            let latest_processed_block = AtomicU64::new(refresh_goal_block);
+            let (snapshot_tx, mut snapshot_rx) = channel::<SafeSnapshotRead>(SAFE_SNAPSHOT_CONCURRENCY * 2);
             let mut owner_refresh = Box::pin(
                 async {
                     if !self.cfg.enable_safe_indexing {
                         return;
                     }
-                    if let Err(error) = Self::refresh_safe_owner_snapshots(&rpc, &db, snapshot_block).await {
+                    if let Err(error) = Self::read_safe_owner_snapshots(
+                        &rpc,
+                        &db,
+                        refresh_goal_block,
+                        &latest_processed_block,
+                        snapshot_tx,
+                        SAFE_SNAPSHOT_RETRY_MIN,
+                    )
+                    .await
+                    {
                         error!(%error, "Safe owner snapshot refresh failed");
                     }
                 }
                 .fuse(),
             );
+            let mut snapshot_rx_open = true;
 
             // Reason why the continuous phase stopped, if it stopped because of a failure.
             // A failure here must not leave the process running without an indexer, so it is
@@ -506,6 +532,13 @@ where
                             None => break,
                         },
                         () = &mut owner_refresh, if !futures::future::FusedFuture::is_terminated(&owner_refresh) => continue,
+                        read = snapshot_rx.next(), if snapshot_rx_open => {
+                            match read {
+                                Some(read) => Self::store_safe_owner_snapshot(&db, read).await,
+                                None => snapshot_rx_open = false,
+                            }
+                            continue;
+                        }
                     };
                     if let Err(error) = Self::store_block_logs(&db, &logs_handler, &block).await {
                         break 'stream_refresh Some(format!(
@@ -517,6 +550,7 @@ where
                     Self::process_block(&db, &logs_handler, block.clone(), false, true, &indexer_state, true).await;
 
                     stream_start_block = block.block_id.saturating_add(1);
+                    latest_processed_block.store(block.block_id, Ordering::Relaxed);
 
                     let latest_safe_filter_epoch = indexer_state.safe_filter_epoch();
                     if latest_safe_filter_epoch != safe_filter_epoch {
@@ -624,57 +658,105 @@ where
         address_topics
     }
 
-    /// Reads owners and threshold of every Safe without a snapshot at `snapshot_block` and stores them.
+    /// Reads owners and threshold of every Safe without a snapshot at `goal_block` and sends them to the
+    /// indexing loop, which stores them.
     ///
     /// Runs at every switch to continuous mode, so owner changes made while the indexer was down are
-    /// picked up. Safes already snapshotted at or above `snapshot_block` are skipped, which makes a
-    /// restart after a crash redo only the missing ones. Reads are bounded in concurrency; a Safe whose
-    /// read fails stays pending for the next switch.
-    async fn refresh_safe_owner_snapshots(rpc: &T, db: &Db, snapshot_block: u64) -> Result<()> {
-        let pending = db.get_safes_pending_owner_snapshot(None, snapshot_block).await?;
-        if pending.is_empty() {
-            return Ok(());
-        }
-        info!(
-            safes = pending.len(),
-            snapshot_block, "Refreshing Safe owners and thresholds from the chain"
-        );
-
-        let mut snapshots = futures::stream::iter(pending)
-            .map(|safe_address| async move {
-                (
-                    safe_address,
-                    rpc.get_safe_owners_and_threshold(safe_address, snapshot_block).await,
-                )
-            })
-            .buffer_unordered(SAFE_SNAPSHOT_CONCURRENCY);
-
-        let (mut refreshed, mut failed) = (0_usize, 0_usize);
-        while let Some((safe_address, snapshot)) = snapshots.next().await {
-            match snapshot {
-                Ok(snapshot) => {
-                    db.apply_safe_owner_snapshot(
-                        None,
-                        safe_address,
-                        snapshot.owners,
-                        snapshot.threshold.to_string(),
-                        snapshot_block,
-                    )
-                    .await?;
-                    refreshed += 1;
-                }
+    /// picked up. Safes already snapshotted at or above `goal_block` are skipped, which makes a restart
+    /// after a crash redo only the missing ones. Reads are bounded in concurrency and pinned at the latest
+    /// processed block of each round. This function performs no database writes, so it can never hold a
+    /// write lock that a block being processed would wait for.
+    ///
+    /// Safes whose read (or storage) failed are still pending in the database; the next round re-reads
+    /// them after a backoff, until none is left.
+    async fn read_safe_owner_snapshots(
+        rpc: &T,
+        db: &Db,
+        goal_block: u64,
+        latest_processed_block: &AtomicU64,
+        mut results: futures::channel::mpsc::Sender<SafeSnapshotRead>,
+        retry_min: Duration,
+    ) -> Result<()> {
+        let mut delay = retry_min;
+        let mut last_pending = usize::MAX;
+        loop {
+            let pending = match db.get_safes_pending_owner_snapshot(None, goal_block).await {
+                Ok(pending) => pending,
                 Err(error) => {
-                    warn!(%safe_address, %error, "failed to read Safe owners, it stays pending until the next start");
-                    failed += 1;
+                    warn!(%error, "failed to list Safes pending an owner snapshot, retrying");
+                    tokio::time::sleep(delay).await;
+                    delay = (delay * 2).min(SAFE_SNAPSHOT_RETRY_MAX);
+                    continue;
+                }
+            };
+            if pending.is_empty() {
+                return Ok(());
+            }
+            let block = latest_processed_block.load(Ordering::Relaxed).max(goal_block);
+            info!(
+                safes = pending.len(),
+                snapshot_block = block,
+                "Refreshing Safe owners and thresholds from the chain"
+            );
+
+            let mut reads = futures::stream::iter(pending.iter().copied())
+                .map(|safe_address| async move {
+                    (
+                        safe_address,
+                        rpc.get_safe_owners_and_threshold(safe_address, block).await,
+                    )
+                })
+                .buffer_unordered(SAFE_SNAPSHOT_CONCURRENCY);
+            while let Some((safe_address, snapshot)) = reads.next().await {
+                match snapshot {
+                    Ok(snapshot) => {
+                        let read = SafeSnapshotRead {
+                            safe_address,
+                            block,
+                            snapshot,
+                        };
+                        if results.send(read).await.is_err() {
+                            // The indexing loop is gone.
+                            return Ok(());
+                        }
+                    }
+                    Err(error) => {
+                        warn!(%safe_address, %error, "failed to read Safe owners, retrying after a backoff");
+                    }
                 }
             }
-        }
 
-        info!(
-            refreshed,
-            failed, snapshot_block, "Safe owner snapshot refresh finished"
-        );
-        Ok(())
+            // Give the indexing loop time to store the results, then see what is left.
+            if pending.len() < last_pending {
+                delay = retry_min;
+            } else {
+                delay = (delay * 2).min(SAFE_SNAPSHOT_RETRY_MAX);
+            }
+            last_pending = pending.len();
+            tokio::time::sleep(delay).await;
+        }
+    }
+
+    /// Stores a Safe owner snapshot. A database error is logged and leaves the Safe pending, so the
+    /// refresh reads it again.
+    async fn store_safe_owner_snapshot(db: &Db, read: SafeSnapshotRead) {
+        let SafeSnapshotRead {
+            safe_address,
+            block,
+            snapshot,
+        } = read;
+        if let Err(error) = db
+            .apply_safe_owner_snapshot(
+                None,
+                safe_address,
+                snapshot.owners,
+                snapshot.threshold.to_string(),
+                block,
+            )
+            .await
+        {
+            warn!(%safe_address, %error, "failed to store Safe owner snapshot, the Safe stays pending");
+        }
     }
 
     /// Generate log filters for the requested indexing phase.
@@ -1761,9 +1843,24 @@ mod tests {
         Ok(())
     }
 
+    type TestIndexer = Indexer<MockHoprIndexerOps, ApprovalFilterHandler, BlokliDb>;
+
+    /// Runs the refresh against `rpc`, storing results like the indexing loop does, until it finishes.
+    async fn run_owner_refresh(rpc: &MockHoprIndexerOps, db: &BlokliDb, goal_block: u64) -> anyhow::Result<()> {
+        let latest = AtomicU64::new(goal_block);
+        let (tx, mut rx) = channel::<SafeSnapshotRead>(4);
+        let reader = TestIndexer::read_safe_owner_snapshots(rpc, db, goal_block, &latest, tx, Duration::from_millis(5));
+        let storer = async {
+            while let Some(read) = rx.next().await {
+                TestIndexer::store_safe_owner_snapshot(db, read).await;
+            }
+        };
+        let (result, ()) = futures::join!(reader, storer);
+        Ok(result?)
+    }
+
     #[tokio::test]
     async fn safe_owner_refresh_matches_the_chain_and_is_resumable() -> anyhow::Result<()> {
-        use blokli_chain_rpc::SafeOwnersSnapshot;
         use blokli_db::safe_history::BlokliDbSafeHistoryOperations;
 
         let db = BlokliDb::new_in_memory().await?;
@@ -1788,8 +1885,7 @@ mod tests {
                 })
             });
 
-        Indexer::<MockHoprIndexerOps, ApprovalFilterHandler, BlokliDb>::refresh_safe_owner_snapshots(&rpc, &db, 200)
-            .await?;
+        run_owner_refresh(&rpc, &db, 200).await?;
 
         for safe in [safe_one, safe_two] {
             assert_eq!(db.get_safe_owners(None, safe).await?, vec![current_owner]);
@@ -1798,30 +1894,130 @@ mod tests {
         }
 
         // Running again at the same block reads nothing (the mock allows exactly two calls in total).
-        Indexer::<MockHoprIndexerOps, ApprovalFilterHandler, BlokliDb>::refresh_safe_owner_snapshots(&rpc, &db, 200)
-            .await?;
+        run_owner_refresh(&rpc, &db, 200).await?;
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn safe_owner_refresh_leaves_failed_safes_pending() -> anyhow::Result<()> {
+    async fn safe_owner_refresh_retries_a_failed_safe_until_it_succeeds() -> anyhow::Result<()> {
+        use std::sync::atomic::AtomicUsize;
+
         use blokli_db::safe_history::BlokliDbSafeHistoryOperations;
 
         let db = BlokliDb::new_in_memory().await?;
-        let safe = Address::from([0x33; 20]);
+        let (flaky, healthy) = (Address::from([0x33; 20]), Address::from([0x34; 20]));
+        let owner = Address::from([0x43; 20]);
+        for safe in [flaky, healthy] {
+            db.create_safe_contract(None, safe, Address::default(), safe, 1, 0, 0)
+                .await?;
+        }
+
+        let flaky_calls = Arc::new(AtomicUsize::new(0));
+        let counter = flaky_calls.clone();
+        let mut rpc = MockHoprIndexerOps::new();
+        rpc.expect_get_safe_owners_and_threshold().returning(move |safe, _| {
+            if safe == flaky && counter.fetch_add(1, StdOrdering::SeqCst) < 2 {
+                Err(blokli_chain_rpc::errors::RpcError::Other("rpc down".into()))
+            } else {
+                Ok(SafeOwnersSnapshot {
+                    owners: vec![owner],
+                    threshold: 1,
+                })
+            }
+        });
+
+        run_owner_refresh(&rpc, &db, 200).await?;
+
+        assert_eq!(flaky_calls.load(StdOrdering::SeqCst), 3);
+        for safe in [flaky, healthy] {
+            assert_eq!(db.get_safe_owners(None, safe).await?, vec![owner]);
+            assert_eq!(db.get_safe_owners_synced_block(None, safe).await?, Some(200));
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn safe_owner_refresh_holds_no_transaction_while_the_loop_writes() -> anyhow::Result<()> {
+        use blokli_db::safe_history::BlokliDbSafeHistoryOperations;
+
+        let db = BlokliDb::new_in_memory().await?;
+        let safe = Address::from([0x35; 20]);
+        let owner = Address::from([0x44; 20]);
         db.create_safe_contract(None, safe, Address::default(), safe, 1, 0, 0)
             .await?;
 
         let mut rpc = MockHoprIndexerOps::new();
-        rpc.expect_get_safe_owners_and_threshold()
-            .returning(|_, _| Err(blokli_chain_rpc::errors::RpcError::Other("rpc down".into())));
+        rpc.expect_get_safe_owners_and_threshold().returning(move |_, _| {
+            Ok(SafeOwnersSnapshot {
+                owners: vec![owner],
+                threshold: 1,
+            })
+        });
 
-        Indexer::<MockHoprIndexerOps, ApprovalFilterHandler, BlokliDb>::refresh_safe_owner_snapshots(&rpc, &db, 200)
+        let latest = AtomicU64::new(200);
+        let (tx, mut rx) = channel::<SafeSnapshotRead>(4);
+        let reader = TestIndexer::read_safe_owner_snapshots(&rpc, &db, 200, &latest, tx, Duration::from_millis(5));
+        let main_loop = async {
+            // The read result is waiting in the channel; nothing is written until the loop stores it.
+            let read = rx.next().await.expect("one read");
+            assert_eq!(db.get_safe_owners_synced_block(None, safe).await?, None);
+            // The loop is free to write for a block while the refresh is in flight.
+            db.upsert_safe_owner_state(None, safe, Address::from([0x45; 20]), true, 201, 0, 0)
+                .await?;
+            TestIndexer::store_safe_owner_snapshot(&db, read).await;
+            while rx.next().await.is_some() {}
+            anyhow::Ok(())
+        };
+        let (reader_result, main_result) = futures::join!(reader, main_loop);
+        reader_result?;
+        main_result?;
+
+        assert_eq!(db.get_safe_owners_synced_block(None, safe).await?, Some(200));
+        let mut expected = vec![owner, Address::from([0x45; 20])];
+        expected.sort();
+        assert_eq!(db.get_safe_owners(None, safe).await?, expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failed_snapshot_storage_does_not_stop_the_other_safes() -> anyhow::Result<()> {
+        use blokli_db::safe_history::BlokliDbSafeHistoryOperations;
+
+        let db = BlokliDb::new_in_memory().await?;
+        let known = Address::from([0x36; 20]);
+        let unknown = Address::from([0x37; 20]);
+        db.create_safe_contract(None, known, Address::default(), known, 1, 0, 0)
             .await?;
+        let owner = Address::from([0x46; 20]);
+        let snapshot = || SafeOwnersSnapshot {
+            owners: vec![owner],
+            threshold: 1,
+        };
 
-        assert_eq!(db.get_safe_owners_synced_block(None, safe).await?, None);
-        assert_eq!(db.get_safes_pending_owner_snapshot(None, 200).await?, vec![safe]);
+        // Storing for a Safe that does not exist fails; it is logged and the next one still lands.
+        TestIndexer::store_safe_owner_snapshot(
+            &db,
+            SafeSnapshotRead {
+                safe_address: unknown,
+                block: 10,
+                snapshot: snapshot(),
+            },
+        )
+        .await;
+        TestIndexer::store_safe_owner_snapshot(
+            &db,
+            SafeSnapshotRead {
+                safe_address: known,
+                block: 10,
+                snapshot: snapshot(),
+            },
+        )
+        .await;
+
+        assert_eq!(db.get_safe_owners(None, known).await?, vec![owner]);
 
         Ok(())
     }
