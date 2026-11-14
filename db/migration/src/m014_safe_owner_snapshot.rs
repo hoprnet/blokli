@@ -5,11 +5,11 @@ use sea_orm_migration::prelude::*;
 /// Safe owners and threshold are no longer rebuilt from Safe event logs. They come from an RPC
 /// snapshot and are kept current by live events, so:
 ///
-/// * `hopr_safe_owner_state` keeps one row per `(safe, owner)` (removed owners stay as
-///   `is_current_owner = false` so a replayed `AddedOwner` cannot revive them),
+/// * `hopr_safe_owner_state` keeps one row per `(safe, owner)` (removed owners stay as `is_current_owner = false` so a
+///   replayed `AddedOwner` cannot revive them),
 /// * `hopr_safe_threshold_state` keeps one row per Safe,
-/// * `hopr_safe_contract_state.owners_synced_block` records the block the owner snapshot is
-///   pinned at; live owner and threshold events at or below it are ignored,
+/// * `hopr_safe_contract_state.owners_synced_block` records the block the owner snapshot is pinned at; live owner and
+///   threshold events at or below it are ignored,
 /// * the six Safe event history tables, which no production code reads, are dropped.
 ///
 /// Rows that predate this migration are reduced to the latest row per key.
@@ -40,8 +40,8 @@ impl MigrationTrait for Migration {
         ))
         .await?;
         conn.execute_unprepared(&format!(
-            "DELETE FROM hopr_safe_threshold_state WHERE id IN (SELECT t.id FROM hopr_safe_threshold_state AS t \
-             WHERE EXISTS (SELECT 1 FROM hopr_safe_threshold_state AS later WHERE later.hopr_safe_contract_id = \
+            "DELETE FROM hopr_safe_threshold_state WHERE id IN (SELECT t.id FROM hopr_safe_threshold_state AS t WHERE \
+             EXISTS (SELECT 1 FROM hopr_safe_threshold_state AS later WHERE later.hopr_safe_contract_id = \
              t.hopr_safe_contract_id AND {POSITION_NEWER_THAN_SELF}))"
         ))
         .await?;

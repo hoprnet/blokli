@@ -686,20 +686,12 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
 mod tests {
     use std::time::Duration;
 
-    use blokli_chain_types::AlloyAddressExt as _;
-    use hopr_bindings::exports::alloy::primitives::U256 as TestU256;
-
-    use super::{
-        SafeSingleton::{getOwnersCall, getThresholdCall},
-        SolCall, snapshot_from_returns,
-    };
-
     use anyhow::Context;
     use async_trait::async_trait;
-    use blokli_chain_types::ContractAddresses;
+    use blokli_chain_types::{AlloyAddressExt as _, ContractAddresses};
     use futures::StreamExt;
     use hopr_bindings::exports::alloy::{
-        primitives::{Address as AlloyAddress, B256, Log as AlloyPrimitiveLog, LogData},
+        primitives::{Address as AlloyAddress, B256, Log as AlloyPrimitiveLog, LogData, U256 as TestU256},
         rpc::{
             client::ClientBuilder,
             types::{Filter, Log as AlloyLog},
@@ -711,6 +703,10 @@ mod tests {
     use tokio::time::sleep;
     use url::Url;
 
+    use super::{
+        SafeSingleton::{getOwnersCall, getThresholdCall},
+        SolCall, snapshot_from_returns,
+    };
     use crate::{
         FilterSet, HoprIndexerRpcOperations,
         errors::{HttpRequestError, RpcError},

@@ -167,10 +167,10 @@ mod tests {
         for statement in [
             "INSERT INTO hopr_safe_contract (id, address) VALUES (1, x'0101010101010101010101010101010101010101')",
             "INSERT INTO hopr_safe_owner_state (hopr_safe_contract_id, owner_address, is_current_owner, \
-             published_block, published_tx_index, published_log_index) VALUES \
-             (1, x'0202020202020202020202020202020202020202', 1, 10, 0, 0), \
-             (1, x'0202020202020202020202020202020202020202', 0, 20, 0, 0), \
-             (1, x'0303030303030303030303030303030303030303', 1, 15, 0, 0)",
+             published_block, published_tx_index, published_log_index) VALUES (1, \
+             x'0202020202020202020202020202020202020202', 1, 10, 0, 0), (1, \
+             x'0202020202020202020202020202020202020202', 0, 20, 0, 0), (1, \
+             x'0303030303030303030303030303030303030303', 1, 15, 0, 0)",
             "INSERT INTO hopr_safe_contract_state (hopr_safe_contract_id, module_address, chain_key, published_block, \
              published_tx_index, published_log_index) VALUES (1, x'0505050505050505050505050505050505050505', \
              x'0606060606060606060606060606060606060606', 5, 0, 0)",

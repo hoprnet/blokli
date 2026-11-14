@@ -56,10 +56,10 @@ where
     ///
     /// * Safe with a snapshot at or above `block`: the snapshot already includes the event, skip it.
     /// * Safe with an older snapshot: apply the event on top of it.
-    /// * Safe without a snapshot: applying the event alone would produce an owner set that looks
-    ///   complete but is not. The Safe is snapshotted pinned at the event block instead, which covers
-    ///   the event and everything before it. If that read fails, the event is skipped and the Safe
-    ///   stays pending, so the background refresh reads the full set later.
+    /// * Safe without a snapshot: applying the event alone would produce an owner set that looks complete but is not.
+    ///   The Safe is snapshotted pinned at the event block instead, which covers the event and everything before it. If
+    ///   that read fails, the event is skipped and the Safe stays pending, so the background refresh reads the full set
+    ///   later.
     async fn skip_owner_event(&self, tx: &OpenTransaction, safe_address: Address, block: u64) -> Result<bool> {
         match self.db.get_safe_owners_synced_block(Some(tx), safe_address).await? {
             Some(synced_block) => Ok(block <= synced_block),

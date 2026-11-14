@@ -291,12 +291,10 @@ async fn check_safe_owner_snapshot_migration(url: &Url) -> Result<()> {
     for statement in [
         "INSERT INTO hopr_safe_contract (id, address) VALUES (1, decode(repeat('01', 20), 'hex'))",
         "INSERT INTO hopr_safe_owner_state (hopr_safe_contract_id, owner_address, is_current_owner, published_block, \
-         published_tx_index, published_log_index) VALUES \
-         (1, decode(repeat('02', 20), 'hex'), TRUE, 10, 0, 0), \
-         (1, decode(repeat('02', 20), 'hex'), FALSE, 20, 0, 0), \
-         (1, decode(repeat('03', 20), 'hex'), TRUE, 15, 0, 0)",
-        "INSERT INTO hopr_safe_threshold_state (hopr_safe_contract_id, threshold, published_block, published_tx_index, \
-         published_log_index) VALUES (1, '1', 10, 0, 0), (1, '2', 30, 0, 0)",
+         published_tx_index, published_log_index) VALUES (1, decode(repeat('02', 20), 'hex'), TRUE, 10, 0, 0), (1, \
+         decode(repeat('02', 20), 'hex'), FALSE, 20, 0, 0), (1, decode(repeat('03', 20), 'hex'), TRUE, 15, 0, 0)",
+        "INSERT INTO hopr_safe_threshold_state (hopr_safe_contract_id, threshold, published_block, \
+         published_tx_index, published_log_index) VALUES (1, '1', 10, 0, 0), (1, '2', 30, 0, 0)",
     ] {
         db.execute_unprepared(statement).await?;
     }
@@ -322,9 +320,9 @@ async fn check_safe_owner_snapshot_migration(url: &Url) -> Result<()> {
     );
     assert_eq!(
         scalar(
-            "SELECT COUNT(*) AS n FROM information_schema.tables WHERE table_schema = current_schema() AND \
-             table_name IN ('hopr_safe_event', 'hopr_safe_setup_event', 'hopr_safe_setup_owner', \
-             'hopr_safe_owner_change_event', 'hopr_safe_threshold_change_event', 'hopr_safe_execution_event')"
+            "SELECT COUNT(*) AS n FROM information_schema.tables WHERE table_schema = current_schema() AND table_name \
+             IN ('hopr_safe_event', 'hopr_safe_setup_event', 'hopr_safe_setup_owner', 'hopr_safe_owner_change_event', \
+             'hopr_safe_threshold_change_event', 'hopr_safe_execution_event')"
         )
         .await?,
         0

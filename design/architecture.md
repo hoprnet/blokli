@@ -938,9 +938,9 @@ The unique constraint on `(deployed_block, deployed_tx_index, deployed_log_index
 Safe owners and threshold are not rebuilt from Safe logs. Historical sync only discovers Safes (stake factory, node-safe registry, v3 CSV
 preseed) and requests no Safe event topics.
 
-- At every switch to continuous mode (including each restart) the indexer reads `getOwners()` and `getThreshold()` for every Safe without
-  a snapshot at the last processed block. Reads are pinned at that block, run with bounded concurrency next to the continuous stream, and
-  are resumable: Safes already snapshotted at that block are skipped.
+- At every switch to continuous mode (including each restart) the indexer reads `getOwners()` and `getThreshold()` for every Safe without a
+  snapshot at the last processed block. Reads are pinned at that block, run with bounded concurrency next to the continuous stream, and are
+  resumable: Safes already snapshotted at that block are skipped.
 - In continuous mode the indexer subscribes to `SafeSetup`, `AddedOwner`, `RemovedOwner` and `ChangedThreshold` through address-scoped
   filters built from the indexed Safe contracts. Unknown Safe addresses are not streamed globally.
 - When a Safe becomes known while live, owners and threshold are read pinned at the discovery block and the Safe filter set is refreshed.
