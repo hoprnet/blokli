@@ -1897,7 +1897,8 @@ mod tests {
         latest: &AtomicU64,
     ) -> anyhow::Result<()> {
         let (tx, mut rx) = channel::<SafeSnapshotRead>(4);
-        let reader = TestIndexer::read_safe_owner_snapshots(rpc, db, goal_block, latest, tx, Duration::from_millis(5));
+        let reader =
+            TestIndexer::read_safe_owner_snapshots(rpc, db, goal_block, latest, tx, Duration::from_millis(100));
         let storer = async {
             while let Some(read) = rx.next().await {
                 TestIndexer::store_safe_owner_snapshot(db, read).await;
@@ -2077,7 +2078,7 @@ mod tests {
 
         let latest = AtomicU64::new(200);
         let (tx, mut rx) = channel::<SafeSnapshotRead>(4);
-        let reader = TestIndexer::read_safe_owner_snapshots(&rpc, &db, 200, &latest, tx, Duration::from_millis(5));
+        let reader = TestIndexer::read_safe_owner_snapshots(&rpc, &db, 200, &latest, tx, Duration::from_millis(100));
         let main_loop = async {
             // The read result is waiting in the channel; nothing is written until the loop stores it.
             let read = rx.next().await.expect("one read");
