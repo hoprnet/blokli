@@ -29,6 +29,8 @@ pub(crate) mod safe_owner_refresh;
 pub mod snapshot;
 pub mod startup;
 pub mod state;
+#[cfg(test)]
+pub(crate) mod test_postgres;
 pub mod traits;
 pub mod utils;
 

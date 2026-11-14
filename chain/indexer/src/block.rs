@@ -2020,6 +2020,53 @@ mod tests {
         assert!(closed.is_none());
     }
 
+    /// The refresh storing a snapshot end to end on a real PostgreSQL.
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL, run with `just test-postgres-schema`"]
+    async fn postgres_safe_owner_refresh_stores_the_snapshot() -> anyhow::Result<()> {
+        let scratch = crate::test_postgres::ScratchPostgres::create().await?;
+        let db = scratch.db.clone();
+        let (safe_one, safe_two) = (Address::from([0x71; 20]), Address::from([0x72; 20]));
+        let (stale_owner, current_owner) = (Address::from([0x73; 20]), Address::from([0x74; 20]));
+        for safe in [safe_one, safe_two] {
+            db.create_safe_contract(None, safe, Address::default(), safe, 1, 0, 0)
+                .await?;
+        }
+        db.apply_safe_owner_snapshot(None, safe_one, vec![stale_owner], "1".into(), 100)
+            .await?;
+
+        let mut rpc = MockHoprIndexerOps::new();
+        rpc.expect_get_safe_owners_and_thresholds()
+            .returning(move |safes, _| Ok(safes.iter().map(|_| Ok(snapshot_of(current_owner, 2))).collect()));
+        let mut refresh = start_refresh(rpc, 200, fast_timings());
+
+        // A fresh database may hold preseeded Safes; only the two created here are refreshed.
+        for safe in [safe_one, safe_two] {
+            refresh.state.mark_safe_owner_snapshot_pending(safe);
+        }
+        refresh.store(&db, 2).await;
+
+        for safe in [safe_one, safe_two] {
+            assert_eq!(db.get_safe_owners(None, safe).await?, vec![current_owner]);
+            assert_eq!(db.get_safe_threshold(None, safe).await?.as_deref(), Some("2"));
+            assert_eq!(db.get_safe_owners_synced_block(None, safe).await?, Some(200));
+        }
+        assert!(
+            !db.get_safes_pending_owner_snapshot(None, 200)
+                .await?
+                .contains(&safe_one)
+        );
+        assert!(
+            !db.get_safes_pending_owner_snapshot(None, 200)
+                .await?
+                .contains(&safe_two)
+        );
+        assert_eq!(refresh.state.unsynced_safe_owner_snapshots(), 0);
+
+        drop(refresh);
+        scratch.drop_database().await
+    }
+
     #[tokio::test]
     async fn safe_owner_refresh_wakes_for_a_safe_reported_after_it_went_idle() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;

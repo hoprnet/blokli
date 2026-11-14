@@ -568,4 +568,30 @@ mod tests {
 
         Ok(())
     }
+    /// The live owner-event guard and the position-guarded writes on a real PostgreSQL.
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL, run with `just test-postgres-schema`"]
+    async fn test_postgres_live_events_apply_above_the_snapshot_block_only() -> anyhow::Result<()> {
+        let scratch = crate::test_postgres::ScratchPostgres::create().await?;
+        let db = scratch.db.clone();
+        let safe_address = address_with_byte(91);
+        setup_safe(&db, safe_address).await?;
+        let (kept, ignored, applied) = (address_with_byte(92), address_with_byte(93), address_with_byte(94));
+
+        db.apply_safe_owner_snapshot(None, safe_address, vec![kept], "1".into(), 200)
+            .await?;
+
+        // At and below the snapshot block: ignored.
+        apply(handlers_for(&db), &db, safe_address, 200, 3, added(ignored)).await?;
+        apply(handlers_for(&db), &db, safe_address, 150, 0, removed(kept)).await?;
+        assert_eq!(db.get_safe_owners(None, safe_address).await?, vec![kept]);
+
+        // Above it: applied, and a replay of an older event afterwards does not undo it.
+        apply(handlers_for(&db), &db, safe_address, 201, 0, added(applied)).await?;
+        apply(handlers_for(&db), &db, safe_address, 202, 0, removed(applied)).await?;
+        apply(handlers_for(&db), &db, safe_address, 201, 0, added(applied)).await?;
+        assert_eq!(db.get_safe_owners(None, safe_address).await?, vec![kept]);
+
+        scratch.drop_database().await
+    }
 }
