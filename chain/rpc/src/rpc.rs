@@ -76,6 +76,24 @@ sol!(
     }
 );
 
+// Multicall3 (canonical deployment, see `MULTICALL3_ADDRESS`), only the call used to batch Safe reads
+sol!(
+    #![sol(abi)]
+    #![sol(rpc)]
+    contract Multicall3 {
+        struct Call3 {
+            address target;
+            bool allowFailure;
+            bytes callData;
+        }
+        struct Call3Result {
+            bool success;
+            bytes returnData;
+        }
+        function aggregate3(Call3[] calldata calls) external payable returns (Call3Result[] memory returnData);
+    }
+);
+
 // minimal interface for verifying HOPR modules
 sol!(
     #![sol(abi)]

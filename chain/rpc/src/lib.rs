@@ -508,6 +508,23 @@ pub trait HoprIndexerRpcOperations {
     /// as of the end of that block.
     async fn get_safe_owners_and_threshold(&self, safe_address: Address, block: u64) -> Result<SafeOwnersSnapshot>;
 
+    /// Reads owners and threshold of several Safes pinned at `block`, one result per Safe in input order.
+    ///
+    /// Implementations may batch the reads (Multicall3). A failing Safe (not a Safe, reverting call)
+    /// only fails its own entry; an error of the whole call (RPC failure, pruned state) is the outer
+    /// `Err`. The default reads the Safes one by one.
+    async fn get_safe_owners_and_thresholds(
+        &self,
+        safe_addresses: Vec<Address>,
+        block: u64,
+    ) -> Result<Vec<Result<SafeOwnersSnapshot>>> {
+        let mut snapshots = Vec::with_capacity(safe_addresses.len());
+        for safe_address in safe_addresses {
+            snapshots.push(self.get_safe_owners_and_threshold(safe_address, block).await);
+        }
+        Ok(snapshots)
+    }
+
     /// Retrieves on-chain xdai balance of the given address.
     async fn get_xdai_balance(&self, address: Address) -> Result<XDaiBalance>;
 

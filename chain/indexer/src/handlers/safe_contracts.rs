@@ -579,4 +579,31 @@ mod tests {
 
         Ok(())
     }
+    #[tokio::test]
+    async fn test_default_batch_read_reports_failures_per_safe_in_input_order() -> anyhow::Result<()> {
+        use blokli_chain_rpc::HoprIndexerRpcOperations;
+
+        let (ok_safe, bad_safe) = (address_with_byte(61), address_with_byte(62));
+        let owner = address_with_byte(63);
+        let mut rpc = MockIndexerRpcOperations::new();
+        rpc.expect_get_safe_owners_and_threshold().returning(move |safe, _| {
+            if safe == bad_safe {
+                Err(blokli_chain_rpc::errors::RpcError::Other("execution reverted".into()))
+            } else {
+                Ok(SafeOwnersSnapshot {
+                    owners: vec![owner],
+                    threshold: 1,
+                })
+            }
+        });
+        let rpc = ClonableMockOperations { inner: Arc::new(rpc) };
+
+        let results = rpc.get_safe_owners_and_thresholds(vec![bad_safe, ok_safe], 10).await?;
+
+        assert_eq!(results.len(), 2);
+        assert!(results[0].is_err());
+        assert_eq!(results[1].as_ref().expect("ok").owners, vec![owner]);
+
+        Ok(())
+    }
 }
