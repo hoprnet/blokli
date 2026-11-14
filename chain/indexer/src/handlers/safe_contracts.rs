@@ -213,7 +213,7 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use blokli_chain_rpc::{Log, SafeOwnersSnapshot};
+    use blokli_chain_rpc::{HoprIndexerRpcOperations, Log, SafeOwnersSnapshot, errors::RpcError};
     use blokli_db::{
         BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations,
         safe_history::BlokliDbSafeHistoryOperations,
@@ -528,7 +528,7 @@ mod tests {
 
         let mut rpc = MockIndexerRpcOperations::new();
         rpc.expect_get_safe_owners_and_threshold()
-            .returning(|_, _| Err(blokli_chain_rpc::errors::RpcError::Other("reverted".into())));
+            .returning(|_, _| Err(RpcError::Other("reverted".into())));
         let handlers = init_handlers(ClonableMockOperations { inner: Arc::new(rpc) }, db.clone());
 
         apply(handlers, &db, safe_address, 130, 0, added(address_with_byte(55))).await?;
@@ -563,7 +563,7 @@ mod tests {
 
         let mut rpc = MockIndexerRpcOperations::new();
         rpc.expect_get_safe_owners_and_threshold()
-            .returning(|_, _| Err(blokli_chain_rpc::errors::RpcError::Other("execution reverted".into())));
+            .returning(|_, _| Err(RpcError::Other("execution reverted".into())));
         let handlers = init_handlers(ClonableMockOperations { inner: Arc::new(rpc) }, db.clone());
 
         let stored = db
@@ -581,14 +581,12 @@ mod tests {
     }
     #[tokio::test]
     async fn test_default_batch_read_reports_failures_per_safe_in_input_order() -> anyhow::Result<()> {
-        use blokli_chain_rpc::HoprIndexerRpcOperations;
-
         let (ok_safe, bad_safe) = (address_with_byte(61), address_with_byte(62));
         let owner = address_with_byte(63);
         let mut rpc = MockIndexerRpcOperations::new();
         rpc.expect_get_safe_owners_and_threshold().returning(move |safe, _| {
             if safe == bad_safe {
-                Err(blokli_chain_rpc::errors::RpcError::Other("execution reverted".into()))
+                Err(RpcError::Other("execution reverted".into()))
             } else {
                 Ok(SafeOwnersSnapshot {
                     owners: vec![owner],

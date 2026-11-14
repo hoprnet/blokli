@@ -1569,17 +1569,18 @@ mod tests {
         collections::BTreeSet,
         pin::Pin,
         sync::{
-            Arc,
-            atomic::{AtomicBool as StdAtomicBool, Ordering as StdOrdering},
+            Arc, Mutex,
+            atomic::{AtomicBool as StdAtomicBool, AtomicUsize, Ordering as StdOrdering},
         },
         time::Duration,
     };
 
     use async_trait::async_trait;
-    use blokli_chain_rpc::BlockWithLogs;
+    use blokli_chain_rpc::{BlockWithLogs, errors::RpcError};
     use blokli_chain_types::{ContractAddresses, chain_events::ChainEventType};
     use blokli_db::{
         TargetDb, accounts::BlokliDbAccountOperations, db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations,
+        safe_history::BlokliDbSafeHistoryOperations,
     };
     use blokli_db_entity::{
         account, channel,
@@ -1919,8 +1920,6 @@ mod tests {
 
     #[tokio::test]
     async fn safe_owner_refresh_matches_the_chain_and_is_resumable() -> anyhow::Result<()> {
-        use blokli_db::safe_history::BlokliDbSafeHistoryOperations;
-
         let db = BlokliDb::new_in_memory().await?;
         let (safe_one, safe_two) = (Address::from([0x31; 20]), Address::from([0x32; 20]));
         let (stale_owner, current_owner) = (Address::from([0x41; 20]), Address::from([0x42; 20]));
@@ -1971,7 +1970,7 @@ mod tests {
             .await?;
         }
 
-        let sizes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sizes = Arc::new(Mutex::new(Vec::new()));
         let recorded = sizes.clone();
         let mut rpc = MockHoprIndexerOps::new();
         rpc.expect_get_safe_owners_and_thresholds().returning(move |safes, _| {
@@ -1994,10 +1993,6 @@ mod tests {
 
     #[tokio::test]
     async fn safe_owner_refresh_leaves_only_the_failed_safes_pending_and_retries_them() -> anyhow::Result<()> {
-        use std::sync::atomic::AtomicUsize;
-
-        use blokli_db::safe_history::BlokliDbSafeHistoryOperations;
-
         let db = BlokliDb::new_in_memory().await?;
         let (flaky, healthy) = (Address::from([0x33; 20]), Address::from([0x34; 20]));
         let owner = Address::from([0x43; 20]);
@@ -2014,10 +2009,7 @@ mod tests {
                 .iter()
                 .map(|safe| {
                     if *safe == flaky && counter.fetch_add(1, StdOrdering::SeqCst) < 2 {
-                        Err(blokli_chain_rpc::errors::RpcError::MulticallFailure(
-                            0,
-                            "reverted".into(),
-                        ))
+                        Err(RpcError::MulticallFailure(0, "reverted".into()))
                     } else {
                         Ok(snapshot_of(owner, 1))
                     }
@@ -2039,15 +2031,13 @@ mod tests {
 
     #[tokio::test]
     async fn safe_owner_refresh_repins_a_batch_after_a_pruned_state_error() -> anyhow::Result<()> {
-        use blokli_db::safe_history::BlokliDbSafeHistoryOperations;
-
         let db = BlokliDb::new_in_memory().await?;
         let safe = Address::from([0x38; 20]);
         db.create_safe_contract(None, safe, Address::default(), safe, 1, 0, 0)
             .await?;
 
         let latest = Arc::new(AtomicU64::new(200));
-        let pinned_blocks = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let pinned_blocks = Arc::new(Mutex::new(Vec::new()));
         let (moved, recorded) = (latest.clone(), pinned_blocks.clone());
         let mut rpc = MockHoprIndexerOps::new();
         rpc.expect_get_safe_owners_and_thresholds()
@@ -2056,9 +2046,7 @@ mod tests {
                 if block == 200 {
                     // The chain moved on while the read was in flight and the node dropped the old state.
                     moved.store(230, StdOrdering::SeqCst);
-                    Err(blokli_chain_rpc::errors::RpcError::Other(
-                        "missing trie node 0xabc (path )".into(),
-                    ))
+                    Err(RpcError::Other("missing trie node 0xabc (path )".into()))
                 } else {
                     Ok(safes
                         .iter()
@@ -2077,8 +2065,6 @@ mod tests {
 
     #[tokio::test]
     async fn safe_owner_refresh_holds_no_transaction_while_the_loop_writes() -> anyhow::Result<()> {
-        use blokli_db::safe_history::BlokliDbSafeHistoryOperations;
-
         let db = BlokliDb::new_in_memory().await?;
         let safe = Address::from([0x35; 20]);
         let owner = Address::from([0x44; 20]);
@@ -2117,8 +2103,6 @@ mod tests {
 
     #[tokio::test]
     async fn failed_snapshot_storage_does_not_stop_the_other_safes() -> anyhow::Result<()> {
-        use blokli_db::safe_history::BlokliDbSafeHistoryOperations;
-
         let db = BlokliDb::new_in_memory().await?;
         let known = Address::from([0x36; 20]);
         let unknown = Address::from([0x37; 20]);
