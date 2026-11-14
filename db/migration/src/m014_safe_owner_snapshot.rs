@@ -21,6 +21,14 @@ const POSITION_NEWER_THAN_SELF: &str = "(later.published_block, later.published_
 
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
+    /// Runs in one transaction on every backend. sea-orm-migration only does so on PostgreSQL by default,
+    /// but SQLite DDL is transactional too. Without it, a failure halfway leaves the column added, the
+    /// views and old indexes dropped and no `seaql_migrations` row, and pooled connections may see
+    /// stale schemas between the statements.
+    fn use_transaction(&self) -> Option<bool> {
+        Some(true)
+    }
+
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let conn = manager.get_connection();
         let create_view = if manager.get_database_backend() == sea_orm::DatabaseBackend::Postgres {
@@ -34,8 +42,30 @@ impl MigrationTrait for Migration {
         conn.execute_unprepared("DROP VIEW IF EXISTS safe_owner_current")
             .await?;
 
-        conn.execute_unprepared("ALTER TABLE hopr_safe_contract_state ADD COLUMN owners_synced_block BIGINT")
+        // Idempotent: a database left half-migrated by an earlier, non-transactional run already has it.
+        if manager.get_database_backend() == sea_orm::DatabaseBackend::Postgres {
+            conn.execute_unprepared(
+                "ALTER TABLE hopr_safe_contract_state ADD COLUMN IF NOT EXISTS owners_synced_block BIGINT",
+            )
             .await?;
+        } else {
+            let present = conn
+                .query_one_raw(sea_orm::Statement::from_string(
+                    sea_orm::DatabaseBackend::Sqlite,
+                    "SELECT COUNT(*) AS n FROM pragma_table_info('hopr_safe_contract_state') WHERE name = \
+                     'owners_synced_block'"
+                        .to_string(),
+                ))
+                .await?
+                .map(|row| row.try_get::<i64>("", "n"))
+                .transpose()?
+                .unwrap_or(0)
+                > 0;
+            if !present {
+                conn.execute_unprepared("ALTER TABLE hopr_safe_contract_state ADD COLUMN owners_synced_block BIGINT")
+                    .await?;
+            }
+        }
 
         // Keep only the latest row per (safe, owner) and per safe.
         conn.execute_unprepared(&format!(

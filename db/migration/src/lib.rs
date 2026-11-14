@@ -763,4 +763,63 @@ mod tests {
             .await;
         assert!(duplicate.is_err(), "service_registry_config must hold a single row");
     }
+    /// Opens a file-backed SQLite database with a multi-connection pool, like the indexer does.
+    async fn file_database_with_pool(dir: &tempfile::TempDir) -> DatabaseConnection {
+        let url = format!("sqlite://{}?mode=rwc", dir.path().join("index.db").display());
+        let mut options = sea_orm::ConnectOptions::new(url);
+        options.max_connections(4).min_connections(2);
+        Database::connect(options).await.expect("file database connects")
+    }
+
+    #[tokio::test]
+    async fn test_safe_owner_snapshot_migration_on_a_file_database_with_a_pool_is_repeatable() {
+        for _ in 0..50 {
+            let dir = tempfile::tempdir().unwrap();
+            let db = file_database_with_pool(&dir).await;
+            Migrator::up(&db, Some(13)).await.unwrap();
+            db.execute_raw(Statement::from_string(
+                DbBackend::Sqlite,
+                "INSERT INTO hopr_safe_contract (id, address) VALUES (1, x'0101010101010101010101010101010101010101')"
+                    .to_string(),
+            ))
+            .await
+            .unwrap();
+
+            Migrator::up(&db, None).await.unwrap();
+
+            assert!(index_exists(&db, "idx_safe_owner_state_unique_owner").await);
+            assert!(index_exists(&db, "idx_safe_owner_state_by_owner").await);
+            assert!(view_exists(&db, "safe_owner_current").await);
+            assert!(!table_exists(&db, "hopr_safe_event").await);
+        }
+    }
+
+    /// The first version of the migration was not transactional on SQLite. A run that failed halfway
+    /// left the column added, the views and the old indexes dropped and no `seaql_migrations` row.
+    #[tokio::test]
+    async fn test_safe_owner_snapshot_migration_recovers_a_half_migrated_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = file_database_with_pool(&dir).await;
+        Migrator::up(&db, Some(13)).await.unwrap();
+
+        for statement in [
+            "ALTER TABLE hopr_safe_contract_state ADD COLUMN owners_synced_block BIGINT",
+            "DROP VIEW safe_threshold_current",
+            "DROP VIEW safe_owner_current",
+            "DROP INDEX idx_safe_owner_state_unique_position",
+            "DROP INDEX idx_safe_owner_state_current_lookup",
+            "DROP INDEX idx_safe_threshold_state_unique_position",
+        ] {
+            db.execute_raw(Statement::from_string(DbBackend::Sqlite, statement.to_string()))
+                .await
+                .unwrap();
+        }
+
+        Migrator::up(&db, None).await.unwrap();
+
+        assert!(view_exists(&db, "safe_owner_current").await);
+        assert!(view_exists(&db, "safe_threshold_current").await);
+        assert!(index_exists(&db, "idx_safe_threshold_state_unique_safe").await);
+        assert!(!table_exists(&db, "hopr_safe_execution_event").await);
+    }
 }

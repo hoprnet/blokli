@@ -2272,6 +2272,7 @@ dependencies = [
  "hopr-types",
  "sea-orm",
  "sea-orm-migration",
+ "tempfile",
  "tokio",
 ]
 
