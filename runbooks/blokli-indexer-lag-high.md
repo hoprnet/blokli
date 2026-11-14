@@ -21,7 +21,7 @@ The GraphQL API continues to serve data, but it reflects a chain state that is i
 ## Diagnosis
 
 - Check the current lag and trend via the `blokli_chain_head_block_number` and `blokli_indexer_block_number` metrics/Grafana panels.
-- Check `blokli_indexer_sync_progress{phase=...}` to see which indexing phase is active (`HistoricalDiscovery`, `HistoricalSafeBackfill`,
+- Check `blokli_indexer_sync_progress{phase=...}` to see which indexing phase is active (`HistoricalDiscovery`,
   `fast_sync`, `Continuous`) — a lag during a historical backfill phase is expected and self-resolving; a lag during `Continuous` phase is
   not.
 - Check `blokli_rpc_call_time_sec` and `blokli_rpc_call_count{result="failure"}` for signs the RPC provider is slow or failing (see

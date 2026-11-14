@@ -49,7 +49,6 @@ use crate::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Display)]
 enum LogFilterPhase {
     HistoricalDiscovery,
-    HistoricalSafeBackfill,
     Continuous,
 }
 
@@ -383,7 +382,6 @@ where
                 }
                 if let Some(metric) = METRIC_INDEXER_SYNC_PROGRESS.as_ref() {
                     metric.set(&[&LogFilterPhase::HistoricalDiscovery.to_string()], 0.0);
-                    metric.set(&[&LogFilterPhase::HistoricalSafeBackfill.to_string()], 0.0);
                     metric.set(&[&LogFilterPhase::Continuous.to_string()], 0.0);
                 }
             }
@@ -406,7 +404,7 @@ where
                 info!(
                     start_block = stream_start_block,
                     end_block = historical_sync_head,
-                    "Starting historical discovery phase without Safe log filters"
+                    "Starting historical discovery phase (Safe discovery only, no Safe log filters)"
                 );
                 if let Err(error) = Self::run_historical_phase(
                     &rpc,
@@ -425,27 +423,6 @@ where
                     return;
                 }
 
-                info!(
-                    start_block = stream_start_block,
-                    end_block = historical_sync_head,
-                    "Starting historical Safe backfill phase for discovered Safes"
-                );
-                if let Err(error) = Self::run_historical_phase(
-                    &rpc,
-                    &db,
-                    &logs_handler,
-                    &indexer_state,
-                    stream_start_block,
-                    historical_sync_head,
-                    LogFilterPhase::HistoricalSafeBackfill,
-                    "backfill-safe-logs",
-                    self.cfg.enable_safe_indexing,
-                )
-                .await
-                {
-                    error!(%error, "historical Safe backfill phase failed");
-                    return;
-                }
                 let checksum = match db.update_logs_checksums().await {
                     Ok(checksum) => checksum,
                     Err(error) => {
@@ -685,11 +662,6 @@ where
                 all: vec![filter_base.clone()],
                 token: vec![],
                 no_token: vec![filter_base],
-            }),
-            LogFilterPhase::HistoricalSafeBackfill => Ok(FilterSet {
-                all: safe_filter.clone().into_iter().collect(),
-                token: vec![],
-                no_token: safe_filter.into_iter().collect(),
             }),
             LogFilterPhase::Continuous => {
                 let mut all_filters = vec![filter_base.clone()];
@@ -1652,6 +1624,56 @@ mod tests {
                 .filter(|filter| filter.matches_address(AlloyAddress::from_hopr_address(token_address)))
                 .count(),
             1
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn historical_filters_never_request_safe_owner_events() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe_address = Address::from([0x33; 20]);
+        let contract_addresses = Arc::new(ContractAddresses {
+            announcements: Address::from([0x11; 20]),
+            token: Address::from([0x22; 20]),
+            ..ContractAddresses::default()
+        });
+        let handler = ApprovalFilterHandler {
+            contract_addresses,
+            primary_topic: B256::repeat_byte(0x55),
+        };
+
+        db.create_safe_contract(None, safe_address, Address::default(), safe_address, 1, 0, 0)
+            .await?;
+
+        let filters = Indexer::<MockHoprIndexerOps, ApprovalFilterHandler, BlokliDb>::generate_log_filters(
+            &db,
+            &handler,
+            LogFilterPhase::HistoricalDiscovery,
+            true,
+        )
+        .await?;
+
+        let safe_topics = crate::constants::topics::safe_contract();
+        for filter in filters.all.iter().chain(filters.no_token.iter()) {
+            assert!(!filter.matches_address(AlloyAddress::from_hopr_address(safe_address)));
+            for topic in &safe_topics {
+                assert!(!filter.matches_topics(&[*topic]));
+            }
+        }
+
+        // The continuous phase does request them for the tracked Safe.
+        let live = Indexer::<MockHoprIndexerOps, ApprovalFilterHandler, BlokliDb>::generate_log_filters(
+            &db,
+            &handler,
+            LogFilterPhase::Continuous,
+            true,
+        )
+        .await?;
+        assert!(
+            live.all
+                .iter()
+                .any(|filter| filter.matches_address(AlloyAddress::from_hopr_address(safe_address)))
         );
 
         Ok(())
