@@ -1460,12 +1460,12 @@ pub struct Safe {
         deprecation = "Use owners instead. chainKey is legacy Safe metadata and may not reflect the current owner set."
     )]
     pub chain_key: String,
-    /// Current signer threshold reconstructed from indexed Safe events
+    /// Current signer threshold, read from the Safe contract and kept current by live Safe events
     #[graphql(
         deprecation = "Read the threshold from the Safe contract. The field is kept for backward compatibility."
     )]
     pub threshold: Option<String>,
-    /// Current Safe owner addresses reconstructed from indexed Safe events
+    /// Current Safe owner addresses, read from the Safe contract and kept current by live Safe events
     pub owners: Vec<String>,
     /// List of node addresses (chain keys) registered to this safe via RegisteredNodeSafe events
     #[graphql(name = "registeredNodes")]
