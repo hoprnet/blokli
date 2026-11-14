@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use blokli_chain_types::AlloyAddressExt;
 use futures::{Stream, StreamExt, stream::BoxStream};
 use hopr_bindings::exports::alloy::{
-    eips::eip2718::Encodable2718,
+    eips::{BlockId, eip2718::Encodable2718},
     primitives::{Address as AlloyAddress, B256, U256},
     providers::Provider,
     rpc::types::{Filter, Log as AlloyLog},
@@ -26,7 +26,7 @@ use rust_stream_ext_concurrent::then_concurrent::StreamThenConcurrentExt;
 use tracing::{debug, error, trace, warn};
 
 use crate::{
-    BlockWithLogs, FilterSet, HoprIndexerRpcOperations, Log,
+    BlockWithLogs, FilterSet, HoprIndexerRpcOperations, Log, SafeOwnersSnapshot,
     errors::{Result, RpcError, RpcError::FilterIsEmpty},
     rpc::{HoprModule, RpcOperations, SafeSingleton, is_log_block_range_limit_error},
     transport::HttpRequestor,
@@ -454,6 +454,23 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
 
         logs.sort();
         Ok(logs)
+    }
+
+    async fn get_safe_owners_and_threshold(&self, safe_address: Address, block: u64) -> Result<SafeOwnersSnapshot> {
+        let safe_contract = SafeSingleton::new(AlloyAddress::from_hopr_address(safe_address), self.provider.clone());
+        let block_id = BlockId::number(block);
+
+        let owners_call = safe_contract.getOwners().block(block_id);
+        let threshold_call = safe_contract.getThreshold().block(block_id);
+        let (owners, threshold) = futures::try_join!(async { owners_call.call().await }, async {
+            threshold_call.call().await
+        })?;
+
+        Ok(SafeOwnersSnapshot {
+            owners: owners.into_iter().map(|owner| owner.to_hopr_address()).collect(),
+            threshold: u64::try_from(threshold)
+                .map_err(|_| RpcError::Other(format!("Safe threshold {threshold} exceeds maximum u64 value")))?,
+        })
     }
 
     async fn get_xdai_balance(&self, address: Address) -> Result<XDaiBalance> {

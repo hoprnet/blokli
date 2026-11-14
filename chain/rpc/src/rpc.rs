@@ -71,6 +71,7 @@ sol!(
         function isModuleEnabled(address module) public view returns (bool);
         function nonce() public view returns (uint256);
         function getThreshold() public view returns (uint256);
+        function getOwners() public view returns (address[] memory);
         function getModulesPaginated(address start, uint256 pageSize) public view returns (address[] memory array, address next);
     }
 );

@@ -64,6 +64,7 @@ pub(super) mod test_helpers {
                 to_block: u64,
             ) -> blokli_chain_rpc::errors::Result<Vec<blokli_chain_rpc::Log>>;
 
+            async fn get_safe_owners_and_threshold(&self, safe_address: Address, block: u64) -> blokli_chain_rpc::errors::Result<blokli_chain_rpc::SafeOwnersSnapshot>;
             async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance>;
             async fn get_hopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
             async fn get_xhopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XHoprBalance>;
@@ -120,6 +121,14 @@ pub(super) mod test_helpers {
             self.inner
                 .get_logs_for_address(address, topics, from_block, to_block)
                 .await
+        }
+
+        async fn get_safe_owners_and_threshold(
+            &self,
+            safe_address: Address,
+            block: u64,
+        ) -> blokli_chain_rpc::errors::Result<blokli_chain_rpc::SafeOwnersSnapshot> {
+            self.inner.get_safe_owners_and_threshold(safe_address, block).await
         }
 
         async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance> {

@@ -90,6 +90,17 @@ impl HoprIndexerRpcOperations for MockRpcOperations {
         Ok(vec![])
     }
 
+    async fn get_safe_owners_and_threshold(
+        &self,
+        _safe_address: Address,
+        _block: u64,
+    ) -> blokli_chain_rpc::errors::Result<blokli_chain_rpc::SafeOwnersSnapshot> {
+        Ok(blokli_chain_rpc::SafeOwnersSnapshot {
+            owners: vec![],
+            threshold: 1,
+        })
+    }
+
     async fn get_xdai_balance(&self, _address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance> {
         Ok(self.xdai_balance)
     }
@@ -378,6 +389,14 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
             self.inner
                 .get_logs_for_address(address, topics, from_block, to_block)
                 .await
+        }
+
+        async fn get_safe_owners_and_threshold(
+            &self,
+            safe_address: Address,
+            block: u64,
+        ) -> blokli_chain_rpc::errors::Result<blokli_chain_rpc::SafeOwnersSnapshot> {
+            self.inner.get_safe_owners_and_threshold(safe_address, block).await
         }
 
         async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance> {

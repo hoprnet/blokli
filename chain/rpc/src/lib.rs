@@ -417,6 +417,15 @@ impl BlockWithLogs {
     }
 }
 
+/// Owners and threshold of a Safe as read from the chain at a specific block.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SafeOwnersSnapshot {
+    /// Current owners of the Safe (`getOwners()`).
+    pub owners: Vec<Address>,
+    /// Current signature threshold of the Safe (`getThreshold()`).
+    pub threshold: u64,
+}
+
 /// Trait with RPC provider functionality required by the Indexer.
 #[async_trait]
 pub trait HoprIndexerRpcOperations {
@@ -492,6 +501,12 @@ pub trait HoprIndexerRpcOperations {
         from_block: u64,
         to_block: u64,
     ) -> Result<Vec<Log>>;
+
+    /// Reads `getOwners()` and `getThreshold()` of a Safe, both pinned at `block`.
+    ///
+    /// Both calls use the same block, so the result is a consistent view of the Safe
+    /// as of the end of that block.
+    async fn get_safe_owners_and_threshold(&self, safe_address: Address, block: u64) -> Result<SafeOwnersSnapshot>;
 
     /// Retrieves on-chain xdai balance of the given address.
     async fn get_xdai_balance(&self, address: Address) -> Result<XDaiBalance>;

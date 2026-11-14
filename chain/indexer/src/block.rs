@@ -1484,6 +1484,7 @@ mod tests {
                 to_block: u64,
             ) -> blokli_chain_rpc::errors::Result<Vec<blokli_chain_rpc::Log>>;
 
+            async fn get_safe_owners_and_threshold(&self, safe_address: Address, block: u64) -> blokli_chain_rpc::errors::Result<blokli_chain_rpc::SafeOwnersSnapshot>;
             async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance>;
             async fn get_hopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
             async fn get_xhopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XHoprBalance>;
