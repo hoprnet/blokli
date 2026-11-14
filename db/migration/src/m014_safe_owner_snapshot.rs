@@ -23,6 +23,11 @@ const POSITION_NEWER_THAN_SELF: &str = "(later.published_block, later.published_
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let conn = manager.get_connection();
+        let create_view = if manager.get_database_backend() == sea_orm::DatabaseBackend::Postgres {
+            "CREATE OR REPLACE VIEW"
+        } else {
+            "CREATE VIEW IF NOT EXISTS"
+        };
 
         conn.execute_unprepared("DROP VIEW IF EXISTS safe_threshold_current")
             .await?;
@@ -58,22 +63,22 @@ impl MigrationTrait for Migration {
         }
 
         conn.execute_unprepared(
-            "CREATE UNIQUE INDEX idx_safe_owner_state_unique_owner ON hopr_safe_owner_state (hopr_safe_contract_id, \
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_safe_owner_state_unique_owner ON hopr_safe_owner_state (hopr_safe_contract_id, \
              owner_address)",
         )
         .await?;
         conn.execute_unprepared(
-            "CREATE INDEX idx_safe_owner_state_owner_lookup ON hopr_safe_owner_state (owner_address)",
+            "CREATE INDEX IF NOT EXISTS idx_safe_owner_state_by_owner ON hopr_safe_owner_state (owner_address)",
         )
         .await?;
         conn.execute_unprepared(
-            "CREATE UNIQUE INDEX idx_safe_threshold_state_unique_safe ON hopr_safe_threshold_state \
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_safe_threshold_state_unique_safe ON hopr_safe_threshold_state \
              (hopr_safe_contract_id)",
         )
         .await?;
 
-        conn.execute_unprepared(
-            "CREATE VIEW safe_owner_current AS
+        conn.execute_unprepared(&format!(
+            "{create_view} safe_owner_current AS
             SELECT
                 sc.id AS safe_contract_id,
                 sc.address AS safe_address,
@@ -83,11 +88,11 @@ impl MigrationTrait for Migration {
                 sos.published_log_index
             FROM hopr_safe_contract sc
             JOIN hopr_safe_owner_state sos ON sos.hopr_safe_contract_id = sc.id
-            WHERE sos.is_current_owner = TRUE",
-        )
+            WHERE sos.is_current_owner = TRUE"
+        ))
         .await?;
-        conn.execute_unprepared(
-            "CREATE VIEW safe_threshold_current AS
+        conn.execute_unprepared(&format!(
+            "{create_view} safe_threshold_current AS
             SELECT
                 sc.id AS safe_contract_id,
                 sc.address AS safe_address,
@@ -96,8 +101,8 @@ impl MigrationTrait for Migration {
                 sts.published_tx_index,
                 sts.published_log_index
             FROM hopr_safe_contract sc
-            JOIN hopr_safe_threshold_state sts ON sts.hopr_safe_contract_id = sc.id",
-        )
+            JOIN hopr_safe_threshold_state sts ON sts.hopr_safe_contract_id = sc.id"
+        ))
         .await?;
 
         for table in [

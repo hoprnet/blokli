@@ -553,7 +553,7 @@ CREATE INDEX "idx_safe_contract_state_position" ON "hopr_safe_contract_state" ("
 
 CREATE UNIQUE INDEX "idx_safe_contract_state_unique_position" ON "hopr_safe_contract_state" ("hopr_safe_contract_id", "published_block", "published_tx_index", "published_log_index");
 
-CREATE INDEX idx_safe_owner_state_owner_lookup ON hopr_safe_owner_state (owner_address);
+CREATE INDEX idx_safe_owner_state_by_owner ON hopr_safe_owner_state (owner_address);
 
 CREATE UNIQUE INDEX idx_safe_owner_state_unique_owner ON hopr_safe_owner_state (hopr_safe_contract_id, owner_address);
 
