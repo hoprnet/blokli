@@ -6,8 +6,11 @@ use blokli_db_entity::{
     prelude::{HoprSafeContract, HoprSafeContractState, HoprSafeOwnerState, HoprSafeThresholdState},
 };
 use hopr_types::primitive::prelude::{Address, ToHex};
-use sea_orm::{ColumnTrait, Condition, ConnectionTrait, DbErr, EntityTrait, QueryFilter, QueryOrder, Set};
-use sea_query::{Expr, OnConflict, Query};
+use sea_orm::{
+    ColumnTrait, Condition, ConnectionTrait, DbErr, EntityTrait, Insert, QueryFilter, QueryOrder, Select, Set,
+    UpdateMany,
+};
+use sea_query::{Expr, ExprTrait, Iden, OnConflict, Query};
 
 use crate::{
     BlokliDb, BlokliDbGeneralModelOperations, DbSqlError, OptTx, Result, safe_contracts::BlokliDbSafeContractOperations,
@@ -57,6 +60,38 @@ async fn owners_synced_block_of<C: ConnectionTrait>(conn: &C, safe_contract_id: 
 /// Writes the owner row of `(safe, owner)` unless the stored row is at or past the given limit.
 ///
 /// `guard` is the SQL condition on the stored row that must hold for the row to be replaced.
+fn owner_row_insert(
+    safe_contract_id: i64,
+    owner_address: Address,
+    is_current_owner: bool,
+    position: (i64, i64, i64),
+    guard: Expr,
+) -> Insert<hopr_safe_owner_state::ActiveModel> {
+    HoprSafeOwnerState::insert(hopr_safe_owner_state::ActiveModel {
+        hopr_safe_contract_id: Set(safe_contract_id),
+        owner_address: Set(owner_address.as_ref().to_vec()),
+        is_current_owner: Set(is_current_owner),
+        published_block: Set(position.0),
+        published_tx_index: Set(position.1),
+        published_log_index: Set(position.2),
+        ..Default::default()
+    })
+    .on_conflict(
+        OnConflict::columns([
+            hopr_safe_owner_state::Column::HoprSafeContractId,
+            hopr_safe_owner_state::Column::OwnerAddress,
+        ])
+        .update_columns([
+            hopr_safe_owner_state::Column::IsCurrentOwner,
+            hopr_safe_owner_state::Column::PublishedBlock,
+            hopr_safe_owner_state::Column::PublishedTxIndex,
+            hopr_safe_owner_state::Column::PublishedLogIndex,
+        ])
+        .action_and_where(guard)
+        .to_owned(),
+    )
+}
+
 async fn write_owner_row<C: ConnectionTrait>(
     conn: &C,
     safe_contract_id: i64,
@@ -66,31 +101,36 @@ async fn write_owner_row<C: ConnectionTrait>(
     guard: Expr,
 ) -> Result<()> {
     ignore_record_not_inserted(
-        HoprSafeOwnerState::insert(hopr_safe_owner_state::ActiveModel {
-            hopr_safe_contract_id: Set(safe_contract_id),
-            owner_address: Set(owner_address.as_ref().to_vec()),
-            is_current_owner: Set(is_current_owner),
-            published_block: Set(position.0),
-            published_tx_index: Set(position.1),
-            published_log_index: Set(position.2),
-            ..Default::default()
-        })
-        .on_conflict(
-            OnConflict::columns([
-                hopr_safe_owner_state::Column::HoprSafeContractId,
-                hopr_safe_owner_state::Column::OwnerAddress,
-            ])
+        owner_row_insert(safe_contract_id, owner_address, is_current_owner, position, guard)
+            .exec(conn)
+            .await,
+    )
+}
+
+fn threshold_row_insert(
+    safe_contract_id: i64,
+    threshold: String,
+    position: (i64, i64, i64),
+    guard: Expr,
+) -> Insert<hopr_safe_threshold_state::ActiveModel> {
+    HoprSafeThresholdState::insert(hopr_safe_threshold_state::ActiveModel {
+        hopr_safe_contract_id: Set(safe_contract_id),
+        threshold: Set(threshold),
+        published_block: Set(position.0),
+        published_tx_index: Set(position.1),
+        published_log_index: Set(position.2),
+        ..Default::default()
+    })
+    .on_conflict(
+        OnConflict::column(hopr_safe_threshold_state::Column::HoprSafeContractId)
             .update_columns([
-                hopr_safe_owner_state::Column::IsCurrentOwner,
-                hopr_safe_owner_state::Column::PublishedBlock,
-                hopr_safe_owner_state::Column::PublishedTxIndex,
-                hopr_safe_owner_state::Column::PublishedLogIndex,
+                hopr_safe_threshold_state::Column::Threshold,
+                hopr_safe_threshold_state::Column::PublishedBlock,
+                hopr_safe_threshold_state::Column::PublishedTxIndex,
+                hopr_safe_threshold_state::Column::PublishedLogIndex,
             ])
             .action_and_where(guard)
             .to_owned(),
-        )
-        .exec(conn)
-        .await,
     )
 }
 
@@ -102,41 +142,113 @@ async fn write_threshold_row<C: ConnectionTrait>(
     guard: Expr,
 ) -> Result<()> {
     ignore_record_not_inserted(
-        HoprSafeThresholdState::insert(hopr_safe_threshold_state::ActiveModel {
-            hopr_safe_contract_id: Set(safe_contract_id),
-            threshold: Set(threshold),
-            published_block: Set(position.0),
-            published_tx_index: Set(position.1),
-            published_log_index: Set(position.2),
-            ..Default::default()
-        })
-        .on_conflict(
-            OnConflict::column(hopr_safe_threshold_state::Column::HoprSafeContractId)
-                .update_columns([
-                    hopr_safe_threshold_state::Column::Threshold,
-                    hopr_safe_threshold_state::Column::PublishedBlock,
-                    hopr_safe_threshold_state::Column::PublishedTxIndex,
-                    hopr_safe_threshold_state::Column::PublishedLogIndex,
-                ])
-                .action_and_where(guard)
-                .to_owned(),
-        )
-        .exec(conn)
-        .await,
+        threshold_row_insert(safe_contract_id, threshold, position, guard)
+            .exec(conn)
+            .await,
     )
 }
 
-/// Matches a stored row whose position is strictly before `position`.
-fn stored_position_before(table: &str, position: (i64, i64, i64)) -> Expr {
-    Expr::cust_with_values(
-        format!("({table}.published_block, {table}.published_tx_index, {table}.published_log_index) < (?, ?, ?)"),
-        [position.0, position.1, position.2],
-    )
+/// Marks the state rows of a Safe as snapshotted at `block` (never moving the marker backwards).
+fn mark_owners_synced_update(safe_contract_id: i64, block: i64) -> UpdateMany<HoprSafeContractState> {
+    HoprSafeContractState::update_many()
+        .col_expr(hopr_safe_contract_state::Column::OwnersSyncedBlock, Expr::value(block))
+        .filter(hopr_safe_contract_state::Column::HoprSafeContractId.eq(safe_contract_id))
+        .filter(
+            Condition::any()
+                .add(hopr_safe_contract_state::Column::OwnersSyncedBlock.is_null())
+                .add(hopr_safe_contract_state::Column::OwnersSyncedBlock.lt(block)),
+        )
+}
+
+/// Safes that have a state row and no state row snapshotted at or above `snapshot_block`.
+///
+/// A Safe identity without any state row is incomplete (no module address or chain key, and not served by
+/// the current views). There is no row to hold `owners_synced_block`, so it could never leave the pending
+/// list: it is not listed until its first state row exists.
+fn pending_safes_query(snapshot_block: i64) -> Select<HoprSafeContract> {
+    let synced = Query::select()
+        .column(hopr_safe_contract_state::Column::HoprSafeContractId)
+        .from(HoprSafeContractState)
+        .and_where(hopr_safe_contract_state::Column::OwnersSyncedBlock.gte(snapshot_block))
+        .to_owned();
+    let with_state = Query::select()
+        .column(hopr_safe_contract_state::Column::HoprSafeContractId)
+        .from(HoprSafeContractState)
+        .to_owned();
+    HoprSafeContract::find()
+        .filter(hopr_safe_contract::Column::Id.in_subquery(with_state))
+        .filter(hopr_safe_contract::Column::Id.not_in_subquery(synced))
+        .order_by_asc(hopr_safe_contract::Column::Id)
+}
+
+/// Matches a stored row whose position `(block, tx index, log index)` is strictly before `position`.
+///
+/// Built from typed expressions, so the placeholders are rendered correctly for every backend.
+fn stored_position_before<T, C>(table: T, columns: [C; 3], position: (i64, i64, i64)) -> Expr
+where
+    T: Iden + Clone + 'static,
+    C: Iden + Clone + 'static,
+{
+    let [block, tx_index, log_index] = columns;
+    Expr::tuple([
+        Expr::col((table.clone(), block)),
+        Expr::col((table.clone(), tx_index)),
+        Expr::col((table, log_index)),
+    ])
+    .lt(Expr::tuple([
+        Expr::val(position.0),
+        Expr::val(position.1),
+        Expr::val(position.2),
+    ]))
 }
 
 /// Matches a stored row published at or before `block`.
-fn stored_block_at_or_before(table: &str, block: i64) -> Expr {
-    Expr::cust_with_values(format!("{table}.published_block <= ?"), [block])
+fn stored_block_at_or_before<T, C>(table: T, block_column: C, block: i64) -> Expr
+where
+    T: Iden + 'static,
+    C: Iden + 'static,
+{
+    Expr::col((table, block_column)).lte(block)
+}
+
+fn owner_position_before(position: (i64, i64, i64)) -> Expr {
+    stored_position_before(
+        hopr_safe_owner_state::Entity,
+        [
+            hopr_safe_owner_state::Column::PublishedBlock,
+            hopr_safe_owner_state::Column::PublishedTxIndex,
+            hopr_safe_owner_state::Column::PublishedLogIndex,
+        ],
+        position,
+    )
+}
+
+fn threshold_position_before(position: (i64, i64, i64)) -> Expr {
+    stored_position_before(
+        hopr_safe_threshold_state::Entity,
+        [
+            hopr_safe_threshold_state::Column::PublishedBlock,
+            hopr_safe_threshold_state::Column::PublishedTxIndex,
+            hopr_safe_threshold_state::Column::PublishedLogIndex,
+        ],
+        position,
+    )
+}
+
+fn owner_block_at_or_before(block: i64) -> Expr {
+    stored_block_at_or_before(
+        hopr_safe_owner_state::Entity,
+        hopr_safe_owner_state::Column::PublishedBlock,
+        block,
+    )
+}
+
+fn threshold_block_at_or_before(block: i64) -> Expr {
+    stored_block_at_or_before(
+        hopr_safe_threshold_state::Entity,
+        hopr_safe_threshold_state::Column::PublishedBlock,
+        block,
+    )
 }
 
 fn block_to_i64(block: u64, what: &str) -> Result<i64> {
@@ -232,7 +344,7 @@ impl BlokliDbSafeHistoryOperations for BlokliDb {
             owner_address,
             is_current_owner,
             position,
-            stored_position_before("hopr_safe_owner_state", position),
+            owner_position_before(position),
         )
         .await?;
         tx.commit().await?;
@@ -256,7 +368,7 @@ impl BlokliDbSafeHistoryOperations for BlokliDb {
             safe.id,
             threshold,
             position,
-            stored_position_before("hopr_safe_threshold_state", position),
+            threshold_position_before(position),
         )
         .await?;
         tx.commit().await?;
@@ -352,7 +464,7 @@ impl BlokliDbSafeHistoryOperations for BlokliDb {
                 *owner,
                 true,
                 position,
-                stored_block_at_or_before("hopr_safe_owner_state", snapshot_block),
+                owner_block_at_or_before(snapshot_block),
             )
             .await?;
         }
@@ -375,7 +487,7 @@ impl BlokliDbSafeHistoryOperations for BlokliDb {
                 owner,
                 false,
                 position,
-                stored_block_at_or_before("hopr_safe_owner_state", snapshot_block),
+                owner_block_at_or_before(snapshot_block),
             )
             .await?;
         }
@@ -385,21 +497,11 @@ impl BlokliDbSafeHistoryOperations for BlokliDb {
             safe.id,
             threshold,
             position,
-            stored_block_at_or_before("hopr_safe_threshold_state", snapshot_block),
+            threshold_block_at_or_before(snapshot_block),
         )
         .await?;
 
-        HoprSafeContractState::update_many()
-            .col_expr(
-                hopr_safe_contract_state::Column::OwnersSyncedBlock,
-                Expr::value(snapshot_block),
-            )
-            .filter(hopr_safe_contract_state::Column::HoprSafeContractId.eq(safe.id))
-            .filter(
-                Condition::any()
-                    .add(hopr_safe_contract_state::Column::OwnersSyncedBlock.is_null())
-                    .add(hopr_safe_contract_state::Column::OwnersSyncedBlock.lt(snapshot_block)),
-            )
+        mark_owners_synced_update(safe.id, snapshot_block)
             .exec(tx.as_ref())
             .await?;
 
@@ -415,22 +517,7 @@ impl BlokliDbSafeHistoryOperations for BlokliDb {
         let snapshot_block = block_to_i64(snapshot_block, "snapshot block")?;
         let nested = self.nest_transaction(tx).await?;
 
-        let synced = Query::select()
-            .column(hopr_safe_contract_state::Column::HoprSafeContractId)
-            .from(HoprSafeContractState)
-            .and_where(hopr_safe_contract_state::Column::OwnersSyncedBlock.gte(snapshot_block))
-            .to_owned();
-        // A Safe identity without any state row is incomplete (no module address or chain key, and not
-        // served by the current views). There is no row to hold `owners_synced_block`, so it could never
-        // leave the pending list: it is not listed until its first state row exists.
-        let with_state = Query::select()
-            .column(hopr_safe_contract_state::Column::HoprSafeContractId)
-            .from(HoprSafeContractState)
-            .to_owned();
-        let pending = HoprSafeContract::find()
-            .filter(hopr_safe_contract::Column::Id.in_subquery(with_state))
-            .filter(hopr_safe_contract::Column::Id.not_in_subquery(synced))
-            .order_by_asc(hopr_safe_contract::Column::Id)
+        let pending = pending_safes_query(snapshot_block)
             .all(nested.as_ref())
             .await?
             .into_iter()
@@ -447,6 +534,8 @@ impl BlokliDbSafeHistoryOperations for BlokliDb {
 
 #[cfg(test)]
 mod tests {
+    use sea_orm::{DbBackend, QueryTrait, Statement};
+
     use super::*;
     use crate::{db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations};
 
@@ -657,5 +746,60 @@ mod tests {
         );
 
         Ok(())
+    }
+    /// The guards used to be hand-written SQL with literal `?` placeholders, which only SQLite understands
+    /// (PostgreSQL needs `$n`). Every statement must render with the placeholders of its backend.
+    #[test]
+    fn test_statements_render_with_backend_placeholders() {
+        let position = (10, 2, 3);
+        let statements: Vec<(&str, Box<dyn Fn(DbBackend) -> Statement>)> = vec![
+            (
+                "owner upsert",
+                Box::new(move |backend| {
+                    owner_row_insert(1, Address::default(), true, position, owner_position_before(position))
+                        .build(backend)
+                }),
+            ),
+            (
+                "owner snapshot write",
+                Box::new(move |backend| {
+                    owner_row_insert(1, Address::default(), true, position, owner_block_at_or_before(10)).build(backend)
+                }),
+            ),
+            (
+                "threshold upsert",
+                Box::new(move |backend| {
+                    threshold_row_insert(1, "2".into(), position, threshold_position_before(position)).build(backend)
+                }),
+            ),
+            (
+                "threshold snapshot write",
+                Box::new(move |backend| {
+                    threshold_row_insert(1, "2".into(), position, threshold_block_at_or_before(10)).build(backend)
+                }),
+            ),
+            (
+                "synced marker",
+                Box::new(|backend| mark_owners_synced_update(1, 10).build(backend)),
+            ),
+            (
+                "pending safes",
+                Box::new(|backend| pending_safes_query(10).build(backend)),
+            ),
+        ];
+
+        for (name, render) in statements {
+            let postgres = render(DbBackend::Postgres).sql;
+            let sqlite = render(DbBackend::Sqlite).sql;
+            assert!(
+                !postgres.contains('?'),
+                "{name}: literal placeholder in PostgreSQL SQL: {postgres}"
+            );
+            assert!(
+                postgres.contains("$1"),
+                "{name}: no numbered placeholder in: {postgres}"
+            );
+            assert!(sqlite.contains('?'), "{name}: no placeholder in SQLite SQL: {sqlite}");
+        }
     }
 }
