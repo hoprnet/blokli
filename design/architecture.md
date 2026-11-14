@@ -938,9 +938,15 @@ The unique constraint on `(deployed_block, deployed_tx_index, deployed_log_index
 Safe owners and threshold are not rebuilt from Safe logs. Historical sync only discovers Safes (stake factory, node-safe registry, v3 CSV
 preseed) and requests no Safe event topics.
 
-- At every switch to continuous mode (including each restart) the indexer reads `getOwners()` and `getThreshold()` for every Safe without a
-  snapshot at the last processed block. Reads are pinned at that block, run with bounded concurrency next to the continuous stream, and are
-  resumable: Safes already snapshotted at that block are skipped.
+- At every switch to continuous mode (including each restart) the indexer lists the Safes without a snapshot at the last processed block and
+  hands them to a background refresh task. The task only performs RPC reads (batched through Multicall3 where deployed, otherwise bounded
+  concurrent calls; bounded batch size and concurrency; pinned at the latest processed block and re-pinned on pruned-state errors) and sends
+  the results to the indexing loop, which stores them between blocks. The task never touches the database.
+- A Safe that cannot be read (or whose result cannot be stored) is retried with backoff for the life of the indexer, with a long-tail
+  interval for Safes that keep failing. Safes whose read at discovery fails, or whose owner event could not be covered by a snapshot, are
+  reported to the same task. The gauge `blokli_indexer_safe_owner_snapshots_pending` counts the Safes being retried.
+- A read pinned before an owner or threshold event that has been processed since is dropped and re-read at a newer block, and a stored
+  snapshot is never replaced by an older one.
 - In continuous mode the indexer subscribes to `SafeSetup`, `AddedOwner`, `RemovedOwner` and `ChangedThreshold` through address-scoped
   filters built from the indexed Safe contracts. Unknown Safe addresses are not streamed globally.
 - When a Safe becomes known while live, owners and threshold are read pinned at the discovery block and the Safe filter set is refreshed.

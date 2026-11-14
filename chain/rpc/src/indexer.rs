@@ -7,7 +7,12 @@
 //! historical blockchain data.
 //!
 //! For details on the Indexer see the `chain-indexer` crate.
-use std::{cmp::Ordering, future::Future, pin::Pin, time::Duration};
+use std::{
+    cmp::Ordering,
+    future::Future,
+    pin::Pin,
+    time::{Duration, Instant},
+};
 
 use async_stream::stream;
 use async_trait::async_trait;
@@ -39,6 +44,9 @@ use crate::{
 
 /// Canonical Multicall3 deployment (the same address on Gnosis Chain and most EVM chains).
 const MULTICALL3_ADDRESS: AlloyAddress = address!("cA11bde05977b3631167028862bE2a173976CA11");
+
+/// How long a Multicall3 detection result is reused before the code at the address is checked again.
+const MULTICALL3_DETECTION_TTL: Duration = Duration::from_secs(600);
 
 /// Maximum number of concurrent reads when Multicall3 is not available.
 const SAFE_READ_CONCURRENCY: usize = 8;
@@ -230,6 +238,28 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
             }
         }
         .boxed()
+    }
+}
+
+impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
+    /// Whether Multicall3 is deployed at its canonical address, detected by the code at that address.
+    ///
+    /// The result is reused for [`MULTICALL3_DETECTION_TTL`], so a refresh of many batches checks once and
+    /// a later refresh checks again. A failed check is an error for the caller (the batch is retried
+    /// later) and is not cached; a chain without Multicall3 (e.g. a fresh Anvil) reads with individual calls.
+    async fn multicall_deployed(&self) -> Result<bool> {
+        if let Ok(cached) = self.multicall_support.lock() {
+            if let Some((deployed, detected_at)) = *cached {
+                if detected_at.elapsed() < MULTICALL3_DETECTION_TTL {
+                    return Ok(deployed);
+                }
+            }
+        }
+        let deployed = !self.provider.get_code_at(MULTICALL3_ADDRESS).await?.is_empty();
+        if let Ok(mut cached) = self.multicall_support.lock() {
+            *cached = Some((deployed, Instant::now()));
+        }
+        Ok(deployed)
     }
 }
 
@@ -505,10 +535,7 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
             return Ok(Vec::new());
         }
 
-        // Multicall3 is detected by its code at the canonical address. A chain without it (e.g. a
-        // fresh Anvil) falls back to bounded concurrent eth_calls.
-        let multicall_deployed = !self.provider.get_code_at(MULTICALL3_ADDRESS).await?.is_empty();
-        if !multicall_deployed {
+        if !self.multicall_deployed().await? {
             debug!("Multicall3 not deployed, reading Safe owners with individual calls");
             let mut snapshots = futures::stream::iter(safe_addresses.into_iter().enumerate())
                 .map(|(index, safe_address)| async move {

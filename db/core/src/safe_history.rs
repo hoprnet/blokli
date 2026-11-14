@@ -6,8 +6,8 @@ use blokli_db_entity::{
     prelude::{HoprSafeContract, HoprSafeContractState, HoprSafeOwnerState, HoprSafeThresholdState},
 };
 use hopr_types::primitive::prelude::{Address, ToHex};
-use sea_orm::{ColumnTrait, Condition, ConnectionTrait, DbErr, EntityTrait, QueryFilter, Set};
-use sea_query::{Expr, OnConflict};
+use sea_orm::{ColumnTrait, Condition, ConnectionTrait, DbErr, EntityTrait, QueryFilter, QueryOrder, Set};
+use sea_query::{Expr, OnConflict, Query};
 
 use crate::{
     BlokliDb, BlokliDbGeneralModelOperations, DbSqlError, OptTx, Result, safe_contracts::BlokliDbSafeContractOperations,
@@ -188,6 +188,9 @@ pub trait BlokliDbSafeHistoryOperations: BlokliDbGeneralModelOperations + Blokli
 
     /// Stores an RPC snapshot of owners and threshold taken at `snapshot_block`.
     ///
+    /// A no-op when the Safe already has a snapshot at or above `snapshot_block`, so a stale snapshot
+    /// cannot overwrite a newer one.
+    ///
     /// The owner set of the Safe becomes exactly `owners`, except for rows written by live events
     /// above `snapshot_block`, which are newer than the snapshot and kept. Owners missing from the
     /// snapshot are marked as removed. `owners_synced_block` is advanced to `snapshot_block`.
@@ -329,6 +332,15 @@ impl BlokliDbSafeHistoryOperations for BlokliDb {
         let tx = self.nest_transaction(tx).await?;
         let safe = require_safe_contract(tx.as_ref(), safe_address).await?;
 
+        // An older snapshot must never land after a newer one: it would revive owners removed since.
+        if owners_synced_block_of(tx.as_ref(), safe.id)
+            .await?
+            .is_some_and(|synced| synced >= snapshot_block)
+        {
+            tx.commit().await?;
+            return Ok(());
+        }
+
         let snapshot_owners = owners
             .iter()
             .map(|owner| owner.as_ref().to_vec())
@@ -403,21 +415,16 @@ impl BlokliDbSafeHistoryOperations for BlokliDb {
         let snapshot_block = block_to_i64(snapshot_block, "snapshot block")?;
         let nested = self.nest_transaction(tx).await?;
 
-        let contracts = HoprSafeContract::find().all(nested.as_ref()).await?;
-        let mut synced = std::collections::HashMap::<i64, i64>::new();
-        for state in HoprSafeContractState::find().all(nested.as_ref()).await? {
-            if let Some(block) = state.owners_synced_block {
-                let entry = synced.entry(state.hopr_safe_contract_id).or_insert(block);
-                *entry = (*entry).max(block);
-            }
-        }
-
-        let mut pending = contracts
-            .into_iter()
-            .filter(|contract| synced.get(&contract.id).is_none_or(|block| *block < snapshot_block))
-            .collect::<Vec<_>>();
-        pending.sort_by_key(|contract| contract.id);
-        let pending = pending
+        let synced = Query::select()
+            .column(hopr_safe_contract_state::Column::HoprSafeContractId)
+            .from(HoprSafeContractState)
+            .and_where(hopr_safe_contract_state::Column::OwnersSyncedBlock.gte(snapshot_block))
+            .to_owned();
+        let pending = HoprSafeContract::find()
+            .filter(hopr_safe_contract::Column::Id.not_in_subquery(synced))
+            .order_by_asc(hopr_safe_contract::Column::Id)
+            .all(nested.as_ref())
+            .await?
             .into_iter()
             .map(|contract| {
                 Address::try_from(contract.address.as_slice())
@@ -602,6 +609,26 @@ mod tests {
             .await?;
 
         assert_eq!(db.get_safe_owners_synced_block(None, safe_address).await?, Some(150));
+
+        Ok(())
+    }
+    #[tokio::test]
+    async fn test_older_snapshot_after_a_newer_one_is_a_no_op() -> anyhow::Result<()> {
+        let (db, safe_address) = setup().await?;
+        let (kept, removed_later) = (random_address(), random_address());
+
+        db.apply_safe_owner_snapshot(None, safe_address, vec![kept], "2".into(), 210)
+            .await?;
+        // A read pinned earlier, when `removed_later` was still an owner, arrives afterwards.
+        db.apply_safe_owner_snapshot(None, safe_address, vec![kept, removed_later], "1".into(), 200)
+            .await?;
+        // Applying at the same block again changes nothing either.
+        db.apply_safe_owner_snapshot(None, safe_address, vec![], "9".into(), 210)
+            .await?;
+
+        assert_eq!(db.get_safe_owners(None, safe_address).await?, vec![kept]);
+        assert_eq!(db.get_safe_threshold(None, safe_address).await?.as_deref(), Some("2"));
+        assert_eq!(db.get_safe_owners_synced_block(None, safe_address).await?, Some(210));
 
         Ok(())
     }

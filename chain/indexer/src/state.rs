@@ -7,9 +7,12 @@
 //! The synchronization ensures no race conditions when capturing the watermark
 //! for subscriptions, guaranteeing no duplicates or data loss.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use async_broadcast::{InactiveReceiver, Receiver, Sender, TrySendError, broadcast};
@@ -167,6 +170,22 @@ pub struct IndexerState {
 
     /// Monotonic counter used to trigger Safe filter refreshes.
     safe_filter_epoch: Arc<AtomicU64>,
+
+    /// Coordination between block processing and the Safe owner refresh task.
+    safe_owner_sync: Arc<SafeOwnerSync>,
+}
+
+/// Shared bookkeeping between block processing and the background Safe owner refresh.
+///
+/// Block processing reports Safes that need an owner snapshot (a read at discovery failed, a stored
+/// snapshot was dropped) and the owner events it processed. The refresh task reads the reported
+/// Safes over RPC, and the indexing loop uses the event record to drop snapshot reads that were
+/// pinned before an event that has been processed since.
+#[derive(Default)]
+struct SafeOwnerSync {
+    pending: Mutex<HashSet<Address>>,
+    event_blocks: Mutex<HashMap<Address, u64>>,
+    wakeup: tokio::sync::Notify,
 }
 
 impl std::fmt::Debug for IndexerState {
@@ -178,6 +197,7 @@ impl std::fmt::Debug for IndexerState {
             .field("_event_bus_rx", &"Arc<InactiveReceiver<Arc<IndexerEvent>>>")
             .field("_shutdown_rx", &"Arc<Receiver<()>>")
             .field("safe_filter_epoch", &"Arc<AtomicU64>")
+            .field("safe_owner_sync", &"Arc<SafeOwnerSync>")
             .finish()
     }
 }
@@ -209,6 +229,7 @@ impl IndexerState {
             _event_bus_rx: Arc::new(event_bus_rx.deactivate()),
             _shutdown_rx: Arc::new(shutdown_rx),
             safe_filter_epoch: Arc::new(AtomicU64::new(0)),
+            safe_owner_sync: Arc::new(SafeOwnerSync::default()),
         }
     }
 
@@ -297,6 +318,56 @@ impl IndexerState {
     }
 
     /// Returns the current Safe filter epoch.
+    /// Reports a Safe that needs an owner snapshot and wakes the refresh task.
+    pub fn mark_safe_owner_snapshot_pending(&self, safe_address: Address) {
+        if let Ok(mut pending) = self.safe_owner_sync.pending.lock() {
+            pending.insert(safe_address);
+        }
+        self.safe_owner_sync.wakeup.notify_one();
+    }
+
+    /// Takes the Safes reported since the last call.
+    pub fn take_pending_safe_owner_snapshots(&self) -> Vec<Address> {
+        self.safe_owner_sync
+            .pending
+            .lock()
+            .map(|mut pending| pending.drain().collect())
+            .unwrap_or_default()
+    }
+
+    /// Resolves when a Safe has been reported (a report made before the call is not lost).
+    pub async fn safe_owner_snapshot_reported(&self) {
+        self.safe_owner_sync.wakeup.notified().await;
+    }
+
+    /// Records that an owner or threshold event of the Safe was processed at `block`.
+    pub fn record_safe_owner_event(&self, safe_address: Address, block: u64) {
+        if let Ok(mut blocks) = self.safe_owner_sync.event_blocks.lock() {
+            let entry = blocks.entry(safe_address).or_insert(block);
+            *entry = (*entry).max(block);
+        }
+    }
+
+    /// Highest block of an owner or threshold event processed for the Safe since the last snapshot read
+    /// that covered it.
+    pub fn safe_owner_event_block(&self, safe_address: Address) -> Option<u64> {
+        self.safe_owner_sync
+            .event_blocks
+            .lock()
+            .ok()
+            .and_then(|blocks| blocks.get(&safe_address).copied())
+    }
+
+    /// Forgets the recorded events of the Safe up to and including `block` (they are covered by a stored
+    /// snapshot pinned at `block`).
+    pub fn clear_safe_owner_events_up_to(&self, safe_address: Address, block: u64) {
+        if let Ok(mut blocks) = self.safe_owner_sync.event_blocks.lock() {
+            if blocks.get(&safe_address).is_some_and(|recorded| *recorded <= block) {
+                blocks.remove(&safe_address);
+            }
+        }
+    }
+
     pub fn safe_filter_epoch(&self) -> u64 {
         self.safe_filter_epoch.load(Ordering::Relaxed)
     }
