@@ -14,6 +14,7 @@ mod m010_safe_chain_key_index;
 mod m011_account_state_safe_address_index;
 mod m012_safe_module_address_index;
 mod m013_account_unique_chain_key;
+mod m014_safe_owner_snapshot;
 
 /// This is a special block ID that even pre-dates the v3 contract deployment on Gnosis chain,
 /// and therefore could be safely used to mark data added via the migration.
@@ -49,6 +50,7 @@ impl MigratorTrait for Migrator {
             Box::new(m011_account_state_safe_address_index::Migration),
             Box::new(m012_safe_module_address_index::Migration),
             Box::new(m013_account_unique_chain_key::Migration),
+            Box::new(m014_safe_owner_snapshot::Migration),
         ]
     }
 }
@@ -75,6 +77,7 @@ impl MigratorTrait for MigratorIndex {
             Box::new(m011_account_state_safe_address_index::Migration),
             Box::new(m012_safe_module_address_index::Migration),
             Box::new(m013_account_unique_chain_key::Migration),
+            Box::new(m014_safe_owner_snapshot::Migration),
         ]
     }
 }
@@ -154,6 +157,62 @@ mod tests {
         let result = Migrator::up(&db, None).await;
 
         assert!(result.is_ok(), "Migrations should run without errors");
+    }
+
+    #[tokio::test]
+    async fn test_safe_owner_snapshot_migration_drops_history_and_keeps_latest_rows() {
+        let db = setup_test_db().await;
+        Migrator::up(&db, Some(13)).await.unwrap();
+
+        for statement in [
+            "INSERT INTO hopr_safe_contract (id, address) VALUES (1, x'0101010101010101010101010101010101010101')",
+            "INSERT INTO hopr_safe_owner_state (hopr_safe_contract_id, owner_address, is_current_owner, \
+             published_block, published_tx_index, published_log_index) VALUES \
+             (1, x'0202020202020202020202020202020202020202', 1, 10, 0, 0), \
+             (1, x'0202020202020202020202020202020202020202', 0, 20, 0, 0), \
+             (1, x'0303030303030303030303030303030303030303', 1, 15, 0, 0)",
+            "INSERT INTO hopr_safe_threshold_state (hopr_safe_contract_id, threshold, published_block, \
+             published_tx_index, published_log_index) VALUES (1, '1', 10, 0, 0), (1, '2', 30, 0, 0)",
+        ] {
+            db.execute_raw(Statement::from_string(DbBackend::Sqlite, statement.to_string()))
+                .await
+                .unwrap();
+        }
+
+        Migrator::up(&db, None).await.unwrap();
+
+        for table in [
+            "hopr_safe_event",
+            "hopr_safe_setup_event",
+            "hopr_safe_setup_owner",
+            "hopr_safe_owner_change_event",
+            "hopr_safe_threshold_change_event",
+            "hopr_safe_execution_event",
+        ] {
+            assert!(!table_exists(&db, table).await, "{table} should be dropped");
+        }
+
+        let count = |sql: &'static str| {
+            let db = &db;
+            async move {
+                db.query_one_raw(Statement::from_string(DbBackend::Sqlite, sql.to_string()))
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .try_get::<i64>("", "n")
+                    .unwrap()
+            }
+        };
+        assert_eq!(count("SELECT COUNT(*) AS n FROM hopr_safe_owner_state").await, 2);
+        assert_eq!(count("SELECT COUNT(*) AS n FROM safe_owner_current").await, 1);
+        assert_eq!(
+            count("SELECT CAST(threshold AS INTEGER) AS n FROM safe_threshold_current").await,
+            2
+        );
+        assert_eq!(
+            count("SELECT COUNT(*) AS n FROM hopr_safe_contract_state WHERE owners_synced_block IS NULL").await,
+            0
+        );
     }
 
     #[tokio::test]

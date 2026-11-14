@@ -1,108 +1,17 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use async_trait::async_trait;
 use blokli_db_entity::{
-    hopr_safe_contract, hopr_safe_event, hopr_safe_execution_event, hopr_safe_owner_change_event,
-    hopr_safe_owner_state, hopr_safe_setup_event, hopr_safe_setup_owner, hopr_safe_threshold_change_event,
-    hopr_safe_threshold_state,
-    prelude::{
-        HoprSafeContract, HoprSafeEvent, HoprSafeExecutionEvent, HoprSafeOwnerChangeEvent, HoprSafeOwnerState,
-        HoprSafeSetupEvent, HoprSafeSetupOwner, HoprSafeThresholdChangeEvent, HoprSafeThresholdState,
-    },
+    hopr_safe_contract, hopr_safe_contract_state, hopr_safe_owner_state, hopr_safe_threshold_state,
+    prelude::{HoprSafeContract, HoprSafeContractState, HoprSafeOwnerState, HoprSafeThresholdState},
 };
-use hopr_types::{
-    crypto::types::Hash,
-    primitive::prelude::{Address, ToHex},
-};
-use sea_orm::{ColumnTrait, ConnectionTrait, DbErr, EntityTrait, QueryFilter, QueryOrder, Set};
-use sea_query::OnConflict;
+use hopr_types::primitive::prelude::{Address, ToHex};
+use sea_orm::{ColumnTrait, Condition, ConnectionTrait, DbErr, EntityTrait, QueryFilter, Set};
+use sea_query::{Expr, OnConflict};
 
 use crate::{
     BlokliDb, BlokliDbGeneralModelOperations, DbSqlError, OptTx, Result, safe_contracts::BlokliDbSafeContractOperations,
 };
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SafeActivityKind {
-    SafeSetup,
-    AddedOwner,
-    RemovedOwner,
-    ChangedThreshold,
-    ExecutionSuccess,
-    ExecutionFailure,
-}
-
-impl SafeActivityKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::SafeSetup => "SAFE_SETUP",
-            Self::AddedOwner => "ADDED_OWNER",
-            Self::RemovedOwner => "REMOVED_OWNER",
-            Self::ChangedThreshold => "CHANGED_THRESHOLD",
-            Self::ExecutionSuccess => "EXECUTION_SUCCESS",
-            Self::ExecutionFailure => "EXECUTION_FAILURE",
-        }
-    }
-
-    fn from_str(value: &str) -> Result<Self> {
-        match value {
-            "SAFE_SETUP" => Ok(Self::SafeSetup),
-            "ADDED_OWNER" => Ok(Self::AddedOwner),
-            "REMOVED_OWNER" => Ok(Self::RemovedOwner),
-            "CHANGED_THRESHOLD" => Ok(Self::ChangedThreshold),
-            "EXECUTION_SUCCESS" => Ok(Self::ExecutionSuccess),
-            "EXECUTION_FAILURE" => Ok(Self::ExecutionFailure),
-            _ => Err(DbSqlError::Construction(format!("unknown safe activity kind: {value}"))),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SafeActivityEntry {
-    pub safe_address: Vec<u8>,
-    pub event_kind: String,
-    pub chain_tx_hash: Vec<u8>,
-    pub safe_tx_hash: Option<Vec<u8>>,
-    pub owner_address: Option<Vec<u8>>,
-    pub owners: Vec<Vec<u8>>,
-    pub threshold: Option<String>,
-    pub payment: Option<String>,
-    pub initiator_address: Option<Vec<u8>>,
-    pub published_block: i64,
-    pub published_tx_index: i64,
-    pub published_log_index: i64,
-}
-
-#[derive(Clone, Debug)]
-struct SafeEventHeader {
-    event_id: i64,
-    event_kind: SafeActivityKind,
-    chain_tx_hash: Vec<u8>,
-    published_block: i64,
-    published_tx_index: i64,
-    published_log_index: i64,
-}
-
-#[derive(Clone, Debug)]
-struct SafeSetupDetail {
-    initiator_address: Option<Vec<u8>>,
-    threshold: String,
-}
-
-#[derive(Clone, Debug)]
-struct SafeOwnerChangeDetail {
-    owner_address: Vec<u8>,
-}
-
-#[derive(Clone, Debug)]
-struct SafeThresholdChangeDetail {
-    threshold: String,
-}
-
-#[derive(Clone, Debug)]
-struct SafeExecutionDetail {
-    safe_tx_hash: Vec<u8>,
-    payment: String,
-}
 
 fn ignore_record_not_inserted<T>(result: std::result::Result<T, DbErr>) -> Result<()> {
     match result {
@@ -122,580 +31,233 @@ async fn get_safe_contract<C: ConnectionTrait>(
         .map_err(Into::into)
 }
 
-async fn insert_safe_event<C: ConnectionTrait>(
+async fn require_safe_contract<C: ConnectionTrait>(
+    conn: &C,
+    safe_address: Address,
+) -> Result<hopr_safe_contract::Model> {
+    get_safe_contract(conn, safe_address)
+        .await?
+        .ok_or_else(|| DbSqlError::EntityNotFound(format!("safe contract not found for {}", safe_address.to_hex())))
+}
+
+/// Highest owner snapshot block across all state rows of a Safe.
+///
+/// The value lives on `hopr_safe_contract_state`, which is versioned by position. Taking the
+/// maximum keeps it correct when a later state row (e.g. a module address update) is appended.
+async fn owners_synced_block_of<C: ConnectionTrait>(conn: &C, safe_contract_id: i64) -> Result<Option<i64>> {
+    Ok(HoprSafeContractState::find()
+        .filter(hopr_safe_contract_state::Column::HoprSafeContractId.eq(safe_contract_id))
+        .all(conn)
+        .await?
+        .into_iter()
+        .filter_map(|state| state.owners_synced_block)
+        .max())
+}
+
+/// Writes the owner row of `(safe, owner)` unless the stored row is at or past the given limit.
+///
+/// `guard` is the SQL condition on the stored row that must hold for the row to be replaced.
+async fn write_owner_row<C: ConnectionTrait>(
     conn: &C,
     safe_contract_id: i64,
-    event_kind: SafeActivityKind,
-    chain_tx_hash: Hash,
-    block: u64,
-    tx_index: u64,
-    log_index: u64,
-) -> Result<i64> {
-    match HoprSafeEvent::insert(hopr_safe_event::ActiveModel {
-        hopr_safe_contract_id: Set(safe_contract_id),
-        event_kind: Set(event_kind.as_str().to_string()),
-        chain_tx_hash: Set(chain_tx_hash.as_ref().to_vec()),
-        published_block: Set(block.cast_signed()),
-        published_tx_index: Set(tx_index.cast_signed()),
-        published_log_index: Set(log_index.cast_signed()),
-        ..Default::default()
-    })
-    .on_conflict(
-        OnConflict::columns([
-            hopr_safe_event::Column::HoprSafeContractId,
-            hopr_safe_event::Column::PublishedBlock,
-            hopr_safe_event::Column::PublishedTxIndex,
-            hopr_safe_event::Column::PublishedLogIndex,
-        ])
-        .do_nothing()
-        .to_owned(),
-    )
-    .exec(conn)
-    .await
-    {
-        Ok(result) => Ok(result.last_insert_id),
-        Err(DbErr::RecordNotInserted) => HoprSafeEvent::find()
-            .filter(hopr_safe_event::Column::HoprSafeContractId.eq(safe_contract_id))
-            .filter(hopr_safe_event::Column::PublishedBlock.eq(block.cast_signed()))
-            .filter(hopr_safe_event::Column::PublishedTxIndex.eq(tx_index.cast_signed()))
-            .filter(hopr_safe_event::Column::PublishedLogIndex.eq(log_index.cast_signed()))
-            .one(conn)
-            .await?
-            .map(|event| event.id)
-            .ok_or_else(|| {
-                DbSqlError::EntityNotFound(format!(
-                    "safe event not found after insert for contract {safe_contract_id} at \
-                     {block}:{tx_index}:{log_index}"
-                ))
-            }),
-        Err(err) => Err(err.into()),
-    }
-}
-
-async fn load_safe_activity_entries<C: ConnectionTrait>(
-    conn: &C,
-    safe: &hopr_safe_contract::Model,
-) -> Result<Vec<SafeActivityEntry>> {
-    let event_rows = HoprSafeEvent::find()
-        .filter(hopr_safe_event::Column::HoprSafeContractId.eq(safe.id))
-        .order_by_asc(hopr_safe_event::Column::PublishedBlock)
-        .order_by_asc(hopr_safe_event::Column::PublishedTxIndex)
-        .order_by_asc(hopr_safe_event::Column::PublishedLogIndex)
-        .all(conn)
-        .await?;
-
-    let headers = event_rows
-        .into_iter()
-        .map(|event| {
-            Ok(SafeEventHeader {
-                event_id: event.id,
-                event_kind: SafeActivityKind::from_str(&event.event_kind)?,
-                chain_tx_hash: event.chain_tx_hash,
-                published_block: event.published_block,
-                published_tx_index: event.published_tx_index,
-                published_log_index: event.published_log_index,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    let mut setup_ids = Vec::new();
-    let mut owner_change_ids = Vec::new();
-    let mut threshold_change_ids = Vec::new();
-    let mut execution_ids = Vec::new();
-
-    for header in &headers {
-        match header.event_kind {
-            SafeActivityKind::SafeSetup => setup_ids.push(header.event_id),
-            SafeActivityKind::AddedOwner | SafeActivityKind::RemovedOwner => owner_change_ids.push(header.event_id),
-            SafeActivityKind::ChangedThreshold => threshold_change_ids.push(header.event_id),
-            SafeActivityKind::ExecutionSuccess | SafeActivityKind::ExecutionFailure => {
-                execution_ids.push(header.event_id)
-            }
-        }
-    }
-
-    let mut setup_details = HashMap::new();
-    if !setup_ids.is_empty() {
-        for row in HoprSafeSetupEvent::find()
-            .filter(hopr_safe_setup_event::Column::HoprSafeEventId.is_in(setup_ids.clone()))
-            .all(conn)
-            .await?
-        {
-            setup_details.insert(
-                row.hopr_safe_event_id,
-                SafeSetupDetail {
-                    initiator_address: row.initiator_address,
-                    threshold: row.threshold,
-                },
-            );
-        }
-    }
-
-    let mut setup_owners: HashMap<i64, Vec<Vec<u8>>> = HashMap::new();
-    if !setup_ids.is_empty() {
-        for row in HoprSafeSetupOwner::find()
-            .filter(hopr_safe_setup_owner::Column::HoprSafeEventId.is_in(setup_ids))
-            .order_by_asc(hopr_safe_setup_owner::Column::HoprSafeEventId)
-            .order_by_asc(hopr_safe_setup_owner::Column::OwnerPosition)
-            .all(conn)
-            .await?
-        {
-            setup_owners
-                .entry(row.hopr_safe_event_id)
-                .or_default()
-                .push(row.owner_address);
-        }
-    }
-
-    let mut owner_change_details = HashMap::new();
-    if !owner_change_ids.is_empty() {
-        for row in HoprSafeOwnerChangeEvent::find()
-            .filter(hopr_safe_owner_change_event::Column::HoprSafeEventId.is_in(owner_change_ids))
-            .all(conn)
-            .await?
-        {
-            owner_change_details.insert(
-                row.hopr_safe_event_id,
-                SafeOwnerChangeDetail {
-                    owner_address: row.owner_address,
-                },
-            );
-        }
-    }
-
-    let mut threshold_change_details = HashMap::new();
-    if !threshold_change_ids.is_empty() {
-        for row in HoprSafeThresholdChangeEvent::find()
-            .filter(hopr_safe_threshold_change_event::Column::HoprSafeEventId.is_in(threshold_change_ids))
-            .all(conn)
-            .await?
-        {
-            threshold_change_details.insert(
-                row.hopr_safe_event_id,
-                SafeThresholdChangeDetail {
-                    threshold: row.threshold,
-                },
-            );
-        }
-    }
-
-    let mut execution_details = HashMap::new();
-    if !execution_ids.is_empty() {
-        for row in HoprSafeExecutionEvent::find()
-            .filter(hopr_safe_execution_event::Column::HoprSafeEventId.is_in(execution_ids))
-            .all(conn)
-            .await?
-        {
-            execution_details.insert(
-                row.hopr_safe_event_id,
-                SafeExecutionDetail {
-                    safe_tx_hash: row.safe_tx_hash,
-                    payment: row.payment,
-                },
-            );
-        }
-    }
-
-    headers
-        .into_iter()
-        .map(|header| {
-            let mut entry = SafeActivityEntry {
-                safe_address: safe.address.clone(),
-                event_kind: header.event_kind.as_str().to_string(),
-                chain_tx_hash: header.chain_tx_hash,
-                safe_tx_hash: None,
-                owner_address: None,
-                owners: Vec::new(),
-                threshold: None,
-                payment: None,
-                initiator_address: None,
-                published_block: header.published_block,
-                published_tx_index: header.published_tx_index,
-                published_log_index: header.published_log_index,
-            };
-
-            match header.event_kind {
-                SafeActivityKind::SafeSetup => {
-                    let detail = setup_details.get(&header.event_id).ok_or_else(|| {
-                        DbSqlError::EntityNotFound(format!("safe setup detail not found for event {}", header.event_id))
-                    })?;
-                    entry.initiator_address = detail.initiator_address.clone();
-                    entry.threshold = Some(detail.threshold.clone());
-                    entry.owners = setup_owners.remove(&header.event_id).unwrap_or_default();
-                }
-                SafeActivityKind::AddedOwner | SafeActivityKind::RemovedOwner => {
-                    let detail = owner_change_details.get(&header.event_id).ok_or_else(|| {
-                        DbSqlError::EntityNotFound(format!(
-                            "safe owner change detail not found for event {}",
-                            header.event_id
-                        ))
-                    })?;
-                    entry.owner_address = Some(detail.owner_address.clone());
-                }
-                SafeActivityKind::ChangedThreshold => {
-                    let detail = threshold_change_details.get(&header.event_id).ok_or_else(|| {
-                        DbSqlError::EntityNotFound(format!(
-                            "safe threshold detail not found for event {}",
-                            header.event_id
-                        ))
-                    })?;
-                    entry.threshold = Some(detail.threshold.clone());
-                }
-                SafeActivityKind::ExecutionSuccess | SafeActivityKind::ExecutionFailure => {
-                    let detail = execution_details.get(&header.event_id).ok_or_else(|| {
-                        DbSqlError::EntityNotFound(format!(
-                            "safe execution detail not found for event {}",
-                            header.event_id
-                        ))
-                    })?;
-                    entry.safe_tx_hash = Some(detail.safe_tx_hash.clone());
-                    entry.payment = Some(detail.payment.clone());
-                }
-            }
-            Ok(entry)
-        })
-        .collect()
-}
-
-#[async_trait]
-pub trait BlokliDbSafeHistoryOperations: BlokliDbGeneralModelOperations + BlokliDbSafeContractOperations {
-    #[allow(clippy::too_many_arguments)]
-    async fn record_safe_setup<'a>(
-        &'a self,
-        tx: OptTx<'a>,
-        safe_address: Address,
-        chain_tx_hash: Hash,
-        owners: Vec<Address>,
-        threshold: String,
-        initiator_address: Option<Address>,
-        block: u64,
-        tx_index: u64,
-        log_index: u64,
-    ) -> Result<i64>;
-
-    #[allow(clippy::too_many_arguments)]
-    async fn record_safe_activity<'a>(
-        &'a self,
-        tx: OptTx<'a>,
-        safe_address: Address,
-        event_kind: SafeActivityKind,
-        chain_tx_hash: Hash,
-        safe_tx_hash: Option<Hash>,
-        owner_address: Option<Address>,
-        threshold: Option<String>,
-        payment: Option<String>,
-        initiator_address: Option<Address>,
-        block: u64,
-        tx_index: u64,
-        log_index: u64,
-    ) -> Result<i64>;
-
-    #[allow(clippy::too_many_arguments)]
-    async fn upsert_safe_owner_state<'a>(
-        &'a self,
-        tx: OptTx<'a>,
-        safe_address: Address,
-        owner_address: Address,
-        is_current_owner: bool,
-        block: u64,
-        tx_index: u64,
-        log_index: u64,
-    ) -> Result<i64>;
-
-    async fn get_safe_owners<'a>(&'a self, tx: OptTx<'a>, safe_address: Address) -> Result<Vec<Address>>;
-
-    async fn get_safe_activity<'a>(&'a self, tx: OptTx<'a>, safe_address: Address) -> Result<Vec<SafeActivityEntry>>;
-}
-
-#[async_trait]
-impl BlokliDbSafeHistoryOperations for BlokliDb {
-    #[allow(clippy::too_many_arguments)]
-    async fn record_safe_setup<'a>(
-        &'a self,
-        tx: OptTx<'a>,
-        safe_address: Address,
-        chain_tx_hash: Hash,
-        owners: Vec<Address>,
-        threshold: String,
-        initiator_address: Option<Address>,
-        block: u64,
-        tx_index: u64,
-        log_index: u64,
-    ) -> Result<i64> {
-        let tx = self.nest_transaction(tx).await?;
-        let safe = get_safe_contract(tx.as_ref(), safe_address).await?.ok_or_else(|| {
-            DbSqlError::EntityNotFound(format!("safe contract not found for {}", safe_address.to_hex()))
-        })?;
-        let event_id = insert_safe_event(
-            tx.as_ref(),
-            safe.id,
-            SafeActivityKind::SafeSetup,
-            chain_tx_hash,
-            block,
-            tx_index,
-            log_index,
-        )
-        .await?;
-
-        ignore_record_not_inserted(
-            HoprSafeSetupEvent::insert(hopr_safe_setup_event::ActiveModel {
-                hopr_safe_event_id: Set(event_id),
-                initiator_address: Set(initiator_address.map(|address| address.as_ref().to_vec())),
-                threshold: Set(threshold.clone()),
-            })
-            .on_conflict(
-                OnConflict::column(hopr_safe_setup_event::Column::HoprSafeEventId)
-                    .do_nothing()
-                    .to_owned(),
-            )
-            .exec(tx.as_ref())
-            .await,
-        )?;
-
-        for (owner_position, owner_address) in owners.iter().copied().enumerate() {
-            let owner_position = i64::try_from(owner_position).map_err(|_| {
-                DbSqlError::Construction(format!(
-                    "safe setup owner position overflow for {}",
-                    safe_address.to_hex()
-                ))
-            })?;
-            ignore_record_not_inserted(
-                HoprSafeSetupOwner::insert(hopr_safe_setup_owner::ActiveModel {
-                    hopr_safe_event_id: Set(event_id),
-                    owner_position: Set(owner_position),
-                    owner_address: Set(owner_address.as_ref().to_vec()),
-                    ..Default::default()
-                })
-                .on_conflict(
-                    OnConflict::columns([
-                        hopr_safe_setup_owner::Column::HoprSafeEventId,
-                        hopr_safe_setup_owner::Column::OwnerPosition,
-                    ])
-                    .do_nothing()
-                    .to_owned(),
-                )
-                .exec(tx.as_ref())
-                .await,
-            )?;
-        }
-
-        ignore_record_not_inserted(
-            HoprSafeThresholdState::insert(hopr_safe_threshold_state::ActiveModel {
-                hopr_safe_contract_id: Set(safe.id),
-                threshold: Set(threshold),
-                published_block: Set(block.cast_signed()),
-                published_tx_index: Set(tx_index.cast_signed()),
-                published_log_index: Set(log_index.cast_signed()),
-                ..Default::default()
-            })
-            .on_conflict(
-                OnConflict::columns([
-                    hopr_safe_threshold_state::Column::HoprSafeContractId,
-                    hopr_safe_threshold_state::Column::PublishedBlock,
-                    hopr_safe_threshold_state::Column::PublishedTxIndex,
-                    hopr_safe_threshold_state::Column::PublishedLogIndex,
-                ])
-                .do_nothing()
-                .to_owned(),
-            )
-            .exec(tx.as_ref())
-            .await,
-        )?;
-
-        tx.commit().await?;
-        Ok(event_id)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn record_safe_activity<'a>(
-        &'a self,
-        tx: OptTx<'a>,
-        safe_address: Address,
-        event_kind: SafeActivityKind,
-        chain_tx_hash: Hash,
-        safe_tx_hash: Option<Hash>,
-        owner_address: Option<Address>,
-        threshold: Option<String>,
-        payment: Option<String>,
-        initiator_address: Option<Address>,
-        block: u64,
-        tx_index: u64,
-        log_index: u64,
-    ) -> Result<i64> {
-        if initiator_address.is_some() {
-            return Err(DbSqlError::Construction(
-                "initiator_address is only supported for SafeSetup events".to_string(),
-            ));
-        }
-
-        let tx = self.nest_transaction(tx).await?;
-        let safe = get_safe_contract(tx.as_ref(), safe_address).await?.ok_or_else(|| {
-            DbSqlError::EntityNotFound(format!("safe contract not found for {}", safe_address.to_hex()))
-        })?;
-        let event_id = insert_safe_event(
-            tx.as_ref(),
-            safe.id,
-            event_kind,
-            chain_tx_hash,
-            block,
-            tx_index,
-            log_index,
-        )
-        .await?;
-
-        match event_kind {
-            SafeActivityKind::SafeSetup => {
-                return Err(DbSqlError::Construction(
-                    "record_safe_setup must be used for SafeSetup events".to_string(),
-                ));
-            }
-            SafeActivityKind::AddedOwner | SafeActivityKind::RemovedOwner => {
-                let owner_address = owner_address.ok_or_else(|| {
-                    DbSqlError::Construction(format!("{} requires owner_address", event_kind.as_str()))
-                })?;
-                ignore_record_not_inserted(
-                    HoprSafeOwnerChangeEvent::insert(hopr_safe_owner_change_event::ActiveModel {
-                        hopr_safe_event_id: Set(event_id),
-                        owner_address: Set(owner_address.as_ref().to_vec()),
-                    })
-                    .on_conflict(
-                        OnConflict::column(hopr_safe_owner_change_event::Column::HoprSafeEventId)
-                            .do_nothing()
-                            .to_owned(),
-                    )
-                    .exec(tx.as_ref())
-                    .await,
-                )?;
-            }
-            SafeActivityKind::ChangedThreshold => {
-                let threshold = threshold
-                    .ok_or_else(|| DbSqlError::Construction("CHANGED_THRESHOLD requires threshold".to_string()))?;
-                ignore_record_not_inserted(
-                    HoprSafeThresholdChangeEvent::insert(hopr_safe_threshold_change_event::ActiveModel {
-                        hopr_safe_event_id: Set(event_id),
-                        threshold: Set(threshold.clone()),
-                    })
-                    .on_conflict(
-                        OnConflict::column(hopr_safe_threshold_change_event::Column::HoprSafeEventId)
-                            .do_nothing()
-                            .to_owned(),
-                    )
-                    .exec(tx.as_ref())
-                    .await,
-                )?;
-                ignore_record_not_inserted(
-                    HoprSafeThresholdState::insert(hopr_safe_threshold_state::ActiveModel {
-                        hopr_safe_contract_id: Set(safe.id),
-                        threshold: Set(threshold),
-                        published_block: Set(block.cast_signed()),
-                        published_tx_index: Set(tx_index.cast_signed()),
-                        published_log_index: Set(log_index.cast_signed()),
-                        ..Default::default()
-                    })
-                    .on_conflict(
-                        OnConflict::columns([
-                            hopr_safe_threshold_state::Column::HoprSafeContractId,
-                            hopr_safe_threshold_state::Column::PublishedBlock,
-                            hopr_safe_threshold_state::Column::PublishedTxIndex,
-                            hopr_safe_threshold_state::Column::PublishedLogIndex,
-                        ])
-                        .do_nothing()
-                        .to_owned(),
-                    )
-                    .exec(tx.as_ref())
-                    .await,
-                )?;
-            }
-            SafeActivityKind::ExecutionSuccess | SafeActivityKind::ExecutionFailure => {
-                let safe_tx_hash = safe_tx_hash.ok_or_else(|| {
-                    DbSqlError::Construction(format!("{} requires safe_tx_hash", event_kind.as_str()))
-                })?;
-                let payment = payment
-                    .ok_or_else(|| DbSqlError::Construction(format!("{} requires payment", event_kind.as_str())))?;
-                ignore_record_not_inserted(
-                    HoprSafeExecutionEvent::insert(hopr_safe_execution_event::ActiveModel {
-                        hopr_safe_event_id: Set(event_id),
-                        safe_tx_hash: Set(safe_tx_hash.as_ref().to_vec()),
-                        payment: Set(payment),
-                    })
-                    .on_conflict(
-                        OnConflict::column(hopr_safe_execution_event::Column::HoprSafeEventId)
-                            .do_nothing()
-                            .to_owned(),
-                    )
-                    .exec(tx.as_ref())
-                    .await,
-                )?;
-            }
-        }
-
-        tx.commit().await?;
-        Ok(event_id)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn upsert_safe_owner_state<'a>(
-        &'a self,
-        tx: OptTx<'a>,
-        safe_address: Address,
-        owner_address: Address,
-        is_current_owner: bool,
-        block: u64,
-        tx_index: u64,
-        log_index: u64,
-    ) -> Result<i64> {
-        let tx = self.nest_transaction(tx).await?;
-        let safe = get_safe_contract(tx.as_ref(), safe_address).await?.ok_or_else(|| {
-            DbSqlError::EntityNotFound(format!("safe contract not found for {}", safe_address.to_hex()))
-        })?;
-        let id = match HoprSafeOwnerState::insert(hopr_safe_owner_state::ActiveModel {
-            hopr_safe_contract_id: Set(safe.id),
+    owner_address: Address,
+    is_current_owner: bool,
+    position: (i64, i64, i64),
+    guard: Expr,
+) -> Result<()> {
+    ignore_record_not_inserted(
+        HoprSafeOwnerState::insert(hopr_safe_owner_state::ActiveModel {
+            hopr_safe_contract_id: Set(safe_contract_id),
             owner_address: Set(owner_address.as_ref().to_vec()),
             is_current_owner: Set(is_current_owner),
-            published_block: Set(block.cast_signed()),
-            published_tx_index: Set(tx_index.cast_signed()),
-            published_log_index: Set(log_index.cast_signed()),
+            published_block: Set(position.0),
+            published_tx_index: Set(position.1),
+            published_log_index: Set(position.2),
             ..Default::default()
         })
         .on_conflict(
             OnConflict::columns([
                 hopr_safe_owner_state::Column::HoprSafeContractId,
                 hopr_safe_owner_state::Column::OwnerAddress,
+            ])
+            .update_columns([
+                hopr_safe_owner_state::Column::IsCurrentOwner,
                 hopr_safe_owner_state::Column::PublishedBlock,
                 hopr_safe_owner_state::Column::PublishedTxIndex,
                 hopr_safe_owner_state::Column::PublishedLogIndex,
             ])
-            .do_nothing()
+            .action_and_where(guard)
             .to_owned(),
         )
-        .exec(tx.as_ref())
-        .await
-        {
-            Ok(result) => result.last_insert_id,
-            Err(DbErr::RecordNotInserted) => HoprSafeOwnerState::find()
-                .filter(hopr_safe_owner_state::Column::HoprSafeContractId.eq(safe.id))
-                .filter(hopr_safe_owner_state::Column::OwnerAddress.eq(owner_address.as_ref().to_vec()))
-                .filter(hopr_safe_owner_state::Column::PublishedBlock.eq(block.cast_signed()))
-                .filter(hopr_safe_owner_state::Column::PublishedTxIndex.eq(tx_index.cast_signed()))
-                .filter(hopr_safe_owner_state::Column::PublishedLogIndex.eq(log_index.cast_signed()))
-                .one(tx.as_ref())
-                .await?
-                .map(|state| state.id)
-                .ok_or_else(|| {
-                    DbSqlError::EntityNotFound(format!(
-                        "safe owner state not found after insert for {} owner {} at {}:{}:{}",
-                        safe_address.to_hex(),
-                        owner_address.to_hex(),
-                        block,
-                        tx_index,
-                        log_index
-                    ))
-                })?,
-            Err(err) => return Err(err.into()),
-        };
+        .exec(conn)
+        .await,
+    )
+}
 
+async fn write_threshold_row<C: ConnectionTrait>(
+    conn: &C,
+    safe_contract_id: i64,
+    threshold: String,
+    position: (i64, i64, i64),
+    guard: Expr,
+) -> Result<()> {
+    ignore_record_not_inserted(
+        HoprSafeThresholdState::insert(hopr_safe_threshold_state::ActiveModel {
+            hopr_safe_contract_id: Set(safe_contract_id),
+            threshold: Set(threshold),
+            published_block: Set(position.0),
+            published_tx_index: Set(position.1),
+            published_log_index: Set(position.2),
+            ..Default::default()
+        })
+        .on_conflict(
+            OnConflict::column(hopr_safe_threshold_state::Column::HoprSafeContractId)
+                .update_columns([
+                    hopr_safe_threshold_state::Column::Threshold,
+                    hopr_safe_threshold_state::Column::PublishedBlock,
+                    hopr_safe_threshold_state::Column::PublishedTxIndex,
+                    hopr_safe_threshold_state::Column::PublishedLogIndex,
+                ])
+                .action_and_where(guard)
+                .to_owned(),
+        )
+        .exec(conn)
+        .await,
+    )
+}
+
+/// Matches a stored row whose position is strictly before `position`.
+fn stored_position_before(table: &str, position: (i64, i64, i64)) -> Expr {
+    Expr::cust_with_values(
+        format!("({table}.published_block, {table}.published_tx_index, {table}.published_log_index) < (?, ?, ?)"),
+        [position.0, position.1, position.2],
+    )
+}
+
+/// Matches a stored row published at or before `block`.
+fn stored_block_at_or_before(table: &str, block: i64) -> Expr {
+    Expr::cust_with_values(format!("{table}.published_block <= ?"), [block])
+}
+
+fn block_to_i64(block: u64, what: &str) -> Result<i64> {
+    i64::try_from(block).map_err(|_| DbSqlError::Construction(format!("{what} {block} does not fit into i64")))
+}
+
+#[async_trait]
+pub trait BlokliDbSafeHistoryOperations: BlokliDbGeneralModelOperations + BlokliDbSafeContractOperations {
+    /// Records the membership of `owner_address` as of the given event position.
+    ///
+    /// Keeps a single row per `(safe, owner)`. An event at or before the stored position is
+    /// ignored, so replaying older events cannot revive a removed owner. Removed owners stay as
+    /// `is_current_owner = false`.
+    ///
+    /// This does not look at `owners_synced_block`; callers applying live events check
+    /// [`Self::get_safe_owners_synced_block`] first.
+    #[allow(clippy::too_many_arguments)]
+    async fn upsert_safe_owner_state<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        safe_address: Address,
+        owner_address: Address,
+        is_current_owner: bool,
+        block: u64,
+        tx_index: u64,
+        log_index: u64,
+    ) -> Result<()>;
+
+    /// Records the threshold of a Safe as of the given event position (one row per Safe).
+    /// An event at or before the stored position is ignored.
+    async fn upsert_safe_threshold_state<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        safe_address: Address,
+        threshold: String,
+        block: u64,
+        tx_index: u64,
+        log_index: u64,
+    ) -> Result<()>;
+
+    /// Returns the current owners of a Safe in ascending address order.
+    async fn get_safe_owners<'a>(&'a self, tx: OptTx<'a>, safe_address: Address) -> Result<Vec<Address>>;
+
+    /// Returns the current threshold of a Safe, if known.
+    async fn get_safe_threshold<'a>(&'a self, tx: OptTx<'a>, safe_address: Address) -> Result<Option<String>>;
+
+    /// Returns the block the owner snapshot of a Safe is pinned at, or `None` before the first snapshot.
+    async fn get_safe_owners_synced_block<'a>(&'a self, tx: OptTx<'a>, safe_address: Address) -> Result<Option<u64>>;
+
+    /// Stores an RPC snapshot of owners and threshold taken at `snapshot_block`.
+    ///
+    /// The owner set of the Safe becomes exactly `owners`, except for rows written by live events
+    /// above `snapshot_block`, which are newer than the snapshot and kept. Owners missing from the
+    /// snapshot are marked as removed. `owners_synced_block` is advanced to `snapshot_block`.
+    async fn apply_safe_owner_snapshot<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        safe_address: Address,
+        owners: Vec<Address>,
+        threshold: String,
+        snapshot_block: u64,
+    ) -> Result<()>;
+
+    /// Returns the Safes without an owner snapshot at or above `snapshot_block`.
+    ///
+    /// This makes the snapshot refresh resumable: Safes already refreshed are not returned.
+    async fn get_safes_pending_owner_snapshot<'a>(&'a self, tx: OptTx<'a>, snapshot_block: u64)
+    -> Result<Vec<Address>>;
+}
+
+#[async_trait]
+impl BlokliDbSafeHistoryOperations for BlokliDb {
+    #[allow(clippy::too_many_arguments)]
+    async fn upsert_safe_owner_state<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        safe_address: Address,
+        owner_address: Address,
+        is_current_owner: bool,
+        block: u64,
+        tx_index: u64,
+        log_index: u64,
+    ) -> Result<()> {
+        let tx = self.nest_transaction(tx).await?;
+        let safe = require_safe_contract(tx.as_ref(), safe_address).await?;
+        let position = (block.cast_signed(), tx_index.cast_signed(), log_index.cast_signed());
+        write_owner_row(
+            tx.as_ref(),
+            safe.id,
+            owner_address,
+            is_current_owner,
+            position,
+            stored_position_before("hopr_safe_owner_state", position),
+        )
+        .await?;
         tx.commit().await?;
-        Ok(id)
+        Ok(())
+    }
+
+    async fn upsert_safe_threshold_state<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        safe_address: Address,
+        threshold: String,
+        block: u64,
+        tx_index: u64,
+        log_index: u64,
+    ) -> Result<()> {
+        let tx = self.nest_transaction(tx).await?;
+        let safe = require_safe_contract(tx.as_ref(), safe_address).await?;
+        let position = (block.cast_signed(), tx_index.cast_signed(), log_index.cast_signed());
+        write_threshold_row(
+            tx.as_ref(),
+            safe.id,
+            threshold,
+            position,
+            stored_position_before("hopr_safe_threshold_state", position),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
     }
 
     async fn get_safe_owners<'a>(&'a self, tx: OptTx<'a>, safe_address: Address) -> Result<Vec<Address>> {
@@ -705,21 +267,14 @@ impl BlokliDbSafeHistoryOperations for BlokliDb {
             return Ok(Vec::new());
         };
 
-        let states = HoprSafeOwnerState::find()
+        let mut owner_bytes = HoprSafeOwnerState::find()
             .filter(hopr_safe_owner_state::Column::HoprSafeContractId.eq(safe.id))
-            .order_by_desc(hopr_safe_owner_state::Column::PublishedBlock)
-            .order_by_desc(hopr_safe_owner_state::Column::PublishedTxIndex)
-            .order_by_desc(hopr_safe_owner_state::Column::PublishedLogIndex)
+            .filter(hopr_safe_owner_state::Column::IsCurrentOwner.eq(true))
             .all(nested.as_ref())
-            .await?;
-
-        let mut seen = HashSet::new();
-        let mut owner_bytes = Vec::new();
-        for state in states {
-            if seen.insert(state.owner_address.clone()) && state.is_current_owner {
-                owner_bytes.push(state.owner_address);
-            }
-        }
+            .await?
+            .into_iter()
+            .map(|state| state.owner_address)
+            .collect::<Vec<_>>();
 
         owner_bytes.sort();
         let owners = owner_bytes
@@ -734,15 +289,144 @@ impl BlokliDbSafeHistoryOperations for BlokliDb {
         Ok(owners)
     }
 
-    async fn get_safe_activity<'a>(&'a self, tx: OptTx<'a>, safe_address: Address) -> Result<Vec<SafeActivityEntry>> {
+    async fn get_safe_threshold<'a>(&'a self, tx: OptTx<'a>, safe_address: Address) -> Result<Option<String>> {
         let nested = self.nest_transaction(tx).await?;
         let Some(safe) = get_safe_contract(nested.as_ref(), safe_address).await? else {
             nested.commit().await?;
-            return Ok(Vec::new());
+            return Ok(None);
         };
-        let entries = load_safe_activity_entries(nested.as_ref(), &safe).await?;
+        let threshold = HoprSafeThresholdState::find()
+            .filter(hopr_safe_threshold_state::Column::HoprSafeContractId.eq(safe.id))
+            .one(nested.as_ref())
+            .await?
+            .map(|state| state.threshold);
         nested.commit().await?;
-        Ok(entries)
+        Ok(threshold)
+    }
+
+    async fn get_safe_owners_synced_block<'a>(&'a self, tx: OptTx<'a>, safe_address: Address) -> Result<Option<u64>> {
+        let nested = self.nest_transaction(tx).await?;
+        let Some(safe) = get_safe_contract(nested.as_ref(), safe_address).await? else {
+            nested.commit().await?;
+            return Ok(None);
+        };
+        let synced = owners_synced_block_of(nested.as_ref(), safe.id).await?;
+        nested.commit().await?;
+        Ok(synced.map(i64::cast_unsigned))
+    }
+
+    async fn apply_safe_owner_snapshot<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        safe_address: Address,
+        owners: Vec<Address>,
+        threshold: String,
+        snapshot_block: u64,
+    ) -> Result<()> {
+        let snapshot_block = block_to_i64(snapshot_block, "snapshot block")?;
+        let position = (snapshot_block, 0, 0);
+
+        let tx = self.nest_transaction(tx).await?;
+        let safe = require_safe_contract(tx.as_ref(), safe_address).await?;
+
+        let snapshot_owners = owners
+            .iter()
+            .map(|owner| owner.as_ref().to_vec())
+            .collect::<HashSet<_>>();
+        for owner in &owners {
+            write_owner_row(
+                tx.as_ref(),
+                safe.id,
+                *owner,
+                true,
+                position,
+                stored_block_at_or_before("hopr_safe_owner_state", snapshot_block),
+            )
+            .await?;
+        }
+
+        // Owners the snapshot does not contain are removed, unless a newer live event wrote them.
+        let stale = HoprSafeOwnerState::find()
+            .filter(hopr_safe_owner_state::Column::HoprSafeContractId.eq(safe.id))
+            .filter(hopr_safe_owner_state::Column::IsCurrentOwner.eq(true))
+            .filter(hopr_safe_owner_state::Column::PublishedBlock.lte(snapshot_block))
+            .all(tx.as_ref())
+            .await?
+            .into_iter()
+            .filter(|state| !snapshot_owners.contains(&state.owner_address));
+        for state in stale {
+            let owner = Address::try_from(state.owner_address.as_slice())
+                .map_err(|e| DbSqlError::Construction(format!("invalid safe owner address length: {e}")))?;
+            write_owner_row(
+                tx.as_ref(),
+                safe.id,
+                owner,
+                false,
+                position,
+                stored_block_at_or_before("hopr_safe_owner_state", snapshot_block),
+            )
+            .await?;
+        }
+
+        write_threshold_row(
+            tx.as_ref(),
+            safe.id,
+            threshold,
+            position,
+            stored_block_at_or_before("hopr_safe_threshold_state", snapshot_block),
+        )
+        .await?;
+
+        HoprSafeContractState::update_many()
+            .col_expr(
+                hopr_safe_contract_state::Column::OwnersSyncedBlock,
+                Expr::value(snapshot_block),
+            )
+            .filter(hopr_safe_contract_state::Column::HoprSafeContractId.eq(safe.id))
+            .filter(
+                Condition::any()
+                    .add(hopr_safe_contract_state::Column::OwnersSyncedBlock.is_null())
+                    .add(hopr_safe_contract_state::Column::OwnersSyncedBlock.lt(snapshot_block)),
+            )
+            .exec(tx.as_ref())
+            .await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn get_safes_pending_owner_snapshot<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        snapshot_block: u64,
+    ) -> Result<Vec<Address>> {
+        let snapshot_block = block_to_i64(snapshot_block, "snapshot block")?;
+        let nested = self.nest_transaction(tx).await?;
+
+        let contracts = HoprSafeContract::find().all(nested.as_ref()).await?;
+        let mut synced = std::collections::HashMap::<i64, i64>::new();
+        for state in HoprSafeContractState::find().all(nested.as_ref()).await? {
+            if let Some(block) = state.owners_synced_block {
+                let entry = synced.entry(state.hopr_safe_contract_id).or_insert(block);
+                *entry = (*entry).max(block);
+            }
+        }
+
+        let mut pending = contracts
+            .into_iter()
+            .filter(|contract| synced.get(&contract.id).is_none_or(|block| *block < snapshot_block))
+            .collect::<Vec<_>>();
+        pending.sort_by_key(|contract| contract.id);
+        let pending = pending
+            .into_iter()
+            .map(|contract| {
+                Address::try_from(contract.address.as_slice())
+                    .map_err(|e| DbSqlError::Construction(format!("invalid safe address length: {e}")))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        nested.commit().await?;
+        Ok(pending)
     }
 }
 
@@ -755,146 +439,169 @@ mod tests {
         Address::from(hopr_types::crypto_random::random_bytes())
     }
 
-    fn random_hash() -> Hash {
-        Hash::from(hopr_types::crypto_random::random_bytes())
+    async fn setup() -> anyhow::Result<(BlokliDb, Address)> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe_address = random_address();
+        db.create_safe_contract(None, safe_address, random_address(), random_address(), 100, 0, 0)
+            .await?;
+        Ok((db, safe_address))
     }
 
     #[tokio::test]
     async fn test_get_safe_owners_tracks_current_membership() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory().await?;
-
-        let safe_address = random_address();
-        let module_address = random_address();
-        let chain_key = random_address();
+        let (db, safe_address) = setup().await?;
         let owner_one: Address = "1111111111111111111111111111111111111111".parse()?;
         let owner_two: Address = "2222222222222222222222222222222222222222".parse()?;
 
-        db.create_safe_contract(None, safe_address, module_address, chain_key, 100, 0, 0)
+        db.upsert_safe_owner_state(None, safe_address, owner_one, true, 101, 0, 0)
             .await?;
-
-        let first_id = db
-            .upsert_safe_owner_state(None, safe_address, owner_one, true, 101, 0, 0)
+        // Replaying the same event is a no-op.
+        db.upsert_safe_owner_state(None, safe_address, owner_one, true, 101, 0, 0)
             .await?;
-        let duplicate_id = db
-            .upsert_safe_owner_state(None, safe_address, owner_one, true, 101, 0, 0)
-            .await?;
-        assert_eq!(
-            first_id, duplicate_id,
-            "duplicate owner state insert should be idempotent"
-        );
-
         db.upsert_safe_owner_state(None, safe_address, owner_two, true, 102, 0, 0)
             .await?;
         db.upsert_safe_owner_state(None, safe_address, owner_one, false, 103, 0, 0)
             .await?;
 
-        let current_owners = db.get_safe_owners(None, safe_address).await?;
-        assert_eq!(current_owners, vec![owner_two], "only owner two should still be active");
+        assert_eq!(db.get_safe_owners(None, safe_address).await?, vec![owner_two]);
 
         db.upsert_safe_owner_state(None, safe_address, owner_one, true, 104, 0, 0)
             .await?;
-
-        let current_owners = db.get_safe_owners(None, safe_address).await?;
         assert_eq!(
-            current_owners,
-            vec![owner_one, owner_two],
-            "re-adding owner one should restore both current owners in sorted order"
+            db.get_safe_owners(None, safe_address).await?,
+            vec![owner_one, owner_two]
         );
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_get_safe_activity_is_ordered_and_idempotent() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory().await?;
-
-        let safe_address = random_address();
-        let module_address = random_address();
-        let chain_key = random_address();
+    async fn test_owner_state_keeps_a_single_row_per_owner() -> anyhow::Result<()> {
+        let (db, safe_address) = setup().await?;
         let owner = random_address();
-        let owner_two = random_address();
-        let chain_tx_hash = random_hash();
-        let safe_tx_hash = random_hash();
 
-        db.create_safe_contract(None, safe_address, module_address, chain_key, 100, 0, 0)
+        for block in 101..106 {
+            db.upsert_safe_owner_state(None, safe_address, owner, block % 2 == 1, block, 0, 0)
+                .await?;
+        }
+
+        let rows = HoprSafeOwnerState::find().all(db.conn(crate::TargetDb::Index)).await?;
+        assert_eq!(rows.len(), 1, "history must not accumulate");
+        assert_eq!(rows[0].published_block, 105);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_replayed_added_owner_does_not_revive_a_removed_owner() -> anyhow::Result<()> {
+        let (db, safe_address) = setup().await?;
+        let owner = random_address();
+
+        db.upsert_safe_owner_state(None, safe_address, owner, false, 120, 1, 2)
+            .await?;
+        // An older AddedOwner (and one at the same position) arrives after the removal.
+        db.upsert_safe_owner_state(None, safe_address, owner, true, 110, 0, 0)
+            .await?;
+        db.upsert_safe_owner_state(None, safe_address, owner, true, 120, 1, 2)
             .await?;
 
-        let first_id = db
-            .record_safe_setup(
-                None,
-                safe_address,
-                random_hash(),
-                vec![owner, owner_two],
-                "2".to_string(),
-                Some(chain_key),
-                109,
-                1,
-                0,
-            )
+        assert!(db.get_safe_owners(None, safe_address).await?.is_empty());
+
+        // A genuinely newer re-add is applied.
+        db.upsert_safe_owner_state(None, safe_address, owner, true, 120, 1, 3)
             .await?;
-        let duplicate_id = db
-            .record_safe_setup(
-                None,
-                safe_address,
-                random_hash(),
-                vec![owner, owner_two],
-                "2".to_string(),
-                Some(chain_key),
-                109,
-                1,
-                0,
-            )
+        assert_eq!(db.get_safe_owners(None, safe_address).await?, vec![owner]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_threshold_state_is_position_guarded() -> anyhow::Result<()> {
+        let (db, safe_address) = setup().await?;
+
+        db.upsert_safe_threshold_state(None, safe_address, "2".into(), 110, 0, 0)
             .await?;
-        assert_eq!(first_id, duplicate_id, "duplicate setup insert should be idempotent");
+        db.upsert_safe_threshold_state(None, safe_address, "1".into(), 105, 0, 0)
+            .await?;
+        assert_eq!(db.get_safe_threshold(None, safe_address).await?.as_deref(), Some("2"));
 
-        db.record_safe_activity(
-            None,
-            safe_address,
-            SafeActivityKind::AddedOwner,
-            chain_tx_hash,
-            None,
-            Some(owner),
-            None,
-            None,
-            None,
-            110,
-            2,
-            0,
-        )
-        .await?;
+        db.upsert_safe_threshold_state(None, safe_address, "3".into(), 111, 0, 0)
+            .await?;
+        assert_eq!(db.get_safe_threshold(None, safe_address).await?.as_deref(), Some("3"));
 
-        db.record_safe_activity(
-            None,
-            safe_address,
-            SafeActivityKind::ExecutionSuccess,
-            random_hash(),
-            Some(safe_tx_hash),
-            None,
-            None,
-            Some("12".to_string()),
-            None,
-            111,
-            0,
-            1,
-        )
-        .await?;
+        Ok(())
+    }
 
-        let activity = db.get_safe_activity(None, safe_address).await?;
-        assert_eq!(activity.len(), 3);
-        assert_eq!(activity[0].event_kind, SafeActivityKind::SafeSetup.as_str());
-        assert_eq!(activity[0].threshold.as_deref(), Some("2"));
-        assert_eq!(activity[0].initiator_address, Some(chain_key.as_ref().to_vec()));
+    #[tokio::test]
+    async fn test_snapshot_replaces_owner_set_and_records_synced_block() -> anyhow::Result<()> {
+        let (db, safe_address) = setup().await?;
+        let (a, b, c) = (random_address(), random_address(), random_address());
+
+        assert_eq!(db.get_safe_owners_synced_block(None, safe_address).await?, None);
         assert_eq!(
-            activity[0].owners,
-            vec![owner.as_ref().to_vec(), owner_two.as_ref().to_vec()]
+            db.get_safes_pending_owner_snapshot(None, 200).await?,
+            vec![safe_address]
         );
-        assert_eq!(activity[1].event_kind, SafeActivityKind::AddedOwner.as_str());
-        assert_eq!(activity[1].owner_address, Some(owner.as_ref().to_vec()));
-        assert_eq!(activity[1].published_block, 110);
-        assert_eq!(activity[2].event_kind, SafeActivityKind::ExecutionSuccess.as_str());
-        assert_eq!(activity[2].safe_tx_hash, Some(safe_tx_hash.as_ref().to_vec()));
-        assert_eq!(activity[2].payment.as_deref(), Some("12"));
-        assert_eq!(activity[2].published_block, 111);
+
+        db.upsert_safe_owner_state(None, safe_address, a, true, 101, 0, 0)
+            .await?;
+        db.upsert_safe_owner_state(None, safe_address, b, true, 102, 0, 0)
+            .await?;
+
+        db.apply_safe_owner_snapshot(None, safe_address, vec![b, c], "2".into(), 200)
+            .await?;
+
+        let mut expected = vec![b, c];
+        expected.sort();
+        assert_eq!(db.get_safe_owners(None, safe_address).await?, expected);
+        assert_eq!(db.get_safe_threshold(None, safe_address).await?.as_deref(), Some("2"));
+        assert_eq!(db.get_safe_owners_synced_block(None, safe_address).await?, Some(200));
+        assert!(db.get_safes_pending_owner_snapshot(None, 200).await?.is_empty());
+        assert_eq!(
+            db.get_safes_pending_owner_snapshot(None, 201).await?,
+            vec![safe_address]
+        );
+
+        // The removed owner is kept as a tombstone: replaying its AddedOwner has no effect.
+        db.upsert_safe_owner_state(None, safe_address, a, true, 101, 0, 0)
+            .await?;
+        assert!(!db.get_safe_owners(None, safe_address).await?.contains(&a));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_keeps_rows_written_above_the_snapshot_block() -> anyhow::Result<()> {
+        let (db, safe_address) = setup().await?;
+        let (a, b) = (random_address(), random_address());
+
+        // A live event above the snapshot block landed before the snapshot was stored.
+        db.upsert_safe_owner_state(None, safe_address, b, true, 205, 0, 0)
+            .await?;
+        db.upsert_safe_threshold_state(None, safe_address, "3".into(), 206, 0, 0)
+            .await?;
+
+        db.apply_safe_owner_snapshot(None, safe_address, vec![a], "1".into(), 200)
+            .await?;
+
+        let mut expected = vec![a, b];
+        expected.sort();
+        assert_eq!(db.get_safe_owners(None, safe_address).await?, expected);
+        assert_eq!(db.get_safe_threshold(None, safe_address).await?.as_deref(), Some("3"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_owners_synced_block_survives_a_new_state_row() -> anyhow::Result<()> {
+        let (db, safe_address) = setup().await?;
+
+        db.apply_safe_owner_snapshot(None, safe_address, vec![random_address()], "1".into(), 150)
+            .await?;
+        db.update_safe_module_address(None, safe_address, random_address(), 160, 0, 0)
+            .await?;
+
+        assert_eq!(db.get_safe_owners_synced_block(None, safe_address).await?, Some(150));
 
         Ok(())
     }

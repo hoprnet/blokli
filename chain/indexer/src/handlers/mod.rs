@@ -465,9 +465,12 @@ mod tests {
         rpc_operations
             .expect_get_hopr_module_from_safe()
             .returning(move |_| Ok(Some(module_addr)));
-        rpc_operations
-            .expect_get_logs_for_address()
-            .returning(|_, _, _, _| Ok(vec![]));
+        rpc_operations.expect_get_safe_owners_and_threshold().returning(|_, _| {
+            Ok(blokli_chain_rpc::SafeOwnersSnapshot {
+                owners: vec![],
+                threshold: 1,
+            })
+        });
 
         let clonable_rpc = ClonableMockOperations {
             inner: Arc::new(rpc_operations),

@@ -34,7 +34,7 @@ pub mod topics {
     };
 
     use crate::custom_abis::safe_contract_events::SafeContract::{
-        AddedOwner, ChangedThreshold, ExecutionFailure, ExecutionSuccess, RemovedOwner, SafeSetup,
+        AddedOwner, ChangedThreshold, RemovedOwner, SafeSetup,
     };
 
     pub fn channel() -> Vec<B256> {
@@ -147,8 +147,6 @@ pub mod topics {
             AddedOwner::SIGNATURE_HASH,
             RemovedOwner::SIGNATURE_HASH,
             ChangedThreshold::SIGNATURE_HASH,
-            ExecutionSuccess::SIGNATURE_HASH,
-            ExecutionFailure::SIGNATURE_HASH,
         ]
     }
 
@@ -180,12 +178,25 @@ mod tests {
     use hopr_bindings::exports::alloy::sol_types::SolEvent;
 
     use super::topics;
-    use crate::custom_abis::safe_contract_events::SafeContract::{ExecutionFailure, ExecutionFromModuleFailure};
+    use crate::custom_abis::safe_contract_events::SafeContract::{
+        AddedOwner, ChangedThreshold, ExecutionFailure, ExecutionFromModuleFailure, ExecutionSuccess, RemovedOwner,
+        SafeSetup,
+    };
 
     #[test]
-    fn safe_contract_topics_exclude_execution_from_module_failure() {
+    fn safe_contract_topics_only_request_owner_and_threshold_events() {
         let topics = topics::safe_contract();
+        assert_eq!(
+            topics,
+            vec![
+                SafeSetup::SIGNATURE_HASH,
+                AddedOwner::SIGNATURE_HASH,
+                RemovedOwner::SIGNATURE_HASH,
+                ChangedThreshold::SIGNATURE_HASH,
+            ]
+        );
         assert!(!topics.contains(&ExecutionFromModuleFailure::SIGNATURE_HASH));
-        assert!(topics.contains(&ExecutionFailure::SIGNATURE_HASH));
+        assert!(!topics.contains(&ExecutionSuccess::SIGNATURE_HASH));
+        assert!(!topics.contains(&ExecutionFailure::SIGNATURE_HASH));
     }
 }

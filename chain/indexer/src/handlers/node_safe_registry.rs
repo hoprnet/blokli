@@ -186,12 +186,12 @@ where
                     .await?;
 
                 if !safe_previously_known && is_synced {
-                    self.backfill_safe_logs_in_discovery_block(tx, safe_addr, block).await?;
+                    self.snapshot_safe_owners_at_discovery(tx, safe_addr, block).await?;
                     let epoch = self.indexer_state.mark_safe_filters_dirty();
                     info!(
                         safe_address = %safe_addr.to_hex(),
                         epoch,
-                        "Backfilled discovery-block Safe logs and marked Safe filters for refresh after new Safe registration"
+                        "Snapshotted Safe owners at the discovery block and marked Safe filters for refresh after new Safe registration"
                     );
                 }
 
@@ -332,9 +332,12 @@ mod tests {
         rpc_operations
             .expect_get_hopr_module_from_safe()
             .returning(move |_| Ok(Some(module_address)));
-        rpc_operations
-            .expect_get_logs_for_address()
-            .returning(|_, _, _, _| Ok(vec![]));
+        rpc_operations.expect_get_safe_owners_and_threshold().returning(|_, _| {
+            Ok(blokli_chain_rpc::SafeOwnersSnapshot {
+                owners: vec![],
+                threshold: 1,
+            })
+        });
 
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),
@@ -403,9 +406,12 @@ mod tests {
         rpc_operations
             .expect_get_hopr_module_from_safe()
             .returning(move |_| Ok(Some(module_address)));
-        rpc_operations
-            .expect_get_logs_for_address()
-            .returning(|_, _, _, _| Ok(vec![]));
+        rpc_operations.expect_get_safe_owners_and_threshold().returning(|_, _| {
+            Ok(blokli_chain_rpc::SafeOwnersSnapshot {
+                owners: vec![],
+                threshold: 1,
+            })
+        });
 
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),
@@ -598,9 +604,12 @@ mod tests {
         rpc_operations
             .expect_get_hopr_module_from_safe()
             .returning(|_| Ok(None));
-        rpc_operations
-            .expect_get_logs_for_address()
-            .returning(|_, _, _, _| Ok(vec![]));
+        rpc_operations.expect_get_safe_owners_and_threshold().returning(|_, _| {
+            Ok(blokli_chain_rpc::SafeOwnersSnapshot {
+                owners: vec![],
+                threshold: 1,
+            })
+        });
 
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),
@@ -658,9 +667,14 @@ mod tests {
             .expect_get_hopr_module_from_safe()
             .returning(move |_| Ok(Some(module_address)));
         rpc_operations
-            .expect_get_logs_for_address()
+            .expect_get_safe_owners_and_threshold()
             .times(1)
-            .returning(|_, _, _, _| Ok(vec![]));
+            .returning(|_, _| {
+                Ok(blokli_chain_rpc::SafeOwnersSnapshot {
+                    owners: vec![],
+                    threshold: 1,
+                })
+            });
 
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),
@@ -820,9 +834,14 @@ mod tests {
             .expect_get_hopr_module_from_safe()
             .returning(|_| Ok(None));
         rpc_operations
-            .expect_get_logs_for_address()
+            .expect_get_safe_owners_and_threshold()
             .times(2)
-            .returning(|_, _, _, _| Ok(vec![]));
+            .returning(|_, _| {
+                Ok(blokli_chain_rpc::SafeOwnersSnapshot {
+                    owners: vec![],
+                    threshold: 1,
+                })
+            });
 
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),
