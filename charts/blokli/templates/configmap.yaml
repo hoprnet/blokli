@@ -57,6 +57,7 @@ data:
     playground_enabled = {{ .Values.config.api.playgroundEnabled }}
     {{- $gm := .Values.config.api.gasMultiplier | toString }}
     gas_multiplier = {{ if contains "." $gm }}{{ $gm }}{{ else }}{{ $gm }}.0{{ end }}
+    max_query_complexity = {{ .Values.config.api.maxQueryComplexity | int }}
 
     # Health check configuration
     [api.health]

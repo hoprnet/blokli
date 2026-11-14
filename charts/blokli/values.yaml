@@ -509,6 +509,9 @@ config:
     ## @param config.api.gasMultiplier Multiplier for gas estimation to provide a safety margin (e.g., 1.2 for 20% extra)
     ##
     gasMultiplier: 1.2
+    ## @param config.api.maxQueryComplexity Maximum allowed GraphQL query complexity; queries above this are rejected
+    ##
+    maxQueryComplexity: 500
     # Health check configuration
     health:
       ## @param config.api.health.maxIndexerLag Maximum indexer lag (blocks) before readiness fails

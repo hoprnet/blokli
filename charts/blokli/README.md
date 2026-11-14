@@ -199,6 +199,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | `config.api.bindAddress`                             | Address and port for the API server to bind to                                                                | `0.0.0.0:8080`      |
 | `config.api.playgroundEnabled`                       | Enable GraphQL Playground for development and testing. Recommended to set to false for production deployments | `false`             |
 | `config.api.gasMultiplier`                           | Multiplier for gas estimation to provide a safety margin (e.g., 1.2 for 20% extra)                            | `1.2`               |
+| `config.api.maxQueryComplexity`                      | Maximum allowed GraphQL query complexity; queries above this are rejected                                     | `500`               |
 | `config.api.health.maxIndexerLag`                    | Maximum indexer lag (blocks) before readiness fails                                                           | `10`                |
 | `config.api.health.timeout`                          | Timeout for health check operations                                                                           | `5s`                |
 | `config.api.health.readinessCheckInterval`           | Interval for periodic readiness checks                                                                        | `60s`               |
