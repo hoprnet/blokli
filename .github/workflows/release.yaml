@@ -138,5 +138,5 @@ jobs:
             {
               "network": "${{ github.ref_name == 'main' && vars.GNOSIS_DEPLOYMENT_MAIN_NETWORK || vars.GNOSIS_DEPLOYMENT_MAINTENANCE_NETWORK }}-staging",
               "tag": "${{ needs.build-docker.outputs.docker_build_version }}",
-              "mode": "update"
+              "mode": "full"
             }
