@@ -2040,7 +2040,7 @@ type Safe {
 	"""
 	Current signer threshold reconstructed from indexed Safe events
 	"""
-	threshold: String
+	threshold: String @deprecated(reason: "Read the threshold from the Safe contract. The field is kept for backward compatibility.")
 	"""
 	Current Safe owner addresses reconstructed from indexed Safe events
 	"""

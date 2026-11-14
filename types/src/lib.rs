@@ -1461,6 +1461,9 @@ pub struct Safe {
     )]
     pub chain_key: String,
     /// Current signer threshold reconstructed from indexed Safe events
+    #[graphql(
+        deprecation = "Read the threshold from the Safe contract. The field is kept for backward compatibility."
+    )]
     pub threshold: Option<String>,
     /// Current Safe owner addresses reconstructed from indexed Safe events
     pub owners: Vec<String>,
