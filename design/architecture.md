@@ -942,9 +942,13 @@ preseed) and requests no Safe event topics.
   hands them to a background refresh task. The task only performs RPC reads (batched through Multicall3 where deployed, otherwise bounded
   concurrent calls; bounded batch size and concurrency; pinned at the latest processed block and re-pinned on pruned-state errors) and sends
   the results to the indexing loop, which stores them between blocks. The task never touches the database.
-- A Safe that cannot be read (or whose result cannot be stored) is retried with backoff for the life of the indexer, with a long-tail
-  interval for Safes that keep failing. Safes whose read at discovery fails, or whose owner event could not be covered by a snapshot, are
-  reported to the same task. The gauge `blokli_indexer_safe_owner_snapshots_pending` counts the Safes being retried.
+- Block processing never calls the RPC node while its database transaction is open. A Safe discovered live, and an owner or threshold event
+  of a Safe without a snapshot, only report the Safe and the block to the refresh task; the event is skipped, and the task reads the Safe
+  pinned at or above that block.
+- A Safe that cannot be read (or whose result cannot be stored) is retried with backoff for the life of the indexer, on its own so a
+  gas-burning contract cannot fail the Safes it was batched with, with a long-tail interval for Safes that keep failing. The refresh task is
+  restarted (bounded) if it panics, and the indexer fails like for any other unrecoverable background failure if it cannot be kept alive.
+  The gauge `blokli_indexer_safe_owner_snapshots_pending` counts the Safes whose snapshot has been requested and not stored yet.
 - A read pinned before an owner or threshold event that has been processed since is dropped and re-read at a newer block, and a stored
   snapshot is never replaced by an older one.
 - In continuous mode the indexer subscribes to `SafeSetup`, `AddedOwner`, `RemovedOwner` and `ChangedThreshold` through address-scoped

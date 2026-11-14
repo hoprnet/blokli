@@ -89,12 +89,12 @@ where
                 .await?;
 
             if !safe_previously_known && is_synced {
-                self.snapshot_safe_owners_at_discovery(tx, safe_addr, block).await?;
+                self.request_safe_owner_snapshot(safe_addr, block);
                 let epoch = self.indexer_state.mark_safe_filters_dirty();
                 info!(
                     safe = %safe_addr.to_hex(),
                     epoch,
-                    "Snapshotted Safe owners at the discovery block and marked Safe filters for refresh after deployment"
+                    "Requested a Safe owner snapshot at the discovery block and marked Safe filters for refresh after deployment"
                 );
             }
 
@@ -123,7 +123,7 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use blokli_chain_rpc::{SafeOwnersSnapshot, errors::RpcError};
+    use blokli_chain_rpc::errors::RpcError;
     use blokli_chain_types::AlloyAddressExt;
     use blokli_db::{
         BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations,
@@ -178,12 +178,6 @@ mod tests {
             .expect_get_transaction_sender()
             .with(eq(tx_hash))
             .returning(move |_| Ok(sender));
-        rpc_operations.expect_get_safe_owners_and_threshold().returning(|_, _| {
-            Ok(SafeOwnersSnapshot {
-                owners: vec![],
-                threshold: 1,
-            })
-        });
 
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),
@@ -288,15 +282,6 @@ mod tests {
             .with(eq(tx_hash))
             .times(2) // Called twice for duplicate event processing
             .returning(move |_| Ok(sender));
-        rpc_operations
-            .expect_get_safe_owners_and_threshold()
-            .times(1)
-            .returning(|_, _| {
-                Ok(SafeOwnersSnapshot {
-                    owners: vec![],
-                    threshold: 1,
-                })
-            });
 
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),
@@ -363,7 +348,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_on_stake_factory_event_snapshots_owners_at_the_discovery_block() -> anyhow::Result<()> {
+    async fn test_on_stake_factory_event_requests_an_owner_snapshot_without_rpc() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let mut rpc_operations = MockIndexerRpcOperations::new();
 
@@ -371,28 +356,16 @@ mod tests {
         let sender = random_address();
         let safe_address = random_address();
         let module_address = random_address();
-        let owner_one = random_address();
-        let owner_two = random_address();
 
         rpc_operations
             .expect_get_transaction_sender()
             .with(eq(deployment_tx_hash))
             .returning(move |_| Ok(sender));
-        rpc_operations
-            .expect_get_safe_owners_and_threshold()
-            .withf(move |address, block| *address == safe_address && *block == 100)
-            .times(1)
-            .returning(move |_, _| {
-                Ok(SafeOwnersSnapshot {
-                    owners: vec![owner_one, owner_two],
-                    threshold: 2,
-                })
-            });
 
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),
         };
-        let handlers = init_handlers(clonable_rpc_operations, db.clone());
+        let (handlers, state, _events) = init_handlers_with_events(clonable_rpc_operations, db.clone());
 
         let event = HoprNodeStakeFactory::NewHoprNodeStakeModuleForSafe {
             safe: AlloyAddress::from_hopr_address(safe_address),
@@ -415,13 +388,12 @@ mod tests {
             )
             .await?;
 
-        let mut owners = db.get_safe_owners(None, safe_address).await?;
-        owners.sort_unstable();
-        let mut expected = vec![owner_one, owner_two];
-        expected.sort_unstable();
-        assert_eq!(owners, expected);
-        assert_eq!(db.get_safe_threshold(None, safe_address).await?.as_deref(), Some("2"));
-        assert_eq!(db.get_safe_owners_synced_block(None, safe_address).await?, Some(100));
+        // The only RPC call is the transaction sender: reading owners inside the block transaction would
+        // panic on the mock. The Safe is handed to the background refresh together with the block instead.
+        assert_eq!(state.take_pending_safe_owner_snapshots(), vec![safe_address]);
+        assert_eq!(state.safe_owner_event_block(safe_address), Some(100));
+        assert!(db.get_safe_owners(None, safe_address).await?.is_empty());
+        assert_eq!(db.get_safe_owners_synced_block(None, safe_address).await?, None);
 
         Ok(())
     }

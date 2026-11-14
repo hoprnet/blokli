@@ -183,7 +183,12 @@ pub struct IndexerState {
 /// pinned before an event that has been processed since.
 #[derive(Default)]
 struct SafeOwnerSync {
+    /// Safes reported since the refresh task last looked.
     pending: Mutex<HashSet<Address>>,
+    /// Every Safe not yet synced: reported and not yet stored (queued, being read, being stored, in backoff).
+    unsynced: Mutex<HashSet<Address>>,
+    /// Highest block of an owner or threshold event processed per Safe. An entry is removed when a stored
+    /// snapshot covers it, so the map is bounded by the number of Safes that currently await a snapshot.
     event_blocks: Mutex<HashMap<Address, u64>>,
     wakeup: tokio::sync::Notify,
 }
@@ -323,7 +328,26 @@ impl IndexerState {
         if let Ok(mut pending) = self.safe_owner_sync.pending.lock() {
             pending.insert(safe_address);
         }
+        if let Ok(mut unsynced) = self.safe_owner_sync.unsynced.lock() {
+            unsynced.insert(safe_address);
+        }
         self.safe_owner_sync.wakeup.notify_one();
+    }
+
+    /// Records that a snapshot of the Safe has been stored.
+    pub fn mark_safe_owner_snapshot_synced(&self, safe_address: Address) {
+        if let Ok(mut unsynced) = self.safe_owner_sync.unsynced.lock() {
+            unsynced.remove(&safe_address);
+        }
+    }
+
+    /// Number of Safes whose owner snapshot has been requested and not stored yet.
+    pub fn unsynced_safe_owner_snapshots(&self) -> usize {
+        self.safe_owner_sync
+            .unsynced
+            .lock()
+            .map(|unsynced| unsynced.len())
+            .unwrap_or(0)
     }
 
     /// Takes the Safes reported since the last call.

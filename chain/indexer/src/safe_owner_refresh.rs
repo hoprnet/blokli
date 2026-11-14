@@ -18,7 +18,7 @@
 use std::{
     collections::HashMap,
     sync::{
-        Arc,
+        Arc, Mutex, PoisonError,
         atomic::{AtomicU64, Ordering},
     },
     time::Duration,
@@ -52,7 +52,7 @@ lazy_static::lazy_static! {
     static ref METRIC_SAFE_OWNER_SNAPSHOTS_PENDING: Option<SimpleGauge> =
         SimpleGauge::new(
             "blokli_indexer_safe_owner_snapshots_pending",
-            "Number of Safes whose owner snapshot could not be read yet and is being retried",
+            "Number of Safes whose owner snapshot has been requested and is not stored yet (queued, being read, being stored or being retried)",
     ).inspect_err(|error| error!(%error, metric = "blokli_indexer_safe_owner_snapshots_pending", "failed to register telemetry metric")).ok();
 }
 
@@ -98,53 +98,153 @@ pub(crate) struct SafeSnapshotRead {
     pub snapshot: SafeOwnersSnapshot,
 }
 
-struct RetryState {
+pub(crate) struct RetryState {
     failures: u32,
     next_attempt: Instant,
+}
+
+/// Safes waiting for a read, shared with the supervisor so a restarted task resumes where the last one died.
+pub(crate) type WaitingSafes = Arc<Mutex<HashMap<Address, RetryState>>>;
+
+/// How long a Safe whose reported event is above the latest processed block waits before it is checked again.
+const EVENT_BLOCK_POLL: Duration = Duration::from_millis(200);
+
+/// Maximum number of times the refresh task is restarted after a panic.
+const MAX_TASK_RESTARTS: u32 = 5;
+
+fn update_pending_gauge(state: &IndexerState) {
+    #[cfg(all(feature = "telemetry", not(test)))]
+    if let Some(metric) = METRIC_SAFE_OWNER_SNAPSHOTS_PENDING.as_ref() {
+        metric.set(state.unsynced_safe_owner_snapshots() as f64);
+    }
+    #[cfg(not(all(feature = "telemetry", not(test))))]
+    let _ = state;
+}
+
+/// Runs [`run_safe_owner_refresh`] and restarts it, with backoff and a bounded number of attempts, when it
+/// panics. The task ends for good when the indexing loop is gone (it returns) or the restarts are used up; the
+/// result channel then closes, which the indexing loop treats as a fatal failure.
+pub(crate) async fn supervise_safe_owner_refresh<T>(
+    rpc: Arc<T>,
+    state: IndexerState,
+    latest_processed_block: Arc<AtomicU64>,
+    results: Sender<SafeSnapshotRead>,
+    timings: RefreshTimings,
+) where
+    T: HoprIndexerRpcOperations + Send + Sync + 'static,
+{
+    let waiting: WaitingSafes = Arc::default();
+    let mut restarts = 0;
+    loop {
+        let task = tokio::spawn(run_safe_owner_refresh(
+            rpc.clone(),
+            state.clone(),
+            latest_processed_block.clone(),
+            results.clone(),
+            timings,
+            waiting.clone(),
+        ));
+        match task.await {
+            Ok(()) => return,
+            Err(error) => {
+                restarts += 1;
+                if restarts > MAX_TASK_RESTARTS {
+                    error!(%error, restarts, "Safe owner refresh task keeps failing, giving up");
+                    return;
+                }
+                error!(%error, restarts, "Safe owner refresh task failed, restarting");
+                tokio::time::sleep(
+                    timings
+                        .retry_min
+                        .saturating_mul(1 << restarts.min(10))
+                        .min(timings.retry_max),
+                )
+                .await;
+            }
+        }
+    }
 }
 
 /// Reads the Safes reported through `state` and sends the results to `results`, forever.
 ///
 /// `latest_processed_block` is the block every read of a round is pinned at (it is read again per
 /// batch, so a long refresh does not outlast the state kept by a pruned node).
+///
+/// Safes that have never failed are read together in batches. A Safe that failed is retried alone, so a
+/// contract that burns the gas of a shared Multicall3 call (or reverts for everything in it) cannot make its
+/// batch-mates fail; it is grouped again once it succeeded, which removes it from the retry list.
 pub(crate) async fn run_safe_owner_refresh<T>(
     rpc: Arc<T>,
     state: IndexerState,
     latest_processed_block: Arc<AtomicU64>,
     mut results: Sender<SafeSnapshotRead>,
     timings: RefreshTimings,
+    waiting: WaitingSafes,
 ) where
     T: HoprIndexerRpcOperations + Send + Sync + 'static,
 {
-    let mut waiting: HashMap<Address, RetryState> = HashMap::new();
     loop {
-        // A Safe reported again starts over: whatever failed before is superseded by the new report.
-        for safe_address in state.take_pending_safe_owner_snapshots() {
-            waiting.insert(
-                safe_address,
-                RetryState {
-                    failures: 0,
-                    next_attempt: Instant::now(),
-                },
+        // Collect what is due. The lock is never held across an await.
+        let (fresh, isolated) = {
+            let mut waiting = waiting.lock().unwrap_or_else(PoisonError::into_inner);
+            // A Safe reported again starts over: whatever failed before is superseded by the new report.
+            for safe_address in state.take_pending_safe_owner_snapshots() {
+                waiting.insert(
+                    safe_address,
+                    RetryState {
+                        failures: 0,
+                        next_attempt: Instant::now(),
+                    },
+                );
+            }
+
+            let now = Instant::now();
+            let latest = latest_processed_block.load(Ordering::Relaxed);
+            let (mut fresh, mut isolated) = (Vec::new(), Vec::new());
+            for (safe_address, retry) in waiting.iter_mut() {
+                if retry.next_attempt > now {
+                    continue;
+                }
+                // A read pinned below an event that block processing has recorded would be dropped: wait for
+                // the chain position to reach it instead of reading uselessly.
+                if state
+                    .safe_owner_event_block(*safe_address)
+                    .is_some_and(|event_block| event_block > latest)
+                {
+                    retry.next_attempt = now + EVENT_BLOCK_POLL;
+                    continue;
+                }
+                if retry.failures == 0 {
+                    fresh.push(*safe_address);
+                } else {
+                    isolated.push(*safe_address);
+                }
+            }
+            (fresh, isolated)
+        };
+        update_pending_gauge(&state);
+
+        if !fresh.is_empty() || !isolated.is_empty() {
+            info!(
+                safes = fresh.len() + isolated.len(),
+                isolated = isolated.len(),
+                "Reading Safe owners and thresholds from the chain"
             );
-        }
-
-        let now = Instant::now();
-        let due = waiting
-            .iter()
-            .filter(|(_, retry)| retry.next_attempt <= now)
-            .map(|(safe_address, _)| *safe_address)
-            .collect::<Vec<_>>();
-
-        if !due.is_empty() {
-            info!(safes = due.len(), "Reading Safe owners and thresholds from the chain");
-            let mut batches = futures::stream::iter(due.chunks(SAFE_SNAPSHOT_BATCH_SIZE).map(<[Address]>::to_vec))
+            let batches = fresh
+                .chunks(SAFE_SNAPSHOT_BATCH_SIZE)
+                .map(<[Address]>::to_vec)
+                .chain(isolated.iter().map(|safe_address| vec![*safe_address]))
+                .collect::<Vec<_>>();
+            let mut batches = futures::stream::iter(batches)
                 .map(|batch| read_batch(rpc.as_ref(), latest_processed_block.as_ref(), batch))
                 .buffer_unordered(SAFE_SNAPSHOT_CONCURRENCY);
             while let Some(reads) = batches.next().await {
                 for read in reads {
                     // From here on the indexing loop owns the Safe: it reports it again if storing fails.
-                    waiting.remove(&read.safe_address);
+                    waiting
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .remove(&read.safe_address);
                     if results.send(read).await.is_err() {
                         // The indexing loop is gone.
                         return;
@@ -154,7 +254,8 @@ pub(crate) async fn run_safe_owner_refresh<T>(
             drop(batches);
 
             let now = Instant::now();
-            for safe_address in due {
+            let mut waiting = waiting.lock().unwrap_or_else(PoisonError::into_inner);
+            for safe_address in fresh.into_iter().chain(isolated) {
                 if let Some(retry) = waiting.get_mut(&safe_address) {
                     retry.failures += 1;
                     retry.next_attempt = now + timings.delay_after(retry.failures);
@@ -167,12 +268,12 @@ pub(crate) async fn run_safe_owner_refresh<T>(
             }
         }
 
-        #[cfg(all(feature = "telemetry", not(test)))]
-        if let Some(metric) = METRIC_SAFE_OWNER_SNAPSHOTS_PENDING.as_ref() {
-            metric.set(waiting.len() as f64);
-        }
-
-        let next_retry = waiting.values().map(|retry| retry.next_attempt).min();
+        let next_retry = waiting
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .map(|retry| retry.next_attempt)
+            .min();
         tokio::select! {
             () = state.safe_owner_snapshot_reported() => {}
             () = async {
@@ -270,7 +371,11 @@ where
         )
         .await
     {
-        Ok(()) => state.clear_safe_owner_events_up_to(safe_address, block),
+        Ok(()) => {
+            state.clear_safe_owner_events_up_to(safe_address, block);
+            state.mark_safe_owner_snapshot_synced(safe_address);
+            update_pending_gauge(state);
+        }
         Err(error) => {
             error!(%safe_address, %error, "failed to store Safe owner snapshot, retrying shortly");
             // Not immediately: a persistent database error must not turn into a hot read loop.

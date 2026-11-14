@@ -43,7 +43,8 @@ use crate::{
     errors::{CoreEthereumIndexerError, Result},
     numeric::{u64_to_i64, u64_to_u32},
     safe_owner_refresh::{
-        RefreshTimings, SAFE_SNAPSHOT_CONCURRENCY, SafeSnapshotRead, run_safe_owner_refresh, store_safe_owner_snapshot,
+        RefreshTimings, SAFE_SNAPSHOT_CONCURRENCY, SafeSnapshotRead, store_safe_owner_snapshot,
+        supervise_safe_owner_refresh,
     },
     snapshot::{SnapshotInfo, SnapshotManager},
     traits::ChainLogHandler,
@@ -490,7 +491,7 @@ where
                     }
                     Err(error) => error!(%error, "failed to list Safes pending an owner snapshot"),
                 }
-                Some(AbortOnDrop(tokio::spawn(run_safe_owner_refresh(
+                Some(AbortOnDrop(tokio::spawn(supervise_safe_owner_refresh(
                     rpc.clone(),
                     indexer_state.clone(),
                     latest_processed_block.clone(),
@@ -500,7 +501,7 @@ where
             } else {
                 None
             };
-            let mut snapshot_rx_open = true;
+            let snapshot_rx_open = self.cfg.enable_safe_indexing;
 
             // Reason why the continuous phase stopped, if it stopped because of a failure.
             // A failure here must not leave the process running without an indexer, so it is
@@ -535,7 +536,13 @@ where
                         read = snapshot_rx.next(), if snapshot_rx_open => {
                             match read {
                                 Some(read) => store_safe_owner_snapshot(&db, &indexer_state, read).await,
-                                None => snapshot_rx_open = false,
+                                // The supervisor only ends when it gave up restarting the task. Without the
+                                // refresh, Safes would silently keep missing owners: fail like any other
+                                // unrecoverable indexer failure.
+                                None => {
+                                    error!("Safe owner refresh task has stopped");
+                                    break 'stream_refresh Some("the Safe owner refresh task has stopped".into());
+                                }
                             }
                             continue;
                         }
@@ -1775,7 +1782,7 @@ mod tests {
         let state = IndexerState::default();
         let latest = Arc::new(AtomicU64::new(latest_block));
         let (tx, results) = channel::<SafeSnapshotRead>(SAFE_SNAPSHOT_CONCURRENCY * 2);
-        let task = tokio::spawn(run_safe_owner_refresh(
+        let task = tokio::spawn(supervise_safe_owner_refresh(
             Arc::new(rpc),
             state.clone(),
             latest.clone(),
@@ -1930,6 +1937,87 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn safe_owner_refresh_isolates_safes_that_failed_in_a_batch() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safes = [
+            Address::from([0x61; 20]),
+            Address::from([0x62; 20]),
+            Address::from([0x63; 20]),
+        ];
+        for safe in safes {
+            db.create_safe_contract(None, safe, Address::default(), safe, 1, 0, 0)
+                .await?;
+        }
+        let poisoned = safes[0];
+        let owner = Address::from([0x64; 20]);
+
+        let batch_sizes = Arc::new(Mutex::new(Vec::new()));
+        let recorded = batch_sizes.clone();
+        let mut rpc = MockHoprIndexerOps::new();
+        rpc.expect_get_safe_owners_and_thresholds().returning(move |batch, _| {
+            recorded.lock().expect("lock").push(batch.len());
+            // A contract that burns the gas of the shared call makes its batch-mates fail; alone it only
+            // fails itself.
+            let shared = batch.len() > 1 && batch.contains(&poisoned);
+            Ok(batch
+                .iter()
+                .map(|safe| {
+                    if shared || *safe == poisoned {
+                        Err(RpcError::MulticallFailure(0, "out of gas".into()))
+                    } else {
+                        Ok(snapshot_of(owner, 1))
+                    }
+                })
+                .collect())
+        });
+        let mut refresh = start_refresh(rpc, 200, fast_timings());
+
+        for safe in safes {
+            refresh.state.mark_safe_owner_snapshot_pending(safe);
+        }
+        // The two healthy Safes are stored once they are retried on their own.
+        refresh.store(&db, 2).await;
+
+        for safe in &safes[1..] {
+            assert_eq!(db.get_safe_owners(None, *safe).await?, vec![owner]);
+        }
+        assert_eq!(db.get_safe_owners_synced_block(None, poisoned).await?, None);
+        let sizes = batch_sizes.lock().expect("lock").clone();
+        assert_eq!(sizes[0], 3, "the first read is one batch");
+        assert!(
+            sizes[1..].iter().all(|size| *size == 1),
+            "retries are batches of one: {sizes:?}"
+        );
+        assert_eq!(
+            refresh.state.unsynced_safe_owner_snapshots(),
+            1,
+            "only the failing Safe is unsynced"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn safe_owner_refresh_closes_its_channel_when_the_task_keeps_failing() {
+        let mut rpc = MockHoprIndexerOps::new();
+        rpc.expect_get_safe_owners_and_thresholds()
+            .returning(|_, _| panic!("simulated task failure"));
+        let mut refresh = start_refresh(rpc, 200, fast_timings());
+
+        refresh
+            .state
+            .mark_safe_owner_snapshot_pending(Address::from([0x67; 20]));
+
+        // Every attempt of the task panics (the mock stays poisoned after its first panic). The supervisor
+        // restarts it a bounded number of times and then gives up; the closed channel is how the indexing
+        // loop learns that the refresh is gone.
+        let closed = tokio::time::timeout(Duration::from_secs(10), refresh.results.next())
+            .await
+            .expect("the channel closes");
+        assert!(closed.is_none());
     }
 
     #[tokio::test]
