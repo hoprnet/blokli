@@ -63,8 +63,8 @@ impl MigrationTrait for Migration {
         }
 
         conn.execute_unprepared(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_safe_owner_state_unique_owner ON hopr_safe_owner_state (hopr_safe_contract_id, \
-             owner_address)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_safe_owner_state_unique_owner ON hopr_safe_owner_state \
+             (hopr_safe_contract_id, owner_address)",
         )
         .await?;
         conn.execute_unprepared(
