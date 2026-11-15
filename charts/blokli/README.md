@@ -186,6 +186,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | `config.rpcUrl`                                      | Blockchain RPC URL                                                                                            | `""`                |
 | `config.maxRpcRequestsPerSec`                        | Hard cap on RPC requests per second, retries included (0 = unlimited)                                       | `0`   |
 | `config.maxBlockRange`                               | Ceiling for adaptive eth_getLogs block ranges (0 = auto-discover up to 10000)                                 | `2500`              |
+| `config.blockRangeReprobeInterval` | Consecutive full-range eth_getLogs successes, below maxBlockRange, before a larger range is probed again (0 = never) | `100` |
 | `config.dataDirectory`                               | Data directory path (should match persistence mount path)                                                     | `/data`             |
 | `config.curvyAggregator`                             | Curvy Aggregator proxy address (required when Curvy indexing is enabled)                                      | `""`                |
 | `config.indexer.fastSync`                            | Enable fast sync mode                                                                                         | `true`              |
@@ -199,6 +200,23 @@ The command removes all the Kubernetes components associated with the chart and 
 | `config.api.bindAddress`                             | Address and port for the API server to bind to                                                                | `0.0.0.0:8080`      |
 | `config.api.playgroundEnabled`                       | Enable GraphQL Playground for development and testing. Recommended to set to false for production deployments | `false`             |
 | `config.api.gasMultiplier`                           | Multiplier for gas estimation to provide a safety margin (e.g., 1.2 for 20% extra)                            | `1.2`               |
+| `config.api.minMaxFeePerGas` | Lower bound, in wei, for the maxFeePerGas exposed by chainInfo, applied after gasMultiplier. Must be >= minPriorityFeePerGas | `5000000` |
+| `config.api.minPriorityFeePerGas` | Lower bound, in wei, for the maxPriorityFeePerGas exposed by chainInfo, applied after gasMultiplier | `100` |
+| `config.api.maxQueryDepth` | Maximum allowed GraphQL query nesting depth | `8` |
+| `config.api.maxQueryComplexity`                      | Maximum allowed GraphQL query complexity; queries above this are rejected                                     | `500`               |
+| `config.api.transactions.maxSubmittedTransactions` | Global limit of transactions awaiting receipt monitoring (0 = unbounded) | `1024` |
+| `config.api.transactions.maxSubmittedTransactionsPerIdentity` | Per-signer limit of transactions awaiting receipt monitoring (0 = unbounded) | `64` |
+| `config.api.transactions.maxTerminalTransactions` | Maximum completed transaction records retained (0 = no cap) | `10000` |
+| `config.api.transactions.terminalTransactionTtl` | How long completed transaction records stay queryable ("0s" = no TTL eviction) | `24h` |
+| `config.api.transactions.maxConcurrentTraceJobs` | Concurrent revert-reason trace jobs (0 = unbounded) | `2` |
+| `config.api.transactions.maxQueuedTraceJobs` | Trace jobs waiting for a worker (0 = unbounded) | `128` |
+| `config.api.transactions.enableRevertReasonTracing` | Fetch revert reasons with debug_traceTransaction; disable for RPC providers without it | `true` |
+| `config.api.transactions.enableHoprActionValidation` | Validate supported HOPR node-management transactions and deduplicate retries | `false` |
+| `config.api.transactions.hoprActionTtl` | Upper bound on how long one HOPR action stays deduplicated | `120s` |
+| `config.api.transactions.hoprInvalidActionThreshold` | Consecutive invalid submissions per signer and operation before suppression (0 = disabled) | `3` |
+| `config.api.transactions.hoprInvalidActionCooldown` | How long a signer stays suppressed once the threshold is reached | `60s` |
+| `config.api.sseKeepalive.enabled` | Send keepalive comments on subscription streams | `true` |
+| `config.api.sseKeepalive.interval` | Interval between keepalive comments | `15s` |
 | `config.api.health.maxIndexerLag`                    | Maximum indexer lag (blocks) before readiness fails                                                           | `10`                |
 | `config.api.health.timeout`                          | Timeout for health check operations                                                                           | `5s`                |
 | `config.api.health.readinessCheckInterval`           | Interval for periodic readiness checks                                                                        | `60s`               |
