@@ -128,41 +128,62 @@ impl Predicate for NotSse {
     }
 }
 
-/// Extracts the subscription name from a GraphQL query string.
-/// Converts to kebab-case format for consistency.
+/// Converts a PascalCase/camelCase operation name to kebab-case.
 ///
-/// # Arguments
-/// * `query` - The GraphQL query string
-///
-/// # Returns
-/// The subscription name in kebab-case, or "unknown" if not found
+/// Unnamed operations map to "unknown".
 ///
 /// # Examples
-/// - "subscription SafeDeployed { ... }" → "safe-deployed"
-/// - "subscription ChannelUpdated { ... }" → "channel-updated"
-/// - "subscription { ... }" → "unknown"
-fn extract_subscription_name(query: &str) -> String {
-    let trimmed = query.trim();
-    if let Some(start) = trimmed.find("subscription") {
-        let after_keyword = &trimmed[start + "subscription".len()..];
-        if let Some(name) = after_keyword
-            .trim_start()
-            .split(|c: char| c.is_whitespace() || c == '{' || c == '(')
-            .next()
-            .filter(|s| !s.is_empty())
-        {
-            // Convert PascalCase/camelCase to kebab-case
-            let mut kebab = String::with_capacity(name.len() + 5);
-            for (i, ch) in name.chars().enumerate() {
-                if ch.is_uppercase() && i > 0 {
-                    kebab.push('-');
-                }
-                kebab.push(ch.to_ascii_lowercase());
-            }
-            return kebab;
+/// - `Some("SafeDeployed")` → "safe-deployed"
+/// - `None` → "unknown"
+fn kebab_case_operation_name(name: Option<&str>) -> String {
+    let Some(name) = name.filter(|n| !n.is_empty()) else {
+        return "unknown".to_string();
+    };
+    let mut kebab = String::with_capacity(name.len() + 5);
+    for (i, ch) in name.chars().enumerate() {
+        if ch.is_uppercase() && i > 0 {
+            kebab.push('-');
+        }
+        kebab.push(ch.to_ascii_lowercase());
+    }
+    kebab
+}
+
+/// Type and name of the operation a request selects, derived from the parsed document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SelectedOperationInfo {
+    ty: OperationType,
+    name: Option<String>,
+}
+
+impl SelectedOperationInfo {
+    /// Metrics label for the request type.
+    fn request_type(&self) -> &'static str {
+        match self.ty {
+            OperationType::Subscription => "subscription",
+            OperationType::Mutation => "mutation",
+            OperationType::Query => "query",
         }
     }
-    "unknown".to_string()
+}
+
+/// Parse the query and return the type and name of the selected operation.
+///
+/// Returns `None` when the document does not parse or no operation can be selected.
+fn selected_operation_info(query: &str, operation_name: Option<&str>) -> Option<SelectedOperationInfo> {
+    let doc = async_graphql::parser::parse_query(query).ok()?;
+    let operation = selected_operation(&doc, operation_name)?;
+    let name = match &doc.operations {
+        DocumentOperations::Single(_) => None,
+        DocumentOperations::Multiple(operations) => operation_name.map(str::to_string).or_else(|| {
+            operations
+                .keys()
+                .next()
+                .map(|n| n.to_string())
+                .filter(|_| operations.len() == 1)
+        }),
+    };
+    Some(SelectedOperationInfo { ty: operation.ty, name })
 }
 
 /// Resolve the operation that the request is actually targeting.
@@ -442,8 +463,9 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
     // Always allow them so the GraphQL Playground can load the schema regardless of readiness.
     let is_introspection = is_introspection_query(&request.query, request.operation_name.as_deref());
 
-    // Check if the request is a subscription
-    let is_subscription = request.query.trim_start().starts_with("subscription");
+    // Route by the parsed, selected operation (not by the raw query text)
+    let selected = selected_operation_info(&request.query, request.operation_name.as_deref());
+    let is_subscription = selected.as_ref().is_some_and(|op| op.ty == OperationType::Subscription);
 
     // Check if the query should be allowed before readiness. Only allowed if it's a health subscription.
     let allows_pre_ready = selected_operation_is_health_subscription(&request.query, request.operation_name.as_deref());
@@ -461,13 +483,7 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
     }
 
     // Determine request type label for metrics
-    let request_type = if is_subscription {
-        "subscription"
-    } else if request.query.trim_start().starts_with("mutation") {
-        "mutation"
-    } else {
-        "query"
-    };
+    let request_type = selected.as_ref().map_or("query", SelectedOperationInfo::request_type);
 
     // Track request count
     metrics::increment_request_count(request_type);
@@ -512,7 +528,7 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
     // Handle subscription requests via SSE
     if accepts_sse && is_subscription {
         // Generate unique identifier for this SSE connection
-        let subscription_name = extract_subscription_name(&request.query);
+        let subscription_name = kebab_case_operation_name(selected.as_ref().and_then(|op| op.name.as_deref()));
         let connection_id = Uuid::new_v4();
         let identifier = format!("sub-{}-{}-keep-alive", subscription_name, connection_id);
 
@@ -1026,61 +1042,75 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_extract_named_subscription() {
-        assert_eq!(
-            extract_subscription_name("subscription SafeDeployed { address }"),
-            "safe-deployed"
-        );
-        assert_eq!(
-            extract_subscription_name("subscription ChannelUpdated { id }"),
-            "channel-updated"
-        );
+    fn info(query: &str, op: Option<&str>) -> Option<SelectedOperationInfo> {
+        selected_operation_info(query, op)
+    }
+
+    fn sub_name(query: &str, op: Option<&str>) -> String {
+        kebab_case_operation_name(info(query, op).and_then(|i| i.name).as_deref())
     }
 
     #[test]
-    fn test_extract_unnamed_subscription() {
+    fn test_subscription_name_named() {
+        assert_eq!(sub_name("subscription SafeDeployed { address }", None), "safe-deployed");
+        assert_eq!(sub_name("subscription ChannelUpdated { id }", None), "channel-updated");
         assert_eq!(
-            extract_subscription_name("subscription { safeDeployed { address } }"),
-            "unknown"
-        );
-    }
-
-    #[test]
-    fn test_extract_with_whitespace() {
-        assert_eq!(
-            extract_subscription_name("  subscription   SafeDeployed   {  address  }  "),
-            "safe-deployed"
-        );
-    }
-
-    #[test]
-    fn test_extract_non_subscription() {
-        assert_eq!(extract_subscription_name("query { accounts { id } }"), "unknown");
-    }
-
-    #[test]
-    fn test_extract_subscription_transaction_updated() {
-        assert_eq!(
-            extract_subscription_name("subscription TransactionUpdated { id status }"),
+            sub_name("subscription TransactionUpdated { id status }", None),
             "transaction-updated"
         );
-    }
-
-    #[test]
-    fn test_extract_subscription_ticket_params_updated() {
         assert_eq!(
-            extract_subscription_name("subscription TicketParamsUpdated { price winningProbability }"),
+            sub_name("subscription TicketParamsUpdated { price winningProbability }", None),
             "ticket-params-updated"
         );
     }
 
     #[test]
-    fn test_extract_subscription_with_variables() {
+    fn test_subscription_name_unnamed() {
+        assert_eq!(sub_name("subscription { safeDeployed { address } }", None), "unknown");
+    }
+
+    #[test]
+    fn test_subscription_name_with_whitespace_and_variables() {
         assert_eq!(
-            extract_subscription_name("subscription SafeDeployed($id: ID!) { address }"),
+            sub_name("  subscription   SafeDeployed   {  address  }  ", None),
             "safe-deployed"
         );
+        assert_eq!(
+            sub_name("subscription SafeDeployed($id: ID!) { address }", None),
+            "safe-deployed"
+        );
+    }
+
+    #[test]
+    fn test_selected_operation_leading_comment() {
+        let op = info("# a comment\nsubscription SafeDeployed { address }", None).expect("parses");
+        assert_eq!(op.ty, OperationType::Subscription);
+        assert_eq!(op.name.as_deref(), Some("SafeDeployed"));
+    }
+
+    #[test]
+    fn test_selected_operation_by_operation_name() {
+        let query = "query Q { a } subscription ChannelUpdated { b }";
+        let op = info(query, Some("ChannelUpdated")).expect("parses");
+        assert_eq!(op.request_type(), "subscription");
+        assert_eq!(op.name.as_deref(), Some("ChannelUpdated"));
+        assert_eq!(info(query, Some("Q")).expect("parses").request_type(), "query");
+        assert!(info(query, None).is_none());
+    }
+
+    #[test]
+    fn test_selected_operation_word_in_comment_or_string_is_query() {
+        let op = info("# subscription\nquery { a(x: \"subscription\") }", None).expect("parses");
+        assert_eq!(op.request_type(), "query");
+    }
+
+    #[test]
+    fn test_selected_operation_mutation_and_invalid() {
+        assert_eq!(
+            info("mutation M { a }", None).expect("parses").request_type(),
+            "mutation"
+        );
+        assert!(info("subscription {", None).is_none());
     }
 
     #[cfg(feature = "telemetry")]
