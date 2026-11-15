@@ -609,8 +609,10 @@ impl TransactionStore {
                     .then(|| transaction_identity(&record.raw_transaction))
                     .flatten();
                 entry.insert(record);
-                drop(entry);
+                // Lock order is `transactions` then `submitted_identities`, with the index
+                // updated under the record guard.
                 self.sync_submitted_status(id, status, identity);
+                drop(entry);
                 if status.is_terminal() {
                     self.mark_terminal(id);
                 } else {
@@ -768,11 +770,11 @@ impl TransactionStore {
                 }
                 record.safe_execution = safe_execution;
                 record.diagnosis = None;
+                self.untrack_submitted(id);
                 record.confirmed_at
             })
             .ok_or(TransactionStoreError::NotFound(id))?;
 
-        self.untrack_submitted(id);
         self.mark_terminal(id);
 
         record_transaction_status(STATUS_CONFIRMED);
@@ -818,14 +820,21 @@ impl TransactionStore {
     /// header or IP.
     pub fn list_submitted_fair(&self) -> Vec<TransactionRecord> {
         let mut by_identity: HashMap<SubmissionIdentity, VecDeque<TransactionRecord>> = HashMap::new();
-        for entry in self.submitted_identities.iter() {
-            let Some(record) = self.transactions.get(entry.key()).map(|record| record.value().clone()) else {
+        // Snapshot the index first so no index guard is held while `transactions` is read: the
+        // lock order everywhere is `transactions` then `submitted_identities`.
+        let indexed: Vec<(Uuid, SubmissionIdentity)> = self
+            .submitted_identities
+            .iter()
+            .map(|entry| (*entry.key(), *entry.value()))
+            .collect();
+        for (id, identity) in indexed {
+            let Some(record) = self.transactions.get(&id).map(|record| record.value().clone()) else {
                 continue;
             };
             if record.status != TransactionStatus::Submitted {
                 continue;
             }
-            by_identity.entry(*entry.value()).or_default().push_back(record);
+            by_identity.entry(identity).or_default().push_back(record);
         }
         let mut queues: Vec<VecDeque<TransactionRecord>> = by_identity.into_values().collect();
         let mut fair = Vec::new();
@@ -1186,6 +1195,94 @@ mod tests {
             .unwrap();
         assert!(!store.mark_timeout_if_unchanged(TEST_UUID, 1, None, None).unwrap());
         assert_eq!(store.get(TEST_UUID).unwrap().status, TransactionStatus::Confirmed);
+    }
+
+    /// Assert every `Submitted` record is both listed for polling and counted.
+    fn assert_submitted_listed_and_counted(store: &TransactionStore, ids: &[Uuid]) {
+        let submitted: HashSet<Uuid> = ids
+            .iter()
+            .copied()
+            .filter(|id| store.get(*id).unwrap().status == TransactionStatus::Submitted)
+            .collect();
+        let listed: HashSet<Uuid> = store.list_submitted_fair().iter().map(|record| record.id).collect();
+        assert_eq!(listed, submitted);
+        assert_eq!(store.submitted_count(), submitted.len());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_submitted_index_stays_consistent_under_concurrent_writers() {
+        let store = Arc::new(TransactionStore::new());
+        let ids: Vec<Uuid> = (0..8u128).map(Uuid::from_u128).collect();
+        for id in &ids {
+            store.insert(submitted_record(*id, vec![id.as_u128() as u8])).unwrap();
+        }
+
+        let mut tasks = Vec::new();
+        {
+            let store = store.clone();
+            tasks.push(tokio::task::spawn_blocking(move || {
+                for _ in 0..300 {
+                    store.list_submitted_fair();
+                    store.submitted_count();
+                }
+            }));
+        }
+        for worker in 0..3usize {
+            let store = store.clone();
+            let ids = ids.clone();
+            tasks.push(tokio::task::spawn_blocking(move || {
+                for round in 0..300usize {
+                    for id in &ids {
+                        match worker {
+                            0 => store.resume_tracking(*id).unwrap(),
+                            1 => {
+                                let status = if round % 2 == 0 {
+                                    TransactionStatus::Timeout
+                                } else {
+                                    TransactionStatus::Submitted
+                                };
+                                store.update_status(*id, status, None).unwrap();
+                            }
+                            _ => {
+                                let generation = store.get(*id).unwrap().resume_generation;
+                                store.mark_timeout_if_unchanged(*id, generation, None, None).unwrap();
+                            }
+                        }
+                    }
+                }
+            }));
+        }
+
+        tokio::time::timeout(Duration::from_secs(60), async {
+            for task in tasks {
+                task.await.unwrap();
+            }
+        })
+        .await
+        .expect("concurrent store operations hung");
+
+        assert_submitted_listed_and_counted(&store, &ids);
+    }
+
+    #[tokio::test]
+    async fn test_submitted_index_follows_update_with_a_changed_signer_and_stale_timeouts() {
+        let store = TransactionStore::new();
+        let first = PrivateKeySigner::random();
+        let second = PrivateKeySigner::random();
+        let id = Uuid::from_u128(1);
+        store
+            .insert(submitted_record(id, signed_raw_tx(&first, [0x11; 20], 0).await))
+            .unwrap();
+
+        store
+            .update(submitted_record(id, signed_raw_tx(&second, [0x11; 20], 0).await))
+            .unwrap();
+        assert_submitted_listed_and_counted(&store, &[id]);
+
+        store.resume_tracking(id).unwrap();
+        assert!(!store.mark_timeout_if_unchanged(id, 0, None, None).unwrap());
+        assert_submitted_listed_and_counted(&store, &[id]);
+        assert_eq!(store.list_submitted_fair().len(), 1);
     }
 
     #[test]
