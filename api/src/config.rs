@@ -56,9 +56,17 @@ pub struct ApiConfig {
     #[serde(default = "default_min_priority_fee_per_gas")]
     pub min_priority_fee_per_gas: u64,
 
+    /// Maximum `maxPriorityFeePerGas` exposed by chainInfo, in wei
+    #[serde(default = "default_max_priority_fee_per_gas")]
+    pub max_priority_fee_per_gas: u64,
+
     /// Minimum `maxFeePerGas` exposed by chainInfo, in wei
     #[serde(default = "default_min_max_fee_per_gas")]
     pub min_max_fee_per_gas: u64,
+
+    /// Factor applied to the next-block base fee when computing `maxFeePerGas`
+    #[serde(default = "default_base_fee_headroom_factor")]
+    pub base_fee_headroom_factor: f64,
 
     #[serde(default)]
     pub sse_keepalive: SseKeepAliveConfig,
@@ -175,7 +183,9 @@ impl Default for ApiConfig {
             expected_block_time: default_expected_block_time(),
             gas_multiplier: default_gas_multiplier(),
             min_priority_fee_per_gas: default_min_priority_fee_per_gas(),
+            max_priority_fee_per_gas: default_max_priority_fee_per_gas(),
             min_max_fee_per_gas: default_min_max_fee_per_gas(),
+            base_fee_headroom_factor: default_base_fee_headroom_factor(),
             sse_keepalive: SseKeepAliveConfig::default(),
             health: HealthConfig::default(),
             max_query_depth: default_max_query_depth(),
@@ -232,18 +242,37 @@ fn default_gas_multiplier() -> f64 {
     1.0
 }
 
-/// 100 wei: just above the 1-2 wei tips Gnosis estimates usually return, at negligible cost
-pub const DEFAULT_MIN_PRIORITY_FEE_PER_GAS: u64 = 100;
+/// 0.01 gwei: Gnosis median tips are around 0.1 gwei but idle blocks often carry none, so a small floor keeps
+/// transactions attractive to block builders while a 300k gas transaction pays at most 0.000003 xDAI of tip.
+pub const DEFAULT_MIN_PRIORITY_FEE_PER_GAS: u64 = 10_000_000;
 
-/// 0.005 gwei: with the 10M gas limit nodes sign with, the upfront balance stays at 0.00005 xDAI
-pub const DEFAULT_MIN_MAX_FEE_PER_GAS: u64 = 5_000_000;
+/// 0.05 gwei: caps the tip so a transaction using ~300k gas never pays more than 0.000015 xDAI of it, even when
+/// recent tips burst to 0.4-25 gwei.
+pub const DEFAULT_MAX_PRIORITY_FEE_PER_GAS: u64 = 50_000_000;
+
+/// 0.5 gwei: the Gnosis base fee idles at 9-20 wei but peaked at 0.23 gwei in 24 hours of blocks, and it can grow
+/// about 14x within two minutes. A 5_000_000 wei floor was exceeded ~8% of the day. Nodes pay base fee plus tip,
+/// not this cap; it only raises the balance reserved upfront (0.005 xDAI at a 10M gas limit).
+pub const DEFAULT_MIN_MAX_FEE_PER_GAS: u64 = 500_000_000;
+
+/// 8x: the base fee grows at most 12.5% per block, so 8x covers about 17 blocks of worst-case growth, where the
+/// default alloy estimate of 2x only covers about 6.
+pub const DEFAULT_BASE_FEE_HEADROOM_FACTOR: f64 = 8.0;
 
 fn default_min_priority_fee_per_gas() -> u64 {
     DEFAULT_MIN_PRIORITY_FEE_PER_GAS
 }
 
+fn default_max_priority_fee_per_gas() -> u64 {
+    DEFAULT_MAX_PRIORITY_FEE_PER_GAS
+}
+
 fn default_min_max_fee_per_gas() -> u64 {
     DEFAULT_MIN_MAX_FEE_PER_GAS
+}
+
+fn default_base_fee_headroom_factor() -> f64 {
+    DEFAULT_BASE_FEE_HEADROOM_FACTOR
 }
 
 impl ApiConfig {
@@ -251,7 +280,9 @@ impl ApiConfig {
     pub fn gas_fee_floors(&self) -> GasFeeFloors {
         GasFeeFloors {
             min_priority_fee_per_gas: u128::from(self.min_priority_fee_per_gas),
+            max_priority_fee_per_gas: u128::from(self.max_priority_fee_per_gas),
             min_max_fee_per_gas: u128::from(self.min_max_fee_per_gas),
+            base_fee_headroom_factor: self.base_fee_headroom_factor,
         }
     }
 }
@@ -269,8 +300,10 @@ mod tests {
         assert_eq!(
             config.gas_fee_floors(),
             GasFeeFloors {
-                min_priority_fee_per_gas: 100,
-                min_max_fee_per_gas: 5_000_000,
+                min_priority_fee_per_gas: 10_000_000,
+                max_priority_fee_per_gas: 50_000_000,
+                min_max_fee_per_gas: 500_000_000,
+                base_fee_headroom_factor: 8.0,
             }
         );
     }

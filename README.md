@@ -303,6 +303,10 @@ fields. SQLite uses separate index and raw-log databases.
 | `api.bind_address`                    | `127.0.0.1:8080` | `BLOKLI_API_BIND_ADDRESS`                    | API listen address                            |
 | `api.playground_enabled`              | `false`          | `BLOKLI_API_PLAYGROUND_ENABLED`              | Enables GraphQL Playground                    |
 | `api.gas_multiplier`                  | `1.0`            | `BLOKLI_API_GAS_MULTIPLIER`                  | Finite EIP-1559 fee multiplier, minimum `1.0` |
+| `api.min_priority_fee_per_gas`        | `10000000`       | `BLOKLI_API_MIN_PRIORITY_FEE_PER_GAS`        | Minimum priority fee in wei (0.01 gwei)       |
+| `api.max_priority_fee_per_gas`        | `50000000`       | `BLOKLI_API_MAX_PRIORITY_FEE_PER_GAS`        | Maximum priority fee in wei (0.05 gwei)       |
+| `api.min_max_fee_per_gas`             | `500000000`      | `BLOKLI_API_MIN_MAX_FEE_PER_GAS`             | Minimum max fee in wei (0.5 gwei)             |
+| `api.base_fee_headroom_factor`        | `8.0`            | `BLOKLI_API_BASE_FEE_HEADROOM_FACTOR`        | Base fee multiple in max fee, minimum `1.0`   |
 | `api.max_query_depth`                 | `8`              | —                                            | Maximum GraphQL nesting depth                 |
 | `api.max_query_complexity`            | `500`            | —                                            | Maximum GraphQL complexity budget             |
 | `api.sse_keepalive.enabled`           | `true`           | `BLOKLI_API_SSE_KEEPALIVE_ENABLED`           | Enables SSE keep-alive events                 |
@@ -314,6 +318,8 @@ fields. SQLite uses separate index and raw-log databases.
 GraphQL subscriptions stream over SSE and send periodic keep-alive events to prevent idle connection timeouts. Keep-alive is enabled by
 default with a 15s interval, and can be customized via the `api.sse_keepalive.*` settings. `api.gas_multiplier` (default `1.0`, minimum
 `1.0`) scales `chainInfo.maxFeePerGas` and `chainInfo.maxPriorityFeePerGas` (rounded up to whole wei). `chainInfo.gasPrice` is not scaled.
+`chainInfo.maxFeePerGas` is the next-block base fee times `api.base_fee_headroom_factor` plus the priority fee, and
+`chainInfo.maxPriorityFeePerGas` is the recent median tip, each raised or capped by the settings above.
 
 #### Telemetry Configuration
 

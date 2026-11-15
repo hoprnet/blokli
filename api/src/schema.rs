@@ -34,12 +34,28 @@ pub struct Finality(pub u16);
 pub struct GasMultiplier(pub f64);
 
 /// Lower bounds, in wei, for the EIP-1559 fee estimates exposed by chainInfo
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GasFeeFloors {
     /// Minimum `maxPriorityFeePerGas`
     pub min_priority_fee_per_gas: u128,
+    /// Maximum `maxPriorityFeePerGas`, so the tip paid per transaction stays bounded
+    pub max_priority_fee_per_gas: u128,
     /// Minimum `maxFeePerGas`
     pub min_max_fee_per_gas: u128,
+    /// Factor applied to the next-block base fee to leave room for base fee growth
+    pub base_fee_headroom_factor: f64,
+}
+
+impl Default for GasFeeFloors {
+    /// No floors, no tip cap and no extra headroom
+    fn default() -> Self {
+        Self {
+            min_priority_fee_per_gas: 0,
+            max_priority_fee_per_gas: u128::MAX,
+            min_max_fee_per_gas: 0,
+            base_fee_headroom_factor: 1.0,
+        }
+    }
 }
 
 /// Wrapper type for chain ID to avoid type confusion in context

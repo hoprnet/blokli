@@ -141,7 +141,9 @@ impl Args {
             ("BLOKLI_API_PLAYGROUND_ENABLED", "api.playground_enabled"),
             ("BLOKLI_API_GAS_MULTIPLIER", "api.gas_multiplier"),
             ("BLOKLI_API_MIN_PRIORITY_FEE_PER_GAS", "api.min_priority_fee_per_gas"),
+            ("BLOKLI_API_MAX_PRIORITY_FEE_PER_GAS", "api.max_priority_fee_per_gas"),
             ("BLOKLI_API_MIN_MAX_FEE_PER_GAS", "api.min_max_fee_per_gas"),
+            ("BLOKLI_API_BASE_FEE_HEADROOM_FACTOR", "api.base_fee_headroom_factor"),
             (
                 "BLOKLI_API_TRANSACTIONS_MAX_SUBMITTED_TRANSACTIONS",
                 "api.transactions.max_submitted_transactions",
@@ -281,6 +283,21 @@ impl Args {
         if !config.api.gas_multiplier.is_finite() || config.api.gas_multiplier < 1.0 {
             return Err(ConfigError::Parse(
                 "api.gas_multiplier must be a finite number greater than or equal to 1".to_string(),
+            )
+            .into());
+        }
+
+        if !config.api.base_fee_headroom_factor.is_finite() || config.api.base_fee_headroom_factor < 1.0 {
+            return Err(ConfigError::Parse(
+                "api.base_fee_headroom_factor must be a finite number greater than or equal to 1".to_string(),
+            )
+            .into());
+        }
+
+        if config.api.max_priority_fee_per_gas < config.api.min_priority_fee_per_gas {
+            return Err(ConfigError::Parse(
+                "api.max_priority_fee_per_gas must be greater than or equal to api.min_priority_fee_per_gas"
+                    .to_string(),
             )
             .into());
         }
@@ -1227,6 +1244,85 @@ mod tests {
                 );
             },
         );
+    }
+
+    #[test]
+    fn test_max_priority_fee_below_min_priority_fee_rejected() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "jura-dev"
+            rpc_url = "http://localhost:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+            [api]
+            min_priority_fee_per_gas = 2000
+            max_priority_fee_per_gas = 1000
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        temp_env::with_vars(
+            [
+                ("BLOKLI_API_MIN_PRIORITY_FEE_PER_GAS", None::<&str>),
+                ("BLOKLI_API_MAX_PRIORITY_FEE_PER_GAS", None::<&str>),
+            ],
+            || {
+                let args = Args {
+                    verbose: 0,
+                    config: Some(path),
+                    command: None,
+                };
+                let error = args
+                    .load_config(false)
+                    .expect_err("a max priority fee below the min priority fee should be invalid");
+                assert!(
+                    error.to_string().contains(
+                        "api.max_priority_fee_per_gas must be greater than or equal to api.min_priority_fee_per_gas"
+                    ),
+                    "unexpected error: {error}"
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn test_base_fee_headroom_factor_below_one_rejected() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "jura-dev"
+            rpc_url = "http://localhost:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+            [api]
+            base_fee_headroom_factor = 0.5
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        temp_env::with_vars([("BLOKLI_API_BASE_FEE_HEADROOM_FACTOR", None::<&str>)], || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
+            let error = args
+                .load_config(false)
+                .expect_err("a headroom factor below 1 should be invalid");
+            assert!(
+                error
+                    .to_string()
+                    .contains("api.base_fee_headroom_factor must be a finite number greater than or equal to 1"),
+                "unexpected error: {error}"
+            );
+        });
     }
 
     #[test]

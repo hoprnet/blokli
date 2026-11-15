@@ -16,7 +16,7 @@ use blokli_api_types::{
 };
 use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_indexer::IndexerState;
-use blokli_chain_rpc::{HoprIndexerRpcOperations, HoprRpcOperations, rpc::RpcOperations};
+use blokli_chain_rpc::{FeeHistorySnapshot, HoprIndexerRpcOperations, HoprRpcOperations, rpc::RpcOperations};
 use blokli_chain_types::ContractAddresses;
 use blokli_db_entity::{
     account, chain_info,
@@ -361,6 +361,22 @@ fn apply_gas_fee_floors(max_fee_per_gas: u128, max_priority_fee_per_gas: u128, f
     let priority_fee = max_priority_fee_per_gas.max(floors.min_priority_fee_per_gas);
     let max_fee = priority_fee
         .saturating_add(base_fee_headroom)
+        .max(floors.min_max_fee_per_gas);
+    (max_fee, priority_fee)
+}
+
+/// Compute `(max_fee_per_gas, max_priority_fee_per_gas)` from a raw fee history snapshot.
+///
+/// The tip is the recent median tip scaled by `gas_multiplier`, clamped to the configured priority fee bounds.
+/// The max fee is that tip plus the scaled next-block base fee times `base_fee_headroom_factor`, raised to
+/// `min_max_fee_per_gas`.
+fn fees_from_fee_history(snapshot: FeeHistorySnapshot, gas_multiplier: f64, floors: GasFeeFloors) -> (u128, u128) {
+    let priority_fee = scale_wei_by_multiplier(snapshot.median_priority_fee_per_gas, gas_multiplier)
+        .max(floors.min_priority_fee_per_gas)
+        .min(floors.max_priority_fee_per_gas);
+    let base_fee = scale_wei_by_multiplier(snapshot.next_base_fee_per_gas, gas_multiplier);
+    let max_fee = priority_fee
+        .saturating_add(scale_wei_by_multiplier(base_fee, floors.base_fee_headroom_factor))
         .max(floors.min_max_fee_per_gas);
     (max_fee, priority_fee)
 }
@@ -2522,8 +2538,9 @@ impl QueryRoot {
     /// The returned `ChainInfo` contains the last indexed block number, the configured chain ID
     /// and network name, human-readable token values for ticket price and key binding fee,
     /// live gas fee estimates from RPC (`gasPrice`, `maxFeePerGas`, `maxPriorityFeePerGas`) in wei,
-    /// where `maxFeePerGas` and `maxPriorityFeePerGas` are scaled by `api.gas_multiplier` and then
-    /// raised to `api.min_max_fee_per_gas` and `api.min_priority_fee_per_gas`,
+    /// where `maxFeePerGas` is the scaled next-block base fee times `api.base_fee_headroom_factor` plus the
+    /// priority fee (at least `api.min_max_fee_per_gas`), and `maxPriorityFeePerGas` is the scaled recent median
+    /// tip clamped to `api.min_priority_fee_per_gas` and `api.max_priority_fee_per_gas`,
     /// minimum incoming ticket winning probability, optional 32-byte domain separator hashes
     /// for channels/ledger/safe registry as `Hex32`, a map of contract addresses, and an optional
     /// channel closure grace period in seconds.
@@ -2639,9 +2656,9 @@ impl QueryRoot {
                 .data_opt::<FeeEstimateCache>()
                 .cloned()
                 .unwrap_or_else(|| FeeEstimateCache::new(Duration::from_secs(expected_block_time.0)));
-            let (gas_price_result, eip1559_result) = tokio::join!(
+            let (gas_price_result, fee_history_result) = tokio::join!(
                 fee_cache.gas_price(HoprRpcOperations::get_gas_price(&**rpc)),
-                fee_cache.eip1559_fees(HoprRpcOperations::estimate_eip1559_fees(&**rpc))
+                fee_cache.fee_history(HoprRpcOperations::get_fee_history_snapshot(&**rpc))
             );
 
             match gas_price_result {
@@ -2653,18 +2670,31 @@ impl QueryRoot {
                 }
             }
 
-            match eip1559_result {
-                Ok(fees) => {
-                    let (max_fee, priority_fee) = apply_gas_fee_floors(
-                        scale_wei_by_multiplier(fees.max_fee_per_gas, gas_multiplier),
-                        scale_wei_by_multiplier(fees.max_priority_fee_per_gas, gas_multiplier),
-                        gas_fee_floors,
-                    );
+            match fee_history_result {
+                Ok(snapshot) => {
+                    let (max_fee, priority_fee) = fees_from_fee_history(snapshot, gas_multiplier, gas_fee_floors);
                     max_fee_per_gas = Some(max_fee.to_string());
                     max_priority_fee_per_gas = Some(priority_fee.to_string());
                 }
                 Err(e) => {
-                    warn!(error = %e, "failed to fetch eip1559 fee estimate for chain_info");
+                    warn!(error = %e, "failed to fetch fee history for chain_info, falling back to the eip1559 estimate");
+                    match fee_cache
+                        .eip1559_fees(HoprRpcOperations::estimate_eip1559_fees(&**rpc))
+                        .await
+                    {
+                        Ok(fees) => {
+                            let (max_fee, priority_fee) = apply_gas_fee_floors(
+                                scale_wei_by_multiplier(fees.max_fee_per_gas, gas_multiplier),
+                                scale_wei_by_multiplier(fees.max_priority_fee_per_gas, gas_multiplier),
+                                gas_fee_floors,
+                            );
+                            max_fee_per_gas = Some(max_fee.to_string());
+                            max_priority_fee_per_gas = Some(priority_fee.to_string());
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "failed to fetch eip1559 fee estimate for chain_info");
+                        }
+                    }
                 }
             }
         }
@@ -2965,6 +2995,7 @@ mod tests {
 
     use anyhow::anyhow;
     use async_graphql::Schema;
+    use blokli_chain_rpc::FeeHistorySnapshot;
     use blokli_chain_types::ContractAddresses;
     use blokli_db::{
         BlokliDbGeneralModelOperations, TargetDb,
@@ -2984,7 +3015,8 @@ mod tests {
 
     use super::{
         QueryRoot, RPC_FANOUT_CONCURRENCY, SAFES_BALANCE_MAX_SAFES, apply_gas_fee_floors, check_safes_balance_cap,
-        collect_with_bounded_concurrency, owners_for_safe, safe_from_current_row, scale_wei_by_multiplier,
+        collect_with_bounded_concurrency, fees_from_fee_history, owners_for_safe, safe_from_current_row,
+        scale_wei_by_multiplier,
     };
     use crate::{
         curvy::{validate_dense_page, validate_page_start},
@@ -3028,8 +3060,62 @@ mod tests {
 
     const FLOORS: GasFeeFloors = GasFeeFloors {
         min_priority_fee_per_gas: 100,
+        max_priority_fee_per_gas: u128::MAX,
         min_max_fee_per_gas: 5_000_000,
+        base_fee_headroom_factor: 1.0,
     };
+
+    const HEADROOM_FLOORS: GasFeeFloors = GasFeeFloors {
+        min_priority_fee_per_gas: 10_000_000,
+        max_priority_fee_per_gas: 50_000_000,
+        min_max_fee_per_gas: 500_000_000,
+        base_fee_headroom_factor: 8.0,
+    };
+
+    fn snapshot(next_base_fee_per_gas: u128, median_priority_fee_per_gas: u128) -> FeeHistorySnapshot {
+        FeeHistorySnapshot {
+            next_base_fee_per_gas,
+            median_priority_fee_per_gas,
+        }
+    }
+
+    #[rstest::rstest]
+    #[case::calm_base_fee(snapshot(10, 1), 1.0)]
+    #[case::zero_base_fee(snapshot(0, 0), 1.0)]
+    #[case::mid_ramp(snapshot(5_000_000, 100_000_000), 1.0)]
+    #[case::spike(snapshot(229_083_357, 100_000_000), 1.0)]
+    #[case::tip_below_min(snapshot(10, 5), 1.0)]
+    #[case::tip_above_max(snapshot(10, 25_000_000_000), 1.0)]
+    #[case::multiplier(snapshot(229_083_357, 20_000_000), 1.5)]
+    #[case::multiplier_tip_clamped(snapshot(10, 40_000_000), 2.0)]
+    fn test_fees_from_fee_history(#[case] case: FeeHistorySnapshot, #[case] multiplier: f64) {
+        let (max_fee, priority_fee) = fees_from_fee_history(case, multiplier, HEADROOM_FLOORS);
+        insta::assert_yaml_snapshot!(
+            format!(
+                "fees_from_fee_history_{}_{}",
+                case.next_base_fee_per_gas, case.median_priority_fee_per_gas
+            ),
+            (max_fee.to_string(), priority_fee.to_string())
+        );
+    }
+
+    #[test]
+    fn test_fees_from_fee_history_survive_observed_spike() {
+        // 229_083_357 wei peak: 8x headroom plus the capped tip must stay above the base fee
+        let (max_fee, priority_fee) = fees_from_fee_history(snapshot(229_083_357, 100_000_000), 1.0, HEADROOM_FLOORS);
+        assert_eq!(priority_fee, 50_000_000);
+        assert_eq!(max_fee, 50_000_000 + 8 * 229_083_357);
+        // A 300k gas transaction pays base fee plus the capped tip, below 0.0001 xDAI
+        assert!(300_000 * (229_083_357 + priority_fee) < 100_000_000_000_000);
+    }
+
+    #[test]
+    fn test_fees_from_fee_history_default_floors_pass_values_through() {
+        assert_eq!(
+            fees_from_fee_history(snapshot(21, 3), 1.0, GasFeeFloors::default()),
+            (24, 3)
+        );
+    }
 
     #[test]
     fn test_gas_fee_floors_lift_floor_level_estimate() {
