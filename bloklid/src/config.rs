@@ -275,6 +275,7 @@ pub struct Config {
     pub block_range_reprobe_interval: u32,
 
     #[serde(default)]
+    #[validate(custom(function = "validate_indexer"))]
     pub indexer: IndexerConfig,
 
     #[serde(default)]
@@ -300,6 +301,12 @@ pub struct Config {
     #[serde(skip)]
     #[default(_code = "ContractAddresses::default()")]
     pub contracts: ContractAddresses,
+}
+
+fn validate_indexer(indexer: &IndexerConfig) -> Result<(), validator::ValidationError> {
+    indexer
+        .validate()
+        .map_err(|message| validator::ValidationError::new("indexer").with_message(message.into()))
 }
 
 impl Config {

@@ -195,7 +195,13 @@ impl SnapshotDownloader {
     /// `expected_sha256` must already be normalized with [`normalize_sha256_hex`].
     async fn download_snapshot_once(&self, url: &str, target_path: &Path, expected_sha256: &str) -> SnapshotResult<()> {
         self.fetch_snapshot_once(url, target_path).await?;
-        verify_sha256(target_path, expected_sha256)
+
+        // Hashing a large archive is blocking I/O, keep it off the async runtime threads.
+        let path = target_path.to_path_buf();
+        let expected = expected_sha256.to_string();
+        tokio::task::spawn_blocking(move || verify_sha256(&path, &expected))
+            .await
+            .map_err(|error| Error::other(format!("snapshot digest task failed: {error}")))?
     }
 
     /// Fetches the snapshot into `target_path` without integrity verification.

@@ -188,7 +188,7 @@
             {
               "if": {
                 "properties": {
-                  "logsSnapshotUrl": { "type": "string", "minLength": 1 }
+                  "logsSnapshotUrl": { "type": "string", "pattern": "\\S" }
                 },
                 "required": ["logsSnapshotUrl"]
               },

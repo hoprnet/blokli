@@ -307,8 +307,6 @@ impl Args {
             return Err(ConfigError::NoDatabaseConfiguration.into());
         }
 
-        config.indexer.validate().map_err(ConfigError::Parse)?;
-
         config.validate().map_err(ConfigError::Validation)?;
 
         let network_config = config.network.resolve().ok_or_else(|| {
@@ -1619,8 +1617,8 @@ mod tests {
                 assert!(
                     matches!(
                         &result,
-                        Err(BloklidError::Config(ConfigError::Parse(message)))
-                            if message.contains("indexer.logs_snapshot_sha256")
+                        Err(BloklidError::Config(ConfigError::Validation(errors)))
+                            if errors.to_string().contains("indexer.logs_snapshot_sha256")
                     ),
                     "expected a logs_snapshot_sha256 error, got {result:?}"
                 );
