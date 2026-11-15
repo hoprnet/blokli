@@ -62,6 +62,8 @@ async fn test_transaction_query_finds_existing_transaction() -> Result<()> {
         error_message: None,
         safe_execution: None,
         diagnosis: None,
+        resume_generation: 0,
+        last_resumed_at: None,
     };
     ctx.store.insert(record)?;
 
@@ -213,6 +215,8 @@ async fn test_transaction_query_all_status_types() -> Result<()> {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
         ctx.store.insert(record)?;
 
@@ -253,6 +257,8 @@ async fn test_transaction_query_uuid_format_variations() -> Result<()> {
         error_message: None,
         safe_execution: None,
         diagnosis: None,
+        resume_generation: 0,
+        last_resumed_at: None,
     };
     ctx.store.insert(record)?;
 
@@ -336,6 +342,8 @@ async fn test_transaction_query_with_safe_execution_success() -> Result<()> {
             revert_reason: None,
         }),
         diagnosis: None,
+        resume_generation: 0,
+        last_resumed_at: None,
     };
     ctx.store.insert(record)?;
 
@@ -393,6 +401,8 @@ async fn test_transaction_query_with_safe_execution_failure() -> Result<()> {
             revert_reason: Some("Arithmetic overflow".to_string()),
         }),
         diagnosis: None,
+        resume_generation: 0,
+        last_resumed_at: None,
     };
     ctx.store.insert(record)?;
 
@@ -440,6 +450,8 @@ async fn test_transaction_query_without_safe_execution() -> Result<()> {
         error_message: None,
         safe_execution: None,
         diagnosis: None,
+        resume_generation: 0,
+        last_resumed_at: None,
     };
     ctx.store.insert(record)?;
 
@@ -499,6 +511,8 @@ async fn test_transaction_query_exposes_unmined_diagnosis() -> Result<()> {
             }),
             retry_after: Duration::from_secs(5),
         }),
+        resume_generation: 0,
+        last_resumed_at: None,
     })?;
 
     let query = format!(
@@ -539,6 +553,8 @@ async fn test_transaction_query_diagnosis_is_null_without_timeout() -> Result<()
         error_message: None,
         safe_execution: None,
         diagnosis: None,
+        resume_generation: 0,
+        last_resumed_at: None,
     })?;
 
     let query =

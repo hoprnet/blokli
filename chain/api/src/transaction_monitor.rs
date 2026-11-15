@@ -447,7 +447,7 @@ impl CheckSchedule {
                     return false;
                 }
                 let age = now_utc
-                    .signed_duration_since(record.submitted_at)
+                    .signed_duration_since(record.timeout_clock_start())
                     .to_std()
                     .unwrap_or_default();
                 due.insert(record.id, now + check_interval(poll_interval, age, in_flight));
@@ -674,7 +674,7 @@ impl<R: ReceiptProvider + 'static, S: SafeAddressChecker> TransactionMonitor<R, 
                 }
             }
             Ok(Ok(None)) => {
-                let elapsed = chrono::Utc::now().signed_duration_since(record.submitted_at);
+                let elapsed = chrono::Utc::now().signed_duration_since(record.timeout_clock_start());
                 if elapsed.to_std().ok() > Some(self.config.timeout) {
                     let (diagnosis, recommended_fees) = self.diagnose_unmined(&record).await;
                     if diagnosis == UnminedDiagnosis::MinedSinceCheck {
@@ -690,7 +690,7 @@ impl<R: ReceiptProvider + 'static, S: SafeAddressChecker> TransactionMonitor<R, 
                     );
                     match self.transaction_store.mark_timeout_if_unchanged(
                         record.id,
-                        record.submitted_at,
+                        record.resume_generation,
                         Some(diagnosis.message()),
                         Some(self.build_diagnosis(&record, diagnosis, recommended_fees)),
                     ) {
@@ -1286,6 +1286,8 @@ mod tests {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         }
     }
 
@@ -1577,6 +1579,8 @@ mod tests {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         let id = record.id;
@@ -1612,6 +1616,8 @@ mod tests {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         let id = record.id;
@@ -1646,6 +1652,8 @@ mod tests {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         let id = record.id;
@@ -1679,6 +1687,8 @@ mod tests {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         let id = record.id;
@@ -1735,6 +1745,8 @@ mod tests {
                 error_message: None,
                 safe_execution: None,
                 diagnosis: None,
+                resume_generation: 0,
+                last_resumed_at: None,
             })
             .unwrap();
         tx_hash
@@ -2008,6 +2020,8 @@ mod tests {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         let record2 = TransactionRecord {
@@ -2020,6 +2034,8 @@ mod tests {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         let id1 = record1.id;
@@ -2064,6 +2080,8 @@ mod tests {
                     error_message: None,
                     safe_execution: None,
                     diagnosis: None,
+                    resume_generation: 0,
+                    last_resumed_at: None,
                 })
                 .unwrap();
         }
@@ -2105,6 +2123,8 @@ mod tests {
                 error_message: None,
                 safe_execution: None,
                 diagnosis: None,
+                resume_generation: 0,
+                last_resumed_at: None,
             })
             .unwrap();
 
@@ -2153,6 +2173,8 @@ mod tests {
                 error_message: None,
                 safe_execution: None,
                 diagnosis: None,
+                resume_generation: 0,
+                last_resumed_at: None,
             })
             .unwrap();
 
@@ -2194,6 +2216,8 @@ mod tests {
                 error_message: None,
                 safe_execution: None,
                 diagnosis: None,
+                resume_generation: 0,
+                last_resumed_at: None,
             })
             .unwrap();
 
@@ -2257,6 +2281,8 @@ mod tests {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         store.insert(record.clone()).unwrap();
@@ -2292,6 +2318,8 @@ mod tests {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         store.insert(record.clone()).unwrap();
@@ -2324,6 +2352,8 @@ mod tests {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         store.insert(record.clone()).unwrap();
@@ -2349,6 +2379,8 @@ mod tests {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         store.insert(record.clone()).unwrap();
@@ -2398,6 +2430,8 @@ mod tests {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         let id = record.id;
@@ -2454,6 +2488,8 @@ mod tests {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         store.insert(record.clone()).unwrap();
@@ -2507,6 +2543,8 @@ mod tests {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         store.insert(record.clone()).unwrap();
@@ -2555,6 +2593,8 @@ mod tests {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         store.insert(record.clone()).unwrap();
@@ -2603,6 +2643,8 @@ mod tests {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         store.insert(record.clone()).unwrap();
@@ -2652,6 +2694,8 @@ mod tests {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         store.insert(record.clone()).unwrap();

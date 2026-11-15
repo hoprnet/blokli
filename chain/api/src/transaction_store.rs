@@ -180,6 +180,19 @@ pub struct TransactionRecord {
     pub safe_execution: Option<SafeExecutionResult>,
     /// Why the transaction was not mined (populated when it times out)
     pub diagnosis: Option<TransactionDiagnosis>,
+    /// Number of times a resubmission resumed tracking of this record
+    #[serde(skip)]
+    pub resume_generation: u64,
+    /// When tracking was last resumed; restarts the timeout clock without touching `submitted_at`
+    #[serde(skip)]
+    pub last_resumed_at: Option<DateTime<Utc>>,
+}
+
+impl TransactionRecord {
+    /// Instant the timeout clock counts from: the last resumption, else the submission.
+    pub fn timeout_clock_start(&self) -> DateTime<Utc> {
+        self.last_resumed_at.unwrap_or(self.submitted_at)
+    }
 }
 
 /// Identity used for per-client submission fairness.
@@ -505,6 +518,8 @@ impl TransactionStore {
                     error_message: record.error_message.clone(),
                     safe_execution: record.safe_execution.clone(),
                     diagnosis: record.diagnosis,
+                    resume_generation: record.resume_generation,
+                    last_resumed_at: record.last_resumed_at,
                 }
             })
             .ok_or(TransactionStoreError::NotFound(id))
@@ -532,28 +547,49 @@ impl TransactionStore {
         })
     }
 
-    /// Resume tracking a transaction that timed out while the node still holds it.
+    /// Resume tracking a transaction the node still holds after an identical resubmission.
     ///
-    /// Restarts the timeout clock of a `Submitted` or `Timeout` record. A `Timeout` record also
-    /// moves back to `Submitted` with its diagnosis cleared, so the monitor polls it again.
-    /// Records in any other status are untouched.
+    /// Bumps the resume generation and restarts the timeout clock (`submitted_at` keeps the
+    /// original submission time). A `Timeout` record also moves back to `Submitted` with its
+    /// diagnosis cleared, so the monitor polls it again. Records in any other status are
+    /// untouched. Repeated identical resubmission extends the check window only while the node
+    /// still holds the transaction: each timeout re-diagnoses it, and a dropped or replaced
+    /// transaction is no longer resumable.
     ///
     /// # Errors
     /// Returns `TransactionStoreError::NotFound` if the transaction doesn't exist
     pub fn resume_tracking(&self, id: Uuid) -> Result<(), TransactionStoreError> {
+        // The submitted index is updated while the record guard is held, so a concurrent
+        // status change cannot interleave its own index update with this one.
         let resumed = {
             let mut entry = self
                 .transactions
                 .get_mut(&id)
                 .ok_or(TransactionStoreError::NotFound(id))?;
             let record = entry.value_mut();
-            if matches!(record.status, TransactionStatus::Submitted | TransactionStatus::Timeout) {
-                record.submitted_at = Utc::now();
+            if !matches!(record.status, TransactionStatus::Submitted | TransactionStatus::Timeout) {
+                return Ok(());
             }
-            record.status == TransactionStatus::Timeout
+            record.resume_generation += 1;
+            record.last_resumed_at = Some(Utc::now());
+            let was_timed_out = record.status == TransactionStatus::Timeout;
+            if was_timed_out {
+                record.status = TransactionStatus::Submitted;
+                record.error_message = None;
+                record.diagnosis = None;
+                let identity = transaction_identity(&record.raw_transaction);
+                self.sync_submitted_status(id, TransactionStatus::Submitted, identity);
+            }
+            was_timed_out
         };
         if resumed {
-            self.update_status_with_diagnosis(id, TransactionStatus::Submitted, None, None)?;
+            self.clear_terminal_timestamp(id);
+            self.broadcast_status_update(TransactionEvent::StatusUpdated {
+                id,
+                status: TransactionStatus::Submitted,
+                error_message: None,
+                confirmed_at: None,
+            });
         }
         Ok(())
     }
@@ -618,17 +654,17 @@ impl TransactionStore {
     }
 
     /// Mark a transaction as timed out, but only if it is still `Submitted` with the
-    /// `submitted_at` the caller read before diagnosing it.
+    /// `resume_generation` the caller read before diagnosing it.
     ///
-    /// A resubmission restarts the clock, so a changed `submitted_at` means the record was
-    /// resumed while the diagnosis ran and the write is skipped. Returns whether it applied.
+    /// A resubmission bumps the generation, so a changed one means the record was resumed
+    /// while the diagnosis ran and the write is skipped. Returns whether it applied.
     ///
     /// # Errors
     /// Returns `TransactionStoreError::NotFound` if the transaction doesn't exist
     pub fn mark_timeout_if_unchanged(
         &self,
         id: Uuid,
-        expected_submitted_at: DateTime<Utc>,
+        expected_generation: u64,
         error_message: Option<String>,
         diagnosis: Option<TransactionDiagnosis>,
     ) -> Result<bool, TransactionStoreError> {
@@ -637,28 +673,28 @@ impl TransactionStore {
             TransactionStatus::Timeout,
             error_message,
             diagnosis,
-            Some(expected_submitted_at),
+            Some(expected_generation),
         )
     }
 
-    /// Apply a status change, optionally only while the record is `Submitted` since
-    /// `unchanged_since`. Returns whether the change was applied.
+    /// Apply a status change, optionally only while the record is `Submitted` at
+    /// `expected_generation`. Returns whether the change was applied.
     fn apply_status(
         &self,
         id: Uuid,
         status: TransactionStatus,
         error_message: Option<String>,
         diagnosis: Option<TransactionDiagnosis>,
-        unchanged_since: Option<DateTime<Utc>>,
+        expected_generation: Option<u64>,
     ) -> Result<bool, TransactionStoreError> {
         // Update the transaction and extract delta fields for event
-        let Some((confirmed_at, error_msg, identity)) = self
+        let Some((confirmed_at, error_msg)) = self
             .transactions
             .get_mut(&id)
             .map(|mut entry| {
                 let record = entry.value_mut();
-                if let Some(since) = unchanged_since {
-                    if record.status != TransactionStatus::Submitted || record.submitted_at != since {
+                if let Some(generation) = expected_generation {
+                    if record.status != TransactionStatus::Submitted || record.resume_generation != generation {
                         return None;
                     }
                 }
@@ -677,14 +713,16 @@ impl TransactionStore {
                 let identity = (status == TransactionStatus::Submitted)
                     .then(|| transaction_identity(&record.raw_transaction))
                     .flatten();
-                Some((record.confirmed_at, record.error_message.clone(), identity))
+                // Reconcile the submitted index while the record guard is held, so a concurrent
+                // resume cannot interleave its own index update with this one.
+                self.sync_submitted_status(id, status, identity);
+                Some((record.confirmed_at, record.error_message.clone()))
             })
             .ok_or(TransactionStoreError::NotFound(id))?
         else {
             return Ok(false);
         };
 
-        self.sync_submitted_status(id, status, identity);
         if status.is_terminal() {
             self.mark_terminal(id);
         } else {
@@ -1027,6 +1065,8 @@ mod tests {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         let id = record.id;
@@ -1053,6 +1093,8 @@ mod tests {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         assert!(store.insert(record.clone()).is_ok());
@@ -1079,6 +1121,71 @@ mod tests {
             min_replacement_fees: None,
             retry_after: Duration::from_secs(5),
         }
+    }
+
+    #[test]
+    fn test_resume_tracking_on_a_timed_out_record_keeps_it_listed_and_counted() {
+        let store = TransactionStore::new();
+        store
+            .insert(submitted_record(TEST_UUID, vec![0x01, 0x02, 0x03]))
+            .unwrap();
+        let submitted_at = store.get(TEST_UUID).unwrap().submitted_at;
+
+        assert!(
+            store
+                .mark_timeout_if_unchanged(TEST_UUID, 0, None, Some(diagnosis_with(UnminedReason::Queued)))
+                .unwrap()
+        );
+        assert_eq!(store.submitted_count(), 0);
+
+        store.resume_tracking(TEST_UUID).unwrap();
+
+        let record = store.get(TEST_UUID).unwrap();
+        assert_eq!(record.status, TransactionStatus::Submitted);
+        assert_eq!(record.diagnosis, None);
+        assert_eq!(record.submitted_at, submitted_at);
+        assert_eq!(record.resume_generation, 1);
+        assert!(record.last_resumed_at.is_some());
+        assert_eq!(store.submitted_count(), 1);
+        assert_eq!(store.list_submitted_fair().len(), 1);
+    }
+
+    #[test]
+    fn test_resume_tracking_on_a_submitted_record_bumps_the_generation_only() {
+        let store = TransactionStore::new();
+        store
+            .insert(submitted_record(TEST_UUID, vec![0x01, 0x02, 0x03]))
+            .unwrap();
+        let submitted_at = store.get(TEST_UUID).unwrap().submitted_at;
+
+        store.resume_tracking(TEST_UUID).unwrap();
+
+        let record = store.get(TEST_UUID).unwrap();
+        assert_eq!(record.status, TransactionStatus::Submitted);
+        assert_eq!(record.submitted_at, submitted_at);
+        assert_eq!(record.resume_generation, 1);
+        assert_eq!(record.timeout_clock_start(), record.last_resumed_at.unwrap());
+        assert_eq!(store.submitted_count(), 1);
+        assert_eq!(store.list_submitted_fair().len(), 1);
+    }
+
+    #[test]
+    fn test_mark_timeout_if_unchanged_skips_stale_and_non_submitted_records() {
+        let store = TransactionStore::new();
+        store
+            .insert(submitted_record(TEST_UUID, vec![0x01, 0x02, 0x03]))
+            .unwrap();
+        let submitted_at = store.get(TEST_UUID).unwrap().submitted_at;
+
+        store.resume_tracking(TEST_UUID).unwrap();
+        assert!(!store.mark_timeout_if_unchanged(TEST_UUID, 0, None, None).unwrap());
+        assert_eq!(store.get(TEST_UUID).unwrap().status, TransactionStatus::Submitted);
+
+        store
+            .update_status(TEST_UUID, TransactionStatus::Confirmed, None)
+            .unwrap();
+        assert!(!store.mark_timeout_if_unchanged(TEST_UUID, 1, None, None).unwrap());
+        assert_eq!(store.get(TEST_UUID).unwrap().status, TransactionStatus::Confirmed);
     }
 
     #[test]
@@ -1112,6 +1219,8 @@ mod tests {
                         error_message: None,
                         safe_execution: None,
                         diagnosis: reason.map(diagnosis_with),
+                        resume_generation: 0,
+                        last_resumed_at: None,
                     })
                     .unwrap();
 
@@ -1139,6 +1248,8 @@ mod tests {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         let id = record.id;
@@ -1188,6 +1299,8 @@ mod tests {
                 error_message: None,
                 safe_execution: None,
                 diagnosis: None,
+                resume_generation: 0,
+                last_resumed_at: None,
             };
 
             store.insert(record).unwrap();
@@ -1219,6 +1332,8 @@ mod tests {
                     error_message: None,
                     safe_execution: None,
                     diagnosis: None,
+                    resume_generation: 0,
+                    last_resumed_at: None,
                 };
                 store_clone1.insert(record).unwrap();
             }
@@ -1237,6 +1352,8 @@ mod tests {
                     error_message: None,
                     safe_execution: None,
                     diagnosis: None,
+                    resume_generation: 0,
+                    last_resumed_at: None,
                 };
                 store_clone2.insert(record).unwrap();
             }
@@ -1263,6 +1380,8 @@ mod tests {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         let id = record.id;
@@ -1279,6 +1398,8 @@ mod tests {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         store.update(updated_record.clone()).unwrap();
@@ -1305,6 +1426,8 @@ mod tests {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         let id = record.id;
@@ -1362,6 +1485,8 @@ mod tests {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         let id = record.id;
@@ -1402,6 +1527,8 @@ mod tests {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         let id = record.id;
@@ -1437,6 +1564,8 @@ mod tests {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         let id = record.id;
@@ -1471,6 +1600,8 @@ mod tests {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         let id = record.id;
@@ -1522,6 +1653,8 @@ mod tests {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         }
     }
 

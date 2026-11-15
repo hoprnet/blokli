@@ -102,6 +102,8 @@ async fn test_transaction_updated_emits_initial_state() -> Result<()> {
         error_message: None,
         safe_execution: None,
         diagnosis: None,
+        resume_generation: 0,
+        last_resumed_at: None,
     };
     ctx.store.insert(record)?;
 
@@ -152,6 +154,8 @@ async fn test_transaction_updated_receives_status_changes() -> Result<()> {
         error_message: None,
         safe_execution: None,
         diagnosis: None,
+        resume_generation: 0,
+        last_resumed_at: None,
     };
     ctx.store.insert(record)?;
 
@@ -204,6 +208,8 @@ async fn test_transaction_updated_emits_same_status_record_changes() -> Result<(
         error_message: None,
         safe_execution: None,
         diagnosis: None,
+        resume_generation: 0,
+        last_resumed_at: None,
     })?;
 
     let query = format!(r#"subscription {{ transactionUpdated(id: "{tx_id}") {{ id status }} }}"#);
@@ -317,6 +323,8 @@ async fn test_transaction_updated_recovers_terminal_state_after_event_overflow()
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         })?;
     }
 
@@ -356,6 +364,8 @@ async fn test_transaction_updated_multiple_status_transitions() -> Result<()> {
         error_message: None,
         safe_execution: None,
         diagnosis: None,
+        resume_generation: 0,
+        last_resumed_at: None,
     };
     ctx.store.insert(record)?;
 
@@ -406,6 +416,8 @@ async fn test_transaction_updated_concurrent_subscriptions() -> Result<()> {
         error_message: None,
         safe_execution: None,
         diagnosis: None,
+        resume_generation: 0,
+        last_resumed_at: None,
     };
     ctx.store.insert(record)?;
 
@@ -488,6 +500,8 @@ async fn test_transaction_updated_handles_all_status_types() -> Result<()> {
             error_message: None,
             safe_execution: None,
             diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
         ctx.store.insert(record)?;
 
@@ -535,6 +549,8 @@ async fn test_transaction_updated_includes_safe_execution() -> Result<()> {
         error_message: None,
         safe_execution: None,
         diagnosis: None,
+        resume_generation: 0,
+        last_resumed_at: None,
     };
     ctx.store.insert(record)?;
 
