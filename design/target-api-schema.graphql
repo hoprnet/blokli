@@ -2830,11 +2830,11 @@ type TransactionDiagnosis {
 	"""
 	signedFees: TransactionFees
 	"""
-	Fees a transaction should currently be signed with, when the reason depends on them
+	Fees a transaction should currently be signed with, when the fee estimate was available
 	"""
 	recommendedFees: TransactionFees
 	"""
-	Lowest fees at which a replacement would be accepted, when the transaction is still held
+	Lowest fees at which a replacement would be accepted, when the fee estimate was available
 	"""
 	minReplacementFees: TransactionFees
 	"""

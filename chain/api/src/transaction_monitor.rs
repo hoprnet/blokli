@@ -207,6 +207,14 @@ fn min_replacement_fees(signed: FeePair, recommended: FeePair) -> FeePair {
     }
 }
 
+/// Fees a raw transaction was signed with; a legacy gas price counts as both fees.
+fn signed_fee_pair(raw_tx: &[u8]) -> Option<FeePair> {
+    decode_transaction_summary(raw_tx).map(|summary| FeePair {
+        max_fee_per_gas: summary.max_fee_per_gas,
+        max_priority_fee_per_gas: summary.max_priority_fee_per_gas.unwrap_or(summary.max_fee_per_gas),
+    })
+}
+
 /// Trait for resolving a transaction target address to a Safe contract address.
 ///
 /// The target may be a known Safe address directly, or a module address
@@ -725,8 +733,8 @@ impl<R: ReceiptProvider + 'static, S: SafeAddressChecker> TransactionMonitor<R, 
     /// Explain why a timed-out transaction was not mined, from the node's view of the
     /// transaction and of the signer's nonce. Any lookup failure yields `Unknown`.
     ///
-    /// Also returns the recommended fees when they were needed to tell an underpriced
-    /// transaction from a queued one.
+    /// Also returns the recommended fees, when they could be fetched. They tell an underpriced
+    /// transaction from a queued one and give a client the fee to resubmit with.
     async fn diagnose_unmined(
         &self,
         record: &crate::transaction_store::TransactionRecord,
@@ -765,31 +773,38 @@ impl<R: ReceiptProvider + 'static, S: SafeAddressChecker> TransactionMonitor<R, 
             }
         };
 
-        if diagnosis != UnminedDiagnosis::Queued {
+        if diagnosis == UnminedDiagnosis::MinedSinceCheck {
             return (diagnosis, None);
         }
-        let Some(signed) = decode_transaction_summary(&record.raw_transaction) else {
-            return (UnminedDiagnosis::Unknown, None);
-        };
-        match timeout(
+        let recommended = match timeout(
             self.config.request_timeout,
             self.receipt_provider.get_recommended_fees(),
         )
         .await
         {
-            Ok(Ok(recommended)) if signed.max_fee_per_gas < recommended.max_fee_per_gas => {
-                (UnminedDiagnosis::Underpriced, Some(recommended))
-            }
-            Ok(Ok(recommended)) => (UnminedDiagnosis::Queued, Some(recommended)),
+            Ok(Ok(recommended)) => Some(recommended),
             failure => {
                 debug!(
                     id = %record.id,
                     tx_hash = %record.transaction_hash,
                     ?failure,
-                    "Could not compare the transaction fee with the recommended fee"
+                    "Could not fetch the recommended fee for the unmined transaction"
                 );
-                (UnminedDiagnosis::Unknown, None)
+                None
             }
+        };
+
+        let underpriced = diagnosis == UnminedDiagnosis::Queued
+            && signed_fee_pair(&record.raw_transaction)
+                .zip(recommended)
+                .is_some_and(|(signed, recommended)| {
+                    signed.max_fee_per_gas < recommended.max_fee_per_gas
+                        || signed.max_priority_fee_per_gas < recommended.max_priority_fee_per_gas
+                });
+        if underpriced {
+            (UnminedDiagnosis::Underpriced, recommended)
+        } else {
+            (diagnosis, recommended)
         }
     }
 
@@ -800,10 +815,7 @@ impl<R: ReceiptProvider + 'static, S: SafeAddressChecker> TransactionMonitor<R, 
         diagnosis: UnminedDiagnosis,
         recommended: Option<RecommendedFees>,
     ) -> TransactionDiagnosis {
-        let signed_fees = decode_transaction_summary(&record.raw_transaction).map(|summary| FeePair {
-            max_fee_per_gas: summary.max_fee_per_gas,
-            max_priority_fee_per_gas: summary.max_priority_fee_per_gas.unwrap_or(summary.max_fee_per_gas),
-        });
+        let signed_fees = signed_fee_pair(&record.raw_transaction);
         let recommended_fees = recommended.map(|fees| FeePair {
             max_fee_per_gas: fees.max_fee_per_gas,
             max_priority_fee_per_gas: fees.max_priority_fee_per_gas,
@@ -1806,7 +1818,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_monitor_timeout_reports_unknown_when_fee_estimate_fails() {
+    async fn test_monitor_timeout_keeps_queued_when_fee_estimate_fails() {
         let store = Arc::new(TransactionStore::new());
         let provider = MockReceiptProvider::new();
 
@@ -1818,7 +1830,45 @@ mod tests {
 
         let updated = store.get(TEST_UUID).unwrap();
         assert_eq!(updated.status, TransactionStatus::Timeout);
-        assert_eq!(updated.diagnosis.unwrap().reason, UnminedReason::Unknown);
+        let diagnosis = updated.diagnosis.unwrap();
+        assert_eq!(diagnosis.reason, UnminedReason::Queued);
+        assert!(diagnosis.signed_fees.is_some());
+        assert_eq!(diagnosis.recommended_fees, None);
+        assert_eq!(diagnosis.min_replacement_fees, None);
+    }
+
+    #[tokio::test]
+    async fn test_monitor_timeout_reports_underpriced_when_only_the_priority_fee_is_low() {
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        // The max fee covers the recommendation, the priority fee does not.
+        provider.set_known(test_tx_hash());
+        provider.set_recommended_fees(900_000_000, 50_000_000);
+        insert_expired_record(
+            &store,
+            create_raw_eip1559_tx(&[0x11; 20], 1_000_000_000, 10_000_000).await,
+        );
+
+        let monitor = create_monitor(store.clone(), provider);
+        monitor.poll_once().await.unwrap();
+
+        let diagnosis = store.get(TEST_UUID).unwrap().diagnosis.unwrap();
+        assert_eq!(diagnosis.reason, UnminedReason::Underpriced);
+    }
+
+    #[tokio::test]
+    async fn test_monitor_timeout_dropped_transaction_carries_recommended_fees() {
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        provider.set_recommended_fees(2_000_000_000, 100_000_000);
+        insert_expired_record(&store, create_raw_tx_to(&[0x11; 20]).await);
+
+        let monitor = create_monitor(store.clone(), provider);
+        monitor.poll_once().await.unwrap();
+
+        insta::assert_yaml_snapshot!(store.get(TEST_UUID).unwrap().diagnosis);
     }
 
     #[test]

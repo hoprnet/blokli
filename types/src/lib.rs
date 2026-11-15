@@ -834,10 +834,10 @@ pub struct TransactionDiagnosis {
     /// Fees the transaction was signed with
     #[graphql(name = "signedFees")]
     pub signed_fees: Option<TransactionFees>,
-    /// Fees a transaction should currently be signed with, when the reason depends on them
+    /// Fees a transaction should currently be signed with, when the fee estimate was available
     #[graphql(name = "recommendedFees")]
     pub recommended_fees: Option<TransactionFees>,
-    /// Lowest fees at which a replacement would be accepted, when the transaction is still held
+    /// Lowest fees at which a replacement would be accepted, when the fee estimate was available
     #[graphql(name = "minReplacementFees")]
     pub min_replacement_fees: Option<TransactionFees>,
     /// Seconds to wait before checking or retrying
