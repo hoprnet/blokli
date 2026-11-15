@@ -21,7 +21,7 @@ pub const FEE_RPC_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct FeeEstimateCache {
     gas_price: Cache<(), u128>,
     eip1559: Cache<(), Eip1559FeeEstimation>,
-    fee_history: Cache<(), FeeHistorySnapshot>,
+    fee_history: Cache<(), Result<FeeHistorySnapshot, String>>,
     timeout: Duration,
 }
 
@@ -60,12 +60,22 @@ impl FeeEstimateCache {
     }
 
     /// Returns the cached fee history snapshot, or awaits `fetch` on a miss.
+    ///
+    /// Unlike the other entries, a failure is cached too (for one TTL), so a node that does not serve
+    /// `eth_feeHistory` is not asked again on every request.
     pub async fn fee_history<F, E>(&self, fetch: F) -> Result<FeeHistorySnapshot, String>
     where
         F: Future<Output = Result<FeeHistorySnapshot, E>>,
         E: Display,
     {
-        get_or_fetch(&self.fee_history, self.timeout, fetch).await
+        let timeout = self.timeout;
+        let outcome = async move {
+            Ok::<_, String>(match tokio::time::timeout(timeout, fetch).await {
+                Ok(result) => result.map_err(|e| e.to_string()),
+                Err(_) => Err(format!("timed out after {timeout:?}")),
+            })
+        };
+        get_or_fetch(&self.fee_history, timeout, outcome).await?
     }
 }
 
@@ -261,16 +271,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fee_history_errors_are_not_cached() {
-        let cache = FeeEstimateCache::new(LONG_TTL);
+    async fn fee_history_failure_is_cached_for_one_ttl() {
+        let cache = FeeEstimateCache::new(Duration::from_millis(80));
 
         let failed = cache
-            .fee_history(async { Err::<FeeHistorySnapshot, _>("rpc down") })
+            .fee_history(async { Err::<FeeHistorySnapshot, _>("no fee history") })
             .await;
-        assert_eq!(failed, Err("rpc down".to_string()));
+        assert_eq!(failed, Err("no fee history".to_string()));
+
+        // Served from the negative entry, the successful fetch is not even started
+        let again = cache.fee_history(async { Ok::<_, String>(snapshot(4)) }).await;
+        assert_eq!(again, Err("no fee history".to_string()));
+
+        tokio::time::sleep(Duration::from_millis(160)).await;
         assert_eq!(
             cache.fee_history(async { Ok::<_, String>(snapshot(4)) }).await,
             Ok(snapshot(4))
+        );
+    }
+
+    #[tokio::test]
+    async fn fee_history_failure_does_not_affect_other_entries() {
+        let cache = FeeEstimateCache::new(LONG_TTL);
+
+        assert!(
+            cache
+                .fee_history(async { Err::<FeeHistorySnapshot, _>("no fee history") })
+                .await
+                .is_err()
+        );
+        assert_eq!(cache.gas_price(async { Ok::<_, String>(9) }).await, Ok(9));
+        assert_eq!(
+            cache
+                .eip1559_fees(counted_fees(&AtomicUsize::new(0)))
+                .await
+                .map(|f| f.max_fee_per_gas),
+            Ok(10)
         );
     }
 
