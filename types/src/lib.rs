@@ -967,7 +967,8 @@ pub struct HoprActionThrottledError {
 pub struct DeduplicatedTransaction {
     /// The transaction already tracking this logical action
     pub transaction: Transaction,
-    /// The decoded HOPR operation that was deduplicated
+    /// The decoded HOPR operation that was deduplicated, or `raw_transaction` when the identical raw
+    /// transaction was resubmitted
     pub operation: String,
 }
 

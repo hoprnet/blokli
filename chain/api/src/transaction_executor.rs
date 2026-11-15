@@ -67,6 +67,16 @@ pub enum TransactionExecutorError {
         /// Identity of the transaction already carrying this logical action.
         existing: Uuid,
     },
+    /// The RPC node already holds this exact transaction and it is already tracked.
+    ///
+    /// Like [`TransactionExecutorError::DuplicateHoprAction`], a non-failure outcome carried as
+    /// an error: nothing new is tracked, and callers report the `existing` transaction and its
+    /// diagnosis instead.
+    #[error("the transaction is already tracked as {existing}")]
+    AlreadyTracked {
+        /// Identity of the transaction already tracking this raw transaction.
+        existing: Uuid,
+    },
     /// The signer is on cooldown after repeated deterministically invalid submissions.
     #[error("HOPR {operation} suppressed for {}s: {reason}", retry_after.as_secs())]
     HoprActionThrottled {
@@ -376,6 +386,12 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             }
         };
 
+        // The node still holds a transaction we already track (an identical resubmission):
+        // report that one rather than tracking the same hash twice.
+        if let Some(existing) = self.transaction_store.find_held_by_hash(tx_hash) {
+            return Err(TransactionExecutorError::AlreadyTracked { existing });
+        }
+
         // Create transaction record with hash and Submitted status
         let id = Uuid::new_v4();
         let record = TransactionRecord {
@@ -495,9 +511,19 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
+    use crate::transaction_store::{TransactionDiagnosis, UnminedReason};
+
+    /// Hash the mock node reports for `raw_tx`: distinct for distinct transactions.
+    fn mock_tx_hash(raw_tx: &[u8]) -> Hash {
+        let mut hash = [0xABu8; 32];
+        for (i, byte) in raw_tx.iter().enumerate() {
+            hash[i % 32] ^= byte;
+        }
+        Hash::from(hash)
+    }
 
     fn test_tx_hash() -> Hash {
-        Hash::from([0xABu8; 32])
+        mock_tx_hash(&[0x01, 0x02, 0x03])
     }
 
     // Mock RPC client for testing
@@ -540,19 +566,19 @@ mod tests {
 
     #[async_trait]
     impl RpcClient for MockRpcClient {
-        async fn send_raw_transaction(&self, _raw_tx: Vec<u8>) -> Result<Hash, String> {
+        async fn send_raw_transaction(&self, raw_tx: Vec<u8>) -> Result<Hash, String> {
             *self.call_count.lock().unwrap() += 1;
 
             if self.should_fail {
                 return Err("RPC error: transaction failed".to_string());
             }
 
-            Ok(test_tx_hash())
+            Ok(mock_tx_hash(&raw_tx))
         }
 
         async fn send_raw_transaction_with_confirm(
             &self,
-            _raw_tx: Vec<u8>,
+            raw_tx: Vec<u8>,
             _confirmations: u64,
             _timeout: Option<Duration>,
         ) -> Result<Hash, ConfirmationError> {
@@ -568,7 +594,7 @@ mod tests {
                 ));
             }
 
-            Ok(test_tx_hash())
+            Ok(mock_tx_hash(&raw_tx))
         }
     }
 
@@ -638,6 +664,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_async_resubmission_of_a_held_transaction_returns_the_tracked_one() {
+        let executor = create_executor(MockRpcClient::new());
+
+        let first = executor.send_raw_transaction_async(vec![0x01]).await.unwrap();
+        let second = executor.send_raw_transaction_async(vec![0x01]).await;
+
+        assert!(matches!(
+            second,
+            Err(TransactionExecutorError::AlreadyTracked { existing }) if existing == first
+        ));
+        assert_eq!(executor.transaction_store().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_async_resubmission_of_a_dropped_transaction_is_tracked_afresh() {
+        let executor = create_executor(MockRpcClient::new());
+
+        let first = executor.send_raw_transaction_async(vec![0x01]).await.unwrap();
+        executor
+            .transaction_store()
+            .update_status_with_diagnosis(
+                first,
+                TransactionStatus::Timeout,
+                None,
+                Some(TransactionDiagnosis {
+                    reason: UnminedReason::Dropped,
+                    signed_fees: None,
+                    recommended_fees: None,
+                    min_replacement_fees: None,
+                    retry_after: Duration::from_secs(5),
+                }),
+            )
+            .unwrap();
+
+        let second = executor.send_raw_transaction_async(vec![0x01]).await.unwrap();
+
+        assert_ne!(first, second);
+        assert_eq!(executor.transaction_store().count(), 2);
+    }
+
+    #[tokio::test]
     async fn test_async_overload_is_rejected_before_broadcast() {
         let executor = RawTransactionExecutor::new(
             MockRpcClient::new(),
@@ -689,8 +756,8 @@ mod tests {
             },
         );
 
-        for _ in 0..8 {
-            assert!(executor.send_raw_transaction_async(vec![0x01]).await.is_ok());
+        for i in 0..8u8 {
+            assert!(executor.send_raw_transaction_async(vec![i]).await.is_ok());
         }
     }
 

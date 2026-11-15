@@ -510,6 +510,28 @@ impl TransactionStore {
             .ok_or(TransactionStoreError::NotFound(id))
     }
 
+    /// Find the tracked transaction with this hash that the RPC node can still be holding.
+    ///
+    /// That is a transaction still awaiting confirmation, or one that timed out because it
+    /// was underpriced, queued or waiting behind a nonce gap. A dropped or replaced
+    /// transaction is no longer held, so a resubmission of it is a fresh one.
+    pub fn find_held_by_hash(&self, transaction_hash: Hash) -> Option<Uuid> {
+        self.transactions.iter().find_map(|entry| {
+            let record = entry.value();
+            let held = match record.status {
+                TransactionStatus::Submitted => true,
+                TransactionStatus::Timeout => record.diagnosis.is_some_and(|diagnosis| {
+                    matches!(
+                        diagnosis.reason,
+                        UnminedReason::Underpriced | UnminedReason::Queued | UnminedReason::NonceGap
+                    )
+                }),
+                _ => false,
+            };
+            (held && record.transaction_hash == transaction_hash).then_some(record.id)
+        })
+    }
+
     /// Update an existing transaction record
     ///
     /// # Errors
@@ -975,6 +997,60 @@ mod tests {
 
         let result = store.get(id);
         assert!(matches!(result, Err(TransactionStoreError::NotFound(_))));
+    }
+
+    fn diagnosis_with(reason: UnminedReason) -> TransactionDiagnosis {
+        TransactionDiagnosis {
+            reason,
+            signed_fees: None,
+            recommended_fees: None,
+            min_replacement_fees: None,
+            retry_after: Duration::from_secs(5),
+        }
+    }
+
+    #[test]
+    fn test_find_held_by_hash_matches_only_transactions_the_node_can_still_hold() {
+        let held = [
+            (TransactionStatus::Submitted, None),
+            (TransactionStatus::Timeout, Some(UnminedReason::Underpriced)),
+            (TransactionStatus::Timeout, Some(UnminedReason::Queued)),
+            (TransactionStatus::Timeout, Some(UnminedReason::NonceGap)),
+        ];
+        let not_held = [
+            (TransactionStatus::Timeout, Some(UnminedReason::Dropped)),
+            (TransactionStatus::Timeout, Some(UnminedReason::Replaced)),
+            (TransactionStatus::Timeout, Some(UnminedReason::Unknown)),
+            (TransactionStatus::Timeout, None),
+            (TransactionStatus::Confirmed, None),
+            (TransactionStatus::Reverted, None),
+        ];
+
+        for (expected, cases) in [(Some(TEST_UUID), held.as_slice()), (None, not_held.as_slice())] {
+            for (status, reason) in cases {
+                let store = TransactionStore::new();
+                store
+                    .insert(TransactionRecord {
+                        id: TEST_UUID,
+                        raw_transaction: vec![0x01, 0x02, 0x03],
+                        transaction_hash: test_tx_hash(),
+                        status: *status,
+                        submitted_at: test_timestamp(),
+                        confirmed_at: None,
+                        error_message: None,
+                        safe_execution: None,
+                        diagnosis: reason.map(diagnosis_with),
+                    })
+                    .unwrap();
+
+                assert_eq!(
+                    store.find_held_by_hash(test_tx_hash()),
+                    expected,
+                    "{status:?} {reason:?}"
+                );
+                assert_eq!(store.find_held_by_hash(Hash::from([0x01; 32])), None);
+            }
+        }
     }
 
     #[test]
