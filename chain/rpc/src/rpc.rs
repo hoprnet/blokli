@@ -451,6 +451,10 @@ const FEE_HISTORY_BLOCKS: u64 = 10;
 const FEE_HISTORY_REWARD_PERCENTILE: f64 = 50.0;
 
 /// Reduces an `eth_feeHistory` response to the next-block base fee and the median of the per-block median tips.
+///
+/// Blocks without a reward entry or with a zero median tip carry no information about what block builders accept
+/// and are ignored. The median of an even number of tips is the lower of the two middle values. When no non-zero
+/// tip remains, the median is 0 and the caller's priority fee floor applies.
 fn snapshot_from_fee_history(history: &FeeHistory) -> Result<FeeHistorySnapshot> {
     let next_base_fee_per_gas = history
         .base_fee_per_gas
@@ -463,15 +467,18 @@ fn snapshot_from_fee_history(history: &FeeHistory) -> Result<FeeHistorySnapshot>
         .iter()
         .flatten()
         .filter_map(|block_rewards| block_rewards.first().copied())
+        .filter(|tip| *tip > 0)
         .collect();
-    if tips.is_empty() {
-        return Err(RpcError::Other("fee history has no priority fee rewards".to_string()));
-    }
     tips.sort_unstable();
+
+    let median_priority_fee_per_gas = match tips.len() {
+        0 => 0,
+        len => tips[(len - 1) / 2],
+    };
 
     Ok(FeeHistorySnapshot {
         next_base_fee_per_gas,
-        median_priority_fee_per_gas: tips[tips.len() / 2],
+        median_priority_fee_per_gas,
     })
 }
 
@@ -1250,14 +1257,47 @@ mod tests {
         ))
         .expect("snapshot");
         assert_eq!(snapshot.next_base_fee_per_gas, 229_083_357);
-        assert_eq!(snapshot.median_priority_fee_per_gas, 9);
+        assert_eq!(snapshot.median_priority_fee_per_gas, 7);
     }
 
     #[test]
-    fn fee_history_snapshot_rejects_incomplete_history() {
+    fn fee_history_snapshot_ignores_zero_tips() {
+        let snapshot = snapshot_from_fee_history(&history(
+            vec![10, 11],
+            Some(vec![vec![0], vec![0], vec![40], vec![0], vec![60], vec![50]]),
+        ))
+        .expect("snapshot");
+        assert_eq!(snapshot.median_priority_fee_per_gas, 50);
+    }
+
+    #[test]
+    fn fee_history_snapshot_takes_the_lower_middle_for_even_counts() {
+        let snapshot = snapshot_from_fee_history(&history(vec![1, 2], Some(vec![vec![4], vec![8], vec![2], vec![6]])))
+            .expect("snapshot");
+        assert_eq!(snapshot.median_priority_fee_per_gas, 4);
+    }
+
+    #[test]
+    fn fee_history_snapshot_with_only_zero_tips_has_a_zero_median() {
+        let snapshot =
+            snapshot_from_fee_history(&history(vec![1, 2], Some(vec![vec![0], vec![0], vec![]]))).expect("snapshot");
+        assert_eq!(snapshot.median_priority_fee_per_gas, 0);
+        assert_eq!(snapshot.next_base_fee_per_gas, 2);
+    }
+
+    #[test]
+    fn fee_history_snapshot_without_rewards_has_a_zero_median() {
+        assert_eq!(
+            snapshot_from_fee_history(&history(vec![1, 2], None))
+                .expect("snapshot")
+                .median_priority_fee_per_gas,
+            0
+        );
+    }
+
+    #[test]
+    fn fee_history_snapshot_rejects_missing_base_fee() {
         assert!(snapshot_from_fee_history(&history(vec![], Some(vec![vec![1]]))).is_err());
-        assert!(snapshot_from_fee_history(&history(vec![1, 2], None)).is_err());
-        assert!(snapshot_from_fee_history(&history(vec![1, 2], Some(vec![]))).is_err());
     }
 
     fn rpc_error_response(code: i64, message: &'static str) -> RpcError {
