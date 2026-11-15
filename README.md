@@ -318,9 +318,13 @@ fields. SQLite uses separate index and raw-log databases.
 
 GraphQL subscriptions stream over SSE and send periodic keep-alive events to prevent idle connection timeouts. Keep-alive is enabled by
 default with a 15s interval, and can be customized via the `api.sse_keepalive.*` settings. `api.gas_multiplier` (default `1.0`, minimum
-`1.0`) scales `chainInfo.maxFeePerGas` and `chainInfo.maxPriorityFeePerGas` (rounded up to whole wei). `chainInfo.gasPrice` is not scaled.
-`chainInfo.maxFeePerGas` is the next-block base fee times `api.base_fee_headroom_factor` plus the priority fee, and
-`chainInfo.maxPriorityFeePerGas` is the recent median tip, each raised or capped by the settings above.
+`1.0`) scales the base fee and tip estimates behind `chainInfo.maxFeePerGas` and `chainInfo.maxPriorityFeePerGas` (rounded up to whole wei).
+`chainInfo.gasPrice` is not scaled. `chainInfo.maxFeePerGas` is the scaled next-block base fee times `api.base_fee_headroom_factor` plus the
+priority fee, so the effective base fee headroom is `api.gas_multiplier` times `api.base_fee_headroom_factor`.
+`chainInfo.maxPriorityFeePerGas` is the scaled recent median tip. The priority fee is clamped to `api.min_priority_fee_per_gas` and
+`api.max_priority_fee_per_gas`, and the max fee to `api.min_max_fee_per_gas` and `api.max_max_fee_per_gas`. The cap and ceiling are applied
+after the multiplier and always win. Nodes pay base fee plus tip, not the max fee; the balance they reserve is gas limit times max fee,
+which `api.max_max_fee_per_gas` bounds.
 
 #### Telemetry Configuration
 

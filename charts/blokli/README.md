@@ -198,12 +198,12 @@ The command removes all the Kubernetes components associated with the chart and 
 | `config.api.enabled`                                 | Enable or disable the GraphQL API server                                                                      | `true`              |
 | `config.api.bindAddress`                             | Address and port for the API server to bind to                                                                | `0.0.0.0:8080`      |
 | `config.api.playgroundEnabled`                       | Enable GraphQL Playground for development and testing. Recommended to set to false for production deployments | `false`             |
-| `config.api.gasMultiplier`                           | Multiplier for gas estimation to provide a safety margin (e.g., 1.2 for 20% extra)                            | `1.2`               |
-| `config.api.minMaxFeePerGas` | Lower bound, in wei, for the maxFeePerGas exposed by chainInfo, applied after gasMultiplier. Must be >= minPriorityFeePerGas | `500000000` |
-| `config.api.maxMaxFeePerGas` | Upper bound, in wei, for the maxFeePerGas exposed by chainInfo. Bounds the balance reserved upfront (gas limit x maxFeePerGas). Must be >= minMaxFeePerGas and >= maxPriorityFeePerGas | `1000000000` |
-| `config.api.minPriorityFeePerGas` | Lower bound, in wei, for the maxPriorityFeePerGas exposed by chainInfo, applied after gasMultiplier | `10000000` |
-| `config.api.maxPriorityFeePerGas` | Upper bound, in wei, for the maxPriorityFeePerGas exposed by chainInfo, applied after gasMultiplier. Must be >= minPriorityFeePerGas | `50000000` |
-| `config.api.baseFeeHeadroomFactor` | Multiple of the next-block base fee included in the maxFeePerGas exposed by chainInfo. Must be >= 1 | `8` |
+| `config.api.gasMultiplier` | Multiplier for the base fee and tip estimates to provide a safety margin (e.g., 1.2 for 20% extra). The base fee headroom factor is applied on top, so the effective headroom is gasMultiplier x baseFeeHeadroomFactor | `1.2` |
+| `config.api.minMaxFeePerGas` | Lower bound, in wei, for the maxFeePerGas exposed by chainInfo. It only caps the price paid; transactions pay base fee plus tip. Must be >= minPriorityFeePerGas | `500000000` |
+| `config.api.maxMaxFeePerGas` | Upper bound, in wei, for the maxFeePerGas exposed by chainInfo, applied after gasMultiplier so it always wins. Bounds the balance reserved upfront (gas limit x maxFeePerGas). Must be >= minMaxFeePerGas and >= maxPriorityFeePerGas | `1000000000` |
+| `config.api.minPriorityFeePerGas` | Lower bound, in wei, for the maxPriorityFeePerGas exposed by chainInfo | `10000000` |
+| `config.api.maxPriorityFeePerGas` | Upper bound, in wei, for the maxPriorityFeePerGas exposed by chainInfo, applied after gasMultiplier so it always wins. Bounds the tip a transaction pays. Must be >= minPriorityFeePerGas | `50000000` |
+| `config.api.baseFeeHeadroomFactor` | Multiple of the (gasMultiplier-scaled) next-block base fee included in the maxFeePerGas exposed by chainInfo. Must be >= 1 | `8` |
 | `config.api.health.maxIndexerLag`                    | Maximum indexer lag (blocks) before readiness fails                                                           | `10`                |
 | `config.api.health.timeout`                          | Timeout for health check operations                                                                           | `5s`                |
 | `config.api.health.readinessCheckInterval`           | Interval for periodic readiness checks                                                                        | `60s`               |
