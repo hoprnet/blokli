@@ -161,7 +161,13 @@ impl ChannelStatsCache {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::{
+        future::pending,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+
+    use futures::future::join_all;
+    use tokio::time::sleep;
 
     use super::*;
 
@@ -169,13 +175,13 @@ mod tests {
 
     async fn counted_price(calls: &AtomicUsize, value: u128) -> Result<u128, String> {
         calls.fetch_add(1, Ordering::SeqCst);
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        sleep(Duration::from_millis(20)).await;
         Ok(value)
     }
 
     async fn counted_fees(calls: &AtomicUsize) -> Result<Eip1559FeeEstimation, String> {
         calls.fetch_add(1, Ordering::SeqCst);
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        sleep(Duration::from_millis(20)).await;
         Ok(Eip1559FeeEstimation {
             max_fee_per_gas: 10,
             max_priority_fee_per_gas: 2,
@@ -199,8 +205,8 @@ mod tests {
         let fee_calls = AtomicUsize::new(0);
 
         let (prices, estimates) = tokio::join!(
-            futures::future::join_all((0..16).map(|_| cache.gas_price(counted_price(&price_calls, 5)))),
-            futures::future::join_all((0..16).map(|_| cache.eip1559_fees(counted_fees(&fee_calls)))),
+            join_all((0..16).map(|_| cache.gas_price(counted_price(&price_calls, 5)))),
+            join_all((0..16).map(|_| cache.eip1559_fees(counted_fees(&fee_calls)))),
         );
 
         assert!(prices.iter().all(|p| *p == Ok(5)));
@@ -219,7 +225,7 @@ mod tests {
         let calls = AtomicUsize::new(0);
 
         assert_eq!(cache.gas_price(counted_price(&calls, 1)).await, Ok(1));
-        tokio::time::sleep(Duration::from_millis(120)).await;
+        sleep(Duration::from_millis(120)).await;
         assert_eq!(cache.gas_price(counted_price(&calls, 2)).await, Ok(2));
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
@@ -263,7 +269,7 @@ mod tests {
             cache.fee_history(async { Ok::<_, String>(snapshot(1)) }).await,
             Ok(snapshot(1))
         );
-        tokio::time::sleep(Duration::from_millis(120)).await;
+        sleep(Duration::from_millis(120)).await;
         assert_eq!(
             cache.fee_history(async { Ok::<_, String>(snapshot(2)) }).await,
             Ok(snapshot(2))
@@ -283,7 +289,7 @@ mod tests {
         let again = cache.fee_history(async { Ok::<_, String>(snapshot(4)) }).await;
         assert_eq!(again, Err("no fee history".to_string()));
 
-        tokio::time::sleep(Duration::from_millis(160)).await;
+        sleep(Duration::from_millis(160)).await;
         assert_eq!(
             cache.fee_history(async { Ok::<_, String>(snapshot(4)) }).await,
             Ok(snapshot(4))
@@ -316,7 +322,7 @@ mod tests {
 
         let hung = cache
             .gas_price(async {
-                std::future::pending::<()>().await;
+                pending::<()>().await;
                 Ok::<u128, String>(0)
             })
             .await;
@@ -345,7 +351,7 @@ mod tests {
 
     async fn counted_stats(calls: &AtomicUsize, count: u64) -> Result<AggregatedChannelStats, DbErr> {
         calls.fetch_add(1, Ordering::SeqCst);
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        sleep(Duration::from_millis(20)).await;
         Ok(stats(count))
     }
 
@@ -445,8 +451,7 @@ mod tests {
         let cache = ChannelStatsCache::default();
         let calls = AtomicUsize::new(0);
 
-        let results =
-            futures::future::join_all((0..16).map(|_| cache.get_or_fetch(key(1), counted_stats(&calls, 4)))).await;
+        let results = join_all((0..16).map(|_| cache.get_or_fetch(key(1), counted_stats(&calls, 4)))).await;
 
         assert!(results.iter().all(|r| r.as_ref().is_ok_and(|s| s.count == 4)));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -480,7 +485,7 @@ mod tests {
                 .count,
             1
         );
-        tokio::time::sleep(Duration::from_millis(120)).await;
+        sleep(Duration::from_millis(120)).await;
         assert_eq!(
             cache
                 .get_or_fetch(key(1), counted_stats(&calls, 2))
