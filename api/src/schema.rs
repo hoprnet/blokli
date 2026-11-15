@@ -33,9 +33,11 @@ pub struct Finality(pub u16);
 #[derive(Debug, Clone, Copy)]
 pub struct GasMultiplier(pub f64);
 
-/// Lower bounds, in wei, for the EIP-1559 fee estimates exposed by chainInfo
+/// Policy, in wei, applied to the EIP-1559 fee estimates exposed by chainInfo
+///
+/// It holds floors, a tip cap, a max fee ceiling and a base fee headroom factor.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct GasFeeFloors {
+pub struct GasFeePolicy {
     /// Minimum `maxPriorityFeePerGas`
     pub min_priority_fee_per_gas: u128,
     /// Maximum `maxPriorityFeePerGas`, so the tip paid per transaction stays bounded
@@ -46,7 +48,7 @@ pub struct GasFeeFloors {
     pub base_fee_headroom_factor: f64,
 }
 
-impl Default for GasFeeFloors {
+impl Default for GasFeePolicy {
     /// No floors, no tip cap and no extra headroom
     fn default() -> Self {
         Self {
@@ -89,7 +91,7 @@ pub fn build_version_registry<R: HttpRequestor + 'static + Clone>(
     expected_block_time: u64,
     finality: u16,
     gas_multiplier: f64,
-    gas_fee_floors: GasFeeFloors,
+    gas_fee_policy: GasFeePolicy,
     indexer_state: IndexerState,
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
@@ -106,7 +108,7 @@ pub fn build_version_registry<R: HttpRequestor + 'static + Clone>(
         expected_block_time,
         finality,
         gas_multiplier,
-        gas_fee_floors,
+        gas_fee_policy,
         indexer_state,
         transaction_executor,
         transaction_store,
@@ -196,7 +198,7 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
     expected_block_time: u64,
     finality: u16,
     gas_multiplier: f64,
-    gas_fee_floors: GasFeeFloors,
+    gas_fee_policy: GasFeePolicy,
     indexer_state: IndexerState,
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
@@ -214,7 +216,7 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
         .data(ExpectedBlockTime(expected_block_time))
         .data(Finality(finality))
         .data(GasMultiplier(gas_multiplier))
-        .data(gas_fee_floors)
+        .data(gas_fee_policy)
         .data(FeeEstimateCache::new(Duration::from_secs(expected_block_time)))
         .data(ChannelStatsCache::default())
         .data(indexer_state)
@@ -255,7 +257,7 @@ pub fn export_schema_sdl<R: HttpRequestor + 'static + Clone>(
         5,   // Placeholder expected block time
         8,   // Placeholder finality
         1.0, // Placeholder gas multiplier
-        GasFeeFloors::default(),
+        GasFeePolicy::default(),
         indexer_state,
         transaction_executor,
         transaction_store,

@@ -1199,7 +1199,7 @@ mod tests {
     }
 
     #[test]
-    fn test_api_gas_fee_floors_override() {
+    fn test_api_gas_fee_policy_override() {
         let config = r#"
          [api]
          min_priority_fee_per_gas = 100000000

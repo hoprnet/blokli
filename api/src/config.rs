@@ -5,7 +5,7 @@ use std::{net::SocketAddr, path::PathBuf, time::Duration};
 use blokli_chain_types::ContractAddresses;
 use serde::{Deserialize, Serialize};
 
-use crate::schema::GasFeeFloors;
+use crate::schema::GasFeePolicy;
 
 /// API server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -276,9 +276,9 @@ fn default_base_fee_headroom_factor() -> f64 {
 }
 
 impl ApiConfig {
-    /// Fee floors applied to the chainInfo EIP-1559 estimates
-    pub fn gas_fee_floors(&self) -> GasFeeFloors {
-        GasFeeFloors {
+    /// Fee policy (floors, tip cap, max fee ceiling, headroom) applied to the chainInfo EIP-1559 estimates
+    pub fn gas_fee_policy(&self) -> GasFeePolicy {
+        GasFeePolicy {
             min_priority_fee_per_gas: u128::from(self.min_priority_fee_per_gas),
             max_priority_fee_per_gas: u128::from(self.max_priority_fee_per_gas),
             min_max_fee_per_gas: u128::from(self.min_max_fee_per_gas),
@@ -298,8 +298,8 @@ mod tests {
         assert_eq!(config.sse_keepalive.interval, Duration::from_secs(15));
         assert_eq!(config.gas_multiplier, 1.0);
         assert_eq!(
-            config.gas_fee_floors(),
-            GasFeeFloors {
+            config.gas_fee_policy(),
+            GasFeePolicy {
                 min_priority_fee_per_gas: 10_000_000,
                 max_priority_fee_per_gas: 50_000_000,
                 min_max_fee_per_gas: 500_000_000,
