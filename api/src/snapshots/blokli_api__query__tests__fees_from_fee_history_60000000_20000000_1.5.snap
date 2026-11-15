@@ -2,5 +2,5 @@
 source: api/src/query.rs
 expression: "(max_fee.to_string(), priority_fee.to_string())"
 ---
-- "1882666856"
-- "50000000"
+- "750000000"
+- "30000000"

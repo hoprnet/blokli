@@ -1,6 +1,6 @@
 //! GraphQL query root and resolver implementations
 
-use std::{collections::HashMap, fmt::Display, future::Future, sync::Arc, time::Duration};
+use std::{collections::HashMap, future::Future, sync::Arc, time::Duration};
 
 use async_graphql::{Context, ID, Object, Result, SimpleObject, Union};
 use blokli_api_types::{
@@ -354,16 +354,26 @@ fn scale_wei_by_multiplier(value: u128, multiplier: f64) -> u128 {
         / denominator
 }
 
-/// Raise `(max_fee_per_gas, max_priority_fee_per_gas)` to the configured floors.
+/// Bound the max fee to the policy ceiling and make sure it never falls below the tip.
 ///
-/// The estimate's headroom for base fee growth (`max_fee - priority_fee`) is kept on top of
-/// the raised priority fee, so lifting the priority fee never eats into it.
-fn apply_gas_fee_policy(max_fee_per_gas: u128, max_priority_fee_per_gas: u128, floors: GasFeePolicy) -> (u128, u128) {
+/// This is applied last, so the ceiling wins over the floor, the headroom and the multiplier.
+fn bound_max_fee(max_fee_per_gas: u128, priority_fee_per_gas: u128, policy: GasFeePolicy) -> u128 {
+    max_fee_per_gas
+        .max(policy.min_max_fee_per_gas)
+        .min(policy.max_max_fee_per_gas)
+        .max(priority_fee_per_gas)
+}
+
+/// Apply the fee policy to an already scaled `(max_fee_per_gas, max_priority_fee_per_gas)` node estimate.
+///
+/// The tip is clamped to the configured priority fee bounds. The estimate's headroom for base fee growth
+/// (`max_fee - priority_fee`) is kept on top of the clamped tip, then the max fee floor and ceiling apply.
+fn apply_gas_fee_policy(max_fee_per_gas: u128, max_priority_fee_per_gas: u128, policy: GasFeePolicy) -> (u128, u128) {
     let base_fee_headroom = max_fee_per_gas.saturating_sub(max_priority_fee_per_gas);
-    let priority_fee = max_priority_fee_per_gas.max(floors.min_priority_fee_per_gas);
-    let max_fee = priority_fee
-        .saturating_add(base_fee_headroom)
-        .max(floors.min_max_fee_per_gas);
+    let priority_fee = max_priority_fee_per_gas
+        .max(policy.min_priority_fee_per_gas)
+        .min(policy.max_priority_fee_per_gas);
+    let max_fee = bound_max_fee(priority_fee.saturating_add(base_fee_headroom), priority_fee, policy);
     (max_fee, priority_fee)
 }
 
@@ -371,48 +381,47 @@ fn apply_gas_fee_policy(max_fee_per_gas: u128, max_priority_fee_per_gas: u128, f
 ///
 /// The tip is the recent median tip scaled by `gas_multiplier`, clamped to the configured priority fee bounds.
 /// The max fee is that tip plus the scaled next-block base fee times `base_fee_headroom_factor`, raised to
-/// `min_max_fee_per_gas`.
-fn fees_from_fee_history(snapshot: FeeHistorySnapshot, gas_multiplier: f64, floors: GasFeePolicy) -> (u128, u128) {
+/// `min_max_fee_per_gas` and capped at `max_max_fee_per_gas`.
+fn fees_from_fee_history(snapshot: FeeHistorySnapshot, gas_multiplier: f64, policy: GasFeePolicy) -> (u128, u128) {
     let priority_fee = scale_wei_by_multiplier(snapshot.median_priority_fee_per_gas, gas_multiplier)
-        .max(floors.min_priority_fee_per_gas)
-        .min(floors.max_priority_fee_per_gas);
+        .max(policy.min_priority_fee_per_gas)
+        .min(policy.max_priority_fee_per_gas);
     let base_fee = scale_wei_by_multiplier(snapshot.next_base_fee_per_gas, gas_multiplier);
-    let max_fee = priority_fee
-        .saturating_add(scale_wei_by_multiplier(base_fee, floors.base_fee_headroom_factor))
-        .max(floors.min_max_fee_per_gas);
+    let max_fee = bound_max_fee(
+        priority_fee.saturating_add(scale_wei_by_multiplier(base_fee, policy.base_fee_headroom_factor)),
+        priority_fee,
+        policy,
+    );
     (max_fee, priority_fee)
 }
 
-/// Resolve the `(maxFeePerGas, maxPriorityFeePerGas)` strings exposed by `chainInfo`.
+/// Select the `(maxFeePerGas, maxPriorityFeePerGas)` strings exposed by `chainInfo`.
 ///
-/// Uses the fee history snapshot when it is available. Otherwise `estimate` is awaited through the cache and the
-/// legacy estimate is raised to the floors. Returns `None` when both sources fail.
-async fn resolve_chain_info_fees<E, F>(
-    fee_cache: &FeeEstimateCache,
+/// Both sources are fetched concurrently by the caller. The fee history snapshot is used when it is available,
+/// otherwise the node's legacy estimate goes through the same policy. Returns `None` when both sources fail.
+fn select_chain_info_fees(
     fee_history: Result<FeeHistorySnapshot, String>,
-    estimate: F,
+    estimate: Result<Eip1559FeeEstimation, String>,
     gas_multiplier: f64,
-    floors: GasFeePolicy,
-) -> Option<(String, String)>
-where
-    F: Future<Output = Result<Eip1559FeeEstimation, E>>,
-    E: Display,
-{
-    let (max_fee, priority_fee) = match fee_history {
-        Ok(snapshot) => fees_from_fee_history(snapshot, gas_multiplier, floors),
-        Err(e) => {
-            warn!(error = %e, "failed to fetch fee history for chain_info, falling back to the eip1559 estimate");
-            match fee_cache.eip1559_fees(estimate).await {
-                Ok(fees) => apply_gas_fee_policy(
-                    scale_wei_by_multiplier(fees.max_fee_per_gas, gas_multiplier),
-                    scale_wei_by_multiplier(fees.max_priority_fee_per_gas, gas_multiplier),
-                    floors,
-                ),
-                Err(e) => {
-                    warn!(error = %e, "failed to fetch eip1559 fee estimate for chain_info");
-                    return None;
-                }
-            }
+    policy: GasFeePolicy,
+) -> Option<(String, String)> {
+    let (max_fee, priority_fee) = match (fee_history, estimate) {
+        (Ok(snapshot), _) => fees_from_fee_history(snapshot, gas_multiplier, policy),
+        (Err(history_error), Ok(fees)) => {
+            warn!(error = %history_error, "failed to fetch fee history for chain_info, using the eip1559 estimate");
+            apply_gas_fee_policy(
+                scale_wei_by_multiplier(fees.max_fee_per_gas, gas_multiplier),
+                scale_wei_by_multiplier(fees.max_priority_fee_per_gas, gas_multiplier),
+                policy,
+            )
+        }
+        (Err(history_error), Err(estimate_error)) => {
+            warn!(
+                fee_history_error = %history_error,
+                estimate_error = %estimate_error,
+                "failed to fetch fee estimates for chain_info"
+            );
+            return None;
         }
     };
     Some((max_fee.to_string(), priority_fee.to_string()))
@@ -2693,9 +2702,10 @@ impl QueryRoot {
                 .data_opt::<FeeEstimateCache>()
                 .cloned()
                 .unwrap_or_else(|| FeeEstimateCache::new(Duration::from_secs(expected_block_time.0)));
-            let (gas_price_result, fee_history_result) = tokio::join!(
+            let (gas_price_result, fee_history_result, estimate_result) = tokio::join!(
                 fee_cache.gas_price(HoprRpcOperations::get_gas_price(&**rpc)),
-                fee_cache.fee_history(HoprRpcOperations::get_fee_history_snapshot(&**rpc))
+                fee_cache.fee_history(HoprRpcOperations::get_fee_history_snapshot(&**rpc)),
+                fee_cache.eip1559_fees(HoprRpcOperations::estimate_eip1559_fees(&**rpc))
             );
 
             match gas_price_result {
@@ -2707,14 +2717,8 @@ impl QueryRoot {
                 }
             }
 
-            if let Some((max_fee, priority_fee)) = resolve_chain_info_fees(
-                &fee_cache,
-                fee_history_result,
-                HoprRpcOperations::estimate_eip1559_fees(&**rpc),
-                gas_multiplier,
-                gas_fee_policy,
-            )
-            .await
+            if let Some((max_fee, priority_fee)) =
+                select_chain_info_fees(fee_history_result, estimate_result, gas_multiplier, gas_fee_policy)
             {
                 max_fee_per_gas = Some(max_fee);
                 max_priority_fee_per_gas = Some(priority_fee);
@@ -3034,14 +3038,15 @@ mod tests {
         crypto::types::Hash,
         primitive::{prelude::Address, traits::ToHex},
     };
+    use insta::assert_yaml_snapshot;
+    use rstest::rstest;
 
     use super::{
         QueryRoot, RPC_FANOUT_CONCURRENCY, SAFES_BALANCE_MAX_SAFES, apply_gas_fee_policy, check_safes_balance_cap,
-        collect_with_bounded_concurrency, fees_from_fee_history, owners_for_safe, resolve_chain_info_fees,
-        safe_from_current_row, scale_wei_by_multiplier,
+        collect_with_bounded_concurrency, fees_from_fee_history, owners_for_safe, safe_from_current_row,
+        scale_wei_by_multiplier, select_chain_info_fees,
     };
     use crate::{
-        cache::FeeEstimateCache,
         curvy::{validate_dense_page, validate_page_start},
         errors,
         schema::{ChainId, GasFeePolicy, GasMultiplier, NetworkName},
@@ -3081,17 +3086,21 @@ mod tests {
         assert_eq!(scale_wei_by_multiplier(3, 1.5), 5);
     }
 
-    const FLOORS: GasFeePolicy = GasFeePolicy {
+    /// Floors only, as shipped before the tip cap and the ceiling existed
+    const LEGACY_POLICY: GasFeePolicy = GasFeePolicy {
         min_priority_fee_per_gas: 100,
         max_priority_fee_per_gas: u128::MAX,
         min_max_fee_per_gas: 5_000_000,
+        max_max_fee_per_gas: u128::MAX,
         base_fee_headroom_factor: 1.0,
     };
 
-    const HEADROOM_FLOORS: GasFeePolicy = GasFeePolicy {
+    /// The defaults shipped in the example config
+    const DEFAULT_POLICY: GasFeePolicy = GasFeePolicy {
         min_priority_fee_per_gas: 10_000_000,
         max_priority_fee_per_gas: 50_000_000,
         min_max_fee_per_gas: 500_000_000,
+        max_max_fee_per_gas: 1_000_000_000,
         base_fee_headroom_factor: 8.0,
     };
 
@@ -3102,34 +3111,55 @@ mod tests {
         }
     }
 
-    #[rstest::rstest]
+    #[rstest]
     #[case::calm_base_fee(snapshot(10, 1), 1.0)]
     #[case::zero_base_fee(snapshot(0, 0), 1.0)]
     #[case::mid_ramp(snapshot(5_000_000, 100_000_000), 1.0)]
-    #[case::spike(snapshot(229_083_357, 100_000_000), 1.0)]
+    #[case::spike_beyond_ceiling(snapshot(229_083_357, 100_000_000), 1.0)]
     #[case::tip_below_min(snapshot(10, 5), 1.0)]
     #[case::tip_above_max(snapshot(10, 25_000_000_000), 1.0)]
-    #[case::multiplier(snapshot(229_083_357, 20_000_000), 1.5)]
+    #[case::multiplier(snapshot(60_000_000, 20_000_000), 1.5)]
     #[case::multiplier_tip_clamped(snapshot(10, 40_000_000), 2.0)]
     fn test_fees_from_fee_history(#[case] case: FeeHistorySnapshot, #[case] multiplier: f64) {
-        let (max_fee, priority_fee) = fees_from_fee_history(case, multiplier, HEADROOM_FLOORS);
-        insta::assert_yaml_snapshot!(
+        let (max_fee, priority_fee) = fees_from_fee_history(case, multiplier, DEFAULT_POLICY);
+        assert_yaml_snapshot!(
             format!(
-                "fees_from_fee_history_{}_{}",
-                case.next_base_fee_per_gas, case.median_priority_fee_per_gas
+                "fees_from_fee_history_{}_{}_{}",
+                case.next_base_fee_per_gas, case.median_priority_fee_per_gas, multiplier
             ),
             (max_fee.to_string(), priority_fee.to_string())
         );
     }
 
     #[test]
-    fn test_fees_from_fee_history_survive_observed_spike() {
-        // 229_083_357 wei peak: 8x headroom plus the capped tip must stay above the base fee
-        let (max_fee, priority_fee) = fees_from_fee_history(snapshot(229_083_357, 100_000_000), 1.0, HEADROOM_FLOORS);
+    fn test_fees_from_fee_history_below_ceiling_keep_the_full_headroom() {
+        // 100_000_000 wei base fee: 8x headroom plus the clamped tip stays between floor and ceiling
+        let (max_fee, priority_fee) = fees_from_fee_history(snapshot(100_000_000, 100_000_000), 1.0, DEFAULT_POLICY);
         assert_eq!(priority_fee, 50_000_000);
-        assert_eq!(max_fee, 50_000_000 + 8 * 229_083_357);
+        assert_eq!(max_fee, 50_000_000 + 8 * 100_000_000);
+    }
+
+    #[test]
+    fn test_fees_from_fee_history_spike_is_clamped_to_the_ceiling() {
+        // 229_083_357 wei peak: 8x headroom would exceed the 1 gwei ceiling
+        let (max_fee, priority_fee) = fees_from_fee_history(snapshot(229_083_357, 100_000_000), 1.0, DEFAULT_POLICY);
+        assert_eq!(priority_fee, 50_000_000);
+        assert_eq!(max_fee, 1_000_000_000);
         // A 300k gas transaction pays base fee plus the capped tip, below 0.0001 xDAI
         assert!(300_000 * (229_083_357 + priority_fee) < 100_000_000_000_000);
+    }
+
+    #[test]
+    fn test_max_fee_never_falls_below_the_tip() {
+        let policy = GasFeePolicy {
+            min_priority_fee_per_gas: 0,
+            max_priority_fee_per_gas: 100,
+            min_max_fee_per_gas: 0,
+            max_max_fee_per_gas: 50,
+            base_fee_headroom_factor: 1.0,
+        };
+        assert_eq!(fees_from_fee_history(snapshot(10, 1_000), 1.0, policy), (100, 100));
+        assert_eq!(apply_gas_fee_policy(20, 1_000, policy), (100, 100));
     }
 
     fn alloy_estimate(max_fee: u128, priority_fee: u128) -> Result<Eip1559FeeEstimation, String> {
@@ -3139,68 +3169,75 @@ mod tests {
         })
     }
 
-    #[tokio::test]
-    async fn test_chain_info_fees_use_fee_history_when_available() {
-        let cache = FeeEstimateCache::new(Duration::from_secs(60));
-        let fees = resolve_chain_info_fees(
-            &cache,
-            Ok(snapshot(229_083_357, 100_000_000)),
-            std::future::ready(alloy_estimate(1, 1)),
-            1.0,
-            HEADROOM_FLOORS,
-        )
-        .await;
-        let (max_fee, priority_fee) = fees_from_fee_history(snapshot(229_083_357, 100_000_000), 1.0, HEADROOM_FLOORS);
-        assert_eq!(fees, Some((max_fee.to_string(), priority_fee.to_string())));
+    fn pair(max_fee: &str, priority_fee: &str) -> Option<(String, String)> {
+        Some((max_fee.to_string(), priority_fee.to_string()))
     }
 
-    #[tokio::test]
-    async fn test_chain_info_fees_fall_back_to_the_alloy_estimate() {
-        let cache = FeeEstimateCache::new(Duration::from_secs(60));
-        let fees = resolve_chain_info_fees(
-            &cache,
-            Err("fee history unsupported".to_string()),
-            std::future::ready(alloy_estimate(21, 1)),
+    #[test]
+    fn test_chain_info_fees_use_fee_history_when_available() {
+        let fees = select_chain_info_fees(
+            Ok(snapshot(20_000_000, 100_000_000)),
+            alloy_estimate(1, 1),
             1.0,
-            FLOORS,
-        )
-        .await;
-        // Same result as the pre-change path: scaled estimate raised to the floors
-        assert_eq!(
-            fees,
-            Some((
-                apply_gas_fee_policy(21, 1, FLOORS).0.to_string(),
-                apply_gas_fee_policy(21, 1, FLOORS).1.to_string()
-            ))
+            DEFAULT_POLICY,
         );
-        assert_eq!(fees, Some(("5000000".to_string(), "100".to_string())));
+        assert_eq!(fees, pair("500000000", "50000000"));
     }
 
-    #[tokio::test]
-    async fn test_chain_info_fees_fallback_applies_the_multiplier() {
-        let cache = FeeEstimateCache::new(Duration::from_secs(60));
-        let fees = resolve_chain_info_fees(
-            &cache,
+    #[test]
+    fn test_chain_info_fees_fall_back_to_the_alloy_estimate() {
+        let fees = select_chain_info_fees(
             Err("fee history unsupported".to_string()),
-            std::future::ready(alloy_estimate(3_000_000_000, 1_000_000_000)),
-            1.5,
-            FLOORS,
-        )
-        .await;
-        assert_eq!(fees, Some(("4500000000".to_string(), "1500000000".to_string())));
-    }
-
-    #[tokio::test]
-    async fn test_chain_info_fees_are_none_when_both_sources_fail() {
-        let cache = FeeEstimateCache::new(Duration::from_secs(60));
-        let fees = resolve_chain_info_fees(
-            &cache,
-            Err("fee history unsupported".to_string()),
-            std::future::ready(Err::<Eip1559FeeEstimation, _>("rpc down".to_string())),
+            alloy_estimate(21, 1),
             1.0,
-            FLOORS,
-        )
-        .await;
+            LEGACY_POLICY,
+        );
+        // Pre-change behaviour: floor-level estimate lifted to the floors
+        assert_eq!(fees, pair("5000000", "100"));
+    }
+
+    #[test]
+    fn test_chain_info_fallback_caps_a_burst_tip() {
+        // 25 gwei estimated tip with the default policy: tip capped at 0.05 gwei, max fee at the floor
+        let fees = select_chain_info_fees(
+            Err("fee history unsupported".to_string()),
+            alloy_estimate(25_000_000_020, 25_000_000_000),
+            1.0,
+            DEFAULT_POLICY,
+        );
+        assert_eq!(fees, pair("500000000", "50000000"));
+    }
+
+    #[test]
+    fn test_chain_info_fallback_clamps_the_max_fee_to_the_ceiling() {
+        let fees = select_chain_info_fees(
+            Err("fee history unsupported".to_string()),
+            alloy_estimate(3_000_000_000, 1_000_000_000),
+            1.0,
+            DEFAULT_POLICY,
+        );
+        assert_eq!(fees, pair("1000000000", "50000000"));
+    }
+
+    #[test]
+    fn test_chain_info_fallback_applies_the_multiplier() {
+        let fees = select_chain_info_fees(
+            Err("fee history unsupported".to_string()),
+            alloy_estimate(3_000_000_000, 1_000_000_000),
+            1.5,
+            LEGACY_POLICY,
+        );
+        assert_eq!(fees, pair("4500000000", "1500000000"));
+    }
+
+    #[test]
+    fn test_chain_info_fees_are_none_when_both_sources_fail() {
+        let fees = select_chain_info_fees(
+            Err("fee history unsupported".to_string()),
+            Err("rpc down".to_string()),
+            1.0,
+            DEFAULT_POLICY,
+        );
         assert_eq!(fees, None);
     }
 
@@ -3215,20 +3252,20 @@ mod tests {
     #[test]
     fn test_gas_fee_policy_lift_floor_level_estimate() {
         // Typical Gnosis estimate: 1 wei tip, 2 × 10 wei base fee headroom
-        assert_eq!(apply_gas_fee_policy(21, 1, FLOORS), (5_000_000, 100));
+        assert_eq!(apply_gas_fee_policy(21, 1, LEGACY_POLICY), (5_000_000, 100));
     }
 
     #[test]
     fn test_gas_fee_policy_keep_base_fee_headroom() {
         // Base fee spike: 2 × 450_000 wei headroom must survive the priority fee lift
-        assert_eq!(apply_gas_fee_policy(900_001, 1, FLOORS), (5_000_000, 100));
-        assert_eq!(apply_gas_fee_policy(80_000_001, 1, FLOORS), (80_000_100, 100));
+        assert_eq!(apply_gas_fee_policy(900_001, 1, LEGACY_POLICY), (5_000_000, 100));
+        assert_eq!(apply_gas_fee_policy(80_000_001, 1, LEGACY_POLICY), (80_000_100, 100));
     }
 
     #[test]
     fn test_gas_fee_policy_leave_higher_estimates_unchanged() {
         assert_eq!(
-            apply_gas_fee_policy(3_000_000_000, 1_000_000_000, FLOORS),
+            apply_gas_fee_policy(3_000_000_000, 1_000_000_000, LEGACY_POLICY),
             (3_000_000_000, 1_000_000_000)
         );
     }

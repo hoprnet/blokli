@@ -512,6 +512,9 @@ config:
     ## @param config.api.minMaxFeePerGas Lower bound, in wei, for the maxFeePerGas exposed by chainInfo, applied after gasMultiplier. It only caps the price paid; nodes must hold gas_limit x maxFeePerGas upfront. Must be >= minPriorityFeePerGas
     ##
     minMaxFeePerGas: 500000000
+    ## @param config.api.maxMaxFeePerGas Upper bound, in wei, for the maxFeePerGas exposed by chainInfo. Bounds the balance reserved upfront (gas limit x maxFeePerGas). Must be >= minMaxFeePerGas and >= maxPriorityFeePerGas
+    ##
+    maxMaxFeePerGas: 1000000000
     ## @param config.api.minPriorityFeePerGas Lower bound, in wei, for the maxPriorityFeePerGas exposed by chainInfo, applied after gasMultiplier
     ##
     minPriorityFeePerGas: 10000000

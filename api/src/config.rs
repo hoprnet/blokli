@@ -64,6 +64,10 @@ pub struct ApiConfig {
     #[serde(default = "default_min_max_fee_per_gas")]
     pub min_max_fee_per_gas: u64,
 
+    /// Maximum `maxFeePerGas` exposed by chainInfo, in wei
+    #[serde(default = "default_max_max_fee_per_gas")]
+    pub max_max_fee_per_gas: u64,
+
     /// Factor applied to the next-block base fee when computing `maxFeePerGas`
     #[serde(default = "default_base_fee_headroom_factor")]
     pub base_fee_headroom_factor: f64,
@@ -185,6 +189,7 @@ impl Default for ApiConfig {
             min_priority_fee_per_gas: default_min_priority_fee_per_gas(),
             max_priority_fee_per_gas: default_max_priority_fee_per_gas(),
             min_max_fee_per_gas: default_min_max_fee_per_gas(),
+            max_max_fee_per_gas: default_max_max_fee_per_gas(),
             base_fee_headroom_factor: default_base_fee_headroom_factor(),
             sse_keepalive: SseKeepAliveConfig::default(),
             health: HealthConfig::default(),
@@ -255,6 +260,10 @@ pub const DEFAULT_MAX_PRIORITY_FEE_PER_GAS: u64 = 50_000_000;
 /// not this cap; it only raises the balance reserved upfront (0.005 xDAI at a 10M gas limit).
 pub const DEFAULT_MIN_MAX_FEE_PER_GAS: u64 = 500_000_000;
 
+/// 1 gwei: 4x the largest base fee seen in a 24h Gnosis sample (0.23 gwei). It bounds the balance reserved upfront
+/// (gas limit x max fee) to 0.01 xDAI at a 10M gas limit.
+pub const DEFAULT_MAX_MAX_FEE_PER_GAS: u64 = 1_000_000_000;
+
 /// 8x: the base fee grows at most 12.5% per block, so 8x covers about 17 blocks of worst-case growth, where the
 /// default alloy estimate of 2x only covers about 6.
 pub const DEFAULT_BASE_FEE_HEADROOM_FACTOR: f64 = 8.0;
@@ -271,6 +280,10 @@ fn default_min_max_fee_per_gas() -> u64 {
     DEFAULT_MIN_MAX_FEE_PER_GAS
 }
 
+fn default_max_max_fee_per_gas() -> u64 {
+    DEFAULT_MAX_MAX_FEE_PER_GAS
+}
+
 fn default_base_fee_headroom_factor() -> f64 {
     DEFAULT_BASE_FEE_HEADROOM_FACTOR
 }
@@ -282,6 +295,7 @@ impl ApiConfig {
             min_priority_fee_per_gas: u128::from(self.min_priority_fee_per_gas),
             max_priority_fee_per_gas: u128::from(self.max_priority_fee_per_gas),
             min_max_fee_per_gas: u128::from(self.min_max_fee_per_gas),
+            max_max_fee_per_gas: u128::from(self.max_max_fee_per_gas),
             base_fee_headroom_factor: self.base_fee_headroom_factor,
         }
     }
@@ -303,6 +317,7 @@ mod tests {
                 min_priority_fee_per_gas: 10_000_000,
                 max_priority_fee_per_gas: 50_000_000,
                 min_max_fee_per_gas: 500_000_000,
+                max_max_fee_per_gas: 1_000_000_000,
                 base_fee_headroom_factor: 8.0,
             }
         );

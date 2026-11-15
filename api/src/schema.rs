@@ -44,6 +44,8 @@ pub struct GasFeePolicy {
     pub max_priority_fee_per_gas: u128,
     /// Minimum `maxFeePerGas`
     pub min_max_fee_per_gas: u128,
+    /// Maximum `maxFeePerGas`, which bounds the balance reserved upfront (gas limit x max fee)
+    pub max_max_fee_per_gas: u128,
     /// Factor applied to the next-block base fee to leave room for base fee growth
     pub base_fee_headroom_factor: f64,
 }
@@ -55,6 +57,7 @@ impl Default for GasFeePolicy {
             min_priority_fee_per_gas: 0,
             max_priority_fee_per_gas: u128::MAX,
             min_max_fee_per_gas: 0,
+            max_max_fee_per_gas: u128::MAX,
             base_fee_headroom_factor: 1.0,
         }
     }

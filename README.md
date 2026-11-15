@@ -306,6 +306,7 @@ fields. SQLite uses separate index and raw-log databases.
 | `api.min_priority_fee_per_gas`        | `10000000`       | `BLOKLI_API_MIN_PRIORITY_FEE_PER_GAS`        | Minimum priority fee in wei (0.01 gwei)       |
 | `api.max_priority_fee_per_gas`        | `50000000`       | `BLOKLI_API_MAX_PRIORITY_FEE_PER_GAS`        | Maximum priority fee in wei (0.05 gwei)       |
 | `api.min_max_fee_per_gas`             | `500000000`      | `BLOKLI_API_MIN_MAX_FEE_PER_GAS`             | Minimum max fee in wei (0.5 gwei)             |
+| `api.max_max_fee_per_gas`             | `1000000000`     | `BLOKLI_API_MAX_MAX_FEE_PER_GAS`             | Maximum max fee in wei (1 gwei)               |
 | `api.base_fee_headroom_factor`        | `8.0`            | `BLOKLI_API_BASE_FEE_HEADROOM_FACTOR`        | Base fee multiple in max fee, minimum `1.0`   |
 | `api.max_query_depth`                 | `8`              | —                                            | Maximum GraphQL nesting depth                 |
 | `api.max_query_complexity`            | `500`            | —                                            | Maximum GraphQL complexity budget             |

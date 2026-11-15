@@ -200,6 +200,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | `config.api.playgroundEnabled`                       | Enable GraphQL Playground for development and testing. Recommended to set to false for production deployments | `false`             |
 | `config.api.gasMultiplier`                           | Multiplier for gas estimation to provide a safety margin (e.g., 1.2 for 20% extra)                            | `1.2`               |
 | `config.api.minMaxFeePerGas` | Lower bound, in wei, for the maxFeePerGas exposed by chainInfo, applied after gasMultiplier. Must be >= minPriorityFeePerGas | `500000000` |
+| `config.api.maxMaxFeePerGas` | Upper bound, in wei, for the maxFeePerGas exposed by chainInfo. Bounds the balance reserved upfront (gas limit x maxFeePerGas). Must be >= minMaxFeePerGas and >= maxPriorityFeePerGas | `1000000000` |
 | `config.api.minPriorityFeePerGas` | Lower bound, in wei, for the maxPriorityFeePerGas exposed by chainInfo, applied after gasMultiplier | `10000000` |
 | `config.api.maxPriorityFeePerGas` | Upper bound, in wei, for the maxPriorityFeePerGas exposed by chainInfo, applied after gasMultiplier. Must be >= minPriorityFeePerGas | `50000000` |
 | `config.api.baseFeeHeadroomFactor` | Multiple of the next-block base fee included in the maxFeePerGas exposed by chainInfo. Must be >= 1 | `8` |
