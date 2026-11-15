@@ -2787,6 +2787,10 @@ type Transaction {
 	Internal Safe execution result (null for non-Safe transactions or before confirmation)
 	"""
 	safeExecution: SafeExecution
+	"""
+	Why the transaction was not mined (null unless the transaction timed out)
+	"""
+	diagnosis: TransactionDiagnosis
 }
 
 """
@@ -2811,6 +2815,46 @@ type TransactionCount {
 Result type for transaction count queries
 """
 union TransactionCountResult = TransactionCount | InvalidAddressError | QueryFailedError
+
+"""
+Explanation of a transaction that timed out unmined
+"""
+type TransactionDiagnosis {
+	"""
+	Why the transaction was not mined
+	"""
+	reason: UnminedReason!
+	"""
+	Fees the transaction was signed with
+	"""
+	signedFees: TransactionFees
+	"""
+	Fees a transaction should currently be signed with, when the reason depends on them
+	"""
+	recommendedFees: TransactionFees
+	"""
+	Lowest fees at which a replacement would be accepted, when the transaction is still held
+	"""
+	minReplacementFees: TransactionFees
+	"""
+	Seconds to wait before checking or retrying
+	"""
+	retryAfterSeconds: Int!
+}
+
+"""
+EIP-1559 fees in wei
+"""
+type TransactionFees {
+	"""
+	`maxFeePerGas` in wei
+	"""
+	maxFeePerGas: String!
+	"""
+	`maxPriorityFeePerGas` in wei
+	"""
+	maxPriorityFeePerGas: String!
+}
 
 """
 Input for transaction submission
@@ -2864,6 +2908,36 @@ enum TransactionStatus {
 scalar UInt256
 
 scalar UInt64
+
+"""
+Why a submitted transaction was not mined before it timed out
+"""
+enum UnminedReason {
+	"""
+	The node holds the transaction, but it was signed below the current recommended fee
+	"""
+	UNDERPRICED
+	"""
+	The node holds the transaction and it waits behind earlier pending transactions of the signer
+	"""
+	QUEUED
+	"""
+	An earlier nonce of the signer is neither mined nor pending
+	"""
+	NONCE_GAP
+	"""
+	The node no longer knows the transaction and its nonce is still unused
+	"""
+	DROPPED
+	"""
+	The node no longer knows the transaction and its nonce was consumed by another one
+	"""
+	REPLACED
+	"""
+	The reason could not be established
+	"""
+	UNKNOWN
+}
 
 """
 Marks an element of a GraphQL schema as no longer supported.

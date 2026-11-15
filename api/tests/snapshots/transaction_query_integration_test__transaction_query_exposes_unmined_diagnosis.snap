@@ -1,0 +1,17 @@
+---
+source: api/tests/transaction_query_integration_test.rs
+expression: "result[\"data\"][\"transaction\"]"
+---
+diagnosis:
+  minReplacementFees:
+    maxFeePerGas: "2000"
+    maxPriorityFeePerGas: "20"
+  reason: UNDERPRICED
+  recommendedFees:
+    maxFeePerGas: "2000"
+    maxPriorityFeePerGas: "20"
+  retryAfterSeconds: 5
+  signedFees:
+    maxFeePerGas: "1000"
+    maxPriorityFeePerGas: "10"
+status: TIMEOUT

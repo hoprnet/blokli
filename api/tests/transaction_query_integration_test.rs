@@ -7,13 +7,14 @@
 //! - UUID format validation
 //! - Non-existent transaction handling
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::Result;
 use async_graphql::{EmptyMutation, EmptySubscription, Schema};
 use blokli_api::query::QueryRoot;
 use blokli_chain_api::transaction_store::{
-    SafeExecutionResult, TransactionRecord, TransactionStatus, TransactionStore,
+    FeePair, SafeExecutionResult, TransactionDiagnosis, TransactionRecord, TransactionStatus, TransactionStore,
+    UnminedReason,
 };
 use hopr_types::crypto::types::Hash;
 
@@ -464,6 +465,86 @@ async fn test_transaction_query_without_safe_execution() -> Result<()> {
         data["safeExecution"].is_null(),
         "safeExecution should be null for non-Safe transactions"
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_transaction_query_exposes_unmined_diagnosis() -> Result<()> {
+    let ctx = setup_test_environment().await?;
+
+    let tx_id = uuid::Uuid::new_v4();
+    ctx.store.insert(TransactionRecord {
+        id: tx_id,
+        raw_transaction: vec![0x01, 0x02, 0x03],
+        transaction_hash: Hash::default(),
+        status: TransactionStatus::Timeout,
+        submitted_at: chrono::Utc::now(),
+        confirmed_at: None,
+        error_message: None,
+        safe_execution: None,
+        diagnosis: Some(TransactionDiagnosis {
+            reason: UnminedReason::Underpriced,
+            signed_fees: Some(FeePair {
+                max_fee_per_gas: 1_000,
+                max_priority_fee_per_gas: 10,
+            }),
+            recommended_fees: Some(FeePair {
+                max_fee_per_gas: 2_000,
+                max_priority_fee_per_gas: 20,
+            }),
+            min_replacement_fees: Some(FeePair {
+                max_fee_per_gas: 2_000,
+                max_priority_fee_per_gas: 20,
+            }),
+            retry_after: Duration::from_secs(5),
+        }),
+    })?;
+
+    let query = format!(
+        r#"query {{
+            transaction(id: "{tx_id}") {{
+                ... on Transaction {{
+                    status
+                    diagnosis {{
+                        reason
+                        signedFees {{ maxFeePerGas maxPriorityFeePerGas }}
+                        recommendedFees {{ maxFeePerGas maxPriorityFeePerGas }}
+                        minReplacementFees {{ maxFeePerGas maxPriorityFeePerGas }}
+                        retryAfterSeconds
+                    }}
+                }}
+            }}
+        }}"#
+    );
+
+    let result = execute_query(&ctx.schema, &query).await;
+    insta::assert_yaml_snapshot!(result["data"]["transaction"]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_transaction_query_diagnosis_is_null_without_timeout() -> Result<()> {
+    let ctx = setup_test_environment().await?;
+
+    let tx_id = uuid::Uuid::new_v4();
+    ctx.store.insert(TransactionRecord {
+        id: tx_id,
+        raw_transaction: vec![0x01, 0x02, 0x03],
+        transaction_hash: Hash::default(),
+        status: TransactionStatus::Submitted,
+        submitted_at: chrono::Utc::now(),
+        confirmed_at: None,
+        error_message: None,
+        safe_execution: None,
+        diagnosis: None,
+    })?;
+
+    let query =
+        format!(r#"query {{ transaction(id: "{tx_id}") {{ ... on Transaction {{ diagnosis {{ reason }} }} }} }}"#);
+    let result = execute_query(&ctx.schema, &query).await;
+    assert!(result["data"]["transaction"]["diagnosis"].is_null());
 
     Ok(())
 }
