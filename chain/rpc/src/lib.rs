@@ -260,6 +260,15 @@ pub struct Eip1559FeeEstimation {
     pub max_priority_fee_per_gas: u128,
 }
 
+/// Raw fee market snapshot derived from `eth_feeHistory`, in wei.
+#[derive(Clone, Debug, Copy, PartialEq, Eq)]
+pub struct FeeHistorySnapshot {
+    /// Base fee per gas of the next block, as derived by the node from the latest block.
+    pub next_base_fee_per_gas: u128,
+    /// Median over the recent blocks of the per-block median priority fee per gas.
+    pub median_priority_fee_per_gas: u128,
+}
+
 /// Current Curvy Aggregator state returned by typed RPC operations.
 #[derive(Clone, Debug, Copy, PartialEq, Eq)]
 pub struct CurvyAggregatorState {
@@ -341,6 +350,9 @@ pub trait HoprRpcOperations {
 
     /// Retrieves EIP-1559 gas fee estimates (wei).
     async fn estimate_eip1559_fees(&self) -> Result<Eip1559FeeEstimation>;
+
+    /// Reads the next-block base fee and the recent median priority fee from `eth_feeHistory`.
+    async fn get_fee_history_snapshot(&self) -> Result<FeeHistorySnapshot>;
 
     /// Retrieves the current notes root and dense indices from the Curvy Aggregator.
     async fn get_curvy_aggregator_state(&self) -> Result<CurvyAggregatorState>;
