@@ -96,9 +96,9 @@ pub struct TransactionDiagnosis {
     pub reason: UnminedReason,
     /// Fees the transaction was signed with
     pub signed_fees: Option<FeePair>,
-    /// Fees a transaction should currently be signed with, when the reason depends on them
+    /// Fees a transaction should currently be signed with, when the fee estimate was available
     pub recommended_fees: Option<FeePair>,
-    /// Lowest fees at which a replacement would be accepted, when the transaction is still held
+    /// Lowest fees at which a replacement would be accepted, when the fee estimate was available
     pub min_replacement_fees: Option<FeePair>,
     /// How long to wait before checking or retrying
     pub retry_after: Duration,
@@ -530,6 +530,32 @@ impl TransactionStore {
             };
             (held && record.transaction_hash == transaction_hash).then_some(record.id)
         })
+    }
+
+    /// Resume tracking a transaction that timed out while the node still holds it.
+    ///
+    /// Moves a `Timeout` record back to `Submitted`, clears its diagnosis and restarts its
+    /// timeout clock so the monitor polls it again. Records in any other status are untouched.
+    ///
+    /// # Errors
+    /// Returns `TransactionStoreError::NotFound` if the transaction doesn't exist
+    pub fn resume_tracking(&self, id: Uuid) -> Result<(), TransactionStoreError> {
+        let resumed = {
+            let mut entry = self
+                .transactions
+                .get_mut(&id)
+                .ok_or(TransactionStoreError::NotFound(id))?;
+            let record = entry.value_mut();
+            let timed_out = record.status == TransactionStatus::Timeout;
+            if timed_out {
+                record.submitted_at = Utc::now();
+            }
+            timed_out
+        };
+        if resumed {
+            self.update_status_with_diagnosis(id, TransactionStatus::Submitted, None, None)?;
+        }
+        Ok(())
     }
 
     /// Update an existing transaction record

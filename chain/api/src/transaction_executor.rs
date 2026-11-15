@@ -389,6 +389,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         // The node still holds a transaction we already track (an identical resubmission):
         // report that one rather than tracking the same hash twice.
         if let Some(existing) = self.transaction_store.find_held_by_hash(tx_hash) {
+            self.transaction_store.resume_tracking(existing)?;
             return Err(TransactionExecutorError::AlreadyTracked { existing });
         }
 
@@ -675,6 +676,42 @@ mod tests {
             Err(TransactionExecutorError::AlreadyTracked { existing }) if existing == first
         ));
         assert_eq!(executor.transaction_store().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_async_resubmission_of_a_timed_out_held_transaction_resumes_tracking() {
+        let executor = create_executor(MockRpcClient::new());
+        let store = executor.transaction_store();
+
+        let first = executor.send_raw_transaction_async(vec![0x01]).await.unwrap();
+        store
+            .update_status_with_diagnosis(
+                first,
+                TransactionStatus::Timeout,
+                None,
+                Some(TransactionDiagnosis {
+                    reason: UnminedReason::Queued,
+                    signed_fees: None,
+                    recommended_fees: None,
+                    min_replacement_fees: None,
+                    retry_after: Duration::from_secs(5),
+                }),
+            )
+            .unwrap();
+
+        let second = executor.send_raw_transaction_async(vec![0x01]).await;
+        assert!(matches!(
+            second,
+            Err(TransactionExecutorError::AlreadyTracked { existing }) if existing == first
+        ));
+
+        let resumed = store.get(first).unwrap();
+        assert_eq!(resumed.status, TransactionStatus::Submitted);
+        assert_eq!(resumed.diagnosis, None);
+        assert_eq!(store.list_submitted_fair().len(), 1);
+
+        store.update_status(first, TransactionStatus::Confirmed, None).unwrap();
+        assert_eq!(store.get(first).unwrap().status, TransactionStatus::Confirmed);
     }
 
     #[tokio::test]
