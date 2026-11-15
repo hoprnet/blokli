@@ -688,18 +688,28 @@ impl<R: ReceiptProvider + 'static, S: SafeAddressChecker> TransactionMonitor<R, 
                         "Transaction timed out: {}",
                         diagnosis.message()
                     );
-                    if let Err(e) = self.transaction_store.update_status_with_diagnosis(
+                    match self.transaction_store.mark_timeout_if_unchanged(
                         record.id,
-                        TransactionStatus::Timeout,
+                        record.submitted_at,
                         Some(diagnosis.message()),
                         Some(self.build_diagnosis(&record, diagnosis, recommended_fees)),
                     ) {
-                        error!(
-                            id = %record.id,
-                            tx_hash = %tx_hash,
-                            error = %e,
-                            "Failed to update transaction status to Timeout"
-                        );
+                        Ok(true) => {}
+                        Ok(false) => {
+                            debug!(
+                                id = %record.id,
+                                tx_hash = %tx_hash,
+                                "Transaction was resubmitted during the check; skipping the timeout"
+                            );
+                        }
+                        Err(e) => {
+                            error!(
+                                id = %record.id,
+                                tx_hash = %tx_hash,
+                                error = %e,
+                                "Failed to update transaction status to Timeout"
+                            );
+                        }
                     }
                 } else {
                     debug!(id = %record.id, tx_hash = %tx_hash, "Transaction still pending");
@@ -733,8 +743,8 @@ impl<R: ReceiptProvider + 'static, S: SafeAddressChecker> TransactionMonitor<R, 
     /// Explain why a timed-out transaction was not mined, from the node's view of the
     /// transaction and of the signer's nonce. Any lookup failure yields `Unknown`.
     ///
-    /// Also returns the recommended fees, when they could be fetched. They tell an underpriced
-    /// transaction from a queued one and give a client the fee to resubmit with.
+    /// Also returns the recommended fees, when they could be fetched. `Unknown` carries no fees. They tell an
+    /// underpriced transaction from a queued one and give a client the fee to resubmit with.
     async fn diagnose_unmined(
         &self,
         record: &crate::transaction_store::TransactionRecord,
@@ -784,7 +794,7 @@ impl<R: ReceiptProvider + 'static, S: SafeAddressChecker> TransactionMonitor<R, 
         {
             Ok(Ok(recommended)) => Some(recommended),
             failure => {
-                debug!(
+                warn!(
                     id = %record.id,
                     tx_hash = %record.transaction_hash,
                     ?failure,
@@ -1006,6 +1016,8 @@ mod tests {
         pending_nonces: Arc<DashMap<[u8; 20], u64>>,
         // Fee recommendation (absent = the estimate is unavailable)
         recommended_fees: Arc<DashMap<(), RecommendedFees>>,
+        // Record resumed by a resubmission while the diagnosis runs
+        resume_during_diagnosis: Arc<DashMap<(), (Arc<TransactionStore>, Uuid)>>,
         receipt_calls: Arc<AtomicUsize>,
         // Artificial latency of every receipt lookup
         receipt_latency: Duration,
@@ -1023,6 +1035,7 @@ mod tests {
                 mined_nonces: Arc::new(DashMap::new()),
                 pending_nonces: Arc::new(DashMap::new()),
                 recommended_fees: Arc::new(DashMap::new()),
+                resume_during_diagnosis: Arc::new(DashMap::new()),
                 receipt_calls: Arc::new(AtomicUsize::new(0)),
                 receipt_latency: Duration::ZERO,
             }
@@ -1143,6 +1156,10 @@ mod tests {
         }
 
         async fn get_recommended_fees(&self) -> Result<RecommendedFees, String> {
+            if let Some(entry) = self.resume_during_diagnosis.get(&()) {
+                let (store, id) = entry.value();
+                store.resume_tracking(*id).unwrap();
+            }
             self.recommended_fees
                 .get(&())
                 .map(|entry| *entry.value())
@@ -1869,6 +1886,25 @@ mod tests {
         monitor.poll_once().await.unwrap();
 
         insta::assert_yaml_snapshot!(store.get(TEST_UUID).unwrap().diagnosis);
+    }
+
+    #[tokio::test]
+    async fn test_monitor_timeout_is_skipped_when_resubmitted_during_the_check() {
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        provider.set_known(test_tx_hash());
+        provider.set_recommended_fees(900_000_000, 100_000_000);
+        provider.resume_during_diagnosis.insert((), (store.clone(), TEST_UUID));
+        insert_expired_record(&store, create_raw_tx_to(&[0x11; 20]).await);
+
+        let monitor = create_monitor(store.clone(), provider);
+        monitor.poll_once().await.unwrap();
+
+        let updated = store.get(TEST_UUID).unwrap();
+        assert_eq!(updated.status, TransactionStatus::Submitted);
+        assert_eq!(updated.diagnosis, None);
+        assert_eq!(store.list_submitted_fair().len(), 1);
     }
 
     #[test]

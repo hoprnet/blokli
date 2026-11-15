@@ -534,8 +534,9 @@ impl TransactionStore {
 
     /// Resume tracking a transaction that timed out while the node still holds it.
     ///
-    /// Moves a `Timeout` record back to `Submitted`, clears its diagnosis and restarts its
-    /// timeout clock so the monitor polls it again. Records in any other status are untouched.
+    /// Restarts the timeout clock of a `Submitted` or `Timeout` record. A `Timeout` record also
+    /// moves back to `Submitted` with its diagnosis cleared, so the monitor polls it again.
+    /// Records in any other status are untouched.
     ///
     /// # Errors
     /// Returns `TransactionStoreError::NotFound` if the transaction doesn't exist
@@ -546,11 +547,10 @@ impl TransactionStore {
                 .get_mut(&id)
                 .ok_or(TransactionStoreError::NotFound(id))?;
             let record = entry.value_mut();
-            let timed_out = record.status == TransactionStatus::Timeout;
-            if timed_out {
+            if matches!(record.status, TransactionStatus::Submitted | TransactionStatus::Timeout) {
                 record.submitted_at = Utc::now();
             }
-            timed_out
+            record.status == TransactionStatus::Timeout
         };
         if resumed {
             self.update_status_with_diagnosis(id, TransactionStatus::Submitted, None, None)?;
@@ -613,12 +613,55 @@ impl TransactionStore {
         error_message: Option<String>,
         diagnosis: Option<TransactionDiagnosis>,
     ) -> Result<(), TransactionStoreError> {
+        self.apply_status(id, status, error_message, diagnosis, None)
+            .map(|_| ())
+    }
+
+    /// Mark a transaction as timed out, but only if it is still `Submitted` with the
+    /// `submitted_at` the caller read before diagnosing it.
+    ///
+    /// A resubmission restarts the clock, so a changed `submitted_at` means the record was
+    /// resumed while the diagnosis ran and the write is skipped. Returns whether it applied.
+    ///
+    /// # Errors
+    /// Returns `TransactionStoreError::NotFound` if the transaction doesn't exist
+    pub fn mark_timeout_if_unchanged(
+        &self,
+        id: Uuid,
+        expected_submitted_at: DateTime<Utc>,
+        error_message: Option<String>,
+        diagnosis: Option<TransactionDiagnosis>,
+    ) -> Result<bool, TransactionStoreError> {
+        self.apply_status(
+            id,
+            TransactionStatus::Timeout,
+            error_message,
+            diagnosis,
+            Some(expected_submitted_at),
+        )
+    }
+
+    /// Apply a status change, optionally only while the record is `Submitted` since
+    /// `unchanged_since`. Returns whether the change was applied.
+    fn apply_status(
+        &self,
+        id: Uuid,
+        status: TransactionStatus,
+        error_message: Option<String>,
+        diagnosis: Option<TransactionDiagnosis>,
+        unchanged_since: Option<DateTime<Utc>>,
+    ) -> Result<bool, TransactionStoreError> {
         // Update the transaction and extract delta fields for event
-        let (confirmed_at, error_msg, identity) = self
+        let Some((confirmed_at, error_msg, identity)) = self
             .transactions
             .get_mut(&id)
             .map(|mut entry| {
                 let record = entry.value_mut();
+                if let Some(since) = unchanged_since {
+                    if record.status != TransactionStatus::Submitted || record.submitted_at != since {
+                        return None;
+                    }
+                }
                 record.status = status;
                 record.error_message = error_message.clone();
                 record.diagnosis = diagnosis;
@@ -634,9 +677,12 @@ impl TransactionStore {
                 let identity = (status == TransactionStatus::Submitted)
                     .then(|| transaction_identity(&record.raw_transaction))
                     .flatten();
-                (record.confirmed_at, record.error_message.clone(), identity)
+                Some((record.confirmed_at, record.error_message.clone(), identity))
             })
-            .ok_or(TransactionStoreError::NotFound(id))?;
+            .ok_or(TransactionStoreError::NotFound(id))?
+        else {
+            return Ok(false);
+        };
 
         self.sync_submitted_status(id, status, identity);
         if status.is_terminal() {
@@ -657,7 +703,7 @@ impl TransactionStore {
             confirmed_at,
         });
 
-        Ok(())
+        Ok(true)
     }
 
     /// Atomically confirm a transaction and set its Safe execution result.
