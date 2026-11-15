@@ -4,7 +4,7 @@
 
 use std::{fmt::Display, future::Future, time::Duration};
 
-use blokli_chain_rpc::Eip1559FeeEstimation;
+use blokli_chain_rpc::{Eip1559FeeEstimation, FeeHistorySnapshot};
 use blokli_db_entity::conversions::channel_aggregation::AggregatedChannelStats;
 use moka::future::Cache;
 use sea_orm::DbErr;
@@ -21,6 +21,7 @@ pub const FEE_RPC_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct FeeEstimateCache {
     gas_price: Cache<(), u128>,
     eip1559: Cache<(), Eip1559FeeEstimation>,
+    fee_history: Cache<(), FeeHistorySnapshot>,
     timeout: Duration,
 }
 
@@ -35,6 +36,7 @@ impl FeeEstimateCache {
         Self {
             gas_price: Cache::builder().max_capacity(1).time_to_live(ttl).build(),
             eip1559: Cache::builder().max_capacity(1).time_to_live(ttl).build(),
+            fee_history: Cache::builder().max_capacity(1).time_to_live(ttl).build(),
             timeout,
         }
     }
@@ -55,6 +57,15 @@ impl FeeEstimateCache {
         E: Display,
     {
         get_or_fetch(&self.eip1559, self.timeout, fetch).await
+    }
+
+    /// Returns the cached fee history snapshot, or awaits `fetch` on a miss.
+    pub async fn fee_history<F, E>(&self, fetch: F) -> Result<FeeHistorySnapshot, String>
+    where
+        F: Future<Output = Result<FeeHistorySnapshot, E>>,
+        E: Display,
+    {
+        get_or_fetch(&self.fee_history, self.timeout, fetch).await
     }
 }
 
@@ -211,6 +222,56 @@ mod tests {
         assert_eq!(failed, Err("rpc down".to_string()));
 
         assert_eq!(cache.gas_price(async { Ok::<_, String>(9) }).await, Ok(9));
+    }
+
+    fn snapshot(next_base_fee_per_gas: u128) -> FeeHistorySnapshot {
+        FeeHistorySnapshot {
+            next_base_fee_per_gas,
+            median_priority_fee_per_gas: 3,
+        }
+    }
+
+    #[tokio::test]
+    async fn fee_history_hit_does_not_refetch() {
+        let cache = FeeEstimateCache::new(LONG_TTL);
+
+        assert_eq!(
+            cache.fee_history(async { Ok::<_, String>(snapshot(1)) }).await,
+            Ok(snapshot(1))
+        );
+        assert_eq!(
+            cache.fee_history(async { Ok::<_, String>(snapshot(2)) }).await,
+            Ok(snapshot(1))
+        );
+    }
+
+    #[tokio::test]
+    async fn fee_history_expires_after_ttl() {
+        let cache = FeeEstimateCache::new(Duration::from_millis(50));
+
+        assert_eq!(
+            cache.fee_history(async { Ok::<_, String>(snapshot(1)) }).await,
+            Ok(snapshot(1))
+        );
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        assert_eq!(
+            cache.fee_history(async { Ok::<_, String>(snapshot(2)) }).await,
+            Ok(snapshot(2))
+        );
+    }
+
+    #[tokio::test]
+    async fn fee_history_errors_are_not_cached() {
+        let cache = FeeEstimateCache::new(LONG_TTL);
+
+        let failed = cache
+            .fee_history(async { Err::<FeeHistorySnapshot, _>("rpc down") })
+            .await;
+        assert_eq!(failed, Err("rpc down".to_string()));
+        assert_eq!(
+            cache.fee_history(async { Ok::<_, String>(snapshot(4)) }).await,
+            Ok(snapshot(4))
+        );
     }
 
     #[tokio::test]
