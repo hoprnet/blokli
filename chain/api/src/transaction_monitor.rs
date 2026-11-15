@@ -23,12 +23,18 @@ use tokio::{
 use tracing::{debug, error, info, warn};
 
 use crate::{
+    fee_recommendation::{GasFeeFloors, RecommendedFees},
     metrics::{
         record_safe_execution, record_safe_inspection_retry, record_trace_failure, record_trace_queue_saturated,
         record_trace_timeout,
     },
-    safe_execution::{decode_transaction_signer_and_nonce, decode_transaction_to_address, inspect_safe_execution_logs},
-    transaction_store::{SafeExecutionResult, TransactionStatus, TransactionStore},
+    safe_execution::{
+        decode_transaction_signer_and_nonce, decode_transaction_summary, decode_transaction_to_address,
+        inspect_safe_execution_logs,
+    },
+    transaction_store::{
+        FeePair, SafeExecutionResult, TransactionDiagnosis, TransactionStatus, TransactionStore, UnminedReason,
+    },
 };
 
 /// A single log entry from a transaction receipt
@@ -89,6 +95,9 @@ pub trait ReceiptProvider: Send + Sync {
     /// Next nonce of `address` counting the transactions the node holds as executable
     /// in its mempool, i.e. the first nonce missing after the contiguous pending run.
     async fn get_pending_nonce(&self, address: [u8; 20]) -> Result<u64, String>;
+
+    /// Fees a transaction should currently be signed with, by the same rule `chainInfo` uses.
+    async fn get_recommended_fees(&self) -> Result<RecommendedFees, String>;
 }
 
 /// Why a submitted transaction has not been mined by the time it times out.
@@ -101,9 +110,13 @@ enum UnminedDiagnosis {
     /// The node holds the transaction, but an earlier nonce of the signer is neither mined
     /// nor pending.
     NonceGap { nonce: u64, missing_nonce: u64 },
-    /// The node holds the transaction and every earlier nonce is mined or pending: it is
-    /// underpriced or queued behind earlier pending transactions.
-    Pending,
+    /// The node holds the transaction, every earlier nonce is mined or pending and the
+    /// transaction was signed below the recommended fee.
+    Underpriced,
+    /// The node holds the transaction, every earlier nonce is mined or pending and the
+    /// transaction was signed at or above the recommended fee: it waits behind earlier
+    /// pending transactions.
+    Queued,
     /// The transaction was mined after the receipt lookup; the next poll confirms it.
     MinedSinceCheck,
     /// The diagnosis could not be established.
@@ -116,9 +129,21 @@ impl UnminedDiagnosis {
             UnminedDiagnosis::Replaced => "replaced",
             UnminedDiagnosis::Dropped => "dropped",
             UnminedDiagnosis::NonceGap { .. } => "nonce_gap",
-            UnminedDiagnosis::Pending => "pending",
+            UnminedDiagnosis::Underpriced => "underpriced",
+            UnminedDiagnosis::Queued => "queued",
             UnminedDiagnosis::MinedSinceCheck => "mined_since_check",
             UnminedDiagnosis::Unknown => "unknown",
+        }
+    }
+
+    fn reason(self) -> UnminedReason {
+        match self {
+            UnminedDiagnosis::Replaced => UnminedReason::Replaced,
+            UnminedDiagnosis::Dropped => UnminedReason::Dropped,
+            UnminedDiagnosis::NonceGap { .. } => UnminedReason::NonceGap,
+            UnminedDiagnosis::Underpriced => UnminedReason::Underpriced,
+            UnminedDiagnosis::Queued => UnminedReason::Queued,
+            UnminedDiagnosis::MinedSinceCheck | UnminedDiagnosis::Unknown => UnminedReason::Unknown,
         }
     }
 
@@ -134,8 +159,11 @@ impl UnminedDiagnosis {
                 "Transaction was not mined: its nonce {nonce} waits for the signer's nonce {missing_nonce}, which is \
                  neither mined nor pending (nonce gap)"
             ),
-            UnminedDiagnosis::Pending => "Transaction timed out waiting for confirmation: still pending in the \
-                                          mempool (possibly underpriced)"
+            UnminedDiagnosis::Underpriced => "Transaction timed out waiting for confirmation: the RPC node holds it \
+                                              but it was signed below the current recommended fee (underpriced)"
+                .to_string(),
+            UnminedDiagnosis::Queued => "Transaction timed out waiting for confirmation: the RPC node holds it and it \
+                                         waits behind earlier pending transactions (queued)"
                 .to_string(),
             UnminedDiagnosis::MinedSinceCheck | UnminedDiagnosis::Unknown => {
                 "Transaction timed out waiting for confirmation".to_string()
@@ -147,6 +175,9 @@ impl UnminedDiagnosis {
 /// Classify an unmined transaction from whether the node still knows it and how its nonce
 /// compares to the signer's mined and pending next nonces.
 ///
+/// A transaction the node holds with no nonce problem is reported as `Queued`; the caller
+/// refines it to `Underpriced` by comparing fees.
+///
 /// A nonce ahead of the mined one is only a gap when the pending run does not reach it:
 /// with nonce 5 mined and 5, 6, 7 pending, nonce 7 is merely queued behind 5 and 6.
 fn classify_unmined(known: bool, nonce: u64, mined_nonce: u64, pending_nonce: u64) -> UnminedDiagnosis {
@@ -157,9 +188,22 @@ fn classify_unmined(known: bool, nonce: u64, mined_nonce: u64, pending_nonce: u6
         (true, false) if nonce > mined_nonce && nonce >= missing_nonce => {
             UnminedDiagnosis::NonceGap { nonce, missing_nonce }
         }
-        (true, false) => UnminedDiagnosis::Pending,
+        (true, false) => UnminedDiagnosis::Queued,
         (false, true) => UnminedDiagnosis::Replaced,
         (false, false) => UnminedDiagnosis::Dropped,
+    }
+}
+
+/// Factor, in thousandths, by which a replacement must raise both fees for nodes to accept it.
+const REPLACEMENT_FEE_BUMP_PER_MILLE: u128 = 1125;
+
+/// Lowest fees at which a replacement of a transaction signed with `signed` is accepted and
+/// also meets the `recommended` fees: the signed fees raised by 12.5%, rounded up.
+fn min_replacement_fees(signed: FeePair, recommended: FeePair) -> FeePair {
+    let bump = |value: u128| value.saturating_mul(REPLACEMENT_FEE_BUMP_PER_MILLE).div_ceil(1000);
+    FeePair {
+        max_fee_per_gas: bump(signed.max_fee_per_gas).max(recommended.max_fee_per_gas),
+        max_priority_fee_per_gas: bump(signed.max_priority_fee_per_gas).max(recommended.max_priority_fee_per_gas),
     }
 }
 
@@ -206,6 +250,10 @@ impl ReceiptProvider for NoSafeEnrichment {
     }
 
     async fn get_pending_nonce(&self, _address: [u8; 20]) -> Result<u64, String> {
+        unreachable!("NoSafeEnrichment is behind Option::None")
+    }
+
+    async fn get_recommended_fees(&self) -> Result<RecommendedFees, String> {
         unreachable!("NoSafeEnrichment is behind Option::None")
     }
 }
@@ -258,6 +306,12 @@ pub struct TransactionMonitorConfig {
     pub max_concurrent_trace_jobs: usize,
     /// Disable optional debug tracing while retaining Safe failure publication.
     pub enable_revert_reason_tracing: bool,
+    /// Expected block time, reported as the retry hint of an unmined transaction
+    pub expected_block_time: Duration,
+    /// Multiplier applied to the node's fee estimate to obtain the recommended fee
+    pub gas_multiplier: f64,
+    /// Lower bounds applied to the recommended fee
+    pub gas_fee_floors: GasFeeFloors,
 }
 
 impl TransactionMonitorConfig {
@@ -312,6 +366,9 @@ impl Default for TransactionMonitorConfig {
             max_queued_trace_jobs: 128,
             max_concurrent_trace_jobs: 2,
             enable_revert_reason_tracing: true,
+            expected_block_time: Duration::from_secs(5),
+            gas_multiplier: 1.0,
+            gas_fee_floors: GasFeeFloors::default(),
         }
     }
 }
@@ -611,7 +668,7 @@ impl<R: ReceiptProvider + 'static, S: SafeAddressChecker> TransactionMonitor<R, 
             Ok(Ok(None)) => {
                 let elapsed = chrono::Utc::now().signed_duration_since(record.submitted_at);
                 if elapsed.to_std().ok() > Some(self.config.timeout) {
-                    let diagnosis = self.diagnose_unmined(&record).await;
+                    let (diagnosis, recommended_fees) = self.diagnose_unmined(&record).await;
                     if diagnosis == UnminedDiagnosis::MinedSinceCheck {
                         debug!(id = %record.id, tx_hash = %tx_hash, "Transaction mined since the receipt lookup");
                         return;
@@ -623,10 +680,11 @@ impl<R: ReceiptProvider + 'static, S: SafeAddressChecker> TransactionMonitor<R, 
                         "Transaction timed out: {}",
                         diagnosis.message()
                     );
-                    if let Err(e) = self.transaction_store.update_status(
+                    if let Err(e) = self.transaction_store.update_status_with_diagnosis(
                         record.id,
                         TransactionStatus::Timeout,
                         Some(diagnosis.message()),
+                        Some(self.build_diagnosis(&record, diagnosis, recommended_fees)),
                     ) {
                         error!(
                             id = %record.id,
@@ -666,9 +724,15 @@ impl<R: ReceiptProvider + 'static, S: SafeAddressChecker> TransactionMonitor<R, 
 
     /// Explain why a timed-out transaction was not mined, from the node's view of the
     /// transaction and of the signer's nonce. Any lookup failure yields `Unknown`.
-    async fn diagnose_unmined(&self, record: &crate::transaction_store::TransactionRecord) -> UnminedDiagnosis {
+    ///
+    /// Also returns the recommended fees when they were needed to tell an underpriced
+    /// transaction from a queued one.
+    async fn diagnose_unmined(
+        &self,
+        record: &crate::transaction_store::TransactionRecord,
+    ) -> (UnminedDiagnosis, Option<RecommendedFees>) {
         let Some((signer, nonce)) = decode_transaction_signer_and_nonce(&record.raw_transaction) else {
-            return UnminedDiagnosis::Unknown;
+            return (UnminedDiagnosis::Unknown, None);
         };
 
         let known = timeout(
@@ -684,7 +748,7 @@ impl<R: ReceiptProvider + 'static, S: SafeAddressChecker> TransactionMonitor<R, 
             self.receipt_provider.get_pending_nonce(signer),
         );
 
-        match tokio::join!(known, mined_nonce, pending_nonce) {
+        let diagnosis = match tokio::join!(known, mined_nonce, pending_nonce) {
             (Ok(Ok(known)), Ok(Ok(mined_nonce)), Ok(Ok(pending_nonce))) => {
                 classify_unmined(known, nonce, mined_nonce, pending_nonce)
             }
@@ -697,8 +761,61 @@ impl<R: ReceiptProvider + 'static, S: SafeAddressChecker> TransactionMonitor<R, 
                     ?pending_nonce,
                     "Could not diagnose why the transaction was not mined"
                 );
-                UnminedDiagnosis::Unknown
+                return (UnminedDiagnosis::Unknown, None);
             }
+        };
+
+        if diagnosis != UnminedDiagnosis::Queued {
+            return (diagnosis, None);
+        }
+        let Some(signed) = decode_transaction_summary(&record.raw_transaction) else {
+            return (UnminedDiagnosis::Unknown, None);
+        };
+        match timeout(
+            self.config.request_timeout,
+            self.receipt_provider.get_recommended_fees(),
+        )
+        .await
+        {
+            Ok(Ok(recommended)) if signed.max_fee_per_gas < recommended.max_fee_per_gas => {
+                (UnminedDiagnosis::Underpriced, Some(recommended))
+            }
+            Ok(Ok(recommended)) => (UnminedDiagnosis::Queued, Some(recommended)),
+            failure => {
+                debug!(
+                    id = %record.id,
+                    tx_hash = %record.transaction_hash,
+                    ?failure,
+                    "Could not compare the transaction fee with the recommended fee"
+                );
+                (UnminedDiagnosis::Unknown, None)
+            }
+        }
+    }
+
+    /// Assemble the structured diagnosis stored with a timed-out transaction.
+    fn build_diagnosis(
+        &self,
+        record: &crate::transaction_store::TransactionRecord,
+        diagnosis: UnminedDiagnosis,
+        recommended: Option<RecommendedFees>,
+    ) -> TransactionDiagnosis {
+        let signed_fees = decode_transaction_summary(&record.raw_transaction).map(|summary| FeePair {
+            max_fee_per_gas: summary.max_fee_per_gas,
+            max_priority_fee_per_gas: summary.max_priority_fee_per_gas.unwrap_or(summary.max_fee_per_gas),
+        });
+        let recommended_fees = recommended.map(|fees| FeePair {
+            max_fee_per_gas: fees.max_fee_per_gas,
+            max_priority_fee_per_gas: fees.max_priority_fee_per_gas,
+        });
+        TransactionDiagnosis {
+            reason: diagnosis.reason(),
+            signed_fees,
+            recommended_fees,
+            min_replacement_fees: signed_fees
+                .zip(recommended_fees)
+                .map(|(signed, recommended)| min_replacement_fees(signed, recommended)),
+            retry_after: self.config.expected_block_time,
         }
     }
 
@@ -831,7 +948,7 @@ mod tests {
     use chrono::{DateTime, Utc};
     use dashmap::DashMap;
     use hopr_bindings::exports::alloy::{
-        consensus::{SignableTransaction, TxLegacy},
+        consensus::{SignableTransaction, TxEip1559, TxLegacy},
         eips::eip2718::Encodable2718,
         primitives::{Address as AlloyAddress, TxKind, U256},
         signers::{Signer, local::PrivateKeySigner},
@@ -875,6 +992,8 @@ mod tests {
         mined_nonces: Arc<DashMap<[u8; 20], u64>>,
         // Next nonce per signer including the mempool (absent = mined nonce)
         pending_nonces: Arc<DashMap<[u8; 20], u64>>,
+        // Fee recommendation (absent = the estimate is unavailable)
+        recommended_fees: Arc<DashMap<(), RecommendedFees>>,
         receipt_calls: Arc<AtomicUsize>,
         // Artificial latency of every receipt lookup
         receipt_latency: Duration,
@@ -891,6 +1010,7 @@ mod tests {
                 known_transactions: Arc::new(DashMap::new()),
                 mined_nonces: Arc::new(DashMap::new()),
                 pending_nonces: Arc::new(DashMap::new()),
+                recommended_fees: Arc::new(DashMap::new()),
                 receipt_calls: Arc::new(AtomicUsize::new(0)),
                 receipt_latency: Duration::ZERO,
             }
@@ -907,6 +1027,16 @@ mod tests {
 
         fn set_mined_nonce(&self, address: [u8; 20], nonce: u64) {
             self.mined_nonces.insert(address, nonce);
+        }
+
+        fn set_recommended_fees(&self, max_fee_per_gas: u128, max_priority_fee_per_gas: u128) {
+            self.recommended_fees.insert(
+                (),
+                RecommendedFees {
+                    max_fee_per_gas,
+                    max_priority_fee_per_gas,
+                },
+            );
         }
 
         fn set_pending_nonce(&self, address: [u8; 20], nonce: u64) {
@@ -999,6 +1129,13 @@ mod tests {
                 None => self.get_mined_nonce(address).await,
             }
         }
+
+        async fn get_recommended_fees(&self) -> Result<RecommendedFees, String> {
+            self.recommended_fees
+                .get(&())
+                .map(|entry| *entry.value())
+                .ok_or_else(|| "no fee estimate".to_string())
+        }
     }
 
     // Mock Safe address checker for testing.
@@ -1057,11 +1194,36 @@ mod tests {
 
     /// Create a raw signed transaction targeting a specific address with a given nonce
     async fn create_raw_tx_with_nonce(target: &[u8; 20], nonce: u64) -> Vec<u8> {
+        create_raw_tx_with_gas_price(target, nonce, 1_000_000_000).await
+    }
+
+    /// Create a raw signed EIP-1559 transaction with the given fees
+    async fn create_raw_eip1559_tx(target: &[u8; 20], max_fee: u128, priority_fee: u128) -> Vec<u8> {
+        let signer = PrivateKeySigner::random();
+        let tx = TxEip1559 {
+            chain_id: 1,
+            nonce: 0,
+            max_fee_per_gas: max_fee,
+            max_priority_fee_per_gas: priority_fee,
+            gas_limit: 21_000,
+            to: TxKind::Call(AlloyAddress::from_slice(target)),
+            value: U256::ZERO,
+            ..Default::default()
+        };
+
+        let signature = signer.sign_hash(&tx.signature_hash()).await.expect("signing failed");
+        let mut encoded = Vec::new();
+        tx.into_signed(signature).encode_2718(&mut encoded);
+        encoded
+    }
+
+    /// Create a raw signed legacy transaction with the given gas price
+    async fn create_raw_tx_with_gas_price(target: &[u8; 20], nonce: u64, gas_price: u128) -> Vec<u8> {
         let signer = PrivateKeySigner::random();
         let tx = TxLegacy {
             chain_id: Some(1),
             nonce,
-            gas_price: 1_000_000_000,
+            gas_price,
             gas_limit: 21_000,
             to: TxKind::Call(AlloyAddress::from_slice(target)),
             value: U256::ZERO,
@@ -1094,6 +1256,7 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         }
     }
 
@@ -1384,6 +1547,7 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         };
 
         let id = record.id;
@@ -1418,6 +1582,7 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         };
 
         let id = record.id;
@@ -1451,6 +1616,7 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         };
 
         let id = record.id;
@@ -1483,6 +1649,7 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         };
 
         let id = record.id;
@@ -1502,11 +1669,11 @@ mod tests {
         assert_eq!(classify_unmined(false, 4, 5, 5), UnminedDiagnosis::Replaced);
         assert_eq!(classify_unmined(false, 5, 5, 5), UnminedDiagnosis::Dropped);
         assert_eq!(classify_unmined(false, 7, 5, 5), UnminedDiagnosis::Dropped);
-        assert_eq!(classify_unmined(true, 5, 5, 6), UnminedDiagnosis::Pending);
+        assert_eq!(classify_unmined(true, 5, 5, 6), UnminedDiagnosis::Queued);
         // Nonces 5, 6 and 7 are all pending: 7 is queued, not gapped.
-        assert_eq!(classify_unmined(true, 7, 5, 8), UnminedDiagnosis::Pending);
+        assert_eq!(classify_unmined(true, 7, 5, 8), UnminedDiagnosis::Queued);
         // Node not reporting mempool nonces: pending equals mined.
-        assert_eq!(classify_unmined(true, 5, 5, 5), UnminedDiagnosis::Pending);
+        assert_eq!(classify_unmined(true, 5, 5, 5), UnminedDiagnosis::Queued);
         assert_eq!(
             classify_unmined(true, 7, 5, 5),
             UnminedDiagnosis::NonceGap {
@@ -1538,6 +1705,7 @@ mod tests {
                 confirmed_at: None,
                 error_message: None,
                 safe_execution: None,
+                diagnosis: None,
             })
             .unwrap();
         tx_hash
@@ -1559,6 +1727,7 @@ mod tests {
         let updated = store.get(TEST_UUID).unwrap();
         assert_eq!(updated.status, TransactionStatus::Timeout);
         assert_eq!(updated.error_message, Some(UnminedDiagnosis::Replaced.message()));
+        assert_eq!(updated.diagnosis.unwrap().reason, UnminedReason::Replaced);
     }
 
     #[tokio::test]
@@ -1574,15 +1743,17 @@ mod tests {
         let updated = store.get(TEST_UUID).unwrap();
         assert_eq!(updated.status, TransactionStatus::Timeout);
         assert_eq!(updated.error_message, Some(UnminedDiagnosis::Dropped.message()));
+        assert_eq!(updated.diagnosis.unwrap().reason, UnminedReason::Dropped);
     }
 
     #[tokio::test]
-    async fn test_monitor_timeout_reports_pending_transaction() {
+    async fn test_monitor_timeout_reports_queued_transaction() {
         let store = Arc::new(TransactionStore::new());
         let provider = MockReceiptProvider::new();
 
-        let tx_hash = test_tx_hash();
-        provider.set_known(tx_hash);
+        // Signed with a 1 gwei gas price, which covers the recommendation.
+        provider.set_known(test_tx_hash());
+        provider.set_recommended_fees(900_000_000, 100_000_000);
         insert_expired_record(&store, create_raw_tx_to(&[0x11; 20]).await);
 
         let monitor = create_monitor(store.clone(), provider);
@@ -1590,11 +1761,79 @@ mod tests {
 
         let updated = store.get(TEST_UUID).unwrap();
         assert_eq!(updated.status, TransactionStatus::Timeout);
-        assert_eq!(updated.error_message, Some(UnminedDiagnosis::Pending.message()));
+        assert_eq!(updated.error_message, Some(UnminedDiagnosis::Queued.message()));
+        insta::assert_yaml_snapshot!(updated.diagnosis);
     }
 
     #[tokio::test]
-    async fn test_monitor_timeout_reports_queued_transaction_as_pending() {
+    async fn test_monitor_timeout_reports_underpriced_transaction() {
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        // The recommendation is above the 1 gwei the transaction was signed with.
+        provider.set_known(test_tx_hash());
+        provider.set_recommended_fees(2_000_000_000, 100_000_000);
+        insert_expired_record(&store, create_raw_tx_to(&[0x11; 20]).await);
+
+        let monitor = create_monitor(store.clone(), provider);
+        monitor.poll_once().await.unwrap();
+
+        let updated = store.get(TEST_UUID).unwrap();
+        assert_eq!(updated.status, TransactionStatus::Timeout);
+        assert_eq!(updated.error_message, Some(UnminedDiagnosis::Underpriced.message()));
+        insta::assert_yaml_snapshot!(updated.diagnosis);
+    }
+
+    #[tokio::test]
+    async fn test_monitor_timeout_underpriced_replacement_is_bumped_by_an_eighth() {
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        // The recommendation is only just above the signed fee, so the 12.5% bump dominates.
+        provider.set_known(test_tx_hash());
+        provider.set_recommended_fees(1_050_000_000, 50_000_000);
+        insert_expired_record(
+            &store,
+            create_raw_eip1559_tx(&[0x11; 20], 1_000_000_000, 10_000_000).await,
+        );
+
+        let monitor = create_monitor(store.clone(), provider);
+        monitor.poll_once().await.unwrap();
+
+        let diagnosis = store.get(TEST_UUID).unwrap().diagnosis.unwrap();
+        assert_eq!(diagnosis.reason, UnminedReason::Underpriced);
+        insta::assert_yaml_snapshot!(diagnosis);
+    }
+
+    #[tokio::test]
+    async fn test_monitor_timeout_reports_unknown_when_fee_estimate_fails() {
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        provider.set_known(test_tx_hash());
+        insert_expired_record(&store, create_raw_tx_to(&[0x11; 20]).await);
+
+        let monitor = create_monitor(store.clone(), provider);
+        monitor.poll_once().await.unwrap();
+
+        let updated = store.get(TEST_UUID).unwrap();
+        assert_eq!(updated.status, TransactionStatus::Timeout);
+        assert_eq!(updated.diagnosis.unwrap().reason, UnminedReason::Unknown);
+    }
+
+    #[test]
+    fn test_min_replacement_fees_round_up_and_respect_recommendation() {
+        let fees = |max_fee_per_gas, max_priority_fee_per_gas| FeePair {
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
+        };
+        assert_eq!(min_replacement_fees(fees(1_000, 8), fees(0, 0)), fees(1_125, 9));
+        assert_eq!(min_replacement_fees(fees(1_000, 8), fees(2_000, 100)), fees(2_000, 100));
+        assert_eq!(min_replacement_fees(fees(1, 1), fees(0, 0)), fees(2, 2));
+    }
+
+    #[tokio::test]
+    async fn test_monitor_timeout_reports_transaction_behind_pending_nonces_as_queued() {
         let store = Arc::new(TransactionStore::new());
         let provider = MockReceiptProvider::new();
 
@@ -1602,6 +1841,7 @@ mod tests {
         let raw_tx = create_raw_tx_with_nonce(&[0x11; 20], 7).await;
         let (signer, _) = decode_transaction_signer_and_nonce(&raw_tx).unwrap();
         provider.set_known(test_tx_hash());
+        provider.set_recommended_fees(900_000_000, 100_000_000);
         provider.set_mined_nonce(signer, 5);
         provider.set_pending_nonce(signer, 8);
         insert_expired_record(&store, raw_tx);
@@ -1611,7 +1851,8 @@ mod tests {
 
         let updated = store.get(TEST_UUID).unwrap();
         assert_eq!(updated.status, TransactionStatus::Timeout);
-        assert_eq!(updated.error_message, Some(UnminedDiagnosis::Pending.message()));
+        assert_eq!(updated.error_message, Some(UnminedDiagnosis::Queued.message()));
+        assert_eq!(updated.diagnosis.unwrap().reason, UnminedReason::Queued);
     }
 
     #[tokio::test]
@@ -1642,6 +1883,7 @@ mod tests {
                 .message()
             )
         );
+        assert_eq!(updated.diagnosis.unwrap().reason, UnminedReason::NonceGap);
     }
 
     #[tokio::test]
@@ -1679,6 +1921,7 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         };
 
         let record2 = TransactionRecord {
@@ -1690,6 +1933,7 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         };
 
         let id1 = record1.id;
@@ -1733,6 +1977,7 @@ mod tests {
                     confirmed_at: None,
                     error_message: None,
                     safe_execution: None,
+                    diagnosis: None,
                 })
                 .unwrap();
         }
@@ -1773,6 +2018,7 @@ mod tests {
                 confirmed_at: None,
                 error_message: None,
                 safe_execution: None,
+                diagnosis: None,
             })
             .unwrap();
 
@@ -1820,6 +2066,7 @@ mod tests {
                 confirmed_at: None,
                 error_message: None,
                 safe_execution: None,
+                diagnosis: None,
             })
             .unwrap();
 
@@ -1860,6 +2107,7 @@ mod tests {
                 confirmed_at: None,
                 error_message: None,
                 safe_execution: None,
+                diagnosis: None,
             })
             .unwrap();
 
@@ -1922,6 +2170,7 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         };
 
         store.insert(record.clone()).unwrap();
@@ -1956,6 +2205,7 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         };
 
         store.insert(record.clone()).unwrap();
@@ -1987,6 +2237,7 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         };
 
         store.insert(record.clone()).unwrap();
@@ -2011,6 +2262,7 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         };
 
         store.insert(record.clone()).unwrap();
@@ -2059,6 +2311,7 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         };
 
         let id = record.id;
@@ -2114,6 +2367,7 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         };
 
         store.insert(record.clone()).unwrap();
@@ -2166,6 +2420,7 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         };
 
         store.insert(record.clone()).unwrap();
@@ -2213,6 +2468,7 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         };
 
         store.insert(record.clone()).unwrap();
@@ -2260,6 +2516,7 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         };
 
         store.insert(record.clone()).unwrap();
@@ -2308,6 +2565,7 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         };
 
         store.insert(record.clone()).unwrap();

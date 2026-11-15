@@ -17,6 +17,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     broadcast_error::{BroadcastRejection, classify_broadcast_error},
+    fee_recommendation::{GasFeeFloors, RecommendedFees, recommended_fees},
     safe_execution::{decode_transaction_signer, decode_transaction_summary},
     transaction_executor::{ConfirmationError, RpcClient},
     transaction_monitor::{ReceiptLog, ReceiptProvider, TransactionReceipt},
@@ -29,12 +30,25 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct RpcAdapter<R: HttpRequestor + 'static + Clone> {
     rpc: Arc<RpcOperations<R>>,
+    gas_multiplier: f64,
+    gas_fee_floors: GasFeeFloors,
 }
 
 impl<R: HttpRequestor + 'static + Clone> RpcAdapter<R> {
     /// Create a new RPC adapter wrapping the given RpcOperations
     pub fn new(rpc: RpcOperations<R>) -> Self {
-        Self { rpc: Arc::new(rpc) }
+        Self {
+            rpc: Arc::new(rpc),
+            gas_multiplier: 1.0,
+            gas_fee_floors: GasFeeFloors::default(),
+        }
+    }
+
+    /// Set the multiplier and floors that turn the node's fee estimate into the recommended fee
+    pub fn with_fee_policy(mut self, gas_multiplier: f64, gas_fee_floors: GasFeeFloors) -> Self {
+        self.gas_multiplier = gas_multiplier;
+        self.gas_fee_floors = gas_fee_floors;
+        self
     }
 }
 
@@ -293,6 +307,12 @@ impl<R: HttpRequestor + 'static + Clone> ReceiptProvider for RpcAdapter<R> {
             .pending()
             .await
             .map_err(|e| format!("Pending nonce lookup error: {e}"))
+    }
+
+    async fn get_recommended_fees(&self) -> Result<RecommendedFees, String> {
+        recommended_fees(&*self.rpc, self.gas_multiplier, self.gas_fee_floors)
+            .await
+            .map_err(|e| format!("Fee estimate error: {e}"))
     }
 }
 

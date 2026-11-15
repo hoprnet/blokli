@@ -25,6 +25,7 @@ fn insert_submitted_transaction(store: &TransactionStore, id: Uuid) -> anyhow::R
         confirmed_at: None,
         error_message: None,
         safe_execution: None,
+        diagnosis: None,
     })?;
     Ok(())
 }

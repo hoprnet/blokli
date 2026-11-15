@@ -13,3 +13,4 @@ safe_execution:
   success: true
   safe_tx_hash: "0xee00000000000000000000000000000000000000000000000000000000000000"
   revert_reason: ~
+diagnosis: ~

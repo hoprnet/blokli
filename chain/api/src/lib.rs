@@ -160,7 +160,10 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         // Build transaction submission infrastructure
         let transaction_store = Arc::new(TransactionStore::new());
         let transaction_validator = Arc::new(TransactionValidator::new());
-        let rpc_adapter = Arc::new(RpcAdapter::new(rpc_operations.clone()));
+        let rpc_adapter = Arc::new(RpcAdapter::new(rpc_operations.clone()).with_fee_policy(
+            transaction_monitor_config.gas_multiplier,
+            transaction_monitor_config.gas_fee_floors,
+        ));
 
         let safe_checker = Arc::new(DbSafeAddressChecker::new(db.clone()));
 

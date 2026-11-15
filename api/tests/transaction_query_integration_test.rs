@@ -60,6 +60,7 @@ async fn test_transaction_query_finds_existing_transaction() -> Result<()> {
         confirmed_at: None,
         error_message: None,
         safe_execution: None,
+        diagnosis: None,
     };
     ctx.store.insert(record)?;
 
@@ -210,6 +211,7 @@ async fn test_transaction_query_all_status_types() -> Result<()> {
             },
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         };
         ctx.store.insert(record)?;
 
@@ -249,6 +251,7 @@ async fn test_transaction_query_uuid_format_variations() -> Result<()> {
         confirmed_at: None,
         error_message: None,
         safe_execution: None,
+        diagnosis: None,
     };
     ctx.store.insert(record)?;
 
@@ -331,6 +334,7 @@ async fn test_transaction_query_with_safe_execution_success() -> Result<()> {
             safe_tx_hash: Some(Hash::default()),
             revert_reason: None,
         }),
+        diagnosis: None,
     };
     ctx.store.insert(record)?;
 
@@ -387,6 +391,7 @@ async fn test_transaction_query_with_safe_execution_failure() -> Result<()> {
             safe_tx_hash: None,
             revert_reason: Some("Arithmetic overflow".to_string()),
         }),
+        diagnosis: None,
     };
     ctx.store.insert(record)?;
 
@@ -433,6 +438,7 @@ async fn test_transaction_query_without_safe_execution() -> Result<()> {
         confirmed_at: Some(chrono::Utc::now()),
         error_message: None,
         safe_execution: None,
+        diagnosis: None,
     };
     ctx.store.insert(record)?;
 

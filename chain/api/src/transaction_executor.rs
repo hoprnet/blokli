@@ -387,6 +387,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         };
 
         if let Err(e) = self.transaction_store.insert_reserved(record, reservation) {
@@ -460,6 +461,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             confirmed_at: Some(Utc::now()),
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         };
 
         if let (Some(receipt_provider), Some(safe_checker)) =

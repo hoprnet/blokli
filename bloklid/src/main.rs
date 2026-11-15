@@ -16,8 +16,8 @@ use args::{Args, Command, generate_config_template, peek_verbosity_from_env_args
 use async_signal::{Signal, Signals};
 use blokli_api::server::ApiDatabases;
 use blokli_chain_api::{
-    BlokliChain, hopr_policy::HoprPolicyConfig, transaction_executor::RawTransactionExecutorConfig,
-    transaction_monitor::TransactionMonitorConfig,
+    BlokliChain, fee_recommendation::GasFeeFloors, hopr_policy::HoprPolicyConfig,
+    transaction_executor::RawTransactionExecutorConfig, transaction_monitor::TransactionMonitorConfig,
 };
 use blokli_chain_indexer::{snapshot::SnapshotManager, startup, utils::redact_url};
 use blokli_db::{
@@ -304,6 +304,12 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
             safe_inspection_timeout: api_config.transactions.safe_inspection_timeout,
             revert_reason_timeout: api_config.transactions.revert_reason_timeout,
             max_concurrent_checks: api_config.transactions.max_concurrent_checks,
+            expected_block_time: Duration::from_secs(chain_network.expected_block_time),
+            gas_multiplier: api_config.gas_multiplier,
+            gas_fee_floors: GasFeeFloors {
+                min_priority_fee_per_gas: u128::from(api_config.min_priority_fee_per_gas),
+                min_max_fee_per_gas: u128::from(api_config.min_max_fee_per_gas),
+            },
             ..Default::default()
         };
         let blokli_chain = BlokliChain::new(

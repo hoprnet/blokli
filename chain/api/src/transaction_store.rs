@@ -64,6 +64,46 @@ fn serialize_hash<S: serde::Serializer>(hash: &Hash, s: S) -> Result<S::Ok, S::E
     s.serialize_str(&hash.to_hex())
 }
 
+/// Why a submitted transaction was not mined before it timed out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum UnminedReason {
+    /// The node holds the transaction, but it was signed below the current recommended fee.
+    Underpriced,
+    /// The node holds the transaction, signed at or above the recommended fee, and it waits
+    /// behind earlier pending transactions of the signer.
+    Queued,
+    /// An earlier nonce of the signer is neither mined nor pending.
+    NonceGap,
+    /// The node no longer knows the transaction and its nonce is still unused.
+    Dropped,
+    /// The node no longer knows the transaction and its nonce was consumed by another one.
+    Replaced,
+    /// The reason could not be established.
+    Unknown,
+}
+
+/// EIP-1559 fee pair in wei.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct FeePair {
+    pub max_fee_per_gas: u128,
+    pub max_priority_fee_per_gas: u128,
+}
+
+/// Structured explanation of a transaction that timed out unmined.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct TransactionDiagnosis {
+    /// Why the transaction was not mined
+    pub reason: UnminedReason,
+    /// Fees the transaction was signed with
+    pub signed_fees: Option<FeePair>,
+    /// Fees a transaction should currently be signed with, when the reason depends on them
+    pub recommended_fees: Option<FeePair>,
+    /// Lowest fees at which a replacement would be accepted, when the transaction is still held
+    pub min_replacement_fees: Option<FeePair>,
+    /// How long to wait before checking or retrying
+    pub retry_after: Duration,
+}
+
 /// Status of a submitted transaction
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum TransactionStatus {
@@ -138,6 +178,8 @@ pub struct TransactionRecord {
     pub error_message: Option<String>,
     /// Internal Safe execution result (populated after confirmation for Safe transactions)
     pub safe_execution: Option<SafeExecutionResult>,
+    /// Why the transaction was not mined (populated when it times out)
+    pub diagnosis: Option<TransactionDiagnosis>,
 }
 
 /// Identity used for per-client submission fairness.
@@ -462,6 +504,7 @@ impl TransactionStore {
                     confirmed_at: record.confirmed_at,
                     error_message: record.error_message.clone(),
                     safe_execution: record.safe_execution.clone(),
+                    diagnosis: record.diagnosis,
                 }
             })
             .ok_or(TransactionStoreError::NotFound(id))
@@ -508,6 +551,20 @@ impl TransactionStore {
         status: TransactionStatus,
         error_message: Option<String>,
     ) -> Result<(), TransactionStoreError> {
+        self.update_status_with_diagnosis(id, status, error_message, None)
+    }
+
+    /// Update the status of a transaction together with its unmined diagnosis.
+    ///
+    /// # Errors
+    /// Returns `TransactionStoreError::NotFound` if the transaction doesn't exist
+    pub fn update_status_with_diagnosis(
+        &self,
+        id: Uuid,
+        status: TransactionStatus,
+        error_message: Option<String>,
+        diagnosis: Option<TransactionDiagnosis>,
+    ) -> Result<(), TransactionStoreError> {
         // Update the transaction and extract delta fields for event
         let (confirmed_at, error_msg, identity) = self
             .transactions
@@ -516,6 +573,7 @@ impl TransactionStore {
                 let record = entry.value_mut();
                 record.status = status;
                 record.error_message = error_message.clone();
+                record.diagnosis = diagnosis;
 
                 // Set confirmed_at timestamp if status is Confirmed
                 if status == TransactionStatus::Confirmed && record.confirmed_at.is_none() {
@@ -577,6 +635,7 @@ impl TransactionStore {
                     record.confirmed_at = Some(Utc::now());
                 }
                 record.safe_execution = safe_execution;
+                record.diagnosis = None;
                 record.confirmed_at
             })
             .ok_or(TransactionStoreError::NotFound(id))?;
@@ -873,6 +932,7 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         };
 
         let id = record.id;
@@ -898,6 +958,7 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         };
 
         assert!(store.insert(record.clone()).is_ok());
@@ -929,6 +990,7 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         };
 
         let id = record.id;
@@ -977,6 +1039,7 @@ mod tests {
                 confirmed_at: None,
                 error_message: None,
                 safe_execution: None,
+                diagnosis: None,
             };
 
             store.insert(record).unwrap();
@@ -1007,6 +1070,7 @@ mod tests {
                     confirmed_at: None,
                     error_message: None,
                     safe_execution: None,
+                    diagnosis: None,
                 };
                 store_clone1.insert(record).unwrap();
             }
@@ -1024,6 +1088,7 @@ mod tests {
                     confirmed_at: None,
                     error_message: None,
                     safe_execution: None,
+                    diagnosis: None,
                 };
                 store_clone2.insert(record).unwrap();
             }
@@ -1049,6 +1114,7 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         };
 
         let id = record.id;
@@ -1064,6 +1130,7 @@ mod tests {
             confirmed_at: Some(test_timestamp()),
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         };
 
         store.update(updated_record.clone()).unwrap();
@@ -1089,6 +1156,7 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         };
 
         let id = record.id;
@@ -1145,6 +1213,7 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         };
 
         let id = record.id;
@@ -1184,6 +1253,7 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         };
 
         let id = record.id;
@@ -1218,6 +1288,7 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         };
 
         let id = record.id;
@@ -1251,6 +1322,7 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         };
 
         let id = record.id;
@@ -1301,6 +1373,7 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
         }
     }
 
