@@ -1,6 +1,6 @@
 //! GraphQL query root and resolver implementations
 
-use std::{collections::HashMap, future::Future, sync::Arc, time::Duration};
+use std::{collections::HashMap, fmt::Display, future::Future, sync::Arc, time::Duration};
 
 use async_graphql::{Context, ID, Object, Result, SimpleObject, Union};
 use blokli_api_types::{
@@ -16,7 +16,9 @@ use blokli_api_types::{
 };
 use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_indexer::IndexerState;
-use blokli_chain_rpc::{FeeHistorySnapshot, HoprIndexerRpcOperations, HoprRpcOperations, rpc::RpcOperations};
+use blokli_chain_rpc::{
+    Eip1559FeeEstimation, FeeHistorySnapshot, HoprIndexerRpcOperations, HoprRpcOperations, rpc::RpcOperations,
+};
 use blokli_chain_types::ContractAddresses;
 use blokli_db_entity::{
     account, chain_info,
@@ -379,6 +381,41 @@ fn fees_from_fee_history(snapshot: FeeHistorySnapshot, gas_multiplier: f64, floo
         .saturating_add(scale_wei_by_multiplier(base_fee, floors.base_fee_headroom_factor))
         .max(floors.min_max_fee_per_gas);
     (max_fee, priority_fee)
+}
+
+/// Resolve the `(maxFeePerGas, maxPriorityFeePerGas)` strings exposed by `chainInfo`.
+///
+/// Uses the fee history snapshot when it is available. Otherwise `estimate` is awaited through the cache and the
+/// legacy estimate is raised to the floors. Returns `None` when both sources fail.
+async fn resolve_chain_info_fees<E, F>(
+    fee_cache: &FeeEstimateCache,
+    fee_history: Result<FeeHistorySnapshot, String>,
+    estimate: F,
+    gas_multiplier: f64,
+    floors: GasFeeFloors,
+) -> Option<(String, String)>
+where
+    F: Future<Output = Result<Eip1559FeeEstimation, E>>,
+    E: Display,
+{
+    let (max_fee, priority_fee) = match fee_history {
+        Ok(snapshot) => fees_from_fee_history(snapshot, gas_multiplier, floors),
+        Err(e) => {
+            warn!(error = %e, "failed to fetch fee history for chain_info, falling back to the eip1559 estimate");
+            match fee_cache.eip1559_fees(estimate).await {
+                Ok(fees) => apply_gas_fee_floors(
+                    scale_wei_by_multiplier(fees.max_fee_per_gas, gas_multiplier),
+                    scale_wei_by_multiplier(fees.max_priority_fee_per_gas, gas_multiplier),
+                    floors,
+                ),
+                Err(e) => {
+                    warn!(error = %e, "failed to fetch eip1559 fee estimate for chain_info");
+                    return None;
+                }
+            }
+        }
+    };
+    Some((max_fee.to_string(), priority_fee.to_string()))
 }
 
 fn safe_from_current_row(
@@ -2670,32 +2707,17 @@ impl QueryRoot {
                 }
             }
 
-            match fee_history_result {
-                Ok(snapshot) => {
-                    let (max_fee, priority_fee) = fees_from_fee_history(snapshot, gas_multiplier, gas_fee_floors);
-                    max_fee_per_gas = Some(max_fee.to_string());
-                    max_priority_fee_per_gas = Some(priority_fee.to_string());
-                }
-                Err(e) => {
-                    warn!(error = %e, "failed to fetch fee history for chain_info, falling back to the eip1559 estimate");
-                    match fee_cache
-                        .eip1559_fees(HoprRpcOperations::estimate_eip1559_fees(&**rpc))
-                        .await
-                    {
-                        Ok(fees) => {
-                            let (max_fee, priority_fee) = apply_gas_fee_floors(
-                                scale_wei_by_multiplier(fees.max_fee_per_gas, gas_multiplier),
-                                scale_wei_by_multiplier(fees.max_priority_fee_per_gas, gas_multiplier),
-                                gas_fee_floors,
-                            );
-                            max_fee_per_gas = Some(max_fee.to_string());
-                            max_priority_fee_per_gas = Some(priority_fee.to_string());
-                        }
-                        Err(e) => {
-                            warn!(error = %e, "failed to fetch eip1559 fee estimate for chain_info");
-                        }
-                    }
-                }
+            if let Some((max_fee, priority_fee)) = resolve_chain_info_fees(
+                &fee_cache,
+                fee_history_result,
+                HoprRpcOperations::estimate_eip1559_fees(&**rpc),
+                gas_multiplier,
+                gas_fee_floors,
+            )
+            .await
+            {
+                max_fee_per_gas = Some(max_fee);
+                max_priority_fee_per_gas = Some(priority_fee);
             }
         }
 
@@ -2995,7 +3017,7 @@ mod tests {
 
     use anyhow::anyhow;
     use async_graphql::Schema;
-    use blokli_chain_rpc::FeeHistorySnapshot;
+    use blokli_chain_rpc::{Eip1559FeeEstimation, FeeHistorySnapshot};
     use blokli_chain_types::ContractAddresses;
     use blokli_db::{
         BlokliDbGeneralModelOperations, TargetDb,
@@ -3015,10 +3037,11 @@ mod tests {
 
     use super::{
         QueryRoot, RPC_FANOUT_CONCURRENCY, SAFES_BALANCE_MAX_SAFES, apply_gas_fee_floors, check_safes_balance_cap,
-        collect_with_bounded_concurrency, fees_from_fee_history, owners_for_safe, safe_from_current_row,
-        scale_wei_by_multiplier,
+        collect_with_bounded_concurrency, fees_from_fee_history, owners_for_safe, resolve_chain_info_fees,
+        safe_from_current_row, scale_wei_by_multiplier,
     };
     use crate::{
+        cache::FeeEstimateCache,
         curvy::{validate_dense_page, validate_page_start},
         errors,
         schema::{ChainId, GasFeeFloors, GasMultiplier, NetworkName},
@@ -3107,6 +3130,78 @@ mod tests {
         assert_eq!(max_fee, 50_000_000 + 8 * 229_083_357);
         // A 300k gas transaction pays base fee plus the capped tip, below 0.0001 xDAI
         assert!(300_000 * (229_083_357 + priority_fee) < 100_000_000_000_000);
+    }
+
+    fn alloy_estimate(max_fee: u128, priority_fee: u128) -> Result<Eip1559FeeEstimation, String> {
+        Ok(Eip1559FeeEstimation {
+            max_fee_per_gas: max_fee,
+            max_priority_fee_per_gas: priority_fee,
+        })
+    }
+
+    #[tokio::test]
+    async fn test_chain_info_fees_use_fee_history_when_available() {
+        let cache = FeeEstimateCache::new(Duration::from_secs(60));
+        let fees = resolve_chain_info_fees(
+            &cache,
+            Ok(snapshot(229_083_357, 100_000_000)),
+            std::future::ready(alloy_estimate(1, 1)),
+            1.0,
+            HEADROOM_FLOORS,
+        )
+        .await;
+        let (max_fee, priority_fee) = fees_from_fee_history(snapshot(229_083_357, 100_000_000), 1.0, HEADROOM_FLOORS);
+        assert_eq!(fees, Some((max_fee.to_string(), priority_fee.to_string())));
+    }
+
+    #[tokio::test]
+    async fn test_chain_info_fees_fall_back_to_the_alloy_estimate() {
+        let cache = FeeEstimateCache::new(Duration::from_secs(60));
+        let fees = resolve_chain_info_fees(
+            &cache,
+            Err("fee history unsupported".to_string()),
+            std::future::ready(alloy_estimate(21, 1)),
+            1.0,
+            FLOORS,
+        )
+        .await;
+        // Same result as the pre-change path: scaled estimate raised to the floors
+        assert_eq!(
+            fees,
+            Some((
+                apply_gas_fee_floors(21, 1, FLOORS).0.to_string(),
+                apply_gas_fee_floors(21, 1, FLOORS).1.to_string()
+            ))
+        );
+        assert_eq!(fees, Some(("5000000".to_string(), "100".to_string())));
+    }
+
+    #[tokio::test]
+    async fn test_chain_info_fees_fallback_applies_the_multiplier() {
+        let cache = FeeEstimateCache::new(Duration::from_secs(60));
+        let fees = resolve_chain_info_fees(
+            &cache,
+            Err("fee history unsupported".to_string()),
+            std::future::ready(alloy_estimate(3_000_000_000, 1_000_000_000)),
+            1.5,
+            FLOORS,
+        )
+        .await;
+        assert_eq!(fees, Some(("4500000000".to_string(), "1500000000".to_string())));
+    }
+
+    #[tokio::test]
+    async fn test_chain_info_fees_are_none_when_both_sources_fail() {
+        let cache = FeeEstimateCache::new(Duration::from_secs(60));
+        let fees = resolve_chain_info_fees(
+            &cache,
+            Err("fee history unsupported".to_string()),
+            std::future::ready(Err::<Eip1559FeeEstimation, _>("rpc down".to_string())),
+            1.0,
+            FLOORS,
+        )
+        .await;
+        assert_eq!(fees, None);
     }
 
     #[test]
