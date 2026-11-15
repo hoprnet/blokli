@@ -509,6 +509,18 @@ config:
     ## @param config.api.gasMultiplier Multiplier for gas estimation to provide a safety margin (e.g., 1.2 for 20% extra)
     ##
     gasMultiplier: 1.2
+    ## @param config.api.minMaxFeePerGas Lower bound, in wei, for the maxFeePerGas exposed by chainInfo, applied after gasMultiplier. It only caps the price paid; nodes must hold gas_limit x maxFeePerGas upfront. Must be >= minPriorityFeePerGas
+    ##
+    minMaxFeePerGas: 500000000
+    ## @param config.api.minPriorityFeePerGas Lower bound, in wei, for the maxPriorityFeePerGas exposed by chainInfo, applied after gasMultiplier
+    ##
+    minPriorityFeePerGas: 10000000
+    ## @param config.api.maxPriorityFeePerGas Upper bound, in wei, for the maxPriorityFeePerGas exposed by chainInfo, applied after gasMultiplier. Bounds the tip a transaction pays. Must be >= minPriorityFeePerGas
+    ##
+    maxPriorityFeePerGas: 50000000
+    ## @param config.api.baseFeeHeadroomFactor Multiple of the next-block base fee included in the maxFeePerGas exposed by chainInfo. Must be >= 1
+    ##
+    baseFeeHeadroomFactor: 8
     # Health check configuration
     health:
       ## @param config.api.health.maxIndexerLag Maximum indexer lag (blocks) before readiness fails

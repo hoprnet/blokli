@@ -57,6 +57,11 @@ data:
     playground_enabled = {{ .Values.config.api.playgroundEnabled }}
     {{- $gm := .Values.config.api.gasMultiplier | toString }}
     gas_multiplier = {{ if contains "." $gm }}{{ $gm }}{{ else }}{{ $gm }}.0{{ end }}
+    min_max_fee_per_gas = {{ .Values.config.api.minMaxFeePerGas | int }}
+    min_priority_fee_per_gas = {{ .Values.config.api.minPriorityFeePerGas | int }}
+    max_priority_fee_per_gas = {{ .Values.config.api.maxPriorityFeePerGas | int }}
+    {{- $bf := .Values.config.api.baseFeeHeadroomFactor | toString }}
+    base_fee_headroom_factor = {{ if contains "." $bf }}{{ $bf }}{{ else }}{{ $bf }}.0{{ end }}
 
     # Health check configuration
     [api.health]

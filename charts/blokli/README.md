@@ -199,6 +199,10 @@ The command removes all the Kubernetes components associated with the chart and 
 | `config.api.bindAddress`                             | Address and port for the API server to bind to                                                                | `0.0.0.0:8080`      |
 | `config.api.playgroundEnabled`                       | Enable GraphQL Playground for development and testing. Recommended to set to false for production deployments | `false`             |
 | `config.api.gasMultiplier`                           | Multiplier for gas estimation to provide a safety margin (e.g., 1.2 for 20% extra)                            | `1.2`               |
+| `config.api.minMaxFeePerGas` | Lower bound, in wei, for the maxFeePerGas exposed by chainInfo, applied after gasMultiplier. Must be >= minPriorityFeePerGas | `500000000` |
+| `config.api.minPriorityFeePerGas` | Lower bound, in wei, for the maxPriorityFeePerGas exposed by chainInfo, applied after gasMultiplier | `10000000` |
+| `config.api.maxPriorityFeePerGas` | Upper bound, in wei, for the maxPriorityFeePerGas exposed by chainInfo, applied after gasMultiplier. Must be >= minPriorityFeePerGas | `50000000` |
+| `config.api.baseFeeHeadroomFactor` | Multiple of the next-block base fee included in the maxFeePerGas exposed by chainInfo. Must be >= 1 | `8` |
 | `config.api.health.maxIndexerLag`                    | Maximum indexer lag (blocks) before readiness fails                                                           | `10`                |
 | `config.api.health.timeout`                          | Timeout for health check operations                                                                           | `5s`                |
 | `config.api.health.readinessCheckInterval`           | Interval for periodic readiness checks                                                                        | `60s`               |
