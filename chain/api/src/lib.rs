@@ -2,6 +2,7 @@
 
 pub mod broadcast_error;
 pub mod errors;
+pub mod fee_recommendation;
 pub mod hopr_action;
 pub mod hopr_policy;
 pub mod metrics;

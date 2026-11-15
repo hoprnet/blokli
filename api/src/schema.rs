@@ -3,6 +3,7 @@
 use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc};
 
 use async_graphql::{ObjectType, Schema, SubscriptionType};
+pub use blokli_chain_api::fee_recommendation::GasFeeFloors;
 use blokli_chain_api::{
     DefaultHttpRequestor, rpc_adapter::RpcAdapter, transaction_executor::RawTransactionExecutor,
     transaction_store::TransactionStore,
@@ -26,15 +27,6 @@ pub struct Finality(pub u16);
 /// Wrapper type for gas multiplier to avoid type confusion in context
 #[derive(Debug, Clone, Copy)]
 pub struct GasMultiplier(pub f64);
-
-/// Lower bounds, in wei, for the EIP-1559 fee estimates exposed by chainInfo
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct GasFeeFloors {
-    /// Minimum `maxPriorityFeePerGas`
-    pub min_priority_fee_per_gas: u128,
-    /// Minimum `maxFeePerGas`
-    pub min_max_fee_per_gas: u128,
-}
 
 /// Wrapper type for chain ID to avoid type confusion in context
 #[derive(Debug, Clone, Copy)]
