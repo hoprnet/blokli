@@ -137,7 +137,7 @@
         "maxRpcRequestsPerSec": {
           "type": "integer",
           "minimum": 0,
-          "description": "Maximum RPC requests per second"
+          "description": "Hard cap on RPC requests per second, retries included (0 = unlimited)"
         },
         "maxBlockRange": {
           "type": "integer",
