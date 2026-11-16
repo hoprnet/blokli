@@ -300,6 +300,10 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
             max_queued_trace_jobs: api_config.transactions.max_queued_trace_jobs,
             max_concurrent_trace_jobs: api_config.transactions.max_concurrent_trace_jobs,
             enable_revert_reason_tracing: api_config.transactions.enable_revert_reason_tracing,
+            request_timeout: api_config.transactions.request_timeout,
+            safe_inspection_timeout: api_config.transactions.safe_inspection_timeout,
+            revert_reason_timeout: api_config.transactions.revert_reason_timeout,
+            max_concurrent_checks: api_config.transactions.max_concurrent_checks,
             ..Default::default()
         };
         let blokli_chain = BlokliChain::new(

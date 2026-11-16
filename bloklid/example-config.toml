@@ -14,7 +14,9 @@ network = "jura-dev"
 # If not specified, uses the network's default RPC endpoint (default: http://localhost:8545)
 rpc_url = "http://localhost:8545"
 
-# Maximum number of RPC requests per second (0 for unlimited)
+# Hard cap on RPC requests per second, enforced by a token bucket on the shared RPC client
+# (indexer, transaction executor, transaction monitor and API all share this budget).
+# Retried requests count towards the cap. A burst of up to a tenth of the rate (at least 1 request) is allowed.
 # If omitted, defaults to 100 req/sec. Set to 0 for unlimited, or a positive value to override the default.
 max_rpc_requests_per_sec = 0
 
@@ -197,6 +199,20 @@ terminal_transaction_ttl  = "24h"
 # Set either to 0 for unbounded. Defaults: queue 128 jobs and run 2 concurrently.
 max_concurrent_trace_jobs = 2
 max_queued_trace_jobs     = 128
+
+# Limits for the background receipt monitor. Durations accept humantime strings ("30s", "1m").
+# request_timeout:         maximum time for one transaction receipt RPC request (default: "30s")
+# safe_inspection_timeout: maximum time to determine the inner outcome of a confirmed Safe
+#                          transaction; on timeout the transaction stays submitted and is retried
+#                          (default: "30s")
+# revert_reason_timeout:   maximum time for one optional Safe revert-reason trace (default: "30s")
+# max_concurrent_checks:   maximum number of receipt checks running at the same time (default: 16)
+# The three durations and max_concurrent_checks must be greater than zero; bloklid refuses to
+# start otherwise.
+max_concurrent_checks   = 16
+request_timeout         = "30s"
+revert_reason_timeout   = "30s"
+safe_inspection_timeout = "30s"
 
 # Set false for RPC providers that do not expose debug_traceTransaction.
 # Safe success/failure status remains available from the transaction receipt.

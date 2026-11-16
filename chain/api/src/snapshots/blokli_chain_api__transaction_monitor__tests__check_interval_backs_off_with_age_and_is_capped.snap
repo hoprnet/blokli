@@ -1,0 +1,12 @@
+---
+source: chain/api/src/transaction_monitor.rs
+expression: intervals
+---
+- 5
+- 5
+- 10
+- 10
+- 20
+- 30
+- 30
+- 30

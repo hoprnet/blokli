@@ -456,7 +456,7 @@ config:
   ## @param config.rpcUrl Blockchain RPC URL
   ##
   rpcUrl: ""
-  ## @param config.maxRpcRequestsPerSec Maximum RPC requests per second (0 = unlimited)
+  ## @param config.maxRpcRequestsPerSec Hard cap on RPC requests per second, retries included (0 = unlimited)
   ##
   maxRpcRequestsPerSec: 0
   ## @param config.maxBlockRange Ceiling for adaptive eth_getLogs block ranges (0 = auto-discover up to 10000)
