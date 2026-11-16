@@ -196,6 +196,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 enable_safe_indexing: cfg.indexer.enable_safe_indexing,
                 enable_curvy_indexing: cfg.indexer.enable_curvy_indexing,
                 logs_snapshot_url: cfg.indexer.logs_snapshot_url.clone(),
+                logs_snapshot_sha256: cfg.indexer.logs_snapshot_sha256.clone(),
                 data_directory: cfg.data_directory.clone(),
                 event_bus_capacity: cfg.indexer.subscription.event_bus_capacity,
                 shutdown_signal_capacity: cfg.indexer.subscription.shutdown_signal_capacity,
