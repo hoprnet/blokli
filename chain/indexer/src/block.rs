@@ -97,6 +97,34 @@ where
     }
 }
 
+/// Attempts made to list the Safes pending an owner snapshot when the continuous phase starts.
+const PENDING_SAFES_LOOKUP_ATTEMPTS: u32 = 5;
+
+/// Wait before the first retry of the pending Safes lookup; it doubles after every failure.
+const PENDING_SAFES_LOOKUP_INITIAL_BACKOFF: Duration = Duration::from_millis(500);
+
+/// Lists the Safes still missing an owner snapshot (retrying the lookup) and reports each to the refresh task.
+///
+/// Returns the number of Safes queued, or the last error once the attempts are used up.
+async fn queue_pending_safe_owner_snapshots<E, F, Fut>(
+    lookup: F,
+    state: &IndexerState,
+    attempts: u32,
+    initial_backoff: Duration,
+) -> StdResult<usize, E>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = StdResult<Vec<Address>, E>>,
+    E: FmtDisplay,
+{
+    let pending = retry_with_backoff(attempts, initial_backoff, lookup).await?;
+    let queued = pending.len();
+    for safe_address in pending {
+        state.mark_safe_owner_snapshot_pending(safe_address);
+    }
+    Ok(queued)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Display)]
 enum LogFilterPhase {
     HistoricalDiscovery,
@@ -540,27 +568,37 @@ where
             let latest_processed_block = Arc::new(AtomicU64::new(refresh_goal_block));
             let (snapshot_tx, mut snapshot_rx) = channel::<SafeSnapshotRead>(SAFE_SNAPSHOT_CONCURRENCY * 2);
             let rpc = Arc::new(rpc);
+            // The lookup of the Safes to refresh is retried; if it keeps failing the phase fails below, because
+            // nothing rescans later and Safes whose owners changed during downtime would stay stale.
+            let mut startup_failure: Option<String> = None;
             let _owner_refresh_guard = if self.cfg.enable_safe_indexing {
-                match db.get_safes_pending_owner_snapshot(None, refresh_goal_block).await {
-                    Ok(pending) => {
+                match queue_pending_safe_owner_snapshots(
+                    || db.get_safes_pending_owner_snapshot(None, refresh_goal_block),
+                    &indexer_state,
+                    PENDING_SAFES_LOOKUP_ATTEMPTS,
+                    PENDING_SAFES_LOOKUP_INITIAL_BACKOFF,
+                )
+                .await
+                {
+                    Ok(queued) => {
                         info!(
-                            safes = pending.len(),
+                            safes = queued,
                             snapshot_block = refresh_goal_block,
                             "Safes pending an owner snapshot"
                         );
-                        for safe_address in pending {
-                            indexer_state.mark_safe_owner_snapshot_pending(safe_address);
-                        }
+                        Some(AbortOnDrop(tokio::spawn(supervise_safe_owner_refresh(
+                            rpc.clone(),
+                            indexer_state.clone(),
+                            latest_processed_block.clone(),
+                            snapshot_tx,
+                            RefreshTimings::default(),
+                        ))))
                     }
-                    Err(error) => error!(%error, "failed to list Safes pending an owner snapshot"),
+                    Err(error) => {
+                        startup_failure = Some(format!("failed to list Safes pending an owner snapshot: {error}"));
+                        None
+                    }
                 }
-                Some(AbortOnDrop(tokio::spawn(supervise_safe_owner_refresh(
-                    rpc.clone(),
-                    indexer_state.clone(),
-                    latest_processed_block.clone(),
-                    snapshot_tx,
-                    RefreshTimings::default(),
-                ))))
             } else {
                 None
             };
@@ -570,6 +608,9 @@ where
             // A failure here must not leave the process running without an indexer, so it is
             // funnelled into the same termination handling as an exhausted event stream.
             let termination_reason: Option<String> = 'stream_refresh: loop {
+                if let Some(reason) = startup_failure.take() {
+                    break 'stream_refresh Some(reason);
+                }
                 let log_filters = match Self::generate_log_filters(
                     &db,
                     &logs_handler,
@@ -4876,6 +4917,57 @@ mod tests {
         assert_eq!(found_state.published_log_index, 0, "Should use synthetic log_index 0");
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_pending_safes_lookup_that_recovers_queues_the_safes() {
+        let state = IndexerState::default();
+        let calls = StdAtomicUsize::new(0);
+        let safes = vec![Address::from([0x51; 20]), Address::from([0x52; 20])];
+
+        let queued = queue_pending_safe_owner_snapshots(
+            || {
+                let call = calls.fetch_add(1, StdOrdering::SeqCst) + 1;
+                let safes = safes.clone();
+                async move {
+                    if call < 2 {
+                        Err("db stall".to_string())
+                    } else {
+                        Ok(safes)
+                    }
+                }
+            },
+            &state,
+            3,
+            Duration::from_millis(1),
+        )
+        .await;
+
+        assert_eq!(queued, Ok(2));
+        assert_eq!(calls.load(StdOrdering::SeqCst), 2);
+        let mut pending = state.take_pending_safe_owner_snapshots();
+        pending.sort();
+        assert_eq!(pending, safes);
+    }
+
+    #[tokio::test]
+    async fn test_pending_safes_lookup_that_keeps_failing_returns_the_error() {
+        let state = IndexerState::default();
+        let calls = StdAtomicUsize::new(0);
+
+        let queued = queue_pending_safe_owner_snapshots(
+            || {
+                let call = calls.fetch_add(1, StdOrdering::SeqCst) + 1;
+                async move { Err::<Vec<Address>, _>(format!("db stall {call}")) }
+            },
+            &state,
+            3,
+            Duration::from_millis(1),
+        )
+        .await;
+
+        assert_eq!(queued, Err("db stall 3".to_string()));
+        assert!(state.take_pending_safe_owner_snapshots().is_empty());
     }
 
     #[tokio::test]
