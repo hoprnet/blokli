@@ -367,6 +367,15 @@ impl IndexerState {
         }
     }
 
+    /// Whether the Safe has an owner snapshot that was requested and is not stored yet.
+    pub fn is_safe_owner_snapshot_unsynced(&self, safe_address: Address) -> bool {
+        self.safe_owner_sync
+            .unsynced
+            .lock()
+            .map(|unsynced| unsynced.contains(&safe_address))
+            .unwrap_or(false)
+    }
+
     /// Number of Safes whose owner snapshot has been requested and not stored yet.
     pub fn unsynced_safe_owner_snapshots(&self) -> usize {
         self.safe_owner_sync
