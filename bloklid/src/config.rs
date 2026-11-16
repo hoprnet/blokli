@@ -1,6 +1,6 @@
 use std::{fmt, time::Duration};
 
-use blokli_chain_indexer::utils::redact_url;
+use blokli_chain_indexer::{snapshot::download::normalize_sha256_hex, utils::redact_url};
 use blokli_chain_types::{ChainConfig, ContractAddresses};
 use blokli_db::utils::redact_database_url;
 use hopr_types::primitive::primitives::Address;
@@ -263,6 +263,7 @@ pub struct Config {
     #[serde(default = "default_rpc_url")]
     pub rpc_url: String,
 
+    /// Hard cap on RPC requests per second (`None` = 100, `Some(0)` = unlimited).
     #[serde(default)]
     pub max_rpc_requests_per_sec: Option<u32>,
 
@@ -275,6 +276,7 @@ pub struct Config {
     pub block_range_reprobe_interval: u32,
 
     #[serde(default)]
+    #[validate(custom(function = "validate_indexer"))]
     pub indexer: IndexerConfig,
 
     #[serde(default)]
@@ -300,6 +302,12 @@ pub struct Config {
     #[serde(skip)]
     #[default(_code = "ContractAddresses::default()")]
     pub contracts: ContractAddresses,
+}
+
+fn validate_indexer(indexer: &IndexerConfig) -> Result<(), validator::ValidationError> {
+    indexer
+        .validate()
+        .map_err(|message| validator::ValidationError::new("indexer").with_message(message.into()))
 }
 
 impl Config {
@@ -343,6 +351,9 @@ impl Config {
         if let Some(snapshot_url) = &self.indexer.logs_snapshot_url {
             output.push_str(&format!("  indexer.logs_snapshot_url: {}\n", redact_url(snapshot_url)));
         }
+        if let Some(snapshot_sha256) = &self.indexer.logs_snapshot_sha256 {
+            output.push_str(&format!("  indexer.logs_snapshot_sha256: {snapshot_sha256}\n"));
+        }
 
         output.push_str(&format!("  api.enabled: {}\n", self.api.enabled));
         output.push_str(&format!("  api.bind_address: {}\n", self.api.bind_address));
@@ -384,6 +395,22 @@ impl Config {
         output.push_str(&format!(
             "  api.transactions.max_concurrent_trace_jobs: {}\n",
             self.api.transactions.max_concurrent_trace_jobs
+        ));
+        output.push_str(&format!(
+            "  api.transactions.request_timeout: {:?}\n",
+            self.api.transactions.request_timeout
+        ));
+        output.push_str(&format!(
+            "  api.transactions.safe_inspection_timeout: {:?}\n",
+            self.api.transactions.safe_inspection_timeout
+        ));
+        output.push_str(&format!(
+            "  api.transactions.revert_reason_timeout: {:?}\n",
+            self.api.transactions.revert_reason_timeout
+        ));
+        output.push_str(&format!(
+            "  api.transactions.max_concurrent_checks: {}\n",
+            self.api.transactions.max_concurrent_checks
         ));
         output.push_str(&format!(
             "  api.transactions.enable_revert_reason_tracing: {}\n",
@@ -472,8 +499,39 @@ pub struct IndexerConfig {
     #[serde(default)]
     pub logs_snapshot_url: Option<String>,
 
+    /// Expected SHA-256 digest (64 hex characters) of the logs snapshot archive.
+    /// An archive with a different digest is rejected before extraction.
+    /// Required when `enable_logs_snapshot` is true or `logs_snapshot_url` is set.
+    #[serde(default)]
+    pub logs_snapshot_sha256: Option<String>,
+
     #[serde(default)]
     pub subscription: SubscriptionConfig,
+}
+
+impl IndexerConfig {
+    /// Validates the logs snapshot settings.
+    ///
+    /// `logs_snapshot_sha256` is required when `enable_logs_snapshot` is true or a non-empty
+    /// `logs_snapshot_url` is set, and must be a SHA-256 digest of 64 hex characters when present.
+    pub fn validate(&self) -> Result<(), String> {
+        let snapshot_url_set = self
+            .logs_snapshot_url
+            .as_deref()
+            .is_some_and(|url| !url.trim().is_empty());
+
+        match &self.logs_snapshot_sha256 {
+            None if self.enable_logs_snapshot || snapshot_url_set => Err("indexer.logs_snapshot_sha256 must be \
+                                                                          specified when \
+                                                                          indexer.enable_logs_snapshot is true or \
+                                                                          indexer.logs_snapshot_url is set"
+                .to_string()),
+            Some(digest) if normalize_sha256_hex(digest).is_none() => {
+                Err("indexer.logs_snapshot_sha256 must be a SHA-256 digest of 64 hex characters".to_string())
+            }
+            _ => Ok(()),
+        }
+    }
 }
 
 /// Configuration for GraphQL subscription behavior
@@ -576,6 +634,27 @@ pub struct TransactionConfig {
     #[default(2)]
     #[serde(default = "default_max_concurrent_trace_jobs")]
     pub max_concurrent_trace_jobs: usize,
+
+    /// Maximum time allowed for one transaction receipt RPC request. Must be greater than `0s`.
+    #[default(_code = "Duration::from_secs(30)")]
+    #[serde(default = "default_transaction_request_timeout", with = "humantime_serde")]
+    pub request_timeout: Duration,
+
+    /// Maximum time allowed to determine the inner outcome of a confirmed Safe transaction.
+    /// Must be greater than `0s`.
+    #[default(_code = "Duration::from_secs(30)")]
+    #[serde(default = "default_safe_inspection_timeout", with = "humantime_serde")]
+    pub safe_inspection_timeout: Duration,
+
+    /// Maximum time allowed for one optional Safe revert-reason trace. Must be greater than `0s`.
+    #[default(_code = "Duration::from_secs(30)")]
+    #[serde(default = "default_revert_reason_timeout", with = "humantime_serde")]
+    pub revert_reason_timeout: Duration,
+
+    /// Maximum number of transaction receipt checks running concurrently. Must be greater than `0`.
+    #[default(16)]
+    #[serde(default = "default_max_concurrent_checks")]
+    pub max_concurrent_checks: usize,
 
     /// Whether to request optional Safe revert reasons through debug tracing.
     #[default(true)]
@@ -699,6 +778,22 @@ fn default_max_submitted_transactions() -> usize {
 
 fn default_max_submitted_transactions_per_identity() -> usize {
     64
+}
+
+fn default_transaction_request_timeout() -> Duration {
+    Duration::from_secs(30)
+}
+
+fn default_safe_inspection_timeout() -> Duration {
+    Duration::from_secs(30)
+}
+
+fn default_revert_reason_timeout() -> Duration {
+    Duration::from_secs(30)
+}
+
+fn default_max_concurrent_checks() -> usize {
+    16
 }
 
 fn default_terminal_transaction_ttl() -> Duration {
@@ -1079,9 +1174,84 @@ mod tests {
         assert_eq!(config.api.max_query_depth, 8);
         assert_eq!(config.api.max_query_complexity, 500);
 
+        // Transaction monitor limits documented in the example
+        assert_eq!(config.api.transactions.request_timeout, Duration::from_secs(30));
+        assert_eq!(config.api.transactions.safe_inspection_timeout, Duration::from_secs(30));
+        assert_eq!(config.api.transactions.revert_reason_timeout, Duration::from_secs(30));
+        assert_eq!(config.api.transactions.max_concurrent_checks, 16);
+
         assert!(config.telemetry.otlp_endpoint.is_some());
         assert_eq!(config.telemetry.metric_export_interval, Duration::from_secs(60));
         assert_eq!(config.telemetry.otlp_signals, "metrics");
+    }
+
+    const MONITOR_LIMITS_DB: &str = r#"
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+    "#;
+
+    #[test]
+    fn test_transaction_monitor_limits_default_when_absent() {
+        let config: Config = toml::from_str(MONITOR_LIMITS_DB).expect("config parses");
+        let tx = &config.api.transactions;
+        let observed = (
+            tx.request_timeout,
+            tx.safe_inspection_timeout,
+            tx.revert_reason_timeout,
+            tx.max_concurrent_checks,
+        );
+        assert_eq!(
+            observed,
+            (
+                Duration::from_secs(30),
+                Duration::from_secs(30),
+                Duration::from_secs(30),
+                16
+            )
+        );
+        // An omitted rate limit stays `None`, which resolves to the 100 req/s default downstream.
+        assert_eq!(config.max_rpc_requests_per_sec, None);
+
+        // The serde defaults and `Default` must agree.
+        let default = TransactionConfig::default();
+        assert_eq!(default.request_timeout, tx.request_timeout);
+        assert_eq!(default.max_concurrent_checks, tx.max_concurrent_checks);
+    }
+
+    #[test]
+    fn test_transaction_monitor_limits_are_parsed() {
+        let config: Config = toml::from_str(&format!(
+            r#"
+            {MONITOR_LIMITS_DB}
+            [api.transactions]
+            request_timeout = "5s"
+            safe_inspection_timeout = "1m"
+            revert_reason_timeout = "250ms"
+            max_concurrent_checks = 4
+            "#
+        ))
+        .expect("config parses");
+        let tx = &config.api.transactions;
+        assert_eq!(tx.request_timeout, Duration::from_secs(5));
+        assert_eq!(tx.safe_inspection_timeout, Duration::from_secs(60));
+        assert_eq!(tx.revert_reason_timeout, Duration::from_millis(250));
+        assert_eq!(tx.max_concurrent_checks, 4);
+    }
+
+    #[test]
+    fn test_transaction_monitor_limits_reject_invalid_values() {
+        let invalid = [
+            r#"request_timeout = "soon""#,
+            r#"max_concurrent_checks = -1"#,
+            r#"max_concurrent_checks = "many""#,
+        ];
+        for entry in invalid {
+            let parsed: Result<Config, _> =
+                toml::from_str(&format!("{MONITOR_LIMITS_DB}\n[api.transactions]\n{entry}\n"));
+            assert!(parsed.is_err(), "{entry} must not parse");
+        }
     }
 
     #[test]
@@ -1104,6 +1274,62 @@ mod tests {
         assert!(!cfg.indexer.enable_safe_indexing); // Default
         assert!(!cfg.indexer.enable_curvy_indexing); // Default
         assert_eq!(cfg.indexer.subscription.event_bus_capacity, 1000); // Default
+    }
+
+    #[test]
+    fn test_indexer_logs_snapshot_sha256() {
+        let config = r#"
+         [indexer]
+         enable_logs_snapshot = true
+         logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz"
+         logs_snapshot_sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
+        let cfg: Config = toml::from_str(config).expect("config with logs_snapshot_sha256 should parse");
+        assert_eq!(
+            cfg.indexer.logs_snapshot_sha256.as_deref(),
+            Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        );
+    }
+
+    #[test]
+    fn test_indexer_validate_requires_logs_snapshot_sha256() {
+        let digest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+        assert!(IndexerConfig::default().validate().is_ok(), "defaults need no digest");
+
+        let enabled = IndexerConfig {
+            enable_logs_snapshot: true,
+            logs_snapshot_url: Some("https://example.com/logs-snapshot.tar.xz".to_string()),
+            ..Default::default()
+        };
+        let error = enabled
+            .validate()
+            .expect_err("enabled snapshot without digest must fail");
+        assert!(error.contains("indexer.logs_snapshot_sha256"), "{error}");
+
+        let url_only = IndexerConfig {
+            logs_snapshot_url: Some("https://example.com/logs-snapshot.tar.xz".to_string()),
+            ..Default::default()
+        };
+        let error = url_only.validate().expect_err("snapshot URL without digest must fail");
+        assert!(error.contains("indexer.logs_snapshot_sha256"), "{error}");
+
+        let malformed = IndexerConfig {
+            logs_snapshot_sha256: Some("abc".to_string()),
+            ..url_only.clone()
+        };
+        let error = malformed.validate().expect_err("malformed digest must fail");
+        assert!(error.contains("indexer.logs_snapshot_sha256"), "{error}");
+
+        let valid = IndexerConfig {
+            logs_snapshot_sha256: Some(digest.to_string()),
+            ..enabled
+        };
+        assert!(valid.validate().is_ok());
     }
 
     #[test]

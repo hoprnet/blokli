@@ -19,6 +19,7 @@ use blokli_chain_indexer::{IndexerConfig, IndexerState, block::Indexer, handlers
 use blokli_chain_rpc::{
     HoprIndexerRpcOperations, HoprRpcOperations,
     client::{DefaultRetryPolicy, MetricsLayer},
+    rate_limit::{RateLimitLayer, resolve_max_requests_per_sec},
     rpc::{RpcOperations, RpcOperationsConfig},
     transport::ReqwestClient,
 };
@@ -58,8 +59,6 @@ use crate::{
 };
 
 pub type DefaultHttpRequestor = blokli_chain_rpc::transport::ReqwestClient;
-
-const DEFAULT_MAX_RPC_REQUESTS_PER_SEC: u64 = 100;
 
 fn build_transport_client(url: &str) -> Result<Http<ReqwestClient>> {
     let parsed_url =
@@ -106,17 +105,18 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
                 "Curvy indexing is enabled but the Curvy Aggregator address is not configured".to_string(),
             ));
         }
+        transaction_monitor_config
+            .validate()
+            .map_err(BlokliChainError::Configuration)?;
         // TODO(#7140): replace this DefaultRetryPolicy with a custom one that computes backoff with the number of
         // retries
         let rpc_http_retry_policy = DefaultRetryPolicy::default();
 
-        // Some(0) means "unlimited" and must not be forwarded as-is: RetryBackoffLayer divides by
-        // this value. Use u64::MAX as a safe stand-in. None falls back to the default rate.
-        let max_requests_per_sec: u64 = match chain_config.max_requests_per_sec {
-            None => DEFAULT_MAX_RPC_REQUESTS_PER_SEC,
-            Some(0) => u64::MAX,
-            Some(v) => u64::from(v),
-        };
+        // None applies the default rate, Some(0) means unlimited and Some(n) is a hard cap of n requests per second.
+        // The same value feeds the rate limiter and, as a compute-unit budget, the retry backoff. The latter divides
+        // by it, so "unlimited" is passed on as u64::MAX.
+        let max_requests_per_sec = resolve_max_requests_per_sec(chain_config.max_requests_per_sec);
+        let retry_compute_units_per_sec: u64 = max_requests_per_sec.map_or(u64::MAX, |rate| u64::from(rate.get()));
 
         let rpc_cfg = RpcOperationsConfig {
             chain_id: chain_config.chain_id,
@@ -137,9 +137,11 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
             .layer(RetryBackoffLayer::new_with_policy(
                 2,
                 100,
-                max_requests_per_sec,
+                retry_compute_units_per_sec,
                 rpc_http_retry_policy,
             ))
+            // Inside the retry layer so that every attempt, including retries, consumes a token.
+            .layer(RateLimitLayer::new(max_requests_per_sec))
             .layer(MetricsLayer)
             .transport(transport_client.clone(), transport_client.guess_local());
 

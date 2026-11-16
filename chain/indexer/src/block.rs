@@ -1413,17 +1413,22 @@ where
 
         let data_dir = Path::new(&self.cfg.data_directory);
 
-        // The URL has been verified so we can just use it.
-        if let Some(url) = &self.cfg.logs_snapshot_url {
-            snapshot_manager
-                .download_and_setup_snapshot(url, data_dir)
-                .await
-                .map_err(|e| CoreEthereumIndexerError::SnapshotError(e.to_string()))
-        } else {
-            Err(CoreEthereumIndexerError::SnapshotError(
+        // The URL and digest have been verified so we can just use them.
+        let Some(url) = &self.cfg.logs_snapshot_url else {
+            return Err(CoreEthereumIndexerError::SnapshotError(
                 "Logs snapshot URL is not configured".to_string(),
-            ))
-        }
+            ));
+        };
+        let Some(expected_sha256) = &self.cfg.logs_snapshot_sha256 else {
+            return Err(CoreEthereumIndexerError::SnapshotError(
+                "Logs snapshot SHA-256 is not configured".to_string(),
+            ));
+        };
+
+        snapshot_manager
+            .download_and_setup_snapshot(url, expected_sha256, data_dir)
+            .await
+            .map_err(|e| CoreEthereumIndexerError::SnapshotError(e.to_string()))
     }
 }
 
@@ -2858,6 +2863,7 @@ mod tests {
                 false,
                 false,
                 None,
+                None,
                 "/tmp/test_data".to_string(),
                 1000,
                 10,
@@ -2959,6 +2965,7 @@ mod tests {
                 false,
                 false,
                 None,
+                None,
                 "/tmp/test_data".to_string(),
                 1000,
                 10,
@@ -2996,6 +3003,7 @@ mod tests {
                 false,
                 false,
                 Some("file:///definitely/missing/snapshot.tar.xz".to_string()),
+                Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()),
                 temp_dir.path().display().to_string(),
                 1000,
                 10,
@@ -3170,6 +3178,7 @@ mod tests {
             false,
             false,
             false,
+            None,
             None,
             "/tmp/test_data".to_string(),
             1000,

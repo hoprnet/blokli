@@ -233,9 +233,14 @@ To generate a template configuration file:
 bloklid generate-config config.toml
 ```
 
-For fast-sync bootstrap, configure `indexer.fast_sync = true`, `indexer.enable_logs_snapshot = true`, and `indexer.logs_snapshot_url` to a
-`.tar.xz` archive that contains `hopr_logs.sql`. On an empty node, `bloklid` imports that file into the raw logs tables, rebuilds derived
-state locally, and then resumes normal RPC catch-up from the snapshot end. If the configured snapshot restore fails, startup fails.
+For fast-sync bootstrap, configure `indexer.fast_sync = true`, `indexer.enable_logs_snapshot = true`, `indexer.logs_snapshot_url` to a
+`.tar.xz` archive that contains `hopr_logs.sql`, and `indexer.logs_snapshot_sha256` to that archive's SHA-256 digest. On an empty node,
+`bloklid` imports that file into the raw logs tables, rebuilds derived state locally, and then resumes normal RPC catch-up from the snapshot
+end. If the configured snapshot restore fails, startup fails.
+
+`indexer.logs_snapshot_sha256` is required whenever `indexer.enable_logs_snapshot = true` or `indexer.logs_snapshot_url` is set, and startup
+fails without it. Use the archive's SHA-256 digest (for example from `sha256sum logs-snapshot.tar.xz`); a tampered or swapped archive is
+rejected before extraction.
 
 For a complete example with comments, see [`bloklid/example-config.toml`](bloklid/example-config.toml). Duration values use human-readable
 syntax such as `500ms`, `15s`, and `1m`.
@@ -260,7 +265,7 @@ priority over their canonical database aliases when both are set. Boolean enviro
 | `data_directory`               | `data`                  | `BLOKLI_DATA_DIRECTORY`               | Directory for daemon data                                                                                                 |
 | `network`                      | `jura-dev`              | `BLOKLI_NETWORK`                      | `jura-dev`, `jura-prod`, or `anvil-localhost` (`localhost` is an alias)                                                   |
 | `rpc_url`                      | `http://localhost:8545` | `BLOKLI_RPC_URL`                      | Chain JSON-RPC endpoint                                                                                                   |
-| `max_rpc_requests_per_sec`     | `100`                   | `BLOKLI_MAX_RPC_REQUESTS_PER_SEC`     | Maximum request rate; `0` means unlimited                                                                                 |
+| `max_rpc_requests_per_sec`     | `100`                   | `BLOKLI_MAX_RPC_REQUESTS_PER_SEC`     | Hard cap on RPC requests per second (token bucket, retries count); `0` means unlimited                                    |
 | `max_block_range`              | `10000`                 | `BLOKLI_MAX_BLOCK_RANGE`              | Ceiling for adaptive `eth_getLogs` ranges; `0` auto-discovers up to 10000                                                 |
 | `block_range_reprobe_interval` | `100`                   | `BLOKLI_BLOCK_RANGE_REPROBE_INTERVAL` | Successful `eth_getLogs` requests spanning the full reduced range before a larger range is probed again; `0` never probes |
 
@@ -292,6 +297,7 @@ fields. SQLite uses separate index and raw-log databases.
 | `indexer.enable_logs_snapshot`                  | `false` | `BLOKLI_INDEXER_ENABLE_LOGS_SNAPSHOT`                  | Restores raw logs from a snapshot before catch-up     |
 | `indexer.enable_safe_indexing`                  | `false` | `BLOKLI_INDEXER_ENABLE_SAFE_INDEXING`                  | Indexes Safe events after Safe discovery              |
 | `indexer.logs_snapshot_url`                     | unset   | `BLOKLI_INDEXER_LOGS_SNAPSHOT_URL`                     | URL of a `.tar.xz` archive containing `hopr_logs.sql` |
+| `indexer.logs_snapshot_sha256`                  | unset   | `BLOKLI_INDEXER_LOGS_SNAPSHOT_SHA256`                  | SHA-256 hex digest of the archive (required with URL) |
 | `indexer.subscription.event_bus_capacity`       | `1000`  | `BLOKLI_INDEXER_SUBSCRIPTION_EVENT_BUS_CAPACITY`       | Channel-event bus capacity                            |
 | `indexer.subscription.shutdown_signal_capacity` | `10`    | `BLOKLI_INDEXER_SUBSCRIPTION_SHUTDOWN_SIGNAL_CAPACITY` | Shutdown signal buffer capacity                       |
 
