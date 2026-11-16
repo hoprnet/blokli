@@ -34,13 +34,6 @@ pub struct BlokliDbConfig {
 /// How long a caller waits for a free pooled connection before giving up.
 const POOL_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// How long a connection may sit idle before it is closed.
-///
-/// sqlx runs its reaper every `min(idle_timeout, max_lifetime)` and releasing a connection back to the pool
-/// resets its idle clock, so the reaper period must be well below the time we want idle connections to live.
-/// A short value lets the pool shrink back after a burst instead of keeping its high-water mark.
-const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
-
 /// Build [`ConnectOptions`] for a PostgreSQL connection with consistent pool sizing and
 /// statement logging settings.
 ///
@@ -56,7 +49,7 @@ pub fn build_connect_options(url: &str, cfg: &BlokliDbConfig) -> ConnectOptions 
         // Waiting for a free connection is separate from opening a new one: a burst of subscription
         // snapshots on (re)connect should queue for a while instead of failing after `connect_timeout`.
         .acquire_timeout(POOL_ACQUIRE_TIMEOUT)
-        .idle_timeout(POOL_IDLE_TIMEOUT)
+        .idle_timeout(Duration::from_secs(300))
         .max_lifetime(Duration::from_secs(1800))
         .sqlx_logging(true)
         .sqlx_logging_level(LevelFilter::Debug);
@@ -178,7 +171,7 @@ impl BlokliDb {
                     .max_connections(cfg.max_connections)
                     .min_connections(1)
                     .acquire_timeout(POOL_ACQUIRE_TIMEOUT)
-                    .idle_timeout(POOL_IDLE_TIMEOUT)
+                    .idle_timeout(Duration::from_secs(300))
                     .max_lifetime(Duration::from_secs(1800))
                     .connect_with(connect_opts)
                     .await
