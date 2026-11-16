@@ -23,7 +23,9 @@ use blokli_db_entity::{
     chain_info::Entity as ChainInfoEntity,
     conversions::{
         account_aggregation::{AggregatedAccount, fetch_accounts_with_filters},
-        channel_aggregation::{fetch_channel_stats as fetch_channel_stats_db, fetch_channels_with_state},
+        channel_aggregation::{
+            AggregatedChannel, fetch_channel_stats as fetch_channel_stats_db, fetch_channels_with_state,
+        },
         node_safe_registration::fetch_registered_nodes_for_safes,
         redemptions_aggregation::fetch_aggregated_redeemed_stats,
         safe_aggregation::{
@@ -58,7 +60,7 @@ use crate::{
         transaction_from_record,
     },
     curvy, errors,
-    loader::AccountsByChainKeyLoader,
+    loader::{AccountsByChainKeyLoader, ChannelsBySafeLoader},
     mutation::TransactionResult,
     schema::{GasFeeFloors, RpcOperationsContext},
     validation::{parse_service_type, validate_eth_address},
@@ -557,6 +559,24 @@ async fn load_accounts_by_chain_key(
         .unwrap_or_default();
 
     Ok(accounts.into_iter().map(account_from_aggregate).collect())
+}
+
+/// Loads the channels of one safe through the batch loader.
+async fn load_channels_by_safe(
+    ctx: &Context<'_>,
+    safe_address: Address,
+) -> std::result::Result<Vec<AggregatedChannel>, QueryFailedError> {
+    let loader = ctx
+        .data::<ChannelsBySafeLoader>()
+        .map_err(|error| errors::context_error("ChannelsBySafeLoader", error))?;
+
+    let channels = loader
+        .load_one(safe_address)
+        .await
+        .map_err(|error| errors::query_failed("fetch channels", error))?
+        .unwrap_or_default();
+
+    Ok(channels)
 }
 
 /// Root query type providing read-only access to indexed blockchain data
@@ -1908,19 +1928,33 @@ impl QueryRoot {
         // Convert GraphQL ChannelStatus to database i16 representation if status filter is provided
         let status_i16: Option<i16> = status.map(|s| s.into());
 
-        let aggregated_channels = match fetch_channels_with_state(
-            db,
-            source_key_id,
-            destination_key_id,
-            concrete_channel_id,
-            status_i16,
-            parsed_safe_address,
-        )
-        .await
-        {
-            Ok(channels) => channels,
-            Err(e) => {
-                return ChannelsResult::QueryFailed(errors::query_failed("fetch channels", e));
+        // A lookup by safe address alone goes through the batch loader, which serves all such
+        // lookups made at the same moment with one pair of statements.
+        let safe_address_only = source_key_id.is_none()
+            && destination_key_id.is_none()
+            && concrete_channel_id.is_none()
+            && status.is_none();
+
+        let aggregated_channels = if let (Some(safe), true) = (parsed_safe_address, safe_address_only) {
+            match load_channels_by_safe(ctx, safe).await {
+                Ok(channels) => channels,
+                Err(error) => return ChannelsResult::QueryFailed(error),
+            }
+        } else {
+            match fetch_channels_with_state(
+                db,
+                source_key_id,
+                destination_key_id,
+                concrete_channel_id,
+                status_i16,
+                parsed_safe_address,
+            )
+            .await
+            {
+                Ok(channels) => channels,
+                Err(e) => {
+                    return ChannelsResult::QueryFailed(errors::query_failed("fetch channels", e));
+                }
             }
         };
 

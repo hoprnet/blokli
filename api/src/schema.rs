@@ -14,8 +14,12 @@ use futures::Stream;
 use sea_orm::DatabaseConnection;
 
 use crate::{
-    loader::accounts_by_chain_key_loader, mutation::MutationRoot, query::QueryRoot, readiness::ReadinessChecker,
-    snapshot::SubscriptionSnapshots, subscription::SubscriptionRoot,
+    loader::{accounts_by_chain_key_loader, channels_by_safe_loader},
+    mutation::MutationRoot,
+    query::QueryRoot,
+    readiness::ReadinessChecker,
+    snapshot::SubscriptionSnapshots,
+    subscription::SubscriptionRoot,
 };
 
 /// Wrapper type for expected block time to avoid type confusion in context
@@ -156,7 +160,7 @@ where
 ///
 /// The schema is configured with:
 /// - Database connection injected as context data
-/// - Batch loader for account lookups by chain key injected as context data
+/// - Batch loaders for account lookups by chain key and channel lookups by safe injected as context data
 /// - Chain ID injected as context data
 /// - Network name injected as context data
 /// - Contract addresses injected as context data
@@ -193,6 +197,7 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
     let query_rpc: Arc<dyn HoprRpcOperations + Send + Sync> = rpc_operations.clone();
     let mut builder = Schema::build(QueryRoot, MutationRoot, SubscriptionRoot)
         .data(accounts_by_chain_key_loader(db.clone()))
+        .data(channels_by_safe_loader(db.clone()))
         .data(db)
         .data(LogsDatabase(logs_db))
         .data(ChainId(chain_id))

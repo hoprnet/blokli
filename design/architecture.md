@@ -593,6 +593,9 @@ parallel requests that arrive together share a batch too. Nothing is cached betw
 trade-offs: a lookup waits up to the length of the window, and a failed batch fails every lookup in it. Lookups that combine several filters
 are not batched.
 
+Channel lookups that filter by safe address alone are batched the same way: one read resolves the accounts of every safe in the batch, and
+one read fetches the channels of all those accounts.
+
 **Required Filters**: To prevent exposing entire account database, at least one identity filter (keyid, packet_key, or chain_key) must be
 provided. This protects against excessive data exposure.
 
