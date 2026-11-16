@@ -14,6 +14,7 @@ use std::{
 
 use anyhow::Result;
 use blokli_api::{
+    cache::ChannelStatsCache,
     query::QueryRoot,
     schema::{ChainId, ExpectedBlockTime, Finality, GasMultiplier, NetworkName},
 };
@@ -1084,6 +1085,80 @@ async fn test_channel_count_with_status_filter() -> Result<()> {
     let data = response.data.into_json()?;
     assert_eq!(data["channelCount"]["__typename"], "Count");
     assert_eq!(data["channelCount"]["count"], 0);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_channel_stats_cached_until_indexed_block_advances() -> Result<()> {
+    let db = BlokliDb::new_in_memory().await?;
+    setup_chain_info(&db).await?;
+
+    let keypair1 = random_keypair();
+    let keypair2 = random_keypair();
+    let keypair3 = random_keypair();
+    let addr1 = keypair1.public().to_address();
+    let addr2 = keypair2.public().to_address();
+    let addr3 = keypair3.public().to_address();
+    for (id, addr) in [(1, addr1), (2, addr2), (3, addr3)] {
+        db.upsert_account(None, id, addr, *random_offchain_keypair().public(), None, 100, 0, 0)
+            .await?;
+    }
+
+    let balance = HoprBalance::from_str("1000 wxHOPR")?;
+    db.upsert_channel(
+        None,
+        build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 1),
+        100,
+        0,
+        0,
+    )
+    .await?;
+
+    let schema = async_graphql::Schema::build(
+        QueryRoot,
+        async_graphql::EmptyMutation,
+        async_graphql::EmptySubscription,
+    )
+    .data(db.conn(TargetDb::Index).clone())
+    .data(ChannelStatsCache::default())
+    .finish();
+
+    let all = "query { channelStats { __typename ... on ChannelStats { count balance } } }";
+    let open = "query { channelStats(status: OPEN) { __typename ... on ChannelStats { count balance } } }";
+    let count_of = |data: &serde_json::Value| data["channelStats"]["count"].as_i64();
+
+    let first = execute_graphql_query(&schema, all).await.data.into_json()?;
+    assert_eq!(count_of(&first), Some(1));
+    assert_eq!(first["channelStats"]["balance"], "1000 wxHOPR");
+
+    // A second channel is written without the indexed block advancing: the cached value is served.
+    db.upsert_channel(
+        None,
+        build_channel_entry(addr2, addr3, balance, 0, ChannelStatus::Open, 1),
+        101,
+        0,
+        0,
+    )
+    .await?;
+    let stale = execute_graphql_query(&schema, all).await.data.into_json()?;
+    assert_eq!(count_of(&stale), Some(1));
+
+    // A different filter tuple is its own entry and is computed fresh.
+    let other = execute_graphql_query(&schema, open).await.data.into_json()?;
+    assert_eq!(count_of(&other), Some(2));
+
+    // Advancing the indexed block invalidates the cached value.
+    chain_info::ActiveModel {
+        id: Set(1),
+        last_indexed_block: Set(1001),
+        ..Default::default()
+    }
+    .update(db.conn(TargetDb::Index))
+    .await?;
+    let fresh = execute_graphql_query(&schema, all).await.data.into_json()?;
+    assert_eq!(count_of(&fresh), Some(2));
+    assert_eq!(fresh["channelStats"]["balance"], "2000 wxHOPR");
 
     Ok(())
 }
