@@ -25,8 +25,8 @@ use axum::serve;
 use blokli_chain_api::{
     rpc_adapter::RpcAdapter,
     transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
+    transaction_policy::TransactionPolicy,
     transaction_store::TransactionStore,
-    transaction_validator::TransactionValidator,
 };
 use blokli_chain_rpc::{
     client::{DefaultRetryPolicy, MetricsLayer},
@@ -100,7 +100,10 @@ pub async fn start_server(network: String, finality: u16, config: ApiConfig) -> 
     warn!("Running in standalone mode - transaction mutations will not work without bloklid");
 
     let transaction_store = Arc::new(TransactionStore::new());
-    let transaction_validator = Arc::new(TransactionValidator::new());
+    // Standalone mode is a development/ops path, not a production relay: the network allow-set is
+    // enforced by bloklid, which builds it from the resolved contract addresses. Whitelisting here
+    // would reject everything whenever `contract_addresses` is left at its (zero) default.
+    let transaction_policy = Arc::new(TransactionPolicy::AllowAll);
 
     // Create RPC connection for balance queries
     info!("Connecting to RPC: {}", redact_url(&config.rpc_url));
@@ -139,7 +142,7 @@ pub async fn start_server(network: String, finality: u16, config: ApiConfig) -> 
     let transaction_executor = Arc::new(RawTransactionExecutor::with_shared_dependencies(
         rpc_adapter,
         transaction_store.clone(),
-        transaction_validator,
+        transaction_policy,
         RawTransactionExecutorConfig::default(),
     ));
 
