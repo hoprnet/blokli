@@ -3,6 +3,7 @@
 //! This crate provides a GraphQL API server built with Axum and async-graphql,
 //! supporting HTTP/2 and Server-Sent Events (SSE) for subscriptions.
 
+pub mod cache;
 pub mod config;
 pub mod conversions;
 pub mod curvy;
