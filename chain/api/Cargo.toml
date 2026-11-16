@@ -58,4 +58,4 @@ blokli-db          = { workspace = true, features = ["runtime-tokio"] }
 env_logger         = { workspace = true }
 insta              = { workspace = true, features = ["redactions", "yaml"] }
 rand               = { workspace = true }
-tokio              = { workspace = true }
+tokio              = { workspace = true, features = ["test-util"] }
