@@ -30,6 +30,7 @@ data:
     curvy_aggregator = "{{ required "config.curvyAggregator is required" .Values.config.curvyAggregator }}"
     {{- end }}
     max_block_range = {{ .Values.config.maxBlockRange }}
+    block_range_reprobe_interval = {{ .Values.config.blockRangeReprobeInterval | int }}
 
     # Indexer settings
     [indexer]
@@ -43,6 +44,7 @@ data:
     {{- end }}
     {{- if .Values.config.indexer.enableLogsSnapshot }}
     logs_snapshot_url = "{{ required "config.indexer.logsSnapshotUrl is required" .Values.config.indexer.logsSnapshotUrl }}"
+    logs_snapshot_sha256 = "{{ required "config.indexer.logsSnapshotSha256 is required" .Values.config.indexer.logsSnapshotSha256 }}"
     {{- end }}
 
     # Indexer subscription configuration
@@ -63,6 +65,27 @@ data:
     max_priority_fee_per_gas = {{ .Values.config.api.maxPriorityFeePerGas | int }}
     {{- $bf := .Values.config.api.baseFeeHeadroomFactor | toString }}
     base_fee_headroom_factor = {{ if contains "." $bf }}{{ $bf }}{{ else }}{{ $bf }}.0{{ end }}
+    max_query_depth = {{ .Values.config.api.maxQueryDepth | int }}
+    max_query_complexity = {{ .Values.config.api.maxQueryComplexity | int }}
+
+    # Transaction submission and revert-reason tracing
+    [api.transactions]
+    max_submitted_transactions = {{ .Values.config.api.transactions.maxSubmittedTransactions | int }}
+    max_submitted_transactions_per_identity = {{ .Values.config.api.transactions.maxSubmittedTransactionsPerIdentity | int }}
+    max_terminal_transactions = {{ .Values.config.api.transactions.maxTerminalTransactions | int }}
+    terminal_transaction_ttl = {{ .Values.config.api.transactions.terminalTransactionTtl | quote }}
+    max_concurrent_trace_jobs = {{ .Values.config.api.transactions.maxConcurrentTraceJobs | int }}
+    max_queued_trace_jobs = {{ .Values.config.api.transactions.maxQueuedTraceJobs | int }}
+    enable_revert_reason_tracing = {{ .Values.config.api.transactions.enableRevertReasonTracing }}
+    enable_hopr_action_validation = {{ .Values.config.api.transactions.enableHoprActionValidation }}
+    hopr_action_ttl = {{ .Values.config.api.transactions.hoprActionTtl | quote }}
+    hopr_invalid_action_threshold = {{ .Values.config.api.transactions.hoprInvalidActionThreshold | int }}
+    hopr_invalid_action_cooldown = {{ .Values.config.api.transactions.hoprInvalidActionCooldown | quote }}
+
+    # SSE keepalive
+    [api.sse_keepalive]
+    enabled = {{ .Values.config.api.sseKeepalive.enabled }}
+    interval = {{ .Values.config.api.sseKeepalive.interval | quote }}
 
     # Health check configuration
     [api.health]
