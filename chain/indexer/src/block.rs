@@ -53,16 +53,8 @@ use crate::{
     },
     snapshot::{SnapshotInfo, SnapshotManager},
     traits::{ChainLogHandler, PrefetchedLogData},
+    utils::AbortOnDrop,
 };
-
-/// Aborts the wrapped task when dropped, so background tasks end together with the indexer.
-struct AbortOnDrop(tokio::task::JoinHandle<()>);
-
-impl Drop for AbortOnDrop {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
 
 /// Number of not-yet-committed blocks whose chain data the indexer fetches ahead of time.
 ///
@@ -2231,6 +2223,50 @@ mod tests {
             .await
             .expect("the channel closes");
         assert!(closed.is_none());
+    }
+
+    #[tokio::test]
+    async fn safe_owner_refresh_worker_stops_when_the_supervisor_is_aborted() {
+        let calls = Arc::new(StdAtomicUsize::new(0));
+        let mut rpc = MockHoprIndexerOps::new();
+        let counter = calls.clone();
+        rpc.expect_get_safe_owners_and_thresholds().returning(move |_, _| {
+            counter.fetch_add(1, StdOrdering::SeqCst);
+            Err(RpcError::Other("node unavailable".into()))
+        });
+
+        let state = IndexerState::default();
+        let (tx, results) = channel::<SafeSnapshotRead>(SAFE_SNAPSHOT_CONCURRENCY * 2);
+        let supervisor = tokio::spawn(supervise_safe_owner_refresh(
+            Arc::new(rpc),
+            state.clone(),
+            Arc::new(AtomicU64::new(200)),
+            tx,
+            fast_timings(),
+        ));
+        state.mark_safe_owner_snapshot_pending(Address::from([0x68; 20]));
+
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while calls.load(StdOrdering::SeqCst) < 2 {
+                sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the worker keeps retrying the failing reads");
+
+        supervisor.abort();
+        assert!(supervisor.await.is_err_and(|error| error.is_cancelled()));
+        drop(results);
+
+        // Let an in-flight call finish, then the count must stay put although every read keeps failing.
+        sleep(Duration::from_millis(100)).await;
+        let after_abort = calls.load(StdOrdering::SeqCst);
+        sleep(Duration::from_millis(300)).await;
+        assert_eq!(
+            calls.load(StdOrdering::SeqCst),
+            after_abort,
+            "the worker was left running"
+        );
     }
 
     /// The refresh storing a snapshot end to end on a real PostgreSQL.

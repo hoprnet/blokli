@@ -33,7 +33,7 @@ use hopr_types::telemetry::SimpleGauge;
 use tokio::time::Instant;
 use tracing::{debug, error, info, warn};
 
-use crate::IndexerState;
+use crate::{IndexerState, utils::AbortOnDrop};
 
 /// Maximum number of Safes read in one batch (one Multicall3 call carries two sub-calls per Safe).
 pub(crate) const SAFE_SNAPSHOT_BATCH_SIZE: usize = 50;
@@ -136,15 +136,16 @@ pub(crate) async fn supervise_safe_owner_refresh<T>(
     let waiting: WaitingSafes = Arc::default();
     let mut restarts = 0;
     loop {
-        let task = tokio::spawn(run_safe_owner_refresh(
+        // Aborted with the supervisor: a dropped join handle would detach the worker and leave it reading forever.
+        let mut task = AbortOnDrop(tokio::spawn(run_safe_owner_refresh(
             rpc.clone(),
             state.clone(),
             latest_processed_block.clone(),
             results.clone(),
             timings,
             waiting.clone(),
-        ));
-        match task.await {
+        )));
+        match (&mut task.0).await {
             Ok(()) => return,
             Err(error) => {
                 restarts += 1;
