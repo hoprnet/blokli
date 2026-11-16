@@ -139,6 +139,16 @@
           "minimum": 0,
           "description": "Maximum RPC requests per second"
         },
+        "maxBlockRange": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Ceiling for adaptive eth_getLogs block ranges (0 = auto-discover up to 10000)"
+        },
+        "blockRangeReprobeInterval": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Consecutive full-range eth_getLogs successes before a larger range is probed again (0 = never)"
+        },
         "dataDirectory": {
           "type": "string",
           "minLength": 1,

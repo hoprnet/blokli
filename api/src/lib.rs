@@ -11,7 +11,6 @@ pub mod logging;
 pub mod metrics;
 pub mod mutation;
 pub mod query;
-pub mod query_v2;
 pub mod readiness;
 pub mod schema;
 pub mod server;

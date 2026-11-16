@@ -1279,7 +1279,7 @@ minutes. Real-time indexing typically processes blocks within seconds of finalit
 
 - Required filters prevent full table scans and accidental exposure of entire dataset
 - Batch loading pattern for related entities reduces N+1 query problems
-- Temporal queries leverage indexed position columns for efficient lookups
+- Latest-state lookups at a watermark leverage indexed position columns
 - Account aggregation uses optimized join strategy with four separate queries
 - Database connection pooling amortizes connection overhead
 

@@ -365,7 +365,6 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 sse_keepalive: blokli_api::config::SseKeepAliveConfig {
                     enabled: api_config.sse_keepalive.enabled,
                     interval: api_config.sse_keepalive.interval,
-                    text: api_config.sse_keepalive.text.clone(),
                 },
                 health: blokli_api::config::HealthConfig {
                     max_indexer_lag: api_config.health.max_indexer_lag,

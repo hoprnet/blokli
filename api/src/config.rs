@@ -95,9 +95,6 @@ pub struct SseKeepAliveConfig {
 
     #[serde(default = "default_sse_keepalive_interval", with = "humantime_serde")]
     pub interval: Duration,
-
-    #[serde(default = "default_sse_keepalive_text")]
-    pub text: String,
 }
 
 /// Health check configuration
@@ -122,7 +119,6 @@ impl Default for SseKeepAliveConfig {
         Self {
             enabled: default_sse_keepalive_enabled(),
             interval: default_sse_keepalive_interval(),
-            text: default_sse_keepalive_text(),
         }
     }
 }
@@ -143,10 +139,6 @@ fn default_sse_keepalive_enabled() -> bool {
 
 fn default_sse_keepalive_interval() -> Duration {
     Duration::from_secs(15)
-}
-
-fn default_sse_keepalive_text() -> String {
-    "keep-alive".to_string()
 }
 
 fn default_max_query_depth() -> usize {
@@ -273,7 +265,6 @@ mod tests {
         let config = ApiConfig::default();
         assert!(config.sse_keepalive.enabled);
         assert_eq!(config.sse_keepalive.interval, Duration::from_secs(15));
-        assert_eq!(config.sse_keepalive.text, "keep-alive");
         assert_eq!(config.gas_multiplier, 1.0);
         assert_eq!(
             config.gas_fee_floors(),

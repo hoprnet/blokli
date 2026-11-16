@@ -1,9 +1,10 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use async_trait::async_trait;
 use blokli_db_entity::{
     hopr_safe_contract, hopr_safe_contract_state,
     prelude::{HoprSafeContract, HoprSafeContractState},
+    views::safe_contract_current,
 };
 use hopr_types::{crypto::types::Hash, primitive::prelude::Address};
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, Set};
@@ -660,42 +661,25 @@ impl BlokliDbSafeContractOperations for BlokliDb {
         module_address: Address,
     ) -> Result<Option<SafeContractEntry>> {
         let tx = self.nest_transaction(tx).await?;
-        let candidate_states = HoprSafeContractState::find()
-            .filter(hopr_safe_contract_state::Column::ModuleAddress.eq(module_address.as_ref().to_vec()))
-            .order_by_desc(hopr_safe_contract_state::Column::PublishedBlock)
-            .order_by_desc(hopr_safe_contract_state::Column::PublishedTxIndex)
-            .order_by_desc(hopr_safe_contract_state::Column::PublishedLogIndex)
-            .all(tx.as_ref())
+        // A module is normally bound to a single Safe; if several Safes currently point at it,
+        // prefer the most recently updated one.
+        let current = safe_contract_current::Entity::find()
+            .filter(safe_contract_current::Column::ModuleAddress.eq(module_address.as_ref().to_vec()))
+            .order_by_desc(safe_contract_current::Column::PublishedBlock)
+            .order_by_desc(safe_contract_current::Column::PublishedTxIndex)
+            .order_by_desc(safe_contract_current::Column::PublishedLogIndex)
+            .one(tx.as_ref())
             .await?;
 
-        let mut seen_safe_ids = HashSet::new();
-        for candidate_state in candidate_states {
-            if !seen_safe_ids.insert(candidate_state.hopr_safe_contract_id) {
-                continue;
-            }
-
-            let Some(latest_state) = get_latest_safe_state(tx.as_ref(), candidate_state.hopr_safe_contract_id).await?
-            else {
-                continue;
-            };
-            if latest_state.id != candidate_state.id {
-                continue;
-            }
-
-            let identity = HoprSafeContract::find_by_id(candidate_state.hopr_safe_contract_id)
-                .one(tx.as_ref())
-                .await?
-                .ok_or_else(|| {
-                    DbSqlError::EntityNotFound(format!(
-                        "safe contract identity not found for id {}",
-                        candidate_state.hopr_safe_contract_id
-                    ))
-                })?;
-
-            return Ok(Some(combine_entry(&identity, &latest_state)));
-        }
-
-        Ok(None)
+        Ok(current.map(|row| SafeContractEntry {
+            id: row.safe_contract_id,
+            address: row.address,
+            module_address: row.module_address,
+            chain_key: row.chain_key,
+            published_block: row.published_block,
+            published_tx_index: row.published_tx_index,
+            published_log_index: row.published_log_index,
+        }))
     }
 
     async fn get_preseeded_safes<'a>(&'a self, tx: OptTx<'a>) -> Result<Vec<SafeContractEntry>> {
@@ -1253,6 +1237,85 @@ mod tests {
         let other_module = random_address();
         let result = db.get_safe_contract_by_module_address(None, other_module).await?;
         assert!(result.is_none(), "should not find safe by unrelated module address");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_safe_contract_by_module_address_ignores_replaced_module() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let safe_addr = random_address();
+        let old_module = random_address();
+        let new_module = random_address();
+        let chain_key = random_address();
+
+        db.upsert_safe_contract(None, safe_addr, old_module, chain_key, 100, 0, 0)
+            .await?;
+        db.update_safe_module_address(None, safe_addr, new_module, 200, 0, 0)
+            .await?;
+
+        assert!(
+            db.get_safe_contract_by_module_address(None, old_module)
+                .await?
+                .is_none(),
+            "a module the Safe no longer uses must not resolve"
+        );
+        let entry = db
+            .get_safe_contract_by_module_address(None, new_module)
+            .await?
+            .expect("current module should resolve");
+        assert_eq!(entry.address, safe_addr.as_ref().to_vec());
+        assert_eq!(entry.published_block, 200);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_safe_contract_by_module_address_prefers_newest_sharing_safe() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let module = random_address();
+        let chain_key = random_address();
+        let resolved = |entry: Option<SafeContractEntry>| entry.expect("shared module should resolve").address;
+
+        // Same block and transaction: the higher log index wins.
+        let safe_a = random_address();
+        let safe_b = random_address();
+        db.upsert_safe_contract(None, safe_a, module, chain_key, 100, 5, 0)
+            .await?;
+        db.upsert_safe_contract(None, safe_b, module, chain_key, 100, 5, 3)
+            .await?;
+        assert_eq!(
+            resolved(db.get_safe_contract_by_module_address(None, module).await?),
+            safe_b.as_ref().to_vec()
+        );
+
+        // Same block: a later transaction wins even with a lower log index.
+        let safe_c = random_address();
+        db.upsert_safe_contract(None, safe_c, module, chain_key, 100, 6, 1)
+            .await?;
+        assert_eq!(
+            resolved(db.get_safe_contract_by_module_address(None, module).await?),
+            safe_c.as_ref().to_vec()
+        );
+
+        // A later block wins regardless of transaction and log index.
+        let safe_d = random_address();
+        db.upsert_safe_contract(None, safe_d, module, chain_key, 101, 0, 0)
+            .await?;
+        assert_eq!(
+            resolved(db.get_safe_contract_by_module_address(None, module).await?),
+            safe_d.as_ref().to_vec()
+        );
+
+        // Moving the newest Safe to another module hands the shared module back to the next newest.
+        db.update_safe_module_address(None, safe_d, random_address(), 102, 0, 0)
+            .await?;
+        assert_eq!(
+            resolved(db.get_safe_contract_by_module_address(None, module).await?),
+            safe_c.as_ref().to_vec()
+        );
 
         Ok(())
     }

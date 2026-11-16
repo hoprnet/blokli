@@ -21,7 +21,6 @@ pub mod safe_history;
 pub mod safe_redeemed_stats;
 pub mod services;
 pub mod snapshot;
-pub mod state_queries;
 pub mod utils;
 pub mod version;
 
@@ -305,6 +304,5 @@ pub mod prelude {
         safe_history::*,
         safe_redeemed_stats::*,
         services::*,
-        state_queries::*,
     };
 }

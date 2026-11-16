@@ -217,25 +217,18 @@ async fn capture_watermark_synchronized(
 /// Queries all non-closed channels at a specific watermark
 ///
 /// This implements the Phase 1 historical snapshot by querying all channels
-/// that were open or pending-to-close at the watermark position. Uses temporal
-/// queries to get the state as it existed at that exact point in time.
-///
-/// Channels are returned in batches for efficient processing.
+/// that were open or pending-to-close at the watermark position, using the latest
+/// state of each channel published up to the watermark block.
 ///
 /// # Arguments
 ///
 /// * `db` - Database connection
 /// * `watermark` - Point in time to query channels at
-/// * `batch_size` - Number of channels to process per batch
 ///
 /// # Returns
 ///
 /// Vector of ChannelUpdate objects with complete channel and account information
-async fn query_channels_at_watermark(
-    db: &DatabaseConnection,
-    watermark: &Watermark,
-    _batch_size: usize, // Reserved for future pagination implementation
-) -> Result<Vec<ChannelUpdate>> {
+async fn query_channels_at_watermark(db: &DatabaseConnection, watermark: &Watermark) -> Result<Vec<ChannelUpdate>> {
     // Only the latest state of each channel is read; CLOSED channels (status 0) are left out
     let non_closed = latest_channel_states(
         db,
@@ -1150,9 +1143,6 @@ impl SubscriptionRoot {
         let (watermark, mut event_receiver, mut shutdown_receiver) =
             capture_watermark_synchronized(&indexer_state, &db).await?;
 
-        // Configuration for Phase 1 batch size
-        const BATCH_SIZE: usize = 100;
-
         Ok(stream! {
             match after {
                 // Phase 1, resumed: every channel that changed after the client's cursor, closed ones included
@@ -1169,7 +1159,7 @@ impl SubscriptionRoot {
                     }
                 },
                 // Phase 1: Stream historical snapshot of all non-closed channels at watermark
-                None => match query_channels_at_watermark(&db, &watermark, BATCH_SIZE).await {
+                None => match query_channels_at_watermark(&db, &watermark).await {
                     Ok(mut historical_channels) => {
                         historical_channels.shuffle(&mut rand::rng());
                         // Only the last entry carries a cursor: a client cut off earlier has not seen the whole
@@ -2708,7 +2698,7 @@ mod tests {
             log_index: 0,
         };
 
-        let result = query_channels_at_watermark(db.conn(blokli_db::TargetDb::Index), &watermark, 100)
+        let result = query_channels_at_watermark(db.conn(blokli_db::TargetDb::Index), &watermark)
             .await
             .unwrap();
 
@@ -2753,7 +2743,7 @@ mod tests {
             log_index: 0,
         };
 
-        let result = query_channels_at_watermark(db.conn(blokli_db::TargetDb::Index), &watermark, 100)
+        let result = query_channels_at_watermark(db.conn(blokli_db::TargetDb::Index), &watermark)
             .await
             .unwrap();
 
@@ -2799,7 +2789,7 @@ mod tests {
             log_index: 0,
         };
 
-        let result = query_channels_at_watermark(db.conn(blokli_db::TargetDb::Index), &watermark, 100)
+        let result = query_channels_at_watermark(db.conn(blokli_db::TargetDb::Index), &watermark)
             .await
             .unwrap();
 
@@ -2848,7 +2838,7 @@ mod tests {
             log_index: 0,
         };
 
-        let result = query_channels_at_watermark(db.conn(blokli_db::TargetDb::Index), &watermark, 100)
+        let result = query_channels_at_watermark(db.conn(blokli_db::TargetDb::Index), &watermark)
             .await
             .unwrap();
 
@@ -2893,7 +2883,7 @@ mod tests {
             log_index: 0,
         };
 
-        let result = query_channels_at_watermark(db.conn(blokli_db::TargetDb::Index), &watermark, 100)
+        let result = query_channels_at_watermark(db.conn(blokli_db::TargetDb::Index), &watermark)
             .await
             .unwrap();
 
@@ -2951,7 +2941,7 @@ mod tests {
             log_index: 0,
         };
 
-        let result = query_channels_at_watermark(db.conn(blokli_db::TargetDb::Index), &watermark, 100)
+        let result = query_channels_at_watermark(db.conn(blokli_db::TargetDb::Index), &watermark)
             .await
             .unwrap();
 
@@ -2988,7 +2978,7 @@ mod tests {
             tx_index: 0,
             log_index: 0,
         };
-        let result = query_channels_at_watermark(conn, &watermark, 100).await.unwrap();
+        let result = query_channels_at_watermark(conn, &watermark).await.unwrap();
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].channel.balance.0, "0.00000000000000005 wxHOPR");
@@ -3069,12 +3059,10 @@ mod tests {
             log_index: 0,
         };
 
-        // Query with batch_size = 3 (parameter is ignored, all channels returned)
-        let result = query_channels_at_watermark(db.conn(blokli_db::TargetDb::Index), &watermark, 3)
+        let result = query_channels_at_watermark(db.conn(blokli_db::TargetDb::Index), &watermark)
             .await
             .unwrap();
 
-        // Should return all 5 channels (batch_size is now unused)
         assert_eq!(result.len(), 5);
     }
 

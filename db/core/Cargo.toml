@@ -18,7 +18,6 @@ telemetry     = ["dep:lazy_static"]
 traits        = []
 
 [dependencies]
-async-broadcast = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }

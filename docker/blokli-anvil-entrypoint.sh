@@ -105,7 +105,6 @@ enable_curvy_indexing = ${BLOKLI_DEPLOY_CURVY}
 [indexer.subscription]
 event_bus_capacity = 100
 shutdown_signal_capacity = 10
-batch_size = 50
 
 [api]
 bind_address = "0.0.0.0:8080"

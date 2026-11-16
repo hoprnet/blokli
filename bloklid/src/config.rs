@@ -413,7 +413,6 @@ impl Config {
             "  api.sse_keepalive.interval: {:?}\n",
             self.api.sse_keepalive.interval
         ));
-        output.push_str(&format!("  api.sse_keepalive.text: {}\n", self.api.sse_keepalive.text));
         output.push_str(&format!(
             "  api.health.max_indexer_lag: {}\n",
             self.api.health.max_indexer_lag
@@ -492,12 +491,6 @@ pub struct SubscriptionConfig {
     #[default(10)]
     #[serde(default = "default_shutdown_signal_capacity")]
     pub shutdown_signal_capacity: usize,
-
-    /// Batch size for Phase 1 historical channel queries
-    /// Higher values fetch more data per query but may increase latency
-    #[default(100)]
-    #[serde(default = "default_batch_size")]
-    pub batch_size: usize,
 }
 
 #[serde_with::serde_as]
@@ -630,10 +623,6 @@ pub struct SseKeepAliveConfig {
     #[default(_code = "Duration::from_secs(15)")]
     #[serde(default = "default_sse_keepalive_interval", with = "humantime_serde")]
     pub interval: Duration,
-
-    #[default(_code = "default_sse_keepalive_text()")]
-    #[serde(default = "default_sse_keepalive_text")]
-    pub text: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
@@ -676,10 +665,6 @@ fn default_shutdown_signal_capacity() -> usize {
     10
 }
 
-fn default_batch_size() -> usize {
-    100
-}
-
 fn default_sse_keepalive_enabled() -> bool {
     true
 }
@@ -698,10 +683,6 @@ fn default_api_min_max_fee_per_gas() -> u64 {
 
 fn default_sse_keepalive_interval() -> Duration {
     Duration::from_secs(15)
-}
-
-fn default_sse_keepalive_text() -> String {
-    "keep-alive".to_string()
 }
 
 fn default_max_query_depth() -> usize {
@@ -1029,7 +1010,6 @@ mod tests {
         let cfg: Config = toml::from_str(config).expect("Failed to parse config");
         assert!(cfg.api.sse_keepalive.enabled);
         assert_eq!(cfg.api.sse_keepalive.interval, Duration::from_secs(15));
-        assert_eq!(cfg.api.sse_keepalive.text, "keep-alive");
     }
 
     #[test]
@@ -1038,7 +1018,6 @@ mod tests {
          [api.sse_keepalive]
          enabled = false
          interval = "5s"
-         text = "ping"
          [database]
          type = "sqlite"
          index_path = ":memory:"
@@ -1047,7 +1026,6 @@ mod tests {
         let cfg: Config = toml::from_str(config).expect("Failed to parse config");
         assert!(!cfg.api.sse_keepalive.enabled);
         assert_eq!(cfg.api.sse_keepalive.interval, Duration::from_secs(5));
-        assert_eq!(cfg.api.sse_keepalive.text, "ping");
     }
 
     #[test]
@@ -1126,7 +1104,6 @@ mod tests {
         assert!(!cfg.indexer.enable_safe_indexing); // Default
         assert!(!cfg.indexer.enable_curvy_indexing); // Default
         assert_eq!(cfg.indexer.subscription.event_bus_capacity, 1000); // Default
-        assert_eq!(cfg.indexer.subscription.batch_size, 100); // Default
     }
 
     #[test]
@@ -1231,7 +1208,6 @@ mod tests {
         let cfg = res.unwrap();
         assert_eq!(cfg.indexer.subscription.event_bus_capacity, 500);
         assert_eq!(cfg.indexer.subscription.shutdown_signal_capacity, 10); // Default
-        assert_eq!(cfg.indexer.subscription.batch_size, 100); // Default
     }
 
     #[test]
