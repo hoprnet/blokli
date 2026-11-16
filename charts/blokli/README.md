@@ -181,7 +181,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | `database.index_path`                                | Sqlite database file path (used only if database.type is "sqlite")                                            | `""`                |
 | `database.logs_path`                                 | Sqlite logs database file path (used only if database.type is "sqlite")                                       | `""`                |
 | `database.existingSecret`                            | Name of existing secret containing database credentials                                                       | `""`                |
-| `database.maxConnections`                            | Maximum number of database connections                                                                        | `10`                |
+| `database.maxConnections`                            | Maximum number of database connections of the indexer; the API server uses config.api.databaseMaxConnections more | `10`                |
 | `config.network`                                     | HOPR network to index (anvil-localhost, jura-dev, jura-prod, piz-palu-dev, piz-palu-staging)                  | `jura-prod`         |
 | `config.rpcUrl`                                      | Blockchain RPC URL                                                                                            | `""`                |
 | `config.maxRpcRequestsPerSec`                        | Maximum RPC requests per second (0 = unlimited)                                                               | `0`                 |
@@ -204,6 +204,9 @@ The command removes all the Kubernetes components associated with the chart and 
 | `config.api.minPriorityFeePerGas` | Lower bound, in wei, for the maxPriorityFeePerGas exposed by chainInfo, applied after gasMultiplier | `100` |
 | `config.api.maxQueryDepth` | Maximum allowed GraphQL query nesting depth | `8` |
 | `config.api.maxQueryComplexity`                      | Maximum allowed GraphQL query complexity; queries above this are rejected                                     | `500`               |
+| `config.api.databaseMaxConnections` | Size of the API server's own PostgreSQL connection pool. Each pod holds up to database.maxConnections plus this many connections | `10` |
+| `config.api.maxConcurrentSnapshots` | Maximum number of subscription snapshots loaded from the database at the same time; keep it below databaseMaxConnections | `8` |
+| `config.api.snapshotQueueTimeout` | How long a subscription waits for its turn to load a snapshot before it is ended | `10s` |
 | `config.api.transactions.maxSubmittedTransactions` | Global limit of transactions awaiting receipt monitoring (0 = unbounded) | `1024` |
 | `config.api.transactions.maxSubmittedTransactionsPerIdentity` | Per-signer limit of transactions awaiting receipt monitoring (0 = unbounded) | `64` |
 | `config.api.transactions.maxTerminalTransactions` | Maximum completed transaction records retained (0 = no cap) | `10000` |

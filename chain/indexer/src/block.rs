@@ -2,13 +2,16 @@
 use std::error::Error as StdError;
 use std::{
     collections::HashSet,
+    future::Future,
     path::Path,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
+    time::Duration,
 };
 
+use backon::{ExponentialBuilder, FuturesTimerSleeper, Retryable};
 use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
 use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{
@@ -99,6 +102,42 @@ fn checksum_low_32_bits(checksum_hash: &Hash) -> u32 {
         .and_then(|bytes| bytes.try_into().ok())
         .map(u32::from_be_bytes)
         .unwrap_or_default()
+}
+
+/// How often a failed read that precedes a block's writes is repeated before giving up
+const PRE_WRITE_READ_RETRIES: usize = 3;
+
+/// Pause before the first repetition of a failed pre-write read; it doubles with each further one
+const PRE_WRITE_READ_MIN_DELAY: Duration = Duration::from_millis(500);
+
+/// Backoff applied to the reads that precede a block's writes
+fn pre_write_read_backoff() -> ExponentialBuilder {
+    ExponentialBuilder::default()
+        .with_min_delay(PRE_WRITE_READ_MIN_DELAY)
+        .with_max_times(PRE_WRITE_READ_RETRIES)
+}
+
+/// Reads through `read`, repeating a failed read as `backoff` allows.
+///
+/// Only for reads that come before every write of a block: repeating such a read cannot apply
+/// anything twice, and it lets indexing ride out a short database outage - a failover, a
+/// momentarily exhausted connection pool - instead of ending the process.
+async fn read_with_retries<T, E, F, Fut>(
+    operation: &str,
+    backoff: ExponentialBuilder,
+    read: F,
+) -> std::result::Result<T, E>
+where
+    E: std::fmt::Display,
+    F: FnMut() -> Fut,
+    Fut: Future<Output = std::result::Result<T, E>>,
+{
+    read.retry(backoff)
+        .sleep(FuturesTimerSleeper)
+        .notify(|error: &E, delay: Duration| {
+            warn!(operation, %error, ?delay, "database read failed, retrying");
+        })
+        .await
 }
 
 /// Indexer
@@ -941,7 +980,11 @@ where
         let processed_logs = if block.logs.is_empty() {
             HashSet::new()
         } else {
-            match db.get_processed_log_identities(block_id).await {
+            match read_with_retries("load processed log identities", pre_write_read_backoff(), || {
+                db.get_processed_log_identities(block_id)
+            })
+            .await
+            {
                 Ok(identities) => identities,
                 Err(error) => {
                     // The logs DB is unreachable; dispatching now would mean marking the logs as
@@ -1393,7 +1436,7 @@ mod tests {
         pin::Pin,
         sync::{
             Arc,
-            atomic::{AtomicBool as StdAtomicBool, Ordering as StdOrdering},
+            atomic::{AtomicBool as StdAtomicBool, AtomicUsize, Ordering as StdOrdering},
         },
         time::Duration,
     };
@@ -3752,5 +3795,57 @@ mod tests {
         assert_eq!(found_state.published_log_index, 0, "Should use synthetic log_index 0");
 
         Ok(())
+    }
+
+    /// Backoff that makes the retry tests finish quickly
+    fn test_read_backoff() -> ExponentialBuilder {
+        ExponentialBuilder::default()
+            .with_min_delay(Duration::from_millis(1))
+            .with_max_times(PRE_WRITE_READ_RETRIES)
+    }
+
+    #[tokio::test]
+    async fn test_read_with_retries_returns_a_read_that_succeeds_after_failures() {
+        let attempts = AtomicUsize::new(0);
+
+        let result: std::result::Result<u32, String> = read_with_retries("test read", test_read_backoff(), || async {
+            if attempts.fetch_add(1, StdOrdering::SeqCst) < 2 {
+                Err("connection pool timed out".to_string())
+            } else {
+                Ok(7)
+            }
+        })
+        .await;
+
+        assert_eq!(result, Ok(7));
+        assert_eq!(attempts.load(StdOrdering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn test_read_with_retries_gives_up_after_the_last_retry() {
+        let attempts = AtomicUsize::new(0);
+
+        let result: std::result::Result<u32, String> = read_with_retries("test read", test_read_backoff(), || async {
+            attempts.fetch_add(1, StdOrdering::SeqCst);
+            Err("database unreachable".to_string())
+        })
+        .await;
+
+        assert_eq!(result, Err("database unreachable".to_string()));
+        assert_eq!(attempts.load(StdOrdering::SeqCst), PRE_WRITE_READ_RETRIES + 1);
+    }
+
+    #[tokio::test]
+    async fn test_read_with_retries_does_not_repeat_a_successful_read() {
+        let attempts = AtomicUsize::new(0);
+
+        let result: std::result::Result<u32, String> = read_with_retries("test read", test_read_backoff(), || async {
+            attempts.fetch_add(1, StdOrdering::SeqCst);
+            Ok(1)
+        })
+        .await;
+
+        assert_eq!(result, Ok(1));
+        assert_eq!(attempts.load(StdOrdering::SeqCst), 1);
     }
 }

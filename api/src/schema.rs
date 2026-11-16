@@ -13,7 +13,10 @@ use blokli_chain_types::ContractAddresses;
 use futures::Stream;
 use sea_orm::DatabaseConnection;
 
-use crate::{mutation::MutationRoot, query::QueryRoot, readiness::ReadinessChecker, subscription::SubscriptionRoot};
+use crate::{
+    loader::accounts_by_chain_key_loader, mutation::MutationRoot, query::QueryRoot, readiness::ReadinessChecker,
+    snapshot::SubscriptionSnapshots, subscription::SubscriptionRoot,
+};
 
 /// Wrapper type for expected block time to avoid type confusion in context
 #[derive(Debug, Clone, Copy)]
@@ -73,6 +76,7 @@ pub fn build_version_registry<R: HttpRequestor + 'static + Clone>(
     transaction_store: Arc<TransactionStore>,
     rpc_operations: Arc<RpcOperations<R>>,
     readiness_checker: ReadinessChecker,
+    subscription_snapshots: SubscriptionSnapshots,
     limits: Option<(usize, usize)>,
 ) -> HashMap<u32, Arc<dyn ErasedSchema>> {
     let v1: Arc<dyn ErasedSchema> = Arc::new(build_schema(
@@ -90,6 +94,7 @@ pub fn build_version_registry<R: HttpRequestor + 'static + Clone>(
         transaction_store,
         rpc_operations,
         readiness_checker,
+        subscription_snapshots,
         limits,
     ));
 
@@ -151,6 +156,7 @@ where
 ///
 /// The schema is configured with:
 /// - Database connection injected as context data
+/// - Batch loader for account lookups by chain key injected as context data
 /// - Chain ID injected as context data
 /// - Network name injected as context data
 /// - Contract addresses injected as context data
@@ -159,6 +165,7 @@ where
 /// - IndexerState injected as context data (for subscription coordination)
 /// - Transaction executor and store injected as context data (for mutations and transaction queries)
 /// - RPC operations injected as context data (for passthrough balance queries)
+/// - Subscription snapshot limiter and caches injected as context data (shared by every schema of the process)
 /// - Query depth limit to prevent excessive nesting
 /// - Query complexity limit to throttle expensive RPC fan-out
 ///
@@ -180,10 +187,12 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
     transaction_store: Arc<TransactionStore>,
     rpc_operations: Arc<RpcOperations<R>>,
     readiness_checker: ReadinessChecker,
+    subscription_snapshots: SubscriptionSnapshots,
     limits: Option<(usize, usize)>,
 ) -> Schema<QueryRoot, MutationRoot, SubscriptionRoot> {
     let query_rpc: Arc<dyn HoprRpcOperations + Send + Sync> = rpc_operations.clone();
     let mut builder = Schema::build(QueryRoot, MutationRoot, SubscriptionRoot)
+        .data(accounts_by_chain_key_loader(db.clone()))
         .data(db)
         .data(LogsDatabase(logs_db))
         .data(ChainId(chain_id))
@@ -198,7 +207,8 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
         .data(transaction_store)
         .data(RpcOperationsContext(query_rpc))
         .data(rpc_operations)
-        .data(readiness_checker);
+        .data(readiness_checker)
+        .data(subscription_snapshots);
 
     if let Some((max_depth, max_complexity)) = limits {
         builder = builder.limit_depth(max_depth).limit_complexity(max_complexity);
@@ -237,6 +247,7 @@ pub fn export_schema_sdl<R: HttpRequestor + 'static + Clone>(
         transaction_store,
         rpc_operations,
         readiness_checker,
+        SubscriptionSnapshots::default(),
         None,
     );
 

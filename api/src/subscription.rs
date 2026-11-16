@@ -1,6 +1,6 @@
 //! GraphQL subscription root and resolver implementations
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, future::Future, sync::Arc, time::Duration};
 
 use async_broadcast::Receiver;
 use async_graphql::{Context, ID, Result, Subscription};
@@ -51,6 +51,7 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::{
+    SYNCHRONIZED_READ_TIMEOUT,
     conversions::{
         service_entry_from_aggregate, service_registry_config_from_model, service_type_from_aggregate,
         transaction_from_record,
@@ -58,8 +59,36 @@ use crate::{
     curvy, errors,
     query::owners_for_safe,
     readiness::{ReadinessChecker, ReadinessState},
+    snapshot::{SnapshotLimiter, SnapshotPoint, SubscriptionSnapshots},
     validation::{parse_service_type, validate_eth_address},
 };
+
+/// Builds the error for a read that held the indexer's watermark lock for too long
+fn synchronized_read_timed_out(operation: &str) -> async_graphql::Error {
+    async_graphql::Error::new(errors::messages::synchronized_read_timed_out(
+        operation,
+        SYNCHRONIZED_READ_TIMEOUT,
+    ))
+}
+
+/// Runs the database load of a snapshot once the limiter admits it
+///
+/// Every multi-row load a subscription starts with goes through here, so that subscriptions
+/// arriving together queue for the database instead of each taking a connection at once.
+async fn load_snapshot<T>(limiter: &SnapshotLimiter, load: impl Future<Output = Result<T>>) -> Result<T> {
+    let _permit = limiter.acquire().await.map_err(errors::graphql_error)?;
+    load.await
+}
+
+/// Returns the positions of `len` rows in random order
+///
+/// Snapshots are emitted in random order so that clients do not come to rely on one. A shared
+/// snapshot cannot be shuffled in place, hence the order is drawn separately per subscription.
+fn shuffled_order(len: usize) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..len).collect();
+    order.shuffle(&mut rand::rng());
+    order
+}
 
 /// Captures the current registry-wide configuration and subscribes to later changes atomically.
 ///
@@ -70,24 +99,29 @@ async fn capture_service_registry_config_synchronized(
     indexer_state: &IndexerState,
     db: &DatabaseConnection,
 ) -> Result<(ServiceRegistryConfig, Receiver<Arc<IndexerEvent>>, Receiver<()>)> {
-    let _lock = indexer_state.acquire_watermark_lock().await;
+    indexer_state
+        .read_synchronized(SYNCHRONIZED_READ_TIMEOUT, async {
+            let model = ServiceRegistryConfigEntity::find()
+                .one(db)
+                .await
+                .map_err(|e| {
+                    async_graphql::Error::new(errors::messages::query_error("service registry config query", e))
+                })?
+                .ok_or_else(|| {
+                    async_graphql::Error::new(errors::messages::not_found(
+                        "service_registry_config",
+                        "not initialized",
+                    ))
+                })?;
+            let config = service_registry_config_from_model(model).map_err(|e| async_graphql::Error::new(e.message))?;
 
-    let model = ServiceRegistryConfigEntity::find()
-        .one(db)
+            let event_receiver = indexer_state.subscribe_to_events();
+            let shutdown_receiver = indexer_state.subscribe_to_shutdown();
+
+            Ok((config, event_receiver, shutdown_receiver))
+        })
         .await
-        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("service registry config query", e)))?
-        .ok_or_else(|| {
-            async_graphql::Error::new(errors::messages::not_found(
-                "service_registry_config",
-                "not initialized",
-            ))
-        })?;
-    let config = service_registry_config_from_model(model).map_err(|e| async_graphql::Error::new(e.message))?;
-
-    let event_receiver = indexer_state.subscribe_to_events();
-    let shutdown_receiver = indexer_state.subscribe_to_shutdown();
-
-    Ok((config, event_receiver, shutdown_receiver))
+        .map_err(|_| synchronized_read_timed_out("service registry config query"))?
 }
 
 async fn query_service_entries_at_watermark(
@@ -123,29 +157,34 @@ async fn capture_service_types_synchronized(
     db: &DatabaseConnection,
     service_type: Option<&ServiceType>,
 ) -> Result<(Vec<ServiceTypeUpdate>, Receiver<Arc<IndexerEvent>>, Receiver<()>)> {
-    let _lock = indexer_state.acquire_watermark_lock().await;
-    let aggregates = match service_type {
-        Some(service_type) => fetch_service_types_by_id(db, &[service_type.as_ref().to_vec()]).await,
-        None => fetch_service_types(db).await,
-    }
-    .map_err(|e| async_graphql::Error::new(errors::messages::query_error("service type snapshot", e)))?;
+    indexer_state
+        .read_synchronized(SYNCHRONIZED_READ_TIMEOUT, async {
+            let aggregates = match service_type {
+                Some(service_type) => fetch_service_types_by_id(db, &[service_type.as_ref().to_vec()]).await,
+                None => fetch_service_types(db).await,
+            }
+            .map_err(|e| async_graphql::Error::new(errors::messages::query_error("service type snapshot", e)))?;
 
-    let mut initial = Vec::with_capacity(aggregates.len());
-    for aggregate in aggregates {
-        let config = service_type_from_aggregate(aggregate).map_err(|e| async_graphql::Error::new(e.message))?;
-        initial.push(ServiceTypeUpdate {
-            kind: ServiceTypeUpdateKind::Registered,
-            service_type: Some(config.service_type.clone()),
-            config: Some(config),
-            registry_config: None,
-        });
-    }
+            let mut initial = Vec::with_capacity(aggregates.len());
+            for aggregate in aggregates {
+                let config =
+                    service_type_from_aggregate(aggregate).map_err(|e| async_graphql::Error::new(e.message))?;
+                initial.push(ServiceTypeUpdate {
+                    kind: ServiceTypeUpdateKind::Registered,
+                    service_type: Some(config.service_type.clone()),
+                    config: Some(config),
+                    registry_config: None,
+                });
+            }
 
-    Ok((
-        initial,
-        indexer_state.subscribe_to_events(),
-        indexer_state.subscribe_to_shutdown(),
-    ))
+            Ok((
+                initial,
+                indexer_state.subscribe_to_events(),
+                indexer_state.subscribe_to_shutdown(),
+            ))
+        })
+        .await
+        .map_err(|_| synchronized_read_timed_out("service type snapshot"))?
 }
 
 /// Watermark representing the last fully processed blockchain position
@@ -189,29 +228,55 @@ async fn capture_watermark_synchronized(
     indexer_state: &IndexerState,
     db: &DatabaseConnection,
 ) -> Result<(Watermark, Receiver<Arc<IndexerEvent>>, Receiver<()>)> {
-    // Acquire read lock - this waits for any in-progress block processing to complete
-    let _lock = indexer_state.acquire_watermark_lock().await;
-
-    // Query the current watermark from chain_info table
-    let chain_info = ChainInfoEntity::find()
-        .one(db)
+    capture_snapshot_point_synchronized(indexer_state, db)
         .await
-        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("chain_info query", e)))?
-        .ok_or_else(|| async_graphql::Error::new(errors::messages::not_found("chain_info", "not initialized")))?;
+        .map(|(watermark, _, event_receiver, shutdown_receiver)| (watermark, event_receiver, shutdown_receiver))
+}
 
-    let watermark = Watermark {
-        block: chain_info.last_indexed_block,
-        tx_index: chain_info.last_indexed_tx_index.unwrap_or(0),
-        log_index: chain_info.last_indexed_log_index.unwrap_or(0),
-    };
+/// Captures the watermark like [`capture_watermark_synchronized`], together with the
+/// [`SnapshotPoint`] it belongs to
+///
+/// The point is what a snapshot shared between subscriptions is keyed by. It is read under the
+/// same lock as the watermark: a reorganization signaled in between would otherwise pair the
+/// block of one fork with the epoch of the next.
+async fn capture_snapshot_point_synchronized(
+    indexer_state: &IndexerState,
+    db: &DatabaseConnection,
+) -> Result<(Watermark, SnapshotPoint, Receiver<Arc<IndexerEvent>>, Receiver<()>)> {
+    // Acquire read lock - this waits for any in-progress block processing to complete.
+    // The read is bounded: the indexer cannot process a block while the lock is held.
+    indexer_state
+        .read_synchronized(SYNCHRONIZED_READ_TIMEOUT, async {
+            // Query the current watermark from chain_info table
+            let chain_info = ChainInfoEntity::find()
+                .one(db)
+                .await
+                .map_err(|e| async_graphql::Error::new(errors::messages::query_error("chain_info query", e)))?
+                .ok_or_else(|| {
+                    async_graphql::Error::new(errors::messages::not_found("chain_info", "not initialized"))
+                })?;
 
-    // Subscribe to event bus and shutdown signal while still holding the lock
-    // This ensures no events can be published between reading watermark and subscribing
-    let event_receiver = indexer_state.subscribe_to_events();
-    let shutdown_receiver = indexer_state.subscribe_to_shutdown();
+            let watermark = Watermark {
+                block: chain_info.last_indexed_block,
+                tx_index: chain_info.last_indexed_tx_index.unwrap_or(0),
+                log_index: chain_info.last_indexed_log_index.unwrap_or(0),
+            };
 
-    // Lock is automatically released when _lock goes out of scope
-    Ok((watermark, event_receiver, shutdown_receiver))
+            // Subscribe to event bus and shutdown signal while still holding the lock
+            // This ensures no events can be published between reading watermark and subscribing
+            let event_receiver = indexer_state.subscribe_to_events();
+            let shutdown_receiver = indexer_state.subscribe_to_shutdown();
+
+            let point = SnapshotPoint {
+                reorg_epoch: indexer_state.reorg_epoch(),
+                block: watermark.block,
+            };
+
+            // Lock is automatically released when the synchronized read returns
+            Ok((watermark, point, event_receiver, shutdown_receiver))
+        })
+        .await
+        .map_err(|_| synchronized_read_timed_out("chain_info query"))?
 }
 
 /// Queries all non-closed channels at a specific watermark
@@ -975,19 +1040,24 @@ impl SubscriptionRoot {
             .map_err(|e| async_graphql::Error::new(errors::messages::context_error("IndexerState", e.message)))?
             .clone();
 
+        let snapshots = ctx.data::<SubscriptionSnapshots>()?.clone();
+
         // Capture watermark and subscribe to event bus (synchronized)
         let (watermark, mut event_receiver, mut shutdown_receiver) =
             capture_watermark_synchronized(&indexer_state, &db).await?;
 
         Ok(stream! {
             // Phase 1: Stream historical snapshot of all matching channels at watermark
-            match query_channels_at_watermark_with_filters(
-                &db,
-                &watermark,
-                source_key_id,
-                destination_key_id,
-                concrete_channel_id.clone(),
-                status,
+            match load_snapshot(
+                &snapshots.limiter,
+                query_channels_at_watermark_with_filters(
+                    &db,
+                    &watermark,
+                    source_key_id,
+                    destination_key_id,
+                    concrete_channel_id.clone(),
+                    status,
+                ),
             )
             .await
             {
@@ -1137,16 +1207,23 @@ impl SubscriptionRoot {
             .map_err(|e| async_graphql::Error::new(errors::messages::context_error("IndexerState", e.message)))?
             .clone();
 
+        let snapshots = ctx.data::<SubscriptionSnapshots>()?.clone();
+
         let after = after.map(cursor_to_watermark).transpose()?;
 
         // Capture watermark and subscribe to event bus (synchronized)
-        let (watermark, mut event_receiver, mut shutdown_receiver) =
-            capture_watermark_synchronized(&indexer_state, &db).await?;
+        let (watermark, point, mut event_receiver, mut shutdown_receiver) =
+            capture_snapshot_point_synchronized(&indexer_state, &db).await?;
 
         Ok(stream! {
             match after {
                 // Phase 1, resumed: every channel that changed after the client's cursor, closed ones included
-                Some(after) => match query_channel_changes_after(&db, &after, &watermark).await {
+                Some(after) => match load_snapshot(
+                    &snapshots.limiter,
+                    query_channel_changes_after(&db, &after, &watermark),
+                )
+                .await
+                {
                     Ok(changed_channels) => {
                         for channel_update in changed_channels {
                             let cursor = channel_update.position;
@@ -1158,16 +1235,24 @@ impl SubscriptionRoot {
                         return; // Terminate subscription on error
                     }
                 },
-                // Phase 1: Stream historical snapshot of all non-closed channels at watermark
-                None => match query_channels_at_watermark(&db, &watermark).await {
-                    Ok(mut historical_channels) => {
-                        historical_channels.shuffle(&mut rand::rng());
+                // Phase 1: Stream historical snapshot of all non-closed channels at watermark.
+                // Every subscription that starts at the same point gets the same rows, so they are
+                // loaded once and shared.
+                None => match snapshots
+                    .channel_graph
+                    .get_or_load(point, {
+                        let (db, limiter) = (db.clone(), snapshots.limiter.clone());
+                        async move { load_snapshot(&limiter, query_channels_at_watermark(&db, &watermark)).await }
+                    })
+                    .await
+                {
+                    Ok(historical_channels) => {
                         // Only the last entry carries a cursor: a client cut off earlier has not seen the whole
                         // snapshot, so it must start over rather than resume.
                         let last = historical_channels.len().saturating_sub(1);
-                        for (index, channel_update) in historical_channels.into_iter().enumerate() {
+                        for (index, row) in shuffled_order(historical_channels.len()).into_iter().enumerate() {
                             let cursor = (index == last).then(|| watermark_position(&watermark)).flatten();
-                            yield channel_update_to_graph_entry(channel_update, cursor);
+                            yield channel_update_to_graph_entry(historical_channels[row].clone(), cursor);
                         }
                     }
                     Err(e) => {
@@ -1275,6 +1360,7 @@ impl SubscriptionRoot {
             .data::<IndexerState>()
             .map_err(|e| async_graphql::Error::new(errors::messages::context_error("IndexerState", e.message)))?
             .clone();
+        let snapshots = ctx.data::<SubscriptionSnapshots>()?.clone();
 
         Ok(stream! {
             // Subscribe to events and shutdown first to avoid missing events
@@ -1282,11 +1368,21 @@ impl SubscriptionRoot {
             let mut shutdown_receiver = indexer_state.subscribe_to_shutdown();
 
             // Emit initial matching accounts
-            match Self::fetch_filtered_accounts(&db, keyid, packet_key.clone(), chain_key.clone()).await {
-                Ok(mut accounts) => {
-                    accounts.shuffle(&mut rand::rng());
-                    for account in accounts {
-                        yield account;
+            let is_unfiltered = keyid.is_none() && packet_key.is_none() && chain_key.is_none();
+            let initial_accounts = if is_unfiltered {
+                Self::load_all_accounts_shared(&snapshots, &indexer_state, &db).await
+            } else {
+                load_snapshot(
+                    &snapshots.limiter,
+                    Self::fetch_filtered_accounts(&db, keyid, packet_key.clone(), chain_key.clone()),
+                )
+                .await
+                .map(Arc::new)
+            };
+            match initial_accounts {
+                Ok(accounts) => {
+                    for row in shuffled_order(accounts.len()) {
+                        yield accounts[row].clone();
                     }
                 }
                 Err(e) => {
@@ -1385,11 +1481,15 @@ impl SubscriptionRoot {
         // at a block boundary and cannot observe half of a block's events.
         let (watermark, mut event_receiver, mut shutdown_receiver) =
             capture_watermark_synchronized(&indexer_state, &db).await?;
-        let initial = query_service_entries_at_watermark(
-            &db,
-            &watermark,
-            parsed_service_type.as_ref().map(AsRef::as_ref),
-            node_address.as_ref().map(AsRef::as_ref),
+        let snapshots = ctx.data::<SubscriptionSnapshots>()?;
+        let initial = load_snapshot(
+            &snapshots.limiter,
+            query_service_entries_at_watermark(
+                &db,
+                &watermark,
+                parsed_service_type.as_ref().map(AsRef::as_ref),
+                node_address.as_ref().map(AsRef::as_ref),
+            ),
         )
         .await?;
 
@@ -2191,14 +2291,38 @@ impl SubscriptionRoot {
         }))
     }
 
+    /// Loads every account, sharing the load with the other subscriptions that start at the same
+    /// point of the indexed chain
+    ///
+    /// The caller must already be subscribed to the event bus. The point is captured afterwards,
+    /// so every change published after it reaches the caller as an event, while the shared rows
+    /// hold at least the state at that point.
+    async fn load_all_accounts_shared(
+        snapshots: &SubscriptionSnapshots,
+        indexer_state: &IndexerState,
+        db: &DatabaseConnection,
+    ) -> Result<Arc<Vec<Account>>> {
+        let (_, point, ..) = capture_snapshot_point_synchronized(indexer_state, db).await?;
+
+        snapshots
+            .accounts
+            .get_or_load(point, {
+                let (db, limiter) = (db.clone(), snapshots.limiter.clone());
+                async move { load_snapshot(&limiter, Self::fetch_filtered_accounts(&db, None, None, None)).await }
+            })
+            .await
+    }
+
     async fn fetch_filtered_accounts(
         db: &DatabaseConnection,
         keyid: Option<i64>,
         packet_key: Option<String>,
         chain_key: Option<String>,
-    ) -> Result<Vec<Account>, sea_orm::DbErr> {
+    ) -> Result<Vec<Account>> {
         // Use optimized batch loading from account_aggregation
-        let aggregated_accounts = fetch_accounts_with_filters(db, keyid, packet_key, chain_key).await?;
+        let aggregated_accounts = fetch_accounts_with_filters(db, keyid, packet_key, chain_key)
+            .await
+            .map_err(|e| async_graphql::Error::new(errors::messages::query_error("accounts fetch", e)))?;
 
         // Convert to GraphQL Account type
         let result = aggregated_accounts
@@ -3766,6 +3890,7 @@ mod tests {
                 .data(conn.clone())
                 .data(indexer_state)
                 .data(GasMultiplier(1.0))
+                .data(SubscriptionSnapshots::default())
                 .finish();
 
             let mut stream = schema.execute_stream(query).boxed();
@@ -3816,6 +3941,7 @@ mod tests {
                 .data(conn.clone())
                 .data(indexer_state)
                 .data(GasMultiplier(1.0))
+                .data(SubscriptionSnapshots::default())
                 .finish();
 
             let mut stream = schema.execute_stream(query).boxed();
@@ -3861,6 +3987,7 @@ mod tests {
                 .data(conn.clone())
                 .data(indexer_state)
                 .data(GasMultiplier(1.0))
+                .data(SubscriptionSnapshots::default())
                 .finish();
 
             let mut stream = schema.execute_stream(query).boxed();
@@ -4043,5 +4170,276 @@ mod tests {
             timeout_result.is_err(),
             "non-TicketRedeemed events must not produce subscription items"
         );
+    }
+
+    /// Schema over `conn` whose subscriptions load their snapshots through `snapshots`
+    fn snapshot_test_schema(
+        conn: &DatabaseConnection,
+        indexer_state: &IndexerState,
+        snapshots: &SubscriptionSnapshots,
+    ) -> Schema<DummyQuery, EmptyMutation, SubscriptionRoot> {
+        Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)
+            .data(conn.clone())
+            .data(indexer_state.clone())
+            .data(GasMultiplier(1.0))
+            .data(snapshots.clone())
+            .finish()
+    }
+
+    /// Collects the items a subscription emits until it stays quiet for a moment or ends,
+    /// which is the whole snapshot when no live event is published.
+    async fn collect_snapshot_items(
+        schema: &Schema<DummyQuery, EmptyMutation, SubscriptionRoot>,
+        query: &str,
+    ) -> Vec<serde_json::Value> {
+        let mut stream = schema.execute_stream(query).boxed();
+        let mut items = Vec::new();
+        while let Ok(Some(response)) = tokio::time::timeout(Duration::from_millis(300), stream.next()).await {
+            let data = response.into_result().expect("response error").data;
+            items.push(serde_json::to_value(data).expect("failed to convert to JSON"));
+        }
+        items
+    }
+
+    /// Creates an open channel between two new accounts, with its state published at `block`
+    async fn create_open_channel(conn: &DatabaseConnection, index: u8, block: i64) -> anyhow::Result<()> {
+        let src = create_test_account(conn, vec![index * 2 + 1; 20], &format!("src{index}")).await?;
+        let dst = create_test_account(conn, vec![index * 2 + 2; 20], &format!("dst{index}")).await?;
+        let channel = create_test_channel(conn, src, dst, &format!("ch{index:02}")).await?;
+        insert_channel_state(conn, channel, block, 0, i64::from(index), vec![0; 12], 1).await?;
+        Ok(())
+    }
+
+    const GRAPH_SNAPSHOT_QUERY: &str = "subscription { openedChannelGraphUpdated { channel { concreteChannelId } } }";
+    const ACCOUNT_SNAPSHOT_QUERY: &str = "subscription { accountUpdated { keyid } }";
+
+    #[tokio::test]
+    async fn test_capture_snapshot_point_pairs_the_block_with_the_reorg_epoch() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let conn = db.conn(blokli_db::TargetDb::Index);
+        init_chain_info(conn, 100, 0, 0).await?;
+        let indexer_state = IndexerState::new(10, 100);
+
+        let (_, before_reorg, ..) = capture_snapshot_point_synchronized(&indexer_state, conn)
+            .await
+            .map_err(|e| anyhow::anyhow!(e.message))?;
+        indexer_state.signal_shutdown();
+        let (_, after_reorg, ..) = capture_snapshot_point_synchronized(&indexer_state, conn)
+            .await
+            .map_err(|e| anyhow::anyhow!(e.message))?;
+
+        assert_eq!(
+            before_reorg,
+            SnapshotPoint {
+                reorg_epoch: 0,
+                block: 100
+            }
+        );
+        assert_eq!(
+            after_reorg,
+            SnapshotPoint {
+                reorg_epoch: 1,
+                block: 100
+            }
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_opened_channel_graph_snapshot_is_loaded_once_per_block() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let conn = db.conn(blokli_db::TargetDb::Index);
+        init_chain_info(conn, 100, 0, 0).await?;
+        for index in 0..3 {
+            create_open_channel(conn, index, 50).await?;
+        }
+        let indexer_state = IndexerState::new(10, 100);
+        let schema = snapshot_test_schema(conn, &indexer_state, &SubscriptionSnapshots::default());
+
+        let first = collect_snapshot_items(&schema, GRAPH_SNAPSHOT_QUERY).await;
+
+        // A channel written without advancing the indexed block stands for any change the
+        // database sees while the block is current: subscriptions at that block share one load.
+        create_open_channel(conn, 3, 60).await?;
+        let same_block = collect_snapshot_items(&schema, GRAPH_SNAPSHOT_QUERY).await;
+
+        init_chain_info(conn, 101, 0, 0).await?;
+        let next_block = collect_snapshot_items(&schema, GRAPH_SNAPSHOT_QUERY).await;
+
+        assert_eq!(first.len(), 3);
+        assert_eq!(same_block.len(), 3);
+        assert_eq!(next_block.len(), 4);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_opened_channel_graph_snapshot_is_loaded_again_after_a_reorganization() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let conn = db.conn(blokli_db::TargetDb::Index);
+        init_chain_info(conn, 100, 0, 0).await?;
+        for index in 0..3 {
+            create_open_channel(conn, index, 50).await?;
+        }
+        let indexer_state = IndexerState::new(10, 100);
+        let schema = snapshot_test_schema(conn, &indexer_state, &SubscriptionSnapshots::default());
+
+        let before_reorg = collect_snapshot_items(&schema, GRAPH_SNAPSHOT_QUERY).await;
+
+        // The indexer is at the same block number again, on a fork with different content
+        create_open_channel(conn, 3, 60).await?;
+        indexer_state.signal_shutdown();
+        let after_reorg = collect_snapshot_items(&schema, GRAPH_SNAPSHOT_QUERY).await;
+
+        assert_eq!(before_reorg.len(), 3);
+        assert_eq!(after_reorg.len(), 4);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_opened_channel_graph_shared_snapshot_ends_with_one_cursor() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let conn = db.conn(blokli_db::TargetDb::Index);
+        init_chain_info(conn, 100, 0, 0).await?;
+        for index in 0..3 {
+            create_open_channel(conn, index, 50).await?;
+        }
+        let indexer_state = IndexerState::new(10, 100);
+        let schema = snapshot_test_schema(conn, &indexer_state, &SubscriptionSnapshots::default());
+        let query = "subscription { openedChannelGraphUpdated { cursor { block } } }";
+
+        // The second subscription is served from the shared rows
+        for _ in 0..2 {
+            let items = collect_snapshot_items(&schema, query).await;
+            let cursors: Vec<&serde_json::Value> = items
+                .iter()
+                .map(|item| &item["openedChannelGraphUpdated"]["cursor"])
+                .collect();
+
+            assert_eq!(cursors.len(), 3);
+            assert!(cursors[0].is_null());
+            assert!(cursors[1].is_null());
+            assert!(!cursors[2].is_null());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_account_updated_unfiltered_snapshot_is_loaded_once_per_block() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let conn = db.conn(blokli_db::TargetDb::Index);
+        init_chain_info(conn, 100, 0, 0).await?;
+        for index in 0..3u8 {
+            create_test_account(conn, vec![index + 1; 20], &format!("peer{index}")).await?;
+        }
+        let indexer_state = IndexerState::new(10, 100);
+        let schema = snapshot_test_schema(conn, &indexer_state, &SubscriptionSnapshots::default());
+
+        let first = collect_snapshot_items(&schema, ACCOUNT_SNAPSHOT_QUERY).await;
+
+        create_test_account(conn, vec![9; 20], "peer9").await?;
+        let same_block = collect_snapshot_items(&schema, ACCOUNT_SNAPSHOT_QUERY).await;
+
+        init_chain_info(conn, 101, 0, 0).await?;
+        let next_block = collect_snapshot_items(&schema, ACCOUNT_SNAPSHOT_QUERY).await;
+
+        assert_eq!(first.len(), 3);
+        assert_eq!(same_block.len(), 3);
+        assert_eq!(next_block.len(), 4);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_account_updated_filtered_snapshot_is_not_shared() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let conn = db.conn(blokli_db::TargetDb::Index);
+        init_chain_info(conn, 100, 0, 0).await?;
+        create_test_account(conn, vec![1; 20], "peer0").await?;
+        let indexer_state = IndexerState::new(10, 100);
+        let schema = snapshot_test_schema(conn, &indexer_state, &SubscriptionSnapshots::default());
+
+        // Fill the shared snapshot, then add an account it does not hold
+        let unfiltered = collect_snapshot_items(&schema, ACCOUNT_SNAPSHOT_QUERY).await;
+        let added = create_test_account(conn, vec![9; 20], "peer9").await?;
+        let filtered = collect_snapshot_items(
+            &schema,
+            &format!("subscription {{ accountUpdated(keyid: {added}) {{ keyid }} }}"),
+        )
+        .await;
+
+        assert_eq!(unfiltered.len(), 1);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0]["accountUpdated"]["keyid"], added);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_a_burst_of_subscriptions_all_receive_their_snapshot() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let conn = db.conn(blokli_db::TargetDb::Index);
+        init_chain_info(conn, 100, 0, 0).await?;
+        for index in 0..3 {
+            create_open_channel(conn, index, 50).await?;
+        }
+        let indexer_state = IndexerState::new(10, 100);
+        // Far fewer load slots than subscriptions, and a queue timeout a queued load would hit
+        let snapshots = SubscriptionSnapshots::new(1, Duration::from_millis(200));
+        let schema = snapshot_test_schema(conn, &indexer_state, &snapshots);
+
+        let subscriptions: Vec<_> = (0..50)
+            .map(|index| {
+                let schema = schema.clone();
+                tokio::spawn(async move {
+                    let query = if index % 2 == 0 {
+                        GRAPH_SNAPSHOT_QUERY
+                    } else {
+                        ACCOUNT_SNAPSHOT_QUERY
+                    };
+                    (query, collect_snapshot_items(&schema, query).await.len())
+                })
+            })
+            .collect();
+
+        for subscription in subscriptions {
+            let (query, received) = subscription.await?;
+            let expected = if query == GRAPH_SNAPSHOT_QUERY { 3 } else { 6 };
+            assert_eq!(received, expected, "{query}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_subscriptions_wait_for_a_free_load_slot() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let conn = db.conn(blokli_db::TargetDb::Index);
+        init_chain_info(conn, 100, 0, 0).await?;
+        for index in 0..3 {
+            create_open_channel(conn, index, 50).await?;
+        }
+        let indexer_state = IndexerState::new(10, 100);
+        let snapshots = SubscriptionSnapshots::new(1, Duration::from_millis(50));
+        let schema = snapshot_test_schema(conn, &indexer_state, &snapshots);
+        let queries = [
+            GRAPH_SNAPSHOT_QUERY,
+            ACCOUNT_SNAPSHOT_QUERY,
+            "subscription { channelUpdated { concreteChannelId } }",
+            "subscription { accountUpdated(keyid: 1) { keyid } }",
+        ];
+
+        // While the only slot is taken, no subscription gets its snapshot
+        let slot = snapshots
+            .limiter
+            .acquire()
+            .await
+            .map_err(|e| anyhow::anyhow!(e.message))?;
+        for query in queries {
+            assert_eq!(collect_snapshot_items(&schema, query).await.len(), 0, "{query}");
+        }
+
+        // Once it is free again, each of them does
+        drop(slot);
+        for query in queries {
+            assert_ne!(collect_snapshot_items(&schema, query).await.len(), 0, "{query}");
+        }
+        Ok(())
     }
 }

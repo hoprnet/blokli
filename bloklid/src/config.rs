@@ -130,6 +130,38 @@ fn default_max_connections() -> u32 {
     10
 }
 
+/// Longest `application_name` PostgreSQL keeps; anything beyond is cut off by the server
+const MAX_APPLICATION_NAME_LENGTH: usize = 63;
+
+/// What a database connection pool is used for
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PoolRole {
+    /// Indexing and everything else that writes chain state
+    Indexer,
+    /// Serving GraphQL queries and subscriptions
+    Api,
+}
+
+/// Name a connection pool reports to PostgreSQL: its role, then the host it runs on.
+///
+/// The role tells the pools of one process apart and the hostname (the pod name on Kubernetes)
+/// tells processes apart. The role comes first so that it survives when a long hostname is cut
+/// to the length PostgreSQL keeps.
+pub fn pool_application_name(role: PoolRole) -> String {
+    let role = match role {
+        PoolRole::Indexer => "bloklid-indexer",
+        PoolRole::Api => "bloklid-api",
+    };
+
+    match std::env::var("HOSTNAME") {
+        Ok(hostname) if !hostname.is_empty() => format!("{role}@{hostname}")
+            .chars()
+            .take(MAX_APPLICATION_NAME_LENGTH)
+            .collect(),
+        _ => role.to_string(),
+    }
+}
+
 impl DatabaseConfig {
     /// Convert database configuration to connection URL
     /// Constructs a database connection URL.
@@ -196,6 +228,14 @@ impl DatabaseConfig {
     /// Inform if the db is stored in memory
     pub fn is_in_memory(&self) -> bool {
         matches!(self, DatabaseConfig::InMemory(_))
+    }
+
+    /// Whether the API server can open a connection pool of its own to this database.
+    ///
+    /// Only PostgreSQL can: a second pool to an in-memory SQLite database would be a different,
+    /// empty database, and SQLite files gain nothing from a second pool.
+    pub fn supports_dedicated_api_pool(&self) -> bool {
+        matches!(self, DatabaseConfig::PostgreSql(_))
     }
 
     /// Display the database configuration with sensitive data redacted
@@ -360,6 +400,18 @@ impl Config {
         output.push_str(&format!(
             "  api.max_query_complexity: {}\n",
             self.api.max_query_complexity
+        ));
+        output.push_str(&format!(
+            "  api.database_max_connections: {}\n",
+            self.api.database_max_connections
+        ));
+        output.push_str(&format!(
+            "  api.max_concurrent_snapshots: {}\n",
+            self.api.max_concurrent_snapshots
+        ));
+        output.push_str(&format!(
+            "  api.snapshot_queue_timeout: {:?}\n",
+            self.api.snapshot_queue_timeout
         ));
         output.push_str(&format!(
             "  api.transactions.max_submitted_transactions: {}\n",
@@ -538,6 +590,24 @@ pub struct ApiConfig {
     #[default(500)]
     #[serde(default = "default_max_query_complexity")]
     pub max_query_complexity: usize,
+
+    /// Size of the API server's own PostgreSQL connection pool. The indexer keeps the pool sized
+    /// by `database.max_connections`, so API load cannot take connections away from indexing.
+    /// SQLite and in-memory databases share the indexer's connections and ignore this setting.
+    #[default(10)]
+    #[serde(default = "default_api_database_max_connections")]
+    pub database_max_connections: u32,
+
+    /// Maximum number of subscription snapshots loaded from the database at the same time.
+    /// Keep it below `database_max_connections` so that queries always find a free connection.
+    #[default(8)]
+    #[serde(default = "default_max_concurrent_snapshots")]
+    pub max_concurrent_snapshots: usize,
+
+    /// How long a subscription waits for its turn to load a snapshot before it is ended.
+    #[default(_code = "Duration::from_secs(10)")]
+    #[serde(default = "default_snapshot_queue_timeout", with = "humantime_serde")]
+    pub snapshot_queue_timeout: Duration,
 }
 
 /// Configuration for transaction submission and optional Safe revert tracing.
@@ -691,6 +761,18 @@ fn default_max_query_depth() -> usize {
 
 fn default_max_query_complexity() -> usize {
     500
+}
+
+fn default_api_database_max_connections() -> u32 {
+    10
+}
+
+fn default_max_concurrent_snapshots() -> usize {
+    8
+}
+
+fn default_snapshot_queue_timeout() -> Duration {
+    Duration::from_secs(10)
 }
 
 fn default_max_submitted_transactions() -> usize {
@@ -1189,6 +1271,102 @@ mod tests {
         let cfg: Config = toml::from_str(config).expect("Failed to parse config");
         assert_eq!(cfg.api.max_query_depth, 4);
         assert_eq!(cfg.api.max_query_complexity, 200);
+    }
+
+    #[test]
+    fn test_api_database_and_snapshot_limits_defaults() {
+        let config = r#"
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
+        let cfg: Config = toml::from_str(config).expect("Failed to parse config");
+        assert_eq!(cfg.api.database_max_connections, 10);
+        assert_eq!(cfg.api.max_concurrent_snapshots, 8);
+        assert_eq!(cfg.api.snapshot_queue_timeout, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn test_api_database_and_snapshot_limits_override() {
+        let config = r#"
+         [api]
+         database_max_connections = 20
+         max_concurrent_snapshots = 4
+         snapshot_queue_timeout = "3s"
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
+        let cfg: Config = toml::from_str(config).expect("Failed to parse config");
+        assert_eq!(cfg.api.database_max_connections, 20);
+        assert_eq!(cfg.api.max_concurrent_snapshots, 4);
+        assert_eq!(cfg.api.snapshot_queue_timeout, Duration::from_secs(3));
+    }
+
+    #[test]
+    fn test_api_database_and_snapshot_limits_are_displayed() {
+        let display = Config::default().display_redacted();
+
+        assert!(display.contains("  api.database_max_connections: 10\n"));
+        assert!(display.contains("  api.max_concurrent_snapshots: 8\n"));
+        assert!(display.contains("  api.snapshot_queue_timeout: 10s\n"));
+    }
+
+    #[test]
+    fn test_only_postgresql_gets_a_dedicated_api_pool() {
+        let postgresql: DatabaseConfig = toml::from_str(
+            r#"
+            type = "postgresql"
+            url = "postgres://user:pw@localhost:5432/db"
+        "#,
+        )
+        .expect("Failed to parse PostgreSQL config");
+        let sqlite: DatabaseConfig = toml::from_str(
+            r#"
+            type = "sqlite"
+            index_path = "data/index.db"
+            logs_path = "data/logs.db"
+        "#,
+        )
+        .expect("Failed to parse SQLite config");
+
+        assert!(postgresql.supports_dedicated_api_pool());
+        assert!(!sqlite.supports_dedicated_api_pool());
+    }
+
+    #[test]
+    fn test_pool_application_name_uses_role_and_hostname() {
+        temp_env::with_var("HOSTNAME", Some("bloklid-canary-7d9f8-x2k4q"), || {
+            assert_eq!(
+                pool_application_name(PoolRole::Indexer),
+                "bloklid-indexer@bloklid-canary-7d9f8-x2k4q"
+            );
+            assert_eq!(
+                pool_application_name(PoolRole::Api),
+                "bloklid-api@bloklid-canary-7d9f8-x2k4q"
+            );
+        });
+    }
+
+    #[test]
+    fn test_pool_application_name_without_hostname_is_the_role() {
+        temp_env::with_var("HOSTNAME", None::<&str>, || {
+            assert_eq!(pool_application_name(PoolRole::Api), "bloklid-api");
+        });
+    }
+
+    #[test]
+    fn test_pool_application_name_fits_the_postgresql_identifier_limit() {
+        let hostname = "h".repeat(200);
+
+        temp_env::with_var("HOSTNAME", Some(hostname.as_str()), || {
+            let name = pool_application_name(PoolRole::Indexer);
+
+            assert_eq!(name.len(), 63);
+            assert!(name.starts_with("bloklid-indexer@hhh"));
+        });
     }
 
     #[test]

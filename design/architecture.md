@@ -267,6 +267,12 @@ contention in SQLite's locking model.
 **SeaORM Integration**: The database layer uses SeaORM for type-safe database access with auto-generated entity models, migration
 management, and connection pooling. The trait-based design allows transaction-agnostic APIs.
 
+**Connection Pools**: On PostgreSQL one process holds two pools: one for the indexer and everything else that writes chain state, and one
+for the API server. They are sized independently, so a burst of API requests can exhaust only the API pool and never takes a connection the
+indexer needs to keep up with the chain. Each pool reports its role and host to PostgreSQL as its application name, which makes its backends
+attributable. SQLite and in-memory databases keep a single shared set of connections. The indexer repeats a failed read that precedes a
+block's writes a few times before it gives up, so a short database outage does not end the process.
+
 ### 5. GraphQL API Server
 
 **Responsibilities**:
@@ -470,6 +476,12 @@ guaranteeing no events are emitted between reading watermark and subscribing.
 **Guarantee**: No events can be missed between reading the watermark and subscribing to the event bus, ensuring complete event delivery to
 all subscriptions.
 
+**Bounded Reads**: Block processing waits for every holder of the read lock, so a database read made while holding it is bounded in time. A
+read that cannot complete, for instance because no connection is free, fails the request instead of holding up the indexer.
+
+**Reorganization Epoch**: The IndexerState counts the reorganizations it has signaled. The indexer returns to block numbers it has already
+indexed when it handles one, so a block number alone does not identify a state of the index; the block together with the epoch does.
+
 **Event Types**: The event bus carries structured variants for account, channel, balance, Safe, ticket, transaction, and Curvy changes.
 Curvy variants contain one normalized non-padding note or nullifier and its complete chain position. Subscribers select the variants
 relevant to their query parameters.
@@ -574,6 +586,13 @@ Client receives structured account data with all related entities
 flexibility. Current state is retrieved via the `account_current` view, which encapsulates the "latest by position" logic in the database
 layer.
 
+**Batched Chain Key Lookups**: A client can ask for many accounts in one request by repeating the account query once per chain key, and the
+API resolves those lookups concurrently. Lookups that filter by chain key alone are therefore collected for a very short window and served
+together, by one read of the accounts and one read of their announcements, whatever the number of lookups. The window spans requests, so
+parallel requests that arrive together share a batch too. Nothing is cached between batches, so every lookup reads the current state. The
+trade-offs: a lookup waits up to the length of the window, and a failed batch fails every lookup in it. Lookups that combine several filters
+are not batched.
+
 **Required Filters**: To prevent exposing entire account database, at least one identity filter (keyid, packet_key, or chain_key) must be
 provided. This protects against excessive data exposure.
 
@@ -619,6 +638,17 @@ synchronization prevents gaps or duplicates between phases.
 
 **Phase 1 Ordering**: The historical snapshot emits entries in randomized order. Clients must not rely on any specific ordering of Phase 1
 results. Reconnecting clients will receive entries in a different order each time.
+
+**Snapshot Admission**: Loading a snapshot is the most expensive part of a subscription, and clients tend to subscribe together, for example
+all at once after a restart. The number of snapshots loaded from the database at the same time is therefore limited to fewer than the API
+pool holds connections. Further loads wait their turn; a subscription that waits too long is ended with a timeout error and the client
+reconnects. Clients are expected to reconnect with jittered backoff.
+
+**Shared Snapshots**: The unfiltered channel graph snapshot and the unfiltered account snapshot are loaded once per indexed block and shared
+by every subscription that starts at that block, so a burst of such subscriptions costs one load rather than one per client. A snapshot is
+identified by the block and the reorganization epoch it was read at, which keeps a snapshot of an abandoned fork from being served once the
+indexer reaches the same block number again. Each subscription still receives its entries in its own random order, followed by every change
+after its own watermark. Filtered and resumed subscriptions load their own snapshot.
 
 **SSE Streaming**: Server-Sent Events provide one-way streaming from server to client over HTTP. Each event is a JSON-encoded GraphQL
 response. Periodic keep-alive events keep idle connections from timing out while the stream stays open.
