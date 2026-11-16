@@ -137,7 +137,7 @@
         "maxRpcRequestsPerSec": {
           "type": "integer",
           "minimum": 0,
-          "description": "Maximum RPC requests per second"
+          "description": "Hard cap on RPC requests per second, retries included (0 = unlimited)"
         },
         "maxBlockRange": {
           "type": "integer",
@@ -172,8 +172,37 @@
             "logsSnapshotUrl": {
               "type": "string",
               "description": "URL for logs snapshot download"
+            },
+            "logsSnapshotSha256": {
+              "type": "string",
+              "description": "Expected SHA-256 hex digest of the logs snapshot archive",
+              "pattern": "^([0-9a-fA-F]{64})?$"
             }
-          }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": { "enableLogsSnapshot": { "const": true } },
+                "required": ["enableLogsSnapshot"]
+              },
+              "then": {
+                "required": ["logsSnapshotSha256"],
+                "properties": { "logsSnapshotSha256": { "minLength": 64 } }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "logsSnapshotUrl": { "type": "string", "pattern": "\\S" }
+                },
+                "required": ["logsSnapshotUrl"]
+              },
+              "then": {
+                "required": ["logsSnapshotSha256"],
+                "properties": { "logsSnapshotSha256": { "minLength": 64 } }
+              }
+            }
+          ]
         },
         "logging": {
           "type": "object",

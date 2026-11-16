@@ -184,7 +184,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | `database.maxConnections`                            | Maximum number of database connections                                                                        | `10`                |
 | `config.network`                                     | HOPR network to index (anvil-localhost, jura-dev, jura-prod, piz-palu-dev, piz-palu-staging)                  | `jura-prod`         |
 | `config.rpcUrl`                                      | Blockchain RPC URL                                                                                            | `""`                |
-| `config.maxRpcRequestsPerSec`                        | Maximum RPC requests per second (0 = unlimited)                                                               | `0`                 |
+| `config.maxRpcRequestsPerSec`                        | Hard cap on RPC requests per second, retries included (0 = unlimited)                                       | `0`   |
 | `config.maxBlockRange`                               | Ceiling for adaptive eth_getLogs block ranges (0 = auto-discover up to 10000)                                 | `2500`              |
 | `config.blockRangeReprobeInterval` | Consecutive full-range eth_getLogs successes, below maxBlockRange, before a larger range is probed again (0 = never) | `100` |
 | `config.dataDirectory`                               | Data directory path (should match persistence mount path)                                                     | `/data`             |
@@ -194,6 +194,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | `config.indexer.enableSafeIndexing`                  | Enable Safe contract event indexing for discovered Safes                                                      | `false`             |
 | `config.indexer.enableCurvyIndexing`                 | Enable Curvy event indexing using config.curvyAggregator                                                      | `false`             |
 | `config.indexer.logsSnapshotUrl`                     | URL for logs snapshot download (required when enableLogsSnapshot is true)                                     | `""`                |
+| `config.indexer.logsSnapshotSha256`                  | Expected SHA-256 hex digest of the logs snapshot archive (required when enableLogsSnapshot is true or logsSnapshotUrl is set) | `""`                |
 | `config.indexer.subscription.eventBusCapacity`       | Capacity of the event bus buffer for channel events                                                           | `1000`              |
 | `config.indexer.subscription.shutdownSignalCapacity` | Capacity of the shutdown signal buffer                                                                        | `10`                |
 | `config.api.enabled`                                 | Enable or disable the GraphQL API server                                                                      | `true`              |
