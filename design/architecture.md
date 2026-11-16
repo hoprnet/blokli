@@ -644,14 +644,16 @@ results. Reconnecting clients will receive entries in a different order each tim
 
 **Snapshot Admission**: Loading a snapshot is the most expensive part of a subscription, and clients tend to subscribe together, for example
 all at once after a restart. The number of snapshots loaded from the database at the same time is therefore limited to fewer than the API
-pool holds connections. Further loads wait their turn; a subscription that waits too long is ended with a timeout error and the client
-reconnects. Clients are expected to reconnect with jittered backoff.
+pool holds connections. Further loads wait their turn. A subscription that waits too long ends: one that loads its snapshot before the
+stream starts returns a timeout error, while `channelUpdated`, `openedChannelGraphUpdated` and `accountUpdated` end their stream without an
+error payload. The timeout is logged and counted in `blokli_errors_total`, and clients are expected to reconnect with jittered backoff.
 
-**Shared Snapshots**: The unfiltered channel graph snapshot and the unfiltered account snapshot are loaded once per indexed block and shared
-by every subscription that starts at that block, so a burst of such subscriptions costs one load rather than one per client. A snapshot is
-identified by the block and the reorganization epoch it was read at, which keeps a snapshot of an abandoned fork from being served once the
-indexer reaches the same block number again. Each subscription still receives its entries in its own random order, followed by every change
-after its own watermark. Filtered and resumed subscriptions load their own snapshot.
+**Shared Snapshots**: The unfiltered channel graph snapshot and the unfiltered account snapshot are loaded once per indexed watermark and
+shared by every subscription that starts at that watermark, so a burst of such subscriptions costs one load rather than one per client. A
+snapshot is identified by the reorganization epoch and the whole watermark (block, transaction and log index) it was read at. That keeps a
+snapshot from being served for a different point: after a reorganization the indexer reaches the same block number again with different
+content, and within a block each later transaction or log can change it further. Each subscription still receives its entries in its own
+random order, followed by every change after its own watermark. Filtered and resumed subscriptions load their own snapshot.
 
 **SSE Streaming**: Server-Sent Events provide one-way streaming from server to client over HTTP. Each event is a JSON-encoded GraphQL
 response. Periodic keep-alive events keep idle connections from timing out while the stream stays open.

@@ -198,7 +198,9 @@ database_max_connections = 10
 max_concurrent_snapshots = 8
 
 # How long a subscription waits for its turn to load a snapshot (default: "10s"). A
-# subscription that waited this long is ended with a TIMEOUT error and the client reconnects.
+# subscription that waited this long ends: one that loads its snapshot before its stream starts
+# returns a TIMEOUT error, while subscriptions that load it inside their stream end it without an
+# error. The timeout is logged and counted, and the client reconnects.
 snapshot_queue_timeout = "10s"
 
 # Transaction submission and optional Safe revert-reason tracing controls.

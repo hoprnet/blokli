@@ -78,16 +78,22 @@ impl Default for SnapshotLimiter {
 /// The point of the indexed chain a snapshot describes
 ///
 /// Two subscriptions that start at the same point see the same state, which is what makes their
-/// snapshot shareable. The block alone does not identify a point: after a reorganization the
-/// indexer reaches the same block number again with different content, hence the epoch.
+/// snapshot shareable. The whole watermark identifies a point: the block alone does not, because
+/// after a reorganization the indexer reaches the same block number again with different content,
+/// and within one block a snapshot can be taken after any transaction or log.
 ///
-/// Points are ordered by epoch first, so a point after a reorganization is always newer.
+/// Points are ordered by epoch, then block, transaction index and log index, so a point after a
+/// reorganization is always newer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SnapshotPoint {
     /// Number of reorganizations the indexer had handled
     pub reorg_epoch: u64,
     /// Last indexed block
     pub block: i64,
+    /// Last indexed transaction index within the block
+    pub tx_index: i64,
+    /// Last indexed log index within the transaction
+    pub log_index: i64,
 }
 
 /// A snapshot load that any number of callers can wait for
@@ -120,8 +126,10 @@ where
     /// Returns the snapshot at `point`, running `load` only if no load for that point exists yet.
     ///
     /// Callers that ask for the same point while it is loading wait for that one load. A failed
-    /// load fails all of them and is forgotten, so the next caller loads again. A caller whose
-    /// point is older than the cached one loads for itself and leaves the cache alone.
+    /// load fails all of them and is forgotten, so the next caller loads again. A load that failed
+    /// without a caller awaiting it is replaced as soon as the next caller asks for its point, so
+    /// nobody receives an error that was never observed. A caller whose point is older than the
+    /// cached one loads for itself and leaves the cache alone.
     ///
     /// The load runs to completion even if every caller goes away, so that it never sits
     /// half-finished on a database connection.
@@ -136,7 +144,15 @@ where
         let (shared, is_cached) = {
             let mut latest = self.latest.lock().unwrap_or_else(PoisonError::into_inner);
             match latest.as_ref() {
-                Some((cached_point, shared)) if *cached_point == point => (shared.clone(), true),
+                Some((cached_point, shared)) if *cached_point == point => {
+                    if matches!(shared.peek(), Some(Err(_))) {
+                        let shared = Self::spawn_load(load);
+                        *latest = Some((point, shared.clone()));
+                        (shared, true)
+                    } else {
+                        (shared.clone(), true)
+                    }
+                }
                 Some((cached_point, _)) if *cached_point > point => (Self::spawn_load(load), false),
                 _ => {
                     let shared = Self::spawn_load(load);
@@ -163,7 +179,7 @@ where
         F: Future<Output = Result<Vec<T>>> + Send + 'static,
     {
         let task = tokio::spawn(load);
-        async move {
+        let shared = async move {
             match task.await {
                 Ok(rows) => rows.map(Arc::new),
                 Err(error) => Err(async_graphql::Error::new(errors::messages::internal_error(
@@ -173,7 +189,11 @@ where
             }
         }
         .boxed()
-        .shared()
+        .shared();
+        // Keep the shared load polled to completion even when no caller waits for it, so that a
+        // finished result is available to the cache.
+        let _driver = tokio::spawn(shared.clone());
+        shared
     }
 }
 
@@ -212,6 +232,8 @@ mod tests {
     const POINT: SnapshotPoint = SnapshotPoint {
         reorg_epoch: 0,
         block: 100,
+        tx_index: 0,
+        log_index: 0,
     };
 
     /// A load that counts how often it ran and returns `rows`
@@ -326,6 +348,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cache_does_not_share_a_load_across_transactions_in_one_block() {
+        let cache = SnapshotCache::<u32>::default();
+        let loads = Arc::new(AtomicUsize::new(0));
+        let later_transaction = SnapshotPoint {
+            tx_index: POINT.tx_index + 1,
+            ..POINT
+        };
+
+        let first = cache.get_or_load(POINT, counted_load(&loads, vec![1])).await;
+        let second = cache
+            .get_or_load(later_transaction, counted_load(&loads, vec![2]))
+            .await;
+
+        assert_eq!(first.ok().as_deref(), Some(&vec![1]));
+        assert_eq!(second.ok().as_deref(), Some(&vec![2]));
+        assert_eq!(loads.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn cache_does_not_share_a_load_across_logs_in_one_transaction() {
+        let cache = SnapshotCache::<u32>::default();
+        let loads = Arc::new(AtomicUsize::new(0));
+        let later_log = SnapshotPoint {
+            log_index: POINT.log_index + 1,
+            ..POINT
+        };
+
+        let first = cache.get_or_load(POINT, counted_load(&loads, vec![1])).await;
+        let second = cache.get_or_load(later_log, counted_load(&loads, vec![2])).await;
+
+        assert_eq!(first.ok().as_deref(), Some(&vec![1]));
+        assert_eq!(second.ok().as_deref(), Some(&vec![2]));
+        assert_eq!(loads.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
     async fn cache_does_not_share_a_block_across_a_reorganization() {
         let cache = SnapshotCache::<u32>::default();
         let loads = Arc::new(AtomicUsize::new(0));
@@ -333,10 +391,12 @@ mod tests {
         let after_reorg = SnapshotPoint {
             reorg_epoch: 1,
             block: 90,
+            ..POINT
         };
         let same_block_on_new_fork = SnapshotPoint {
             reorg_epoch: 1,
             block: 100,
+            ..POINT
         };
 
         let old_fork = cache.get_or_load(POINT, counted_load(&loads, vec![1])).await;
@@ -442,5 +502,40 @@ mod tests {
 
         assert_eq!(rows.ok().as_deref(), Some(&vec![5]));
         assert_eq!(loads.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn cache_loads_again_when_a_failed_load_was_never_awaited() -> anyhow::Result<()> {
+        let cache = SnapshotCache::<u32>::default();
+        let loads = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(Notify::new());
+
+        let caller = tokio::spawn({
+            let (cache, loads, release) = (cache.clone(), loads.clone(), release.clone());
+            async move {
+                cache
+                    .get_or_load(POINT, async move {
+                        loads.fetch_add(1, Ordering::SeqCst);
+                        release.notified().await;
+                        Err(async_graphql::Error::new("connection pool timed out"))
+                    })
+                    .await
+            }
+        });
+        while loads.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+        caller.abort();
+        assert!(caller.await.is_err());
+
+        release.notify_one();
+        // Let the spawned load finish while no caller waits for it
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        let rows = cache.get_or_load(POINT, counted_load(&loads, vec![6])).await;
+
+        assert_eq!(rows.ok().as_deref(), Some(&vec![6]));
+        assert_eq!(loads.load(Ordering::SeqCst), 2);
+        Ok(())
     }
 }

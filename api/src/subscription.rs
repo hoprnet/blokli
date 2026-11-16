@@ -270,6 +270,8 @@ async fn capture_snapshot_point_synchronized(
             let point = SnapshotPoint {
                 reorg_epoch: indexer_state.reorg_epoch(),
                 block: watermark.block,
+                tx_index: watermark.tx_index,
+                log_index: watermark.log_index,
             };
 
             // Lock is automatically released when the synchronized read returns
@@ -1387,6 +1389,7 @@ impl SubscriptionRoot {
                 }
                 Err(e) => {
                     error!(error = ?e, "failed to fetch initial accounts");
+                    return; // Terminate subscription on error
                 }
             }
 
@@ -4217,7 +4220,7 @@ mod tests {
     async fn test_capture_snapshot_point_pairs_the_block_with_the_reorg_epoch() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let conn = db.conn(blokli_db::TargetDb::Index);
-        init_chain_info(conn, 100, 0, 0).await?;
+        init_chain_info(conn, 100, 3, 7).await?;
         let indexer_state = IndexerState::new(10, 100);
 
         let (_, before_reorg, ..) = capture_snapshot_point_synchronized(&indexer_state, conn)
@@ -4232,14 +4235,18 @@ mod tests {
             before_reorg,
             SnapshotPoint {
                 reorg_epoch: 0,
-                block: 100
+                block: 100,
+                tx_index: 3,
+                log_index: 7,
             }
         );
         assert_eq!(
             after_reorg,
             SnapshotPoint {
                 reorg_epoch: 1,
-                block: 100
+                block: 100,
+                tx_index: 3,
+                log_index: 7,
             }
         );
         Ok(())
@@ -4404,6 +4411,38 @@ mod tests {
             let expected = if query == GRAPH_SNAPSHOT_QUERY { 3 } else { 6 };
             assert_eq!(received, expected, "{query}");
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_account_updated_ends_when_its_snapshot_load_times_out() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let conn = db.conn(blokli_db::TargetDb::Index);
+        init_chain_info(conn, 100, 0, 0).await?;
+        create_test_account(conn, vec![1; 20], "peer0").await?;
+        let indexer_state = IndexerState::new(10, 100);
+        let snapshots = SubscriptionSnapshots::new(1, Duration::from_millis(50));
+        let schema = snapshot_test_schema(conn, &indexer_state, &snapshots);
+        let queries = [
+            ACCOUNT_SNAPSHOT_QUERY,
+            "subscription { accountUpdated(keyid: 1) { keyid } }",
+        ];
+
+        // The only load slot stays taken, so every initial account load hits the queue timeout
+        let slot = snapshots
+            .limiter
+            .acquire()
+            .await
+            .map_err(|e| anyhow::anyhow!(e.message))?;
+        for query in queries {
+            let mut stream = schema.execute_stream(query).boxed();
+            let next = tokio::time::timeout(Duration::from_secs(2), stream.next())
+                .await
+                .unwrap_or_else(|_| panic!("{query} should end after its snapshot load timed out"));
+
+            assert!(next.is_none(), "{query} should end without yielding an item");
+        }
+        drop(slot);
         Ok(())
     }
 
