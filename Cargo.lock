@@ -2047,6 +2047,7 @@ dependencies = [
  "humantime-serde",
  "insta",
  "lazy_static",
+ "moka",
  "multiaddr",
  "pem-rfc7468",
  "rand 0.10.3",

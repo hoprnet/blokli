@@ -47,6 +47,10 @@ impl HoprIndexerRpcOperations for MockRpcOperations {
         Ok(vec![])
     }
 
+    async fn get_transaction_bytes_batch(&self, tx_hashes: &[Hash]) -> Vec<blokli_chain_rpc::errors::Result<Vec<u8>>> {
+        tx_hashes.iter().map(|_| Ok(vec![])).collect()
+    }
+
     fn try_stream_logs<'a>(
         &'a self,
         start_block_number: u64,
@@ -205,6 +209,7 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
         data_directory: db_path.to_string_lossy().to_string(),
         event_bus_capacity: 1000,
         shutdown_signal_capacity: 10,
+        safe_tx_prefetch: Default::default(),
     };
 
     // Create indexer
@@ -296,6 +301,7 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
         data_directory: db_path.to_string_lossy().to_string(),
         event_bus_capacity: 1000,
         shutdown_signal_capacity: 10,
+        safe_tx_prefetch: Default::default(),
     };
 
     // Create indexer
@@ -341,6 +347,13 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
 
         async fn get_transaction_bytes(&self, tx_hash: Hash) -> blokli_chain_rpc::errors::Result<Vec<u8>> {
             self.inner.get_transaction_bytes(tx_hash).await
+        }
+
+        async fn get_transaction_bytes_batch(
+            &self,
+            tx_hashes: &[Hash],
+        ) -> Vec<blokli_chain_rpc::errors::Result<Vec<u8>>> {
+            self.inner.get_transaction_bytes_batch(tx_hashes).await
         }
 
         fn try_stream_logs<'a>(
@@ -500,6 +513,7 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         data_directory: db_path.to_string_lossy().to_string(),
         event_bus_capacity: 1000,
         shutdown_signal_capacity: 10,
+        safe_tx_prefetch: Default::default(),
     };
 
     // Create and start indexer
@@ -613,6 +627,7 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
         data_directory: db_path.to_string_lossy().to_string(),
         event_bus_capacity: 1000,
         shutdown_signal_capacity: 10,
+        safe_tx_prefetch: Default::default(),
     };
 
     // Create indexer

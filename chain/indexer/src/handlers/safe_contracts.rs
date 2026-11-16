@@ -4,8 +4,24 @@ use blokli_db::{BlokliDbAllOperations, OpenTransaction};
 use hopr_types::primitive::prelude::Address;
 use tracing::{debug, info};
 
+#[cfg(all(feature = "telemetry", not(test)))]
+use super::increment_indexer_contract_log_count;
 use super::{ContractEventHandlers, u256_to_u64};
 use crate::{custom_abis::safe_contract_events::SafeContract::SafeContractEvents, errors::Result, state::IndexerEvent};
+
+#[cfg(all(feature = "telemetry", not(test)))]
+fn safe_contract_event_metric_label(event: &SafeContractEvents) -> &'static str {
+    match event {
+        SafeContractEvents::SafeSetup(_) => "safe_setup",
+        SafeContractEvents::AddedOwner(_) => "safe_owner_added",
+        SafeContractEvents::RemovedOwner(_) => "safe_owner_removed",
+        SafeContractEvents::ChangedThreshold(_) => "safe_threshold_changed",
+        SafeContractEvents::ExecutionSuccess(_) => "safe_execution_success",
+        SafeContractEvents::ExecutionFailure(_) => "safe_execution_failure",
+        SafeContractEvents::ExecutionFromModuleSuccess(_) => "safe_module_execution_success",
+        SafeContractEvents::ExecutionFromModuleFailure(_) => "safe_module_execution_failure",
+    }
+}
 
 impl<T, Db> ContractEventHandlers<T, Db>
 where
@@ -52,6 +68,9 @@ where
         event: SafeContractEvents,
         _is_synced: bool,
     ) -> Result<Vec<IndexerEvent>> {
+        #[cfg(all(feature = "telemetry", not(test)))]
+        increment_indexer_contract_log_count(safe_contract_event_metric_label(&event));
+
         let log_index = u256_to_u64(log.log_index, "log_index")?;
 
         // Owner and threshold events are only applied above the snapshot block of the Safe.
