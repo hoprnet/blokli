@@ -462,6 +462,9 @@ config:
   ## @param config.maxBlockRange Ceiling for adaptive eth_getLogs block ranges (0 = auto-discover up to 10000)
   ##
   maxBlockRange: 2500
+  ## @param config.blockRangeReprobeInterval Consecutive full-range eth_getLogs successes, below maxBlockRange, before a larger range is probed again (0 = never probe upward)
+  ##
+  blockRangeReprobeInterval: 100
   ## @param config.dataDirectory Data directory path (should match persistence mount path)
   ##
   dataDirectory: "/data"
@@ -485,6 +488,9 @@ config:
     ## @param config.indexer.logsSnapshotUrl URL for logs snapshot download (required when enableLogsSnapshot is true)
     ##
     logsSnapshotUrl: ""
+    ## @param config.indexer.logsSnapshotSha256 Expected SHA-256 hex digest of the logs snapshot archive (required when enableLogsSnapshot is true or logsSnapshotUrl is set)
+    ##
+    logsSnapshotSha256: ""
     # Subscription behavior configuration
     subscription:
       ## @param config.indexer.subscription.eventBusCapacity Capacity of the event bus buffer for channel events
@@ -509,6 +515,61 @@ config:
     ## @param config.api.gasMultiplier Multiplier for gas estimation to provide a safety margin (e.g., 1.2 for 20% extra)
     ##
     gasMultiplier: 1.2
+    ## @param config.api.minMaxFeePerGas Lower bound, in wei, for the maxFeePerGas exposed by chainInfo, applied after gasMultiplier. It only caps the price paid; nodes must hold gas_limit x maxFeePerGas upfront. Must be >= minPriorityFeePerGas
+    ##
+    minMaxFeePerGas: 5000000
+    ## @param config.api.minPriorityFeePerGas Lower bound, in wei, for the maxPriorityFeePerGas exposed by chainInfo, applied after gasMultiplier
+    ##
+    minPriorityFeePerGas: 100
+    ## @param config.api.maxQueryDepth Maximum allowed GraphQL query nesting depth; deeper queries are rejected
+    ##
+    maxQueryDepth: 8
+    ## @param config.api.maxQueryComplexity Maximum allowed GraphQL query complexity; queries above this are rejected
+    ##
+    maxQueryComplexity: 500
+    # Transaction submission and optional Safe revert-reason tracing
+    transactions:
+      ## @param config.api.transactions.maxSubmittedTransactions Global limit of transactions awaiting receipt monitoring (0 = unbounded)
+      ##
+      maxSubmittedTransactions: 1024
+      ## @param config.api.transactions.maxSubmittedTransactionsPerIdentity Per-signer limit of transactions awaiting receipt monitoring (0 = unbounded)
+      ##
+      maxSubmittedTransactionsPerIdentity: 64
+      ## @param config.api.transactions.maxTerminalTransactions Maximum completed transaction records retained (0 = no cap)
+      ##
+      maxTerminalTransactions: 10000
+      ## @param config.api.transactions.terminalTransactionTtl How long completed transaction records stay queryable ("0s" = no TTL eviction)
+      ##
+      terminalTransactionTtl: "24h"
+      ## @param config.api.transactions.maxConcurrentTraceJobs Concurrent debug_traceTransaction jobs for failed Safe executions (0 = unbounded)
+      ##
+      maxConcurrentTraceJobs: 2
+      ## @param config.api.transactions.maxQueuedTraceJobs Trace jobs waiting for a worker (0 = unbounded)
+      ##
+      maxQueuedTraceJobs: 128
+      ## @param config.api.transactions.enableRevertReasonTracing Fetch revert reasons with debug_traceTransaction. Set to false for RPC providers without that method
+      ##
+      enableRevertReasonTracing: true
+      ## @param config.api.transactions.enableHoprActionValidation Validate supported HOPR node-management transactions and deduplicate retries
+      ##
+      enableHoprActionValidation: false
+      ## @param config.api.transactions.hoprActionTtl Upper bound on how long one HOPR action stays deduplicated while its transaction is tracked
+      ##
+      hoprActionTtl: "120s"
+      ## @param config.api.transactions.hoprInvalidActionThreshold Consecutive invalid submissions of one operation by one signer before suppression (0 = disabled)
+      ##
+      hoprInvalidActionThreshold: 3
+      ## @param config.api.transactions.hoprInvalidActionCooldown How long a signer stays suppressed once the threshold is reached
+      ##
+      hoprInvalidActionCooldown: "60s"
+    # SSE keepalive configuration
+    sseKeepalive:
+      ## @param config.api.sseKeepalive.enabled Send keepalive comments on subscription streams to prevent idle timeouts
+      ##
+      enabled: true
+      ## @param config.api.sseKeepalive.interval Interval between keepalive comments
+      ##
+      interval: "15s"
     # Health check configuration
     health:
       ## @param config.api.health.maxIndexerLag Maximum indexer lag (blocks) before readiness fails

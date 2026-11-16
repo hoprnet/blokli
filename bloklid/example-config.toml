@@ -123,8 +123,13 @@ fast_sync = true
 # Enable downloading a `hopr_logs.sql` snapshot archive for faster initial sync
 enable_logs_snapshot = false
 
-# URL to download logs snapshot from (optional)
-logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz"
+# URL to download logs snapshot from (required when enable_logs_snapshot = true)
+# logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz"
+
+# Expected SHA-256 digest of the snapshot archive, 64 hex characters
+# (required when enable_logs_snapshot = true or logs_snapshot_url is set)
+# The archive is rejected before extraction if its digest differs.
+# logs_snapshot_sha256 = "<64 hex characters>"
 
 # Enable indexing of Safe contract events after a Safe has been discovered
 # Safe discovery via registry/stake-factory events remains enabled regardless
@@ -134,6 +139,22 @@ enable_safe_indexing = false
 # Requires curvy_aggregator and its resolved Vault to be non-zero. A zero
 # PortalFactory is allowed, but Portal-specific GraphQL queries are unavailable.
 enable_curvy_indexing = false
+
+# Concurrent pre-fetch of the transactions needed to decode Safe execution
+# failures. These lookups run before a block's database transaction is opened,
+# so they trade requests in flight against how long a slow RPC endpoint can
+# stall indexing. The transaction lookups happen only when enable_safe_indexing
+# is true; the request budget below also covers the pre-fetch of Safe discovery-block
+# logs, which runs regardless of that flag.
+[indexer.safe_tx_prefetch]
+# Transaction hashes packed into a single batched JSON-RPC request (default: 16)
+# Lower it if the RPC provider rejects or truncates large batch requests.
+batch_size = 16
+
+# Batched requests in flight at once (default: 8)
+# The limit is global: the indexer pre-fetches several blocks concurrently and
+# they all draw from this budget.
+concurrency = 8
 
 # GraphQL subscription behavior configuration
 [indexer.subscription]
