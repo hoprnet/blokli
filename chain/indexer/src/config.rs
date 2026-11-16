@@ -1,3 +1,5 @@
+use crate::snapshot::download::normalize_sha256_hex;
+
 /// Configuration for the chain indexer functionality
 #[derive(Debug, Clone, smart_default::SmartDefault)]
 pub struct IndexerConfig {
@@ -46,6 +48,14 @@ pub struct IndexerConfig {
     #[default(None)]
     pub logs_snapshot_url: Option<String>,
 
+    /// Expected SHA-256 digest of the logs snapshot archive, hex-encoded (64 characters).
+    /// The downloaded archive is rejected before extraction if its digest differs.
+    /// Required when `enable_logs_snapshot` is true or `logs_snapshot_url` is set.
+    ///
+    /// Default is None
+    #[default(None)]
+    pub logs_snapshot_sha256: Option<String>,
+
     /// Path to the data directory where databases are stored.
     /// This is used for snapshot installation and database state checking.
     ///
@@ -78,13 +88,14 @@ impl IndexerConfig {
     /// * `enable_safe_indexing` - Whether to index Safe contract events for discovered Safes
     /// * `enable_curvy_indexing` - Whether to index Curvy Aggregator note and nullifier events
     /// * `logs_snapshot_url` - URL to download logs snapshot from
+    /// * `logs_snapshot_sha256` - Expected SHA-256 hex digest of the logs snapshot archive
     /// * `data_directory` - Path to the data directory where databases are stored
     /// * `event_bus_capacity` - Capacity of the event bus buffer
     /// * `shutdown_signal_capacity` - Capacity of the shutdown signal buffer
     ///
     /// # Returns
     ///
-    /// A new instance of `IndexerConfig`
+    /// A new instance of `IndexerConfig`.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         start_block_number: u64,
@@ -93,6 +104,7 @@ impl IndexerConfig {
         enable_safe_indexing: bool,
         enable_curvy_indexing: bool,
         logs_snapshot_url: Option<String>,
+        logs_snapshot_sha256: Option<String>,
         data_directory: String,
         event_bus_capacity: usize,
         shutdown_signal_capacity: usize,
@@ -104,6 +116,7 @@ impl IndexerConfig {
             enable_safe_indexing,
             enable_curvy_indexing,
             logs_snapshot_url,
+            logs_snapshot_sha256,
             data_directory,
             event_bus_capacity,
             shutdown_signal_capacity,
@@ -117,6 +130,8 @@ impl IndexerConfig {
     /// - File extension validation (.tar.xz required)
     /// - Data directory path validation
     /// - Dependency validation (data directory required when snapshots enabled)
+    /// - Snapshot SHA-256 digest presence when snapshots are enabled or a snapshot URL is set
+    /// - Snapshot SHA-256 digest format (64 hex characters) when set
     ///
     /// # Returns
     ///
@@ -135,6 +150,7 @@ impl IndexerConfig {
     ///     false,
     ///     false,
     ///     Some("https://example.com/snapshot.tar.xz".to_string()),
+    ///     Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()),
     ///     "/tmp/hopr_data".to_string(),
     ///     100,
     ///     10,
@@ -146,6 +162,25 @@ impl IndexerConfig {
         // Check that url is valid if logs snapshot is enabled
         if self.enable_logs_snapshot && self.logs_snapshot_url.is_none() {
             return Err("Logs snapshot URL must be specified when logs snapshots are enabled".to_string());
+        }
+
+        let snapshot_url_set = self
+            .logs_snapshot_url
+            .as_deref()
+            .is_some_and(|url| !url.trim().is_empty());
+
+        match &self.logs_snapshot_sha256 {
+            None if self.enable_logs_snapshot || snapshot_url_set => {
+                return Err(
+                    "logs_snapshot_sha256 must be specified when logs snapshots are enabled or logs_snapshot_url is \
+                     set"
+                    .to_string(),
+                );
+            }
+            Some(digest) if normalize_sha256_hex(digest).is_none() => {
+                return Err("logs_snapshot_sha256 must be a SHA-256 digest of 64 hex characters".to_string());
+            }
+            _ => {}
         }
 
         Ok(())
@@ -179,6 +214,8 @@ impl IndexerConfig {
 mod tests {
     use super::*;
 
+    const VALID_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
     #[test]
     fn test_full_valid_config() {
         let data_directory = "/tmp/hopr_test_data";
@@ -191,6 +228,7 @@ mod tests {
             false,
             false,
             Some(logs_snapshot_url),
+            Some(VALID_SHA256.to_string()),
             data_directory.into(),
             1000,
             10,
@@ -209,6 +247,7 @@ mod tests {
             false,
             false,
             Some("".to_string()),
+            None,
             "".to_string(),
             1000,
             10,
@@ -221,8 +260,121 @@ mod tests {
     }
 
     #[test]
+    fn test_snapshot_sha256_format_is_validated() {
+        let mut cfg = IndexerConfig::new(
+            0,
+            true,
+            true,
+            false,
+            false,
+            Some("file:///tmp/snapshot.tar.xz".to_string()),
+            None,
+            "/tmp/hopr_test_data".to_string(),
+            1000,
+            10,
+        );
+
+        cfg.logs_snapshot_sha256 = Some(VALID_SHA256.to_string());
+        assert!(cfg.validate().is_ok(), "64 hex characters should be accepted");
+
+        cfg.logs_snapshot_sha256 = Some("not-a-digest".to_string());
+        assert!(cfg.validate().is_err(), "malformed digest should be rejected");
+    }
+
+    #[test]
+    fn test_snapshot_sha256_validated_even_when_snapshot_disabled() {
+        let mut cfg = IndexerConfig::new(0, true, false, false, false, None, None, "".to_string(), 1000, 10);
+        cfg.logs_snapshot_sha256 = Some("   ".to_string());
+        assert!(cfg.validate().is_err());
+        cfg.logs_snapshot_sha256 = Some(format!(" {} ", "AB".repeat(32)));
+        assert!(cfg.validate().is_ok(), "uppercase padded digest is accepted");
+    }
+
+    #[test]
+    fn test_snapshot_sha256_required_when_snapshot_enabled() {
+        let cfg = IndexerConfig::new(
+            0,
+            true,
+            true,
+            false,
+            false,
+            Some("file:///tmp/snapshot.tar.xz".to_string()),
+            None,
+            "/tmp/hopr_test_data".to_string(),
+            1000,
+            10,
+        );
+
+        let error = cfg
+            .validate()
+            .expect_err("enabled snapshot without digest must be rejected");
+        assert!(
+            error.contains("logs_snapshot_sha256"),
+            "error should name the option: {error}"
+        );
+    }
+
+    #[test]
+    fn test_snapshot_sha256_required_when_snapshot_url_set() {
+        let cfg = IndexerConfig::new(
+            0,
+            true,
+            false,
+            false,
+            false,
+            Some("https://example.com/snapshot.tar.xz".to_string()),
+            None,
+            "/tmp/hopr_test_data".to_string(),
+            1000,
+            10,
+        );
+
+        let error = cfg
+            .validate()
+            .expect_err("snapshot URL without digest must be rejected");
+        assert!(
+            error.contains("logs_snapshot_sha256"),
+            "error should name the option: {error}"
+        );
+    }
+
+    #[test]
+    fn test_snapshot_sha256_not_required_without_snapshot() {
+        let cfg = IndexerConfig::new(0, true, false, false, false, None, None, "".to_string(), 1000, 10);
+        assert!(cfg.validate().is_ok());
+
+        let cfg = IndexerConfig::new(
+            0,
+            true,
+            false,
+            false,
+            false,
+            Some("  ".to_string()),
+            None,
+            "".to_string(),
+            1000,
+            10,
+        );
+        assert!(
+            cfg.validate().is_ok(),
+            "a blank URL does not count as a configured snapshot"
+        );
+    }
+
+    #[test]
     fn test_missing_snapshot_url() {
-        let cfg = IndexerConfig::new(0, true, true, false, false, None, "".to_string(), 1000, 10);
+        let cfg = IndexerConfig::new(
+            0,
+            true,
+            true,
+            false,
+            false,
+            None,
+            Some(VALID_SHA256.to_string()),
+            "".to_string(),
+            1000,
+            10,
+        );
 
         assert!(
             cfg.validate().is_err(),
