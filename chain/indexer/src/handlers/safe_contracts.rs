@@ -209,7 +209,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{iter::from_fn, sync::Arc};
 
     use blokli_chain_rpc::{HoprIndexerRpcOperations, Log, SafeOwnersSnapshot, errors::RpcError};
     use blokli_db::{
@@ -221,8 +221,6 @@ mod tests {
     use hopr_types::crypto::types::Hash;
     use primitive_types::U256 as PrimitiveU256;
     use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
-
-    use std::iter::from_fn;
 
     use super::*;
     use crate::{
