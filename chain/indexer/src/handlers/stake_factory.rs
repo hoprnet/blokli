@@ -361,7 +361,10 @@ mod tests {
             IndexerEvent::SafeDeployed(addr) => assert_eq!(addr, safe_address),
             _ => panic!("Unexpected event type"),
         }
-        assert!(try_recv_event(&mut event_rx).is_none(), "SafeDeployed is announced once");
+        assert!(
+            try_recv_event(&mut event_rx).is_none(),
+            "SafeDeployed is announced once"
+        );
 
         Ok(())
     }
