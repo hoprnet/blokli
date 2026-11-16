@@ -226,7 +226,7 @@ mod tests {
     use crate::{
         custom_abis::safe_contract_events::SafeContract,
         handlers::test_utils::test_helpers::{
-            ClonableMockOperations, MockIndexerRpcOperations, init_handlers, init_handlers_with_events,
+            ClonableMockOperations, MockIndexerRpcOperations, init_handlers, init_handlers_with_events, try_recv_event,
         },
         safe_owner_refresh::{SafeSnapshotRead, store_safe_owner_snapshot},
     };
@@ -521,6 +521,88 @@ mod tests {
         store_safe_owner_snapshot(&db, &state, fresh_read).await;
         assert_eq!(db.get_safe_owners(None, safe_address).await?, vec![kept_owner]);
         assert_eq!(state.safe_owner_event_block(safe_address), None);
+
+        Ok(())
+    }
+
+    fn read_at(safe_address: Address, block: u64) -> SafeSnapshotRead {
+        SafeSnapshotRead {
+            safe_address,
+            block,
+            snapshot: SafeOwnersSnapshot {
+                owners: vec![address_with_byte(95)],
+                threshold: 1,
+            },
+        }
+    }
+
+    fn deployed_announcements(events: &mut async_broadcast::Receiver<Arc<crate::state::IndexerEvent>>) -> Vec<Address> {
+        std::iter::from_fn(|| try_recv_event(events))
+            .filter_map(|event| match event {
+                crate::state::IndexerEvent::SafeDeployed(address) => Some(address),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_deployment_is_not_announced_for_a_dropped_read() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe_address = pending_safe(&db, 80).await?;
+        let state = crate::state::IndexerState::default();
+        let mut events = state.subscribe_to_events();
+
+        state.mark_safe_awaiting_deployment_announcement(safe_address);
+        state.record_safe_owner_event(safe_address, 201);
+
+        // The read predates a processed owner event: it is dropped and nothing is announced.
+        store_safe_owner_snapshot(&db, &state, read_at(safe_address, 200)).await;
+        assert!(deployed_announcements(&mut events).is_empty());
+
+        // The flag stays until a snapshot is stored.
+        store_safe_owner_snapshot(&db, &state, read_at(safe_address, 202)).await;
+        assert_eq!(deployed_announcements(&mut events), vec![safe_address]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_deployment_is_not_announced_for_a_failed_store() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        // The Safe is not in the database yet, so storing its snapshot fails.
+        let safe_address = address_with_byte(81);
+        let state = crate::state::IndexerState::default();
+        let mut events = state.subscribe_to_events();
+
+        state.mark_safe_awaiting_deployment_announcement(safe_address);
+        store_safe_owner_snapshot(&db, &state, read_at(safe_address, 200)).await;
+        assert!(deployed_announcements(&mut events).is_empty());
+
+        db.create_safe_contract(
+            None,
+            safe_address,
+            address_with_byte(2),
+            address_with_byte(3),
+            100,
+            0,
+            0,
+        )
+        .await?;
+        store_safe_owner_snapshot(&db, &state, read_at(safe_address, 201)).await;
+        assert_eq!(deployed_announcements(&mut events), vec![safe_address]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_deployment_is_not_announced_for_an_unflagged_safe() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe_address = pending_safe(&db, 82).await?;
+        let state = crate::state::IndexerState::default();
+        let mut events = state.subscribe_to_events();
+
+        store_safe_owner_snapshot(&db, &state, read_at(safe_address, 200)).await;
+        assert!(deployed_announcements(&mut events).is_empty());
 
         Ok(())
     }

@@ -902,7 +902,8 @@ Database operations:
         * Chain key (owner)
         * Event position (block, tx_index, log_index)
     ↓
-Publish SafeDeployed event to IndexerState event bus
+Publish SafeDeployed event to IndexerState event bus (for a Safe discovered while synced, only once its first
+owner snapshot is stored, so subscribers see the owners and threshold)
     ↓
 GraphQL safeDeployed subscription receives event:
     - Queries database for full Safe details

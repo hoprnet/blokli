@@ -88,8 +88,12 @@ where
                 .create_safe_contract(Some(tx), safe_addr, module_addr, chain_key, block, tx_index, log_index)
                 .await?;
 
+            let mut announcement_deferred = false;
             if !safe_previously_known && is_synced {
                 self.request_safe_owner_snapshot(safe_addr, block);
+                // Subscribers read owners and threshold from the database: announce once the snapshot is stored.
+                self.indexer_state.mark_safe_awaiting_deployment_announcement(safe_addr);
+                announcement_deferred = true;
                 let epoch = self.indexer_state.mark_safe_filters_dirty();
                 info!(
                     safe = %safe_addr.to_hex(),
@@ -104,8 +108,8 @@ where
                 "Safe contract entry created"
             );
 
-            // Emit SafeDeployed event if synced
-            if is_synced {
+            // Emit SafeDeployed event if synced, unless it waits for the owner snapshot
+            if is_synced && !announcement_deferred {
                 events.push(crate::state::IndexerEvent::SafeDeployed(safe_addr));
             }
         } else {
@@ -123,7 +127,7 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use blokli_chain_rpc::errors::RpcError;
+    use blokli_chain_rpc::{SafeOwnersSnapshot, errors::RpcError};
     use blokli_chain_types::AlloyAddressExt;
     use blokli_db::{
         BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations,
@@ -141,7 +145,23 @@ mod tests {
     use mockall::predicate::*;
     use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 
-    use crate::{handlers::test_utils::test_helpers::*, state::IndexerEvent, traits::ChainLogHandler};
+    use crate::{
+        handlers::test_utils::test_helpers::*,
+        safe_owner_refresh::{SafeSnapshotRead, store_safe_owner_snapshot},
+        state::IndexerEvent,
+        traits::ChainLogHandler,
+    };
+
+    fn snapshot_read(safe_address: Address, block: u64) -> SafeSnapshotRead {
+        SafeSnapshotRead {
+            safe_address,
+            block,
+            snapshot: SafeOwnersSnapshot {
+                owners: vec![random_address()],
+                threshold: 1,
+            },
+        }
+    }
 
     /// Generates a cryptographically random Hopr `Address`.
     ///
@@ -183,7 +203,7 @@ mod tests {
             inner: Arc::new(rpc_operations),
         };
 
-        let (handlers, _indexer_state, mut event_rx) = init_handlers_with_events(clonable_rpc_operations, db.clone());
+        let (handlers, state, mut event_rx) = init_handlers_with_events(clonable_rpc_operations, db.clone());
 
         // Create event
         let safe_address = random_address();
@@ -212,12 +232,21 @@ mod tests {
         let safe = db.verify_safe_contract(None, safe_address, sender).await?;
         assert!(safe, "Safe should be created and verified");
 
-        // Verify event published
-        let event = try_recv_event(&mut event_rx).expect("Should receive event");
-        match event {
+        // The announcement waits for the owner snapshot: nothing is published (or returned) yet
+        assert!(try_recv_event(&mut event_rx).is_none(), "SafeDeployed must be deferred");
+        assert_eq!(state.take_pending_safe_owner_snapshots(), vec![safe_address]);
+
+        // Storing the snapshot announces the Safe, once
+        store_safe_owner_snapshot(&db, &state, snapshot_read(safe_address, 100)).await;
+        match try_recv_event(&mut event_rx).expect("Should receive event") {
             IndexerEvent::SafeDeployed(addr) => assert_eq!(addr, safe_address),
             _ => panic!("Unexpected event type"),
         }
+        store_safe_owner_snapshot(&db, &state, snapshot_read(safe_address, 101)).await;
+        assert!(
+            try_recv_event(&mut event_rx).is_none(),
+            "SafeDeployed is announced once"
+        );
 
         Ok(())
     }
@@ -287,7 +316,7 @@ mod tests {
             inner: Arc::new(rpc_operations),
         };
 
-        let (handlers, _indexer_state, mut event_rx) = init_handlers_with_events(clonable_rpc_operations, db.clone());
+        let (handlers, state, mut event_rx) = init_handlers_with_events(clonable_rpc_operations, db.clone());
 
         // Create event
         let safe_address = random_address();
@@ -316,7 +345,9 @@ mod tests {
         let safe_exists = db.verify_safe_contract(None, safe_address, sender).await?;
         assert!(safe_exists, "Safe should be created after first processing");
 
-        // Verify event published
+        // The first deployment defers its announcement until the owner snapshot is stored
+        assert!(try_recv_event(&mut event_rx).is_none(), "SafeDeployed must be deferred");
+        store_safe_owner_snapshot(&db, &state, snapshot_read(safe_address, 100)).await;
         let first_event = try_recv_event(&mut event_rx).expect("Should receive first event");
         match first_event {
             IndexerEvent::SafeDeployed(addr) => assert_eq!(addr, safe_address),

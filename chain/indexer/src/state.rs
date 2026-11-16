@@ -190,6 +190,8 @@ struct SafeOwnerSync {
     /// Highest block of an owner or threshold event processed per Safe. An entry is removed when a stored
     /// snapshot covers it, so the map is bounded by the number of Safes that currently await a snapshot.
     event_blocks: Mutex<HashMap<Address, u64>>,
+    /// Safes discovered live whose `SafeDeployed` announcement waits for their first stored owner snapshot.
+    awaiting_announcement: Mutex<HashSet<Address>>,
     wakeup: tokio::sync::Notify,
 }
 
@@ -332,6 +334,30 @@ impl IndexerState {
             unsynced.insert(safe_address);
         }
         self.safe_owner_sync.wakeup.notify_one();
+    }
+
+    /// Remembers that the `SafeDeployed` announcement of the Safe is held back until its owner snapshot is stored.
+    pub fn mark_safe_awaiting_deployment_announcement(&self, safe_address: Address) {
+        if let Ok(mut awaiting) = self.safe_owner_sync.awaiting_announcement.lock() {
+            awaiting.insert(safe_address);
+        }
+    }
+
+    /// Publishes `SafeDeployed` for the Safe if its announcement was held back, and clears the flag.
+    ///
+    /// Returns whether an announcement was made. Called once the owner snapshot of the Safe is stored, so
+    /// subscribers read the owners and threshold from the database.
+    pub fn announce_safe_deployed_if_awaiting(&self, safe_address: Address) -> bool {
+        let was_awaiting = self
+            .safe_owner_sync
+            .awaiting_announcement
+            .lock()
+            .map(|mut awaiting| awaiting.remove(&safe_address))
+            .unwrap_or(false);
+        if was_awaiting {
+            self.publish_event(IndexerEvent::SafeDeployed(safe_address));
+        }
+        was_awaiting
     }
 
     /// Records that a snapshot of the Safe has been stored.

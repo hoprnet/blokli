@@ -375,6 +375,7 @@ where
             state.clear_safe_owner_events_up_to(safe_address, block);
             state.mark_safe_owner_snapshot_synced(safe_address);
             update_pending_gauge(state);
+            state.announce_safe_deployed_if_awaiting(safe_address);
         }
         Err(error) => {
             error!(%safe_address, %error, "failed to store Safe owner snapshot, retrying shortly");
