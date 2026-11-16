@@ -222,6 +222,8 @@ mod tests {
     use primitive_types::U256 as PrimitiveU256;
     use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 
+    use std::iter::from_fn;
+
     use super::*;
     use crate::{
         custom_abis::safe_contract_events::SafeContract,
@@ -229,6 +231,7 @@ mod tests {
             ClonableMockOperations, MockIndexerRpcOperations, init_handlers, init_handlers_with_events, try_recv_event,
         },
         safe_owner_refresh::{SafeSnapshotRead, store_safe_owner_snapshot},
+        state::{IndexerEvent, IndexerState},
     };
 
     fn address_with_byte(byte: u8) -> Address {
@@ -536,10 +539,10 @@ mod tests {
         }
     }
 
-    fn deployed_announcements(events: &mut async_broadcast::Receiver<Arc<crate::state::IndexerEvent>>) -> Vec<Address> {
-        std::iter::from_fn(|| try_recv_event(events))
+    fn deployed_announcements(events: &mut async_broadcast::Receiver<Arc<IndexerEvent>>) -> Vec<Address> {
+        from_fn(|| try_recv_event(events))
             .filter_map(|event| match event {
-                crate::state::IndexerEvent::SafeDeployed(address) => Some(address),
+                IndexerEvent::SafeDeployed(address) => Some(address),
                 _ => None,
             })
             .collect()
@@ -549,7 +552,7 @@ mod tests {
     async fn test_deployment_is_not_announced_for_a_dropped_read() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let safe_address = pending_safe(&db, 80).await?;
-        let state = crate::state::IndexerState::default();
+        let state = IndexerState::default();
         let mut events = state.subscribe_to_events();
 
         state.mark_safe_awaiting_deployment_announcement(safe_address);
@@ -571,7 +574,7 @@ mod tests {
         let db = BlokliDb::new_in_memory().await?;
         // The Safe is not in the database yet, so storing its snapshot fails.
         let safe_address = address_with_byte(81);
-        let state = crate::state::IndexerState::default();
+        let state = IndexerState::default();
         let mut events = state.subscribe_to_events();
 
         state.mark_safe_awaiting_deployment_announcement(safe_address);
@@ -598,7 +601,7 @@ mod tests {
     async fn test_deployment_is_not_announced_for_an_unflagged_safe() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let safe_address = pending_safe(&db, 82).await?;
-        let state = crate::state::IndexerState::default();
+        let state = IndexerState::default();
         let mut events = state.subscribe_to_events();
 
         store_safe_owner_snapshot(&db, &state, read_at(safe_address, 200)).await;

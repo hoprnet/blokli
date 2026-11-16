@@ -89,7 +89,7 @@ where
                 .await?;
 
             let mut announcement_deferred = false;
-            if !safe_previously_known && is_synced {
+            if self.enable_safe_indexing && !safe_previously_known && is_synced {
                 self.request_safe_owner_snapshot(safe_addr, block);
                 // Subscribers read owners and threshold from the database: announce once the snapshot is stored.
                 self.indexer_state.mark_safe_awaiting_deployment_announcement(safe_addr);
@@ -247,6 +247,57 @@ mod tests {
             try_recv_event(&mut event_rx).is_none(),
             "SafeDeployed is announced once"
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_safe_deployed_is_not_deferred_when_safe_indexing_is_disabled() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let mut rpc_operations = MockIndexerRpcOperations::new();
+        let sender = random_address();
+        rpc_operations
+            .expect_get_transaction_sender()
+            .returning(move |_| Ok(sender));
+
+        let (mut handlers, state, mut event_rx) = init_handlers_with_events(
+            ClonableMockOperations {
+                inner: Arc::new(rpc_operations),
+            },
+            db.clone(),
+        );
+        handlers.enable_safe_indexing = false;
+
+        let safe_address = random_address();
+        let event = HoprNodeStakeFactory::NewHoprNodeStakeModuleForSafe {
+            safe: AlloyAddress::from_hopr_address(safe_address),
+            module: AlloyAddress::from_hopr_address(random_address()),
+        };
+        let encoded_data = event.encode_log_data();
+        handlers
+            .collect_log_event(
+                SerializableLog {
+                    address: handlers.addresses.node_stake_factory,
+                    topics: encoded_data.topics().iter().map(|t| t.0).collect(),
+                    data: encoded_data.data.to_vec(),
+                    tx_hash: random_hash().into(),
+                    block_number: 100,
+                    tx_index: 1,
+                    log_index: 2,
+                    ..test_log()
+                },
+                true,
+            )
+            .await?;
+
+        match try_recv_event(&mut event_rx).expect("SafeDeployed is published immediately") {
+            IndexerEvent::SafeDeployed(addr) => assert_eq!(addr, safe_address),
+            _ => panic!("Unexpected event type"),
+        }
+        assert!(state.take_pending_safe_owner_snapshots().is_empty());
+        assert_eq!(state.unsynced_safe_owner_snapshots(), 0);
+        // No flag was left behind: a later snapshot store announces nothing.
+        assert!(!state.announce_safe_deployed_if_awaiting(safe_address));
 
         Ok(())
     }
