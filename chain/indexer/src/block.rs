@@ -12,7 +12,9 @@ use std::{
 use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
 use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{
-    BlokliDbGeneralModelOperations, TargetDb, api::logs::BlokliDbLogOperations, info::BlokliDbInfoOperations,
+    BlokliDbGeneralModelOperations, TargetDb,
+    api::{errors::DbError, logs::BlokliDbLogOperations},
+    info::BlokliDbInfoOperations,
     safe_contracts::BlokliDbSafeContractOperations,
 };
 use blokli_db_entity::{channel_state, prelude::ChannelState};
@@ -205,7 +207,16 @@ where
 
         // Check that the contract addresses and topics are consistent with what is in the logs DB,
         // or if the DB is empty, prime it with the given addresses and topics.
-        db.ensure_logs_origin(address_topics.clone()).await?;
+        db.ensure_logs_origin(address_topics.clone())
+            .await
+            .map_err(|error| match error {
+                DbError::InconsistentLogs => CoreEthereumIndexerError::ProcessError(
+                    "the logs database does not match the configured contracts (for example, a StakeFactory release \
+                     was added or changed on an existing database); wipe the indexer databases and re-sync"
+                        .into(),
+                ),
+                other => other.into(),
+            })?;
 
         let is_synced = Arc::new(AtomicBool::new(false));
         let chain_head = Arc::new(AtomicU64::new(0));

@@ -286,14 +286,37 @@ fields. SQLite uses separate index and raw-log databases.
 
 #### Indexer Configuration
 
-| Config Key                                      | Default | Environment Variable                                   | Description                                           |
-| :---------------------------------------------- | :------ | :----------------------------------------------------- | :---------------------------------------------------- |
-| `indexer.fast_sync`                             | `true`  | `BLOKLI_INDEXER_FAST_SYNC`                             | Enables the fast initial synchronization path         |
-| `indexer.enable_logs_snapshot`                  | `false` | `BLOKLI_INDEXER_ENABLE_LOGS_SNAPSHOT`                  | Restores raw logs from a snapshot before catch-up     |
-| `indexer.enable_safe_indexing`                  | `false` | `BLOKLI_INDEXER_ENABLE_SAFE_INDEXING`                  | Indexes Safe events after Safe discovery              |
-| `indexer.logs_snapshot_url`                     | unset   | `BLOKLI_INDEXER_LOGS_SNAPSHOT_URL`                     | URL of a `.tar.xz` archive containing `hopr_logs.sql` |
-| `indexer.subscription.event_bus_capacity`       | `1000`  | `BLOKLI_INDEXER_SUBSCRIPTION_EVENT_BUS_CAPACITY`       | Channel-event bus capacity                            |
-| `indexer.subscription.shutdown_signal_capacity` | `10`    | `BLOKLI_INDEXER_SUBSCRIPTION_SHUTDOWN_SIGNAL_CAPACITY` | Shutdown signal buffer capacity                       |
+| Config Key                                       | Default | Environment Variable                                   | Description                                                                  |
+| :----------------------------------------------- | :------ | :----------------------------------------------------- | :--------------------------------------------------------------------------- |
+| `indexer.fast_sync`                              | `true`  | `BLOKLI_INDEXER_FAST_SYNC`                             | Enables the fast initial synchronization path                                |
+| `indexer.enable_logs_snapshot`                   | `false` | `BLOKLI_INDEXER_ENABLE_LOGS_SNAPSHOT`                  | Restores raw logs from a snapshot before catch-up                            |
+| `indexer.enable_safe_indexing`                   | `false` | `BLOKLI_INDEXER_ENABLE_SAFE_INDEXING`                  | Indexes Safe events after Safe discovery                                     |
+| `indexer.additional_node_stake_factory_releases` | `[]`    | —                                                      | Historical contract releases whose StakeFactory deployments are also indexed |
+| `indexer.logs_snapshot_url`                      | unset   | `BLOKLI_INDEXER_LOGS_SNAPSHOT_URL`                     | URL of a `.tar.xz` archive containing `hopr_logs.sql`                        |
+| `indexer.subscription.event_bus_capacity`        | `1000`  | `BLOKLI_INDEXER_SUBSCRIPTION_EVENT_BUS_CAPACITY`       | Channel-event bus capacity                                                   |
+| `indexer.subscription.shutdown_signal_capacity`  | `10`    | `BLOKLI_INDEXER_SUBSCRIPTION_SHUTDOWN_SIGNAL_CAPACITY` | Shutdown signal buffer capacity                                              |
+| `indexer.subscription.batch_size`                | `100`   | `BLOKLI_INDEXER_SUBSCRIPTION_BATCH_SIZE`               | Historical subscription query batch size                                     |
+
+##### Adding a historical StakeFactory release
+
+Blokli can index several HoprNodeStakeFactory deployments. The catalog of historical releases is **empty by default**: no historical release
+is bundled, and any tag in `indexer.additional_node_stake_factory_releases` is rejected at startup with an error explaining how to add it.
+The active `hopr-bindings` dependency uses a caret range and is deliberately not listed under a tag.
+
+To add a release `vX.Y.Z`:
+
+1. Add a uniquely named `hopr-bindings` dependency alias with the exact release version (`=X.Y.Z`) to the workspace dependencies in
+   `Cargo.toml`, e.g. `hopr-bindings-vX-Y-Z = { package = "hopr-bindings", version = "=X.Y.Z" }`.
+2. Add that dependency alias with `{ workspace = true }` to `bloklid/Cargo.toml`.
+3. Map the release tag to the alias crate in the `historical_bindings!` catalog in `bloklid/src/historical_bindings.rs`.
+4. Add the release tag to `indexer.additional_node_stake_factory_releases` in the deployment configuration.
+5. Wipe the indexer databases and re-sync. Enabling or changing releases on an existing database is not migrated automatically: the indexer
+   refuses to start with an error asking for a wipe, because the logs already stored do not cover the new factory.
+
+`indexer.enable_logs_snapshot` cannot be combined with additional releases, since a snapshot does not cover the added factories.
+
+The catalog macro generates deployment-resolution tests for every network and verifies that historical StakeFactory events remain decodable
+with the current bindings.
 
 #### API Configuration
 

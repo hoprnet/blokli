@@ -93,8 +93,12 @@ pub struct ChainConfig {
     /// Successful requests spanning the full reduced log block range after which a larger range is probed again
     /// (0 = never)
     pub block_range_reprobe_interval: u32,
-    /// Starting block number for channel contract (where indexing should begin)
-    pub channel_contract_deploy_block: u32,
+    /// Earliest block number the indexer should start from.
+    ///
+    /// This is the minimum across every contract deployment that must be indexed for the
+    /// network: the current deployment's start block and, when historical StakeFactory
+    /// releases are configured, their deployment start blocks as well.
+    pub indexer_start_block_number: u32,
     /// Maximum RPC requests per second (None = default, Some(0) = unlimited)
     pub max_requests_per_sec: Option<u32>,
     /// Expected block time in seconds (network-specific, affects indexer polling frequency)
