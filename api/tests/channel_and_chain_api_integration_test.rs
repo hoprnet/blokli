@@ -9,15 +9,21 @@
 
 use std::{
     str::FromStr,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, SystemTime},
 };
 
 use anyhow::Result;
 use blokli_api::{
     cache::ChannelStatsCache,
+    loader::channels_by_safe_loader,
     query::QueryRoot,
     schema::{ChainId, ExpectedBlockTime, Finality, GasMultiplier, NetworkName},
 };
+use blokli_chain_indexer::IndexerState;
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{
     BlokliDbGeneralModelOperations, TargetDb, accounts::BlokliDbAccountOperations, channels::BlokliDbChannelOperations,
@@ -27,9 +33,9 @@ use blokli_db_entity::chain_info;
 use hopr_types::{
     crypto::prelude::{ChainKeypair, Keypair, OffchainKeypair},
     internal::channels::{ChannelEntry, ChannelStatus},
-    primitive::prelude::{Address, HoprBalance},
+    primitive::prelude::{Address, HoprBalance, ToHex},
 };
-use sea_orm::{ActiveModelTrait, EntityTrait, ModelTrait, Set};
+use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, EntityTrait, ModelTrait, Set};
 
 /// Helper to extract channels from union result
 fn extract_channels_from_result(data: &serde_json::Value) -> Result<Vec<serde_json::Value>> {
@@ -1085,6 +1091,308 @@ async fn test_channel_count_with_status_filter() -> Result<()> {
     let data = response.data.into_json()?;
     assert_eq!(data["channelCount"]["__typename"], "Count");
     assert_eq!(data["channelCount"]["count"], 0);
+
+    Ok(())
+}
+
+/// Build a query schema that resolves `channels(safeAddress:)` through the batch loader
+fn build_schema_with_channel_loader(
+    conn: DatabaseConnection,
+) -> async_graphql::Schema<QueryRoot, async_graphql::EmptyMutation, async_graphql::EmptySubscription> {
+    async_graphql::Schema::build(
+        QueryRoot,
+        async_graphql::EmptyMutation,
+        async_graphql::EmptySubscription,
+    )
+    .data(channels_by_safe_loader(conn.clone()))
+    .data(conn)
+    .data(ContractAddresses::default())
+    .data(ChainId(100))
+    .data(NetworkName("test".to_string()))
+    .data(GasMultiplier(1.0))
+    .finish()
+}
+
+/// Build one `channels` field with the given alias and arguments
+fn aliased_channels_field(alias: &str, arguments: &str) -> String {
+    format!(
+        r#"{alias}: channels({arguments}) {{
+            __typename
+            ... on ChannelsList {{ channels {{ concreteChannelId source destination balance status epoch ticketIndex }} }}
+            ... on MissingFilterError {{ code message }}
+            ... on InvalidAddressError {{ code message }}
+            ... on QueryFailedError {{ code message }}
+        }}"#
+    )
+}
+
+/// The channels of one alias, ordered by channel ID so that two results can be compared
+fn sorted_channels(data: &serde_json::Value, alias: &str) -> Vec<serde_json::Value> {
+    let mut channels = data[alias]["channels"].as_array().cloned().unwrap_or_default();
+    channels.sort_by_key(|channel| channel["concreteChannelId"].as_str().map(str::to_string));
+    channels
+}
+
+const SAFE_A: [u8; 20] = [0xa1; 20];
+const SAFE_B: [u8; 20] = [0xb2; 20];
+
+/// Create accounts 1 and 2 in safe A, account 3 in safe B and account 4 without a safe, with one
+/// open channel from each of them
+async fn create_safe_channels(db: &BlokliDb) -> Result<()> {
+    let safes = [
+        Some(Address::from(SAFE_A)),
+        Some(Address::from(SAFE_A)),
+        Some(Address::from(SAFE_B)),
+        None,
+    ];
+    let mut chain_keys = Vec::new();
+    for (keyid, safe) in (1u32..).zip(safes) {
+        let chain_key = random_keypair().public().to_address();
+        db.upsert_account(
+            None,
+            keyid,
+            chain_key,
+            *random_offchain_keypair().public(),
+            safe,
+            100,
+            0,
+            0,
+        )
+        .await?;
+        chain_keys.push(chain_key);
+    }
+
+    let destinations = [chain_keys[3], chain_keys[3], chain_keys[3], chain_keys[0]];
+    for (log_index, (source, destination)) in (0u32..).zip(chain_keys.iter().zip(destinations)) {
+        let channel = build_channel_entry(*source, destination, HoprBalance::from(1000), 1, ChannelStatus::Open, 1);
+        db.upsert_channel(None, channel, 100, 0, log_index).await?;
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_aliased_safe_channel_lookups_share_one_statement_pair() -> Result<()> {
+    let db = BlokliDb::new_in_memory().await?;
+    create_safe_channels(&db).await?;
+
+    let statements = Arc::new(AtomicUsize::new(0));
+    let mut conn = db.conn(TargetDb::Index).clone();
+    conn.set_metric_callback({
+        let statements = statements.clone();
+        move |_| {
+            statements.fetch_add(1, Ordering::SeqCst);
+        }
+    });
+    let schema = build_schema_with_channel_loader(conn);
+
+    let query = format!(
+        "query {{ {} {} {} }}",
+        aliased_channels_field("a", &format!(r#"safeAddress: "{}""#, Address::from(SAFE_A).to_hex())),
+        aliased_channels_field("b", &format!(r#"safeAddress: "{}""#, Address::from(SAFE_B).to_hex())),
+        aliased_channels_field(
+            "unknown",
+            &format!(r#"safeAddress: "{}""#, Address::from([0x42; 20]).to_hex())
+        ),
+    );
+
+    let response = execute_graphql_query(&schema, &query).await;
+    assert!(response.errors.is_empty(), "Errors: {:?}", response.errors);
+
+    let data = response.data.into_json()?;
+    let sources = |alias: &str| -> Vec<i64> {
+        let mut sources: Vec<i64> = sorted_channels(&data, alias)
+            .iter()
+            .filter_map(|channel| channel["source"].as_i64())
+            .collect();
+        sources.sort_unstable();
+        sources
+    };
+    assert_eq!(sources("a"), vec![1, 2]);
+    assert_eq!(sources("b"), vec![3]);
+    assert_eq!(data["unknown"]["__typename"], "ChannelsList");
+    assert!(sources("unknown").is_empty());
+
+    // One statement for the accounts of the safes and one for their channels, however many aliases
+    assert_eq!(statements.load(Ordering::SeqCst), 2);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_aliased_safe_channel_lookups_match_unbatched_results() -> Result<()> {
+    let db = BlokliDb::new_in_memory().await?;
+    create_safe_channels(&db).await?;
+    let schema = build_schema_with_channel_loader(db.conn(TargetDb::Index).clone());
+
+    // A lookup with a second filter does not go through the batch loader. Every channel is open,
+    // so the status filter does not change the result.
+    let mut fields = Vec::new();
+    for (name, safe) in [("a", SAFE_A), ("b", SAFE_B)] {
+        let safe = Address::from(safe).to_hex();
+        fields.push(aliased_channels_field(
+            &format!("batched_{name}"),
+            &format!(r#"safeAddress: "{safe}""#),
+        ));
+        fields.push(aliased_channels_field(
+            &format!("unbatched_{name}"),
+            &format!(r#"safeAddress: "{safe}", status: OPEN"#),
+        ));
+    }
+    let query = format!("query {{ {} }}", fields.join("\n"));
+
+    let response = execute_graphql_query(&schema, &query).await;
+    assert!(response.errors.is_empty(), "Errors: {:?}", response.errors);
+
+    let data = response.data.into_json()?;
+    for (name, expected) in [("a", 2), ("b", 1)] {
+        let batched = sorted_channels(&data, &format!("batched_{name}"));
+        assert_eq!(batched.len(), expected, "safe {name}");
+        assert_eq!(
+            batched,
+            sorted_channels(&data, &format!("unbatched_{name}")),
+            "safe {name}"
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_invalid_safe_address_alias_does_not_fail_other_aliases() -> Result<()> {
+    let db = BlokliDb::new_in_memory().await?;
+    create_safe_channels(&db).await?;
+    let schema = build_schema_with_channel_loader(db.conn(TargetDb::Index).clone());
+
+    let query = format!(
+        "query {{ {} {} }}",
+        aliased_channels_field(
+            "valid",
+            &format!(r#"safeAddress: "{}""#, Address::from(SAFE_B).to_hex())
+        ),
+        aliased_channels_field("invalid", r#"safeAddress: "notvalidhex""#),
+    );
+
+    let response = execute_graphql_query(&schema, &query).await;
+    assert!(response.errors.is_empty(), "Errors: {:?}", response.errors);
+
+    let data = response.data.into_json()?;
+    assert_eq!(sorted_channels(&data, "valid").len(), 1);
+    assert_eq!(data["invalid"]["__typename"], "InvalidAddressError");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_failed_safe_channel_batch_fails_every_alias_in_it() -> Result<()> {
+    // A database without the schema makes the batch statement fail
+    let conn = Database::connect("sqlite::memory:").await?;
+    let schema = build_schema_with_channel_loader(conn);
+
+    let query = format!(
+        "query {{ {} {} }}",
+        aliased_channels_field("a", &format!(r#"safeAddress: "{}""#, Address::from(SAFE_A).to_hex())),
+        aliased_channels_field("b", &format!(r#"safeAddress: "{}""#, Address::from(SAFE_B).to_hex())),
+    );
+
+    let response = execute_graphql_query(&schema, &query).await;
+    assert!(response.errors.is_empty(), "Errors: {:?}", response.errors);
+
+    let data = response.data.into_json()?;
+    for alias in ["a", "b"] {
+        assert_eq!(data[alias]["__typename"], "QueryFailedError", "alias {alias}");
+        assert_eq!(data[alias]["code"], "QUERY_FAILED", "alias {alias}");
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_safe_channel_lookup_without_loader_reports_context_error() -> Result<()> {
+    let db = BlokliDb::new_in_memory().await?;
+    let schema = async_graphql::Schema::build(
+        QueryRoot,
+        async_graphql::EmptyMutation,
+        async_graphql::EmptySubscription,
+    )
+    .data(db.conn(TargetDb::Index).clone())
+    .finish();
+
+    let query = format!(
+        "query {{ {} }}",
+        aliased_channels_field("a", &format!(r#"safeAddress: "{}""#, Address::from(SAFE_A).to_hex())),
+    );
+
+    let response = execute_graphql_query(&schema, &query).await;
+    assert!(response.errors.is_empty(), "Errors: {:?}", response.errors);
+
+    let data = response.data.into_json()?;
+    assert_eq!(data["a"]["__typename"], "QueryFailedError");
+    assert_eq!(data["a"]["code"], "CONTEXT_ERROR");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_channel_stats_cached_until_reorganization_advances_epoch() -> Result<()> {
+    let db = BlokliDb::new_in_memory().await?;
+    setup_chain_info(&db).await?;
+
+    let keypair1 = random_keypair();
+    let keypair2 = random_keypair();
+    let keypair3 = random_keypair();
+    let addr1 = keypair1.public().to_address();
+    let addr2 = keypair2.public().to_address();
+    let addr3 = keypair3.public().to_address();
+    for (id, addr) in [(1, addr1), (2, addr2), (3, addr3)] {
+        db.upsert_account(None, id, addr, *random_offchain_keypair().public(), None, 100, 0, 0)
+            .await?;
+    }
+
+    let balance = HoprBalance::from_str("1000 wxHOPR")?;
+    db.upsert_channel(
+        None,
+        build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 1),
+        100,
+        0,
+        0,
+    )
+    .await?;
+
+    let indexer_state = IndexerState::new(10, 100);
+    let schema = async_graphql::Schema::build(
+        QueryRoot,
+        async_graphql::EmptyMutation,
+        async_graphql::EmptySubscription,
+    )
+    .data(db.conn(TargetDb::Index).clone())
+    .data(ChannelStatsCache::default())
+    .data(indexer_state.clone())
+    .finish();
+
+    let all = "query { channelStats { __typename ... on ChannelStats { count balance } } }";
+    let count_of = |data: &serde_json::Value| data["channelStats"]["count"].as_i64();
+
+    let first = execute_graphql_query(&schema, all).await.data.into_json()?;
+    assert_eq!(count_of(&first), Some(1));
+
+    // A second channel is written without the indexed block advancing: the cached value is served.
+    db.upsert_channel(
+        None,
+        build_channel_entry(addr2, addr3, balance, 0, ChannelStatus::Open, 1),
+        101,
+        0,
+        0,
+    )
+    .await?;
+    let stale = execute_graphql_query(&schema, all).await.data.into_json()?;
+    assert_eq!(count_of(&stale), Some(1));
+
+    // A reorganization rewrites channel rows while the indexed block stays where it was.
+    indexer_state.signal_shutdown();
+    let fresh = execute_graphql_query(&schema, all).await.data.into_json()?;
+    assert_eq!(count_of(&fresh), Some(2));
+    assert_eq!(fresh["channelStats"]["balance"], "2000 wxHOPR");
 
     Ok(())
 }

@@ -23,6 +23,10 @@ pub struct ApiConfig {
     #[serde(default = "default_database_url")]
     pub database_url: String,
 
+    /// Maximum number of connections in this process's database pool
+    #[serde(default = "default_max_connections")]
+    pub max_connections: u32,
+
     /// TLS configuration
     #[serde(default)]
     pub tls: Option<TlsConfig>,
@@ -74,6 +78,14 @@ pub struct ApiConfig {
     /// Maximum GraphQL query complexity budget
     #[serde(default = "default_max_query_complexity")]
     pub max_query_complexity: usize,
+
+    /// Maximum number of subscription snapshots loaded from the database at the same time
+    #[serde(default = "default_max_concurrent_snapshots")]
+    pub max_concurrent_snapshots: usize,
+
+    /// How long a subscription waits for its turn to load a snapshot before it is ended
+    #[serde(default = "default_snapshot_queue_timeout", with = "humantime_serde")]
+    pub snapshot_queue_timeout: Duration,
 }
 
 /// TLS configuration
@@ -149,6 +161,14 @@ fn default_max_query_complexity() -> usize {
     500
 }
 
+fn default_max_concurrent_snapshots() -> usize {
+    8
+}
+
+fn default_snapshot_queue_timeout() -> Duration {
+    Duration::from_secs(10)
+}
+
 fn default_max_indexer_lag() -> u64 {
     10
 }
@@ -167,6 +187,7 @@ impl Default for ApiConfig {
             bind_address: default_bind_address(),
             playground_enabled: default_playground_enabled(),
             database_url: default_database_url(),
+            max_connections: default_max_connections(),
             tls: None,
             cors_allowed_origins: default_cors_allowed_origins(),
             chain_id: default_chain_id(),
@@ -180,6 +201,8 @@ impl Default for ApiConfig {
             health: HealthConfig::default(),
             max_query_depth: default_max_query_depth(),
             max_query_complexity: default_max_query_complexity(),
+            max_concurrent_snapshots: default_max_concurrent_snapshots(),
+            snapshot_queue_timeout: default_snapshot_queue_timeout(),
         }
     }
 }
@@ -194,6 +217,13 @@ fn default_playground_enabled() -> bool {
 
 fn default_database_url() -> String {
     std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://user:pw@127.0.0.1/blokli".to_string())
+}
+
+fn default_max_connections() -> u32 {
+    std::env::var("BLOKLI_DATABASE_MAX_CONNECTIONS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(10)
 }
 
 fn default_cors_allowed_origins() -> Vec<String> {
@@ -283,6 +313,13 @@ mod tests {
     }
 
     #[test]
+    fn test_snapshot_limits_defaults() {
+        let config = ApiConfig::default();
+        assert_eq!(config.max_concurrent_snapshots, 8);
+        assert_eq!(config.snapshot_queue_timeout, Duration::from_secs(10));
+    }
+
+    #[test]
     fn test_chain_id_from_valid_env_var() {
         temp_env::with_var("CHAIN_ID", Some("137"), || {
             assert_eq!(default_chain_id(), 137);
@@ -344,6 +381,27 @@ mod tests {
     fn test_database_url_defaults_when_env_missing() {
         temp_env::with_var("DATABASE_URL", None::<&str>, || {
             assert_eq!(default_database_url(), "postgres://user:pw@127.0.0.1/blokli");
+        });
+    }
+
+    #[test]
+    fn test_max_connections_defaults_when_env_missing() {
+        temp_env::with_var("BLOKLI_DATABASE_MAX_CONNECTIONS", None::<&str>, || {
+            assert_eq!(default_max_connections(), 10);
+        });
+    }
+
+    #[test]
+    fn test_max_connections_from_env_var() {
+        temp_env::with_var("BLOKLI_DATABASE_MAX_CONNECTIONS", Some("25"), || {
+            assert_eq!(default_max_connections(), 25);
+        });
+    }
+
+    #[test]
+    fn test_max_connections_defaults_when_env_invalid() {
+        temp_env::with_var("BLOKLI_DATABASE_MAX_CONNECTIONS", Some("not-a-number"), || {
+            assert_eq!(default_max_connections(), 10);
         });
     }
 

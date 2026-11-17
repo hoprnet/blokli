@@ -22,8 +22,10 @@ use blokli_db_entity::{
     account, chain_info,
     chain_info::Entity as ChainInfoEntity,
     conversions::{
-        account_aggregation::fetch_accounts_with_filters,
-        channel_aggregation::{fetch_channel_stats as fetch_channel_stats_db, fetch_channels_with_state},
+        account_aggregation::{AggregatedAccount, fetch_accounts_with_filters},
+        channel_aggregation::{
+            AggregatedChannel, fetch_channel_stats as fetch_channel_stats_db, fetch_channels_with_state,
+        },
         node_safe_registration::fetch_registered_nodes_for_safes,
         redemptions_aggregation::fetch_aggregated_redeemed_stats,
         safe_aggregation::{
@@ -59,6 +61,7 @@ use crate::{
         transaction_from_record,
     },
     curvy, errors,
+    loader::{AccountsByChainKeyLoader, ChannelsBySafeLoader},
     mutation::TransactionResult,
     schema::{GasFeeFloors, RpcOperationsContext},
     validation::{parse_service_type, validate_eth_address},
@@ -526,6 +529,57 @@ fn parse_node_filter(node: Option<&str>) -> std::result::Result<Option<Address>,
     .transpose()
 }
 
+/// Converts an aggregated database account to the GraphQL account type.
+fn account_from_aggregate(aggregate: AggregatedAccount) -> Account {
+    Account {
+        keyid: aggregate.keyid,
+        chain_key: aggregate.chain_key,
+        packet_key: aggregate.packet_key,
+        safe_address: aggregate.safe_address,
+        multi_addresses: aggregate.multi_addresses,
+    }
+}
+
+/// Loads the accounts of one chain key through the batch loader.
+///
+/// The chain key must have passed `validate_eth_address`.
+async fn load_accounts_by_chain_key(
+    ctx: &Context<'_>,
+    chain_key: &str,
+) -> std::result::Result<Vec<Account>, QueryFailedError> {
+    let loader = ctx
+        .data::<AccountsByChainKeyLoader>()
+        .map_err(|error| errors::context_error("AccountsByChainKeyLoader", error))?;
+    let address = Address::from_hex(chain_key)
+        .map_err(|e| errors::invalid_address_query_failed(errors::messages::invalid_address(chain_key, e)))?;
+
+    let accounts = loader
+        .load_one(address)
+        .await
+        .map_err(|error| errors::query_failed("fetch accounts", error))?
+        .unwrap_or_default();
+
+    Ok(accounts.into_iter().map(account_from_aggregate).collect())
+}
+
+/// Loads the channels of one safe through the batch loader.
+async fn load_channels_by_safe(
+    ctx: &Context<'_>,
+    safe_address: Address,
+) -> std::result::Result<Vec<AggregatedChannel>, QueryFailedError> {
+    let loader = ctx
+        .data::<ChannelsBySafeLoader>()
+        .map_err(|error| errors::context_error("ChannelsBySafeLoader", error))?;
+
+    let channels = loader
+        .load_one(safe_address)
+        .await
+        .map_err(|error| errors::query_failed("fetch channels", error))?
+        .unwrap_or_default();
+
+    Ok(channels)
+}
+
 /// Root query type providing read-only access to indexed blockchain data
 #[derive(Default)]
 pub struct QueryRoot;
@@ -650,10 +704,7 @@ impl QueryRoot {
             let indexer_state = ctx
                 .data::<IndexerState>()
                 .map_err(|error| errors::context_error("IndexerState", error))?;
-            let checkpoint_model = {
-                let _lock = indexer_state.acquire_watermark_lock().await;
-                curvy::load_checkpoint(db, block_hash.as_ref()).await?
-            };
+            let checkpoint_model = curvy::load_checkpoint_synchronized(indexer_state, db, block_hash.as_ref()).await?;
             curvy::sync_checkpoint(checkpoint_model)
         }
         .await;
@@ -679,10 +730,7 @@ impl QueryRoot {
             let indexer_state = ctx
                 .data::<IndexerState>()
                 .map_err(|error| errors::context_error("IndexerState", error))?;
-            let checkpoint_model = {
-                let _lock = indexer_state.acquire_watermark_lock().await;
-                curvy::load_checkpoint(db, Some(&checkpoint)).await?
-            };
+            let checkpoint_model = curvy::load_checkpoint_synchronized(indexer_state, db, Some(&checkpoint)).await?;
             let start = curvy::dense_start(from_index)?;
             let total = checkpoint_model.leaf_count;
             curvy::validate_page_start(start, total)?;
@@ -770,10 +818,7 @@ impl QueryRoot {
             let indexer_state = ctx
                 .data::<IndexerState>()
                 .map_err(|error| errors::context_error("IndexerState", error))?;
-            let checkpoint_model = {
-                let _lock = indexer_state.acquire_watermark_lock().await;
-                curvy::load_checkpoint(db, Some(&checkpoint)).await?
-            };
+            let checkpoint_model = curvy::load_checkpoint_synchronized(indexer_state, db, Some(&checkpoint)).await?;
             let start = curvy::dense_start(from_index)?;
             let total = checkpoint_model.nullifier_count;
             curvy::validate_page_start(start, total)?;
@@ -828,10 +873,7 @@ impl QueryRoot {
             let indexer_state = ctx
                 .data::<IndexerState>()
                 .map_err(|error| errors::context_error("IndexerState", error))?;
-            let checkpoint_model = {
-                let _lock = indexer_state.acquire_watermark_lock().await;
-                curvy::load_checkpoint(db, Some(&checkpoint)).await?
-            };
+            let checkpoint_model = curvy::load_checkpoint_synchronized(indexer_state, db, Some(&checkpoint)).await?;
             let start = curvy::dense_start(from_index)?;
             let total = checkpoint_model.shard_count;
             curvy::validate_page_start(start, total)?;
@@ -1266,6 +1308,15 @@ impl QueryRoot {
             }
         };
 
+        // A lookup by chain key alone goes through the batch loader, which serves all such lookups
+        // made at the same moment with one pair of statements.
+        if let (Some(ck), None, None) = (&chain_key, keyid, &packet_key) {
+            return match load_accounts_by_chain_key(ctx, ck).await {
+                Ok(accounts) => AccountsResult::Accounts(AccountsList { accounts }),
+                Err(error) => AccountsResult::QueryFailed(error),
+            };
+        }
+
         // Fetch accounts with optional filters using optimized batch loading (4 queries)
         let aggregated_accounts = match fetch_accounts_with_filters(db, keyid, packet_key, chain_key).await {
             Ok(accounts) => accounts,
@@ -1275,16 +1326,7 @@ impl QueryRoot {
         };
 
         // Convert to GraphQL Account type
-        let accounts = aggregated_accounts
-            .into_iter()
-            .map(|agg| Account {
-                keyid: agg.keyid,
-                chain_key: agg.chain_key,
-                packet_key: agg.packet_key,
-                safe_address: agg.safe_address,
-                multi_addresses: agg.multi_addresses,
-            })
-            .collect();
+        let accounts = aggregated_accounts.into_iter().map(account_from_aggregate).collect();
 
         AccountsResult::Accounts(AccountsList { accounts })
     }
@@ -1804,6 +1846,14 @@ impl QueryRoot {
 
         let status_i16: Option<i16> = status.map(|s| s.into());
 
+        // Read the reorganization epoch before the indexed block and the aggregate: a reorganization can rewrite
+        // channel rows while leaving the indexed block unchanged, so the epoch has to be part of what identifies
+        // the state the result was computed for.
+        let reorg_epoch = ctx
+            .data_opt::<IndexerState>()
+            .map(IndexerState::reorg_epoch)
+            .unwrap_or(0);
+
         // Read the indexed block before the aggregate: the indexer advances it after committing a block's channel
         // writes, so a result computed afterwards is at least as new as the block it is stored under.
         let last_indexed_block = match chain_info::Entity::find_by_id(1).one(db).await {
@@ -1819,6 +1869,7 @@ impl QueryRoot {
         let cache = ctx.data_opt::<ChannelStatsCache>().cloned().unwrap_or_default();
         let key = ChannelStatsKey {
             block: last_indexed_block,
+            reorg_epoch,
             source_key_id,
             destination_key_id,
             concrete_channel_id: concrete_channel_id
@@ -1915,19 +1966,33 @@ impl QueryRoot {
         // Convert GraphQL ChannelStatus to database i16 representation if status filter is provided
         let status_i16: Option<i16> = status.map(|s| s.into());
 
-        let aggregated_channels = match fetch_channels_with_state(
-            db,
-            source_key_id,
-            destination_key_id,
-            concrete_channel_id,
-            status_i16,
-            parsed_safe_address,
-        )
-        .await
-        {
-            Ok(channels) => channels,
-            Err(e) => {
-                return ChannelsResult::QueryFailed(errors::query_failed("fetch channels", e));
+        // A lookup by safe address alone goes through the batch loader, which serves all such
+        // lookups made at the same moment with one pair of statements.
+        let safe_address_only = source_key_id.is_none()
+            && destination_key_id.is_none()
+            && concrete_channel_id.is_none()
+            && status.is_none();
+
+        let aggregated_channels = if let (Some(safe), true) = (parsed_safe_address, safe_address_only) {
+            match load_channels_by_safe(ctx, safe).await {
+                Ok(channels) => channels,
+                Err(error) => return ChannelsResult::QueryFailed(error),
+            }
+        } else {
+            match fetch_channels_with_state(
+                db,
+                source_key_id,
+                destination_key_id,
+                concrete_channel_id,
+                status_i16,
+                parsed_safe_address,
+            )
+            .await
+            {
+                Ok(channels) => channels,
+                Err(e) => {
+                    return ChannelsResult::QueryFailed(errors::query_failed("fetch channels", e));
+                }
             }
         };
 

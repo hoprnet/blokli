@@ -81,16 +81,19 @@ const CHANNEL_STATS_MAX_ENTRIES: u64 = 1024;
 
 /// Safety bound on how long a `channelStats` entry may be served.
 ///
-/// Entries are normally replaced because the indexed block advances (it is part of the key). The bound only covers
-/// the case where channel rows change without `last_indexed_block` moving, such as during historical sync, and
-/// keeps entries of old blocks from lingering.
+/// Entries are normally replaced because the indexed block or the reorganization epoch advances (both are part of
+/// the key). The bound covers the remaining case where channel rows change without either moving, such as during
+/// historical sync, and keeps entries of old blocks from lingering.
 const CHANNEL_STATS_MAX_AGE: Duration = Duration::from_secs(60);
 
-/// Full filter tuple of a `channelStats` query together with the indexed block the result was computed for.
+/// Full filter tuple of a `channelStats` query together with the indexed block and reorganization epoch the result
+/// was computed for.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ChannelStatsKey {
     /// `chain_info.last_indexed_block` read before the aggregate was computed.
     pub block: i64,
+    /// `IndexerState::reorg_epoch()` read before the aggregate was computed.
+    pub reorg_epoch: u64,
     pub source_key_id: Option<i64>,
     pub destination_key_id: Option<i64>,
     /// Concrete channel id without `0x` prefix, exactly as used by the query.
@@ -100,10 +103,10 @@ pub struct ChannelStatsKey {
     pub safe_address: Option<Vec<u8>>,
 }
 
-/// Caches `channelStats` aggregates per filter tuple and indexed block.
+/// Caches `channelStats` aggregates per filter tuple and index state (indexed block and reorganization epoch).
 ///
-/// A result is only reused while `last_indexed_block` is unchanged. Concurrent misses for the same key share one
-/// database scan and failures are not stored.
+/// A result is only reused while both `last_indexed_block` and the reorganization epoch are unchanged. Concurrent
+/// misses for the same key share one database scan and failures are not stored.
 #[derive(Clone)]
 pub struct ChannelStatsCache {
     cache: Cache<ChannelStatsKey, AggregatedChannelStats>,
@@ -238,6 +241,7 @@ mod tests {
     fn key(block: i64) -> ChannelStatsKey {
         ChannelStatsKey {
             block,
+            reorg_epoch: 0,
             source_key_id: None,
             destination_key_id: None,
             concrete_channel_id: None,
@@ -307,6 +311,10 @@ mod tests {
 
         let variants = [
             key(1),
+            ChannelStatsKey {
+                reorg_epoch: 1,
+                ..key(1)
+            },
             ChannelStatsKey {
                 source_key_id: Some(1),
                 ..key(1)

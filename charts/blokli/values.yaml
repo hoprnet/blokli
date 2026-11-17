@@ -445,7 +445,7 @@ database:
   ##
   ## Secret should contain key BLOKLI_DATABASE_URL with the full database URL in the format: postgresql://username:password@host:port/database
   existingSecret: ""
-  ## @param database.maxConnections Maximum number of database connections
+  ## @param database.maxConnections Maximum number of database connections of the indexer; the API server uses config.api.databaseMaxConnections more
   ##
   maxConnections: 10
 # Bloklid configuration
@@ -524,6 +524,15 @@ config:
     ## @param config.api.maxQueryComplexity Maximum allowed GraphQL query complexity; queries above this are rejected
     ##
     maxQueryComplexity: 500
+    ## @param config.api.databaseMaxConnections Size of the API server's own PostgreSQL connection pool. Each pod holds up to database.maxConnections plus this many connections
+    ##
+    databaseMaxConnections: 10
+    ## @param config.api.maxConcurrentSnapshots Maximum number of subscription snapshots loaded from the database at the same time; keep it below databaseMaxConnections
+    ##
+    maxConcurrentSnapshots: 8
+    ## @param config.api.snapshotQueueTimeout How long a subscription waits for its turn to load a snapshot before it is ended
+    ##
+    snapshotQueueTimeout: 10s
     # Transaction submission and optional Safe revert-reason tracing
     transactions:
       ## @param config.api.transactions.maxSubmittedTransactions Global limit of transactions awaiting receipt monitoring (0 = unbounded)

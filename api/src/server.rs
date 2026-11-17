@@ -49,6 +49,7 @@ use crate::{
     metrics,
     readiness::{ReadinessChecker, ReadinessState},
     schema::{ErasedSchema, LATEST_SCHEMA_VERSION, build_version_registry},
+    snapshot::SubscriptionSnapshots,
     sse_connection::{SseConnectionLog, subscription_events},
 };
 
@@ -328,6 +329,10 @@ pub async fn build_app(
     let db = databases.index;
     let logs_db = databases.logs;
     let readiness_checker = ReadinessChecker::new(db.clone(), rpc_operations.clone(), config.health.clone());
+    // One instance for every schema: the limit on snapshot loads protects the connection pool,
+    // which all schema versions share.
+    let subscription_snapshots =
+        SubscriptionSnapshots::new(config.max_concurrent_snapshots, config.snapshot_queue_timeout);
 
     let schemas = build_version_registry(
         db.clone(),
@@ -344,6 +349,7 @@ pub async fn build_app(
         transaction_store.clone(),
         rpc_operations.clone(),
         readiness_checker.clone(),
+        subscription_snapshots.clone(),
         Some((config.max_query_depth, config.max_query_complexity)),
     );
 
@@ -362,6 +368,7 @@ pub async fn build_app(
         transaction_store,
         rpc_operations.clone(),
         readiness_checker.clone(),
+        subscription_snapshots,
         None,
     ));
 

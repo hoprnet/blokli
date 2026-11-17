@@ -9,10 +9,12 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    future::Future,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
+    time::Duration,
 };
 
 use async_broadcast::{InactiveReceiver, Receiver, Sender, TrySendError, broadcast};
@@ -21,7 +23,7 @@ use blokli_api_types::{
     RedemptionResult, ServiceTypeUpdate, ServiceUpdate, TicketParameters, TokenValueString, UInt64,
 };
 use hopr_types::primitive::prelude::Address;
-use tokio::sync::RwLock;
+use tokio::{sync::RwLock, time::error::Elapsed};
 
 /// Internal event payload for a ticket redemption observed on-chain.
 ///
@@ -171,6 +173,12 @@ pub struct IndexerState {
     /// Monotonic counter used to trigger Safe filter refreshes.
     safe_filter_epoch: Arc<AtomicU64>,
 
+    /// Number of reorganizations signaled to subscriptions.
+    reorg_epoch: Arc<AtomicU64>,
+
+    /// Number of blocks whose writes completed but whose indexed-block update failed.
+    failed_indexed_block_updates: Arc<AtomicU64>,
+
     /// Coordination between block processing and the Safe owner refresh task.
     safe_owner_sync: Arc<SafeOwnerSync>,
 }
@@ -204,6 +212,8 @@ impl std::fmt::Debug for IndexerState {
             .field("_event_bus_rx", &"Arc<InactiveReceiver<Arc<IndexerEvent>>>")
             .field("_shutdown_rx", &"Arc<Receiver<()>>")
             .field("safe_filter_epoch", &"Arc<AtomicU64>")
+            .field("reorg_epoch", &"Arc<AtomicU64>")
+            .field("failed_indexed_block_updates", &"Arc<AtomicU64>")
             .field("safe_owner_sync", &"Arc<SafeOwnerSync>")
             .finish()
     }
@@ -236,6 +246,8 @@ impl IndexerState {
             _event_bus_rx: Arc::new(event_bus_rx.deactivate()),
             _shutdown_rx: Arc::new(shutdown_rx),
             safe_filter_epoch: Arc::new(AtomicU64::new(0)),
+            reorg_epoch: Arc::new(AtomicU64::new(0)),
+            failed_indexed_block_updates: Arc::new(AtomicU64::new(0)),
             safe_owner_sync: Arc::new(SafeOwnerSync::default()),
         }
     }
@@ -262,6 +274,26 @@ impl IndexerState {
     /// A read lock guard that should be held during watermark capture
     pub async fn acquire_watermark_lock(&self) -> tokio::sync::RwLockReadGuard<'_, ()> {
         self.coordination_lock.read().await
+    }
+
+    /// Runs `read` while holding the watermark lock, giving up once it has taken `timeout`
+    ///
+    /// Block processing waits for every holder of the watermark lock, so a read that stalls
+    /// while holding it - a database query waiting for a free connection, say - stalls the
+    /// indexer with it. Bounding the read keeps that wait short: on timeout the read is dropped
+    /// and the lock is released.
+    ///
+    /// The time spent waiting for the lock itself is not counted.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Elapsed`] if `read` did not complete within `timeout`
+    pub async fn read_synchronized<F>(&self, timeout: Duration, read: F) -> Result<F::Output, Elapsed>
+    where
+        F: Future,
+    {
+        let _lock = self.acquire_watermark_lock().await;
+        tokio::time::timeout(timeout, read).await
     }
 
     /// Publishes an indexer event to the event bus
@@ -307,7 +339,33 @@ impl IndexerState {
     ///
     /// `true` if the signal was broadcast successfully, `false` if the channel is closed
     pub fn signal_shutdown(&self) -> bool {
+        self.reorg_epoch.fetch_add(1, Ordering::Relaxed);
         self.shutdown_signal.try_broadcast(()).is_ok()
+    }
+
+    /// Returns how many reorganizations have been signaled.
+    ///
+    /// The indexer returns to block numbers it has already indexed when it handles a
+    /// reorganization. Together with the epoch, a block number still identifies one state of the
+    /// index, which is what anything derived from "the state at block N" has to be keyed by.
+    /// Read it while holding the watermark lock to pair it with a watermark.
+    pub fn reorg_epoch(&self) -> u64 {
+        self.reorg_epoch.load(Ordering::Relaxed)
+    }
+
+    /// Records that a block's writes completed but updating the indexed block failed.
+    ///
+    /// The watermark stays behind the writes of such a block until a later block moves it, so a
+    /// snapshot taken from it must not be reused as if the block had been marked.
+    pub fn mark_indexed_block_update_failed(&self) {
+        self.failed_indexed_block_updates.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Returns how many blocks completed their writes but failed to update the indexed block.
+    ///
+    /// Read it while holding the watermark lock to pair it with a watermark.
+    pub fn failed_indexed_block_updates(&self) -> u64 {
+        self.failed_indexed_block_updates.load(Ordering::Relaxed)
     }
 
     /// Subscribes to shutdown signals
@@ -461,6 +519,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_read_synchronized_returns_the_result_of_the_read() {
+        let state = IndexerState::default();
+
+        let result = state.read_synchronized(Duration::from_secs(1), async { 42 }).await;
+
+        assert_eq!(result.ok(), Some(42));
+    }
+
+    #[tokio::test]
+    async fn test_read_synchronized_gives_up_and_releases_the_lock_when_the_read_stalls() {
+        let state = IndexerState::default();
+
+        let result = state
+            .read_synchronized(Duration::from_millis(20), std::future::pending::<()>())
+            .await;
+
+        assert!(result.is_err());
+
+        // Block processing must be able to continue right away
+        let processing = tokio::time::timeout(Duration::from_millis(100), state.acquire_processing_lock()).await;
+        assert!(processing.is_ok());
+    }
+
+    #[tokio::test]
     async fn test_event_bus_publish_subscribe() {
         let state = IndexerState::default();
 
@@ -500,6 +582,40 @@ mod tests {
 
         // Receive shutdown signal
         assert!(receiver.recv().await.is_ok());
+    }
+
+    #[test]
+    fn test_reorg_epoch_advances_with_every_shutdown_signal() {
+        let state = IndexerState::default();
+        assert_eq!(state.reorg_epoch(), 0);
+
+        state.signal_shutdown();
+        assert_eq!(state.reorg_epoch(), 1);
+
+        state.signal_shutdown();
+        assert_eq!(state.reorg_epoch(), 2);
+    }
+
+    #[test]
+    fn test_reorg_epoch_is_shared_between_clones() {
+        let state = IndexerState::default();
+        let clone = state.clone();
+
+        state.signal_shutdown();
+
+        assert_eq!(clone.reorg_epoch(), 1);
+    }
+
+    #[test]
+    fn test_failed_indexed_block_updates_start_at_zero_and_increment() {
+        let state = IndexerState::default();
+        assert_eq!(state.failed_indexed_block_updates(), 0);
+
+        state.mark_indexed_block_update_failed();
+        assert_eq!(state.failed_indexed_block_updates(), 1);
+
+        state.mark_indexed_block_update_failed();
+        assert_eq!(state.failed_indexed_block_updates(), 2);
     }
 
     #[tokio::test]

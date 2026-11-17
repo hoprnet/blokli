@@ -8,7 +8,9 @@
 use std::{error::Error, future::Future, time::Duration};
 
 use async_graphql::{EmptyMutation, Schema};
-use blokli_api::{query::QueryRoot, schema::GasMultiplier, subscription::SubscriptionRoot};
+use blokli_api::{
+    query::QueryRoot, schema::GasMultiplier, snapshot::SubscriptionSnapshots, subscription::SubscriptionRoot,
+};
 use blokli_chain_indexer::{IndexerState, handlers::ContractEventHandlers, traits::ChainLogHandler};
 use blokli_chain_rpc::{
     Log,
@@ -263,6 +265,7 @@ async fn test_curvy_events_are_indexed_and_streamed() -> anyhow::Result<()> {
         .data(db.conn(TargetDb::Index).clone())
         .data(indexer_state.clone())
         .data(GasMultiplier(1.0))
+        .data(SubscriptionSnapshots::default())
         .finish();
     let handlers = ContractEventHandlers::new(contract_addresses, db.clone(), rpc_operations, indexer_state, true);
 
