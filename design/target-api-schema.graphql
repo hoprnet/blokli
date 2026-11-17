@@ -116,6 +116,14 @@ type ChainInfo {
 	Number of block confirmations required for finality
 	"""
 	finality: UInt64!
+	"""
+	Confirmation rule applied to the chain tip
+	"""
+	confirmationMode: ConfirmationMode!
+	"""
+	Live health of the Fast Confirmation Rule
+	"""
+	fcrStatus: FcrStatus!
 }
 
 """
@@ -270,6 +278,28 @@ type Compatibility {
 	Feature flags advertised by this server. Always empty since versioning is now header-based.
 	"""
 	features: [String!]!
+}
+
+"""
+Rule used to derive the confirmed block from the observed chain tip
+"""
+enum ConfirmationMode {
+	"""
+	Fixed number of blocks behind the chain head
+	"""
+	DEPTH
+	"""
+	Safe tip while the Fast Confirmation Rule is healthy, otherwise the fixed depth
+	"""
+	SAFE_OR_DEPTH
+	"""
+	Safe tip only
+	"""
+	SAFE
+	"""
+	Finalized tip only
+	"""
+	FINALIZED
 }
 
 scalar ContractAddressMap
@@ -875,6 +905,24 @@ type DeduplicatedTransaction {
 	transaction was resubmitted
 	"""
 	operation: String!
+}
+
+"""
+Health of the Fast Confirmation Rule as observed through the safe block tag
+"""
+enum FcrStatus {
+	"""
+	The endpoint does not expose a safe block
+	"""
+	UNAVAILABLE
+	"""
+	The safe block is too far behind the latest block
+	"""
+	DEGRADED
+	"""
+	The safe block is close enough to the latest block to be useful
+	"""
+	HEALTHY
 }
 
 """
@@ -1826,8 +1874,9 @@ type QueryRoot {
 	When `api.max_max_fee_per_gas` is below the scaled next-block base fee, the capped max fee could not be
 	included in the next block, so `maxFeePerGas` and `maxPriorityFeePerGas` are null instead,
 	minimum incoming ticket winning probability, optional 32-byte domain separator hashes
-	for channels/ledger/safe registry as `Hex32`, a map of contract addresses, and an optional
-	channel closure grace period in seconds.
+	for channels/ledger/safe registry as `Hex32`, a map of contract addresses, an optional
+	channel closure grace period in seconds, the configured confirmation rule, and the live
+	health of the Fast Confirmation Rule.
 	
 	# Examples
 	

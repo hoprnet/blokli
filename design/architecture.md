@@ -182,7 +182,10 @@ RPC Endpoint
 
 - **Fast Sync**: Downloads an archive containing `hopr_logs.sql`, imports the raw logs tables, rebuilds derived state locally, and then
   catches up over RPC from the snapshot watermark for faster initial sync
-- **Finality Awareness**: Only processes blocks after configured confirmation count to avoid reorg complications
+- **Finality Awareness**: Only processes blocks up to the confirmed tip derived from the configured confirmation rule, so fast-confirmed
+  blocks are indexed as soon as the chain reports them while depth-based deployments keep their fixed wait
+- **Chain Tip Tracking**: One background task observes the head, derives the confirmed block and publishes it together with the Fast
+  Confirmation Rule health
 - **Reorg Handling**: Detects blockchain reorganizations by tracking block hashes and marks affected logs as removed
 - **Post-Finality Verification**: Re-checks every block that was indexed before it was final once the chain reports it final, by re-fetching
   the canonical logs of the finalized range and comparing them with the stored ones. A difference halts the indexer, marks the service as
@@ -395,7 +398,8 @@ transaction signatures are verified by Ethereum consensus—only successfully mi
 recovered from the transaction's ECDSA signature by the blockchain itself.
 
 **Configuration Parameters**: The RPC layer is configured with network-specific parameters including chain ID, contract addresses, expected
-block time for polling intervals, transaction polling configuration, finality depth, and a maximum block range ceiling for log fetching.
+block time for polling intervals, transaction polling configuration, the confirmation rule and depth, and a maximum block range ceiling for
+log fetching.
 
 **Adaptive Log Range Discovery**: The configured log block range is a ceiling, not a fixed request size. The RPC layer treats real
 `eth_getLogs` requests as observations: it starts with the ceiling, records successful ranges, records rejected ranges, and uses binary
@@ -768,7 +772,7 @@ Blockchain RPC
       ▼
 ┌─────────────────┐
 │  Block Indexer  │
-│  - Fetch blocks │  Streams blocks respecting finality depth
+│  - Fetch blocks │  Streams blocks respecting the confirmed tip
 │  - Decode logs  │  Applies filter sets for HOPR contracts
 └─────────────────┘
       │
@@ -1312,7 +1316,7 @@ Lightweight deployment using SQLite with separated databases:
 - RPC endpoint rate limits and response latency
 - Database write throughput and transaction commit time
 - Event handler processing complexity per event type
-- Configured finality depth (confirmation blocks required)
+- Configured confirmation rule and depth
 
 **Optimization Strategies**:
 
@@ -1557,34 +1561,64 @@ Health check configuration:
 - `max_indexer_lag` - Maximum allowed lag before readiness fails
 - `timeout_ms` - Timeout for health check operations
 
+### Chain Tip Tracking and Confirmation Modes
+
+A single background task in the RPC layer owns the view of the chain tip. It reads the latest, safe and finalized block numbers from the
+endpoint, derives the confirmed block from the configured rule and publishes the result, including the health of the Fast Confirmation Rule
+(FCR), on a watch channel. The indexer and the readiness checks consume that channel and never derive a confirmed height of their own.
+
+**Head source.** The tracker prefers a WebSocket `newHeads` subscription. Each new header triggers one batched read of the safe and
+finalized headers, which is the moment the consensus client has updated its fork choice for that head. When the endpoint cannot serve the
+subscription, when it is disabled, or when the socket goes silent, the tracker polls the same batch at a short fixed interval and reconnects
+in the background. A startup probe checks the subscription chain and block hash against the HTTP endpoint, so a WebSocket URL that points at
+a different node or chain reduces to polling instead of corrupting the tip.
+
+**Confirmation modes.** The confirmed block follows one of four rules:
+
+- **Depth**: the latest block minus the configured depth, a fixed confirmation count with no formal guarantee.
+- **Safe or depth**: the safe block while FCR is healthy, otherwise the latest block minus the depth. Lag never exceeds the depth rule, and
+  blocks above it are only indexed when they are fast-confirmed.
+- **Safe**: the safe block only. This gives the strongest guarantee, but lag grows to about one epoch whenever FCR stalls or the endpoint
+  does not provide a safe block.
+- **Finalized**: the finalized block only, for deployments that cannot tolerate any reorganization.
+
+**FCR health.** FCR is healthy while the gap between latest and safe stays below the configured limit, degraded at or above it, and
+unavailable when the endpoint exposes no safe block. The tracker rejects observations where safe is above latest or finalized is above safe
+and keeps the previous tip. The confirmed block never moves backwards: when the safe block regresses, the tracker keeps the previous value
+and counts the event, and post-finality verification decides whether anything already indexed was affected.
+
+**Consumers.** The indexer waits for the next published confirmed tip instead of sleeping for a fixed block time, then fetches logs up to
+that block. Readiness and the GraphQL server read the same cached confirmed block, so lag is measured against confirmed blocks without an
+additional RPC call. The `chainInfo` GraphQL field reports the configured mode and the live FCR status so clients can see which rule is in
+effect.
+
 ### Finality Handling in Readiness Checks
 
 The readiness check automatically accounts for blockchain finality to prevent false-positive "ready" states:
 
-**Block Number Finality Adjustment**: RPC block heights are treated as confirmed by subtracting the configured finality depth. For example,
-with a finality depth of 3, a chain head at block 1000 yields a confirmed height of 997, so only blocks with 3+ confirmations count as
-confirmed.
+**Confirmed Block**: Readiness uses the confirmed block from the chain tip tracker instead of the latest block reported by the RPC endpoint.
+The confirmation rule determines how far the confirmed block trails the chain head.
 
-**Readiness Calculation**: Readiness compares the confirmed height with the indexer watermark. If the lag in confirmed blocks is within
+**Readiness Calculation**: Readiness compares the confirmed block with the indexer watermark. If the lag in confirmed blocks is within
 `max_indexer_lag`, readiness passes.
 
-**Effective Threshold**: Because readiness uses confirmed height (not chain head), the indexer can be up to `max_indexer_lag + finality`
-behind the tip while still reporting ready.
+**Effective Threshold**: Because readiness uses the confirmed block rather than the chain head, the indexer can be up to `max_indexer_lag`
+plus the confirmation distance of the active rule behind the tip while still reporting ready.
 
-**Example (Gnosis Chain)**:
+**Example (Gnosis Chain, depth mode)**:
 
-- Configuration: `max_indexer_lag=10`, `finality=3`
+- Configuration: `max_indexer_lag=10`, depth 3
 - Latest RPC block: 1000
-- Confirmed RPC block: 997
+- Confirmed block: 997
 - Indexed block: 987
 - Calculated lag: 10 blocks
 - Result: READY
 
-The indexer is actually 13 blocks behind the RPC chain head (1000 - 987), but only 10 blocks behind confirmed blocks—within the acceptable
-threshold.
+The indexer is actually 13 blocks behind the RPC chain head (1000 - 987), but only 10 blocks behind the confirmed block, within the
+acceptable threshold.
 
-**Configuration Flow**: Finality is defined by the selected network, propagated through runtime configuration into the RPC layer, and reused
-by the readiness checks.
+**Configuration Flow**: The network selects the default confirmation mode, runtime configuration can override it, the tracker applies it,
+and the indexer and readiness checks reuse the resulting confirmed tip.
 
 ## Local Contract Deployment Variants
 

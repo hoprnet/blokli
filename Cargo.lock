@@ -2090,6 +2090,7 @@ dependencies = [
  "async-broadcast",
  "async-graphql",
  "async-stream",
+ "async-trait",
  "axum",
  "base64ct",
  "blokli-api-types",

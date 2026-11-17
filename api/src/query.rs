@@ -8,7 +8,7 @@ use blokli_api_types::{
     ChannelsList, ChannelsResult, ContractAddressMap, CountResult, CurvyAddress, CurvyAggregatorFees,
     CurvyAggregatorState, CurvyBooleanValue, CurvyCommittedNotes, CurvyCommittedNullifiers, CurvyEventCursor,
     CurvyGasFees, CurvyNoteStatus, CurvyPendingNotes, CurvyShardRootPage, CurvySyncCheckpoint, CurvySyncNotePage,
-    CurvySyncNullifierPage, CurvyVaultFees, CurvyVaultToken, CurvyVaultTokenCount, Hex32, HoprBalance,
+    CurvySyncNullifierPage, CurvyVaultFees, CurvyVaultToken, CurvyVaultTokenCount, FcrStatus, Hex32, HoprBalance,
     InvalidAddressError, MissingFilterError, ModuleAddress, NativeBalance, QueryFailedError, RedeemedStats,
     RedeemedStatsFilter, Safe, SafeHoprAllowance, SafeSelectorInput, SafesBalance, SafesBalanceResult,
     ServiceRegistryConfigResult, ServiceTypesList, ServiceTypesResult, ServicesList, ServicesResult, Token,
@@ -60,13 +60,13 @@ use tracing::warn;
 use crate::{
     cache::{ChannelStatsCache, ChannelStatsKey, FeeEstimateCache},
     conversions::{
-        service_entry_from_aggregate, service_registry_config_from_model, service_type_from_aggregate,
-        transaction_from_record,
+        convert_confirmation_mode, convert_fcr_status, service_entry_from_aggregate,
+        service_registry_config_from_model, service_type_from_aggregate, transaction_from_record,
     },
     curvy, errors,
     loader::{AccountsByChainKeyLoader, ChannelsBySafeLoader},
     mutation::TransactionResult,
-    schema::RpcOperationsContext,
+    schema::{ChainTipTrackerContext, ConfirmationRule, RpcOperationsContext},
     validation::{parse_service_type, validate_eth_address},
 };
 
@@ -2653,8 +2653,9 @@ impl QueryRoot {
     /// When `api.max_max_fee_per_gas` is below the scaled next-block base fee, the capped max fee could not be
     /// included in the next block, so `maxFeePerGas` and `maxPriorityFeePerGas` are null instead,
     /// minimum incoming ticket winning probability, optional 32-byte domain separator hashes
-    /// for channels/ledger/safe registry as `Hex32`, a map of contract addresses, and an optional
-    /// channel closure grace period in seconds.
+    /// for channels/ledger/safe registry as `Hex32`, a map of contract addresses, an optional
+    /// channel closure grace period in seconds, the configured confirmation rule, and the live
+    /// health of the Fast Confirmation Rule.
     ///
     /// # Examples
     ///
@@ -2703,6 +2704,16 @@ impl QueryRoot {
                 return ChainInfoResult::QueryFailed(errors::context_error("finality", format!("{:?}", e)));
             }
         };
+        let confirmation_mode = match ctx.data::<ConfirmationRule>() {
+            Ok(rule) => convert_confirmation_mode(rule.0),
+            Err(e) => {
+                return ChainInfoResult::QueryFailed(errors::context_error("confirmation mode", format!("{:?}", e)));
+            }
+        };
+        let fcr_status = ctx
+            .data_opt::<ChainTipTrackerContext>()
+            .and_then(|tracker| tracker.0.current())
+            .map_or(FcrStatus::Unavailable, |tip| convert_fcr_status(tip.fcr));
         let gas_multiplier = match ctx.data::<crate::schema::GasMultiplier>() {
             Ok(multiplier) => multiplier.0,
             Err(e) => {
@@ -2854,6 +2865,8 @@ impl QueryRoot {
             channel_closure_grace_period,
             expected_block_time: UInt64(expected_block_time.0),
             finality: UInt64(finality.0 as u64),
+            confirmation_mode,
+            fcr_status,
         }))
     }
 

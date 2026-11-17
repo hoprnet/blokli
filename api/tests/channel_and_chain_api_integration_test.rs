@@ -17,13 +17,19 @@ use std::{
 };
 
 use anyhow::Result;
+use async_trait::async_trait;
 use blokli_api::{
     cache::ChannelStatsCache,
     loader::channels_by_safe_loader,
     query::QueryRoot,
-    schema::{ChainId, ExpectedBlockTime, Finality, GasMultiplier, NetworkName},
+    schema::{
+        ChainId, ChainTipTrackerContext, ConfirmationRule, ExpectedBlockTime, Finality, GasMultiplier, NetworkName,
+    },
 };
 use blokli_chain_indexer::IndexerState;
+use blokli_chain_rpc::tip::{
+    ChainTipTracker, ConfirmationConfig, ConfirmationMode as ChainConfirmationMode, TipObservation, TipSource,
+};
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{
     BlokliDbGeneralModelOperations, TargetDb, accounts::BlokliDbAccountOperations, channels::BlokliDbChannelOperations,
@@ -139,6 +145,59 @@ async fn execute_graphql_query(
     query: &str,
 ) -> async_graphql::Response {
     schema.execute(query).await
+}
+
+/// Tip source that always returns the same observation.
+#[derive(Clone)]
+struct FixedTipSource {
+    observation: TipObservation,
+}
+
+#[async_trait]
+impl TipSource for FixedTipSource {
+    async fn observe(&self) -> blokli_chain_rpc::errors::Result<TipObservation> {
+        Ok(self.observation)
+    }
+}
+
+fn tip_tracker(observation: TipObservation) -> Arc<ChainTipTracker> {
+    Arc::new(ChainTipTracker::new(
+        Arc::new(FixedTipSource { observation }),
+        ConfirmationConfig::default(),
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+    ))
+}
+
+fn tip_observation(latest: u64, safe: Option<u64>, finalized: Option<u64>) -> TipObservation {
+    TipObservation {
+        latest,
+        latest_timestamp: Some(1_700_000_000 + latest),
+        safe,
+        finalized,
+    }
+}
+
+async fn chain_info_schema(
+    db: &BlokliDb,
+    mode: ChainConfirmationMode,
+    tracker: Arc<ChainTipTracker>,
+) -> async_graphql::Schema<QueryRoot, async_graphql::EmptyMutation, async_graphql::EmptySubscription> {
+    async_graphql::Schema::build(
+        QueryRoot,
+        async_graphql::EmptyMutation,
+        async_graphql::EmptySubscription,
+    )
+    .data(db.conn(TargetDb::Index).clone())
+    .data(ContractAddresses::default())
+    .data(ChainId(100))
+    .data(NetworkName("anvil-localhost".to_string()))
+    .data(ExpectedBlockTime(1))
+    .data(Finality(3))
+    .data(ConfirmationRule(mode))
+    .data(ChainTipTrackerContext(tracker))
+    .data(GasMultiplier(1.0))
+    .finish()
 }
 
 /// Helper to setup test database with chain_info
@@ -632,6 +691,7 @@ async fn test_chain_info_query() -> Result<()> {
     .data(NetworkName("anvil-localhost".to_string()))
     .data(ExpectedBlockTime(1))
     .data(Finality(3))
+    .data(ConfirmationRule(ChainConfirmationMode::Depth))
     .data(GasMultiplier(1.0))
     .finish();
 
@@ -750,6 +810,60 @@ async fn test_chain_info_query() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_chain_info_reports_confirmation_mode_and_fcr_status() -> Result<()> {
+    let db = BlokliDb::new_in_memory().await?;
+    setup_chain_info(&db).await?;
+
+    let query = r#"
+        query {
+            chainInfo {
+                __typename
+                ... on ChainInfo {
+                    confirmationMode
+                    fcrStatus
+                }
+                ... on QueryFailedError {
+                    code
+                    message
+                }
+            }
+        }
+    "#;
+
+    let tracker = tip_tracker(tip_observation(1000, Some(999), Some(980)));
+    let schema = chain_info_schema(&db, ChainConfirmationMode::SafeOrDepth, tracker.clone()).await;
+
+    // No tip has been published yet.
+    let response = execute_graphql_query(&schema, query).await;
+    assert!(response.errors.is_empty(), "GraphQL errors: {:?}", response.errors);
+    let data = response.data.into_json()?;
+    let chain_info = extract_chain_info_from_result(&data)?;
+    assert_eq!(chain_info["confirmationMode"], "SAFE_OR_DEPTH");
+    assert_eq!(chain_info["fcrStatus"], "UNAVAILABLE");
+
+    // The status follows the tracker without being frozen by a cached chain info value.
+    tracker.refresh().await?;
+    let response = execute_graphql_query(&schema, query).await;
+    assert!(response.errors.is_empty(), "GraphQL errors: {:?}", response.errors);
+    let data = response.data.into_json()?;
+    let chain_info = extract_chain_info_from_result(&data)?;
+    assert_eq!(chain_info["confirmationMode"], "SAFE_OR_DEPTH");
+    assert_eq!(chain_info["fcrStatus"], "HEALTHY");
+
+    let degraded_tracker = tip_tracker(tip_observation(1000, Some(960), Some(940)));
+    degraded_tracker.refresh().await?;
+    let degraded = chain_info_schema(&db, ChainConfirmationMode::Finalized, degraded_tracker).await;
+    let response = execute_graphql_query(&degraded, query).await;
+    assert!(response.errors.is_empty(), "GraphQL errors: {:?}", response.errors);
+    let data = response.data.into_json()?;
+    let chain_info = extract_chain_info_from_result(&data)?;
+    assert_eq!(chain_info["confirmationMode"], "FINALIZED");
+    assert_eq!(chain_info["fcrStatus"], "DEGRADED");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_chain_info_query_missing_data_returns_error() -> Result<()> {
     // Create empty database without setting up chain_info
     let db = BlokliDb::new_in_memory().await?;
@@ -772,6 +886,7 @@ async fn test_chain_info_query_missing_data_returns_error() -> Result<()> {
     .data(NetworkName("anvil-localhost".to_string()))
     .data(ExpectedBlockTime(1))
     .data(Finality(3))
+    .data(ConfirmationRule(ChainConfirmationMode::Depth))
     .data(GasMultiplier(1.0))
     .finish();
 
@@ -841,6 +956,7 @@ async fn test_chain_info_query_with_null_optional_fields() -> Result<()> {
     .data(NetworkName("test-network".to_string()))
     .data(ExpectedBlockTime(5))
     .data(Finality(3))
+    .data(ConfirmationRule(ChainConfirmationMode::Depth))
     .data(GasMultiplier(1.0))
     .finish();
 

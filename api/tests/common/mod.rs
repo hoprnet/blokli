@@ -36,6 +36,7 @@ use blokli_chain_indexer::IndexerState;
 use blokli_chain_rpc::{
     client::{DefaultRetryPolicy, create_rpc_client_to_anvil},
     rpc::{RpcOperations, RpcOperationsConfig},
+    tip::ConfirmationMode as ChainConfirmationMode,
     transport::ReqwestClient,
 };
 use blokli_chain_types::{ContractAddresses, ContractInstances, utils::create_anvil};
@@ -164,6 +165,7 @@ fn build_subscription_test_schema(
         ContractAddresses::default(),
         1,
         3,
+        ChainConfirmationMode::Depth,
         1.0,
         GasFeePolicy::default(),
         indexer_state,
@@ -311,6 +313,7 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
         contract_addrs,
         config.expected_block_time.as_secs(),
         3, // Test finality value
+        ChainConfirmationMode::Depth,
         1.0,
         GasFeePolicy::default(),
         indexer_state,
@@ -479,6 +482,7 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
         api_config,
         expected_block_time.as_secs(),
         3, // Test finality value
+        ChainConfirmationMode::Depth,
         indexer_state,
         transaction_executor,
         transaction_store.clone(),

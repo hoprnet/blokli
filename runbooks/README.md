@@ -14,6 +14,14 @@ Alerts related to on-chain indexing progress and correctness.
 | [Indexer Stalled](blokli-indexer-stalled.md)                   | Critical | DevOps Engineer | The indexer has made zero progress while the chain head keeps advancing                  |
 | [Indexer Checksum Stalled](blokli-indexer-checksum-stalled.md) | Warning  | DevOps Engineer | The indexer's running checksum isn't mutating despite block-number progress              |
 
+## Fast Confirmation
+
+Operational guidance for the confirmation modes, the chain head source and the Fast Confirmation Rule health checks.
+
+| Runbook                                   | Description                                                                                   |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------- |
+| [Fast Confirmation](fast-confirmation.md) | Confirmation modes, endpoint trust, hard forks, false confirmations and WebSocket head source |
+
 ## Readiness
 
 Alerts derived from the same readiness logic that gates the `/readyz` endpoint.

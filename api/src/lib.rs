@@ -35,6 +35,7 @@ use blokli_chain_rpc::{
     client::{DefaultRetryPolicy, MetricsLayer},
     rate_limit::{RateLimitLayer, resolve_max_requests_per_sec},
     rpc::{RpcOperations, RpcOperationsConfig},
+    tip::ConfirmationMode as ChainConfirmationMode,
     transport::ReqwestClient,
 };
 use blokli_db::{
@@ -171,6 +172,7 @@ pub async fn start_server(network: String, finality: u16, config: ApiConfig) -> 
         config.clone(),
         config.expected_block_time,
         finality,
+        ChainConfirmationMode::Depth,
         indexer_state,
         transaction_executor,
         transaction_store,

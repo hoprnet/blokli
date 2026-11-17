@@ -267,6 +267,43 @@ pub struct ChainInfo {
     /// Number of block confirmations required for finality
     #[graphql(name = "finality")]
     pub finality: UInt64,
+    /// Confirmation rule applied to the chain tip
+    #[graphql(name = "confirmationMode")]
+    pub confirmation_mode: ConfirmationMode,
+    /// Live health of the Fast Confirmation Rule
+    #[graphql(name = "fcrStatus")]
+    pub fcr_status: FcrStatus,
+}
+
+/// Rule used to derive the confirmed block from the observed chain tip
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum ConfirmationMode {
+    /// Fixed number of blocks behind the chain head
+    #[graphql(name = "DEPTH")]
+    Depth,
+    /// Safe tip while the Fast Confirmation Rule is healthy, otherwise the fixed depth
+    #[graphql(name = "SAFE_OR_DEPTH")]
+    SafeOrDepth,
+    /// Safe tip only
+    #[graphql(name = "SAFE")]
+    Safe,
+    /// Finalized tip only
+    #[graphql(name = "FINALIZED")]
+    Finalized,
+}
+
+/// Health of the Fast Confirmation Rule as observed through the safe block tag
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum FcrStatus {
+    /// The endpoint does not expose a safe block
+    #[graphql(name = "UNAVAILABLE")]
+    Unavailable,
+    /// The safe block is too far behind the latest block
+    #[graphql(name = "DEGRADED")]
+    Degraded,
+    /// The safe block is close enough to the latest block to be useful
+    #[graphql(name = "HEALTHY")]
+    Healthy,
 }
 
 /// Result type for chain info queries

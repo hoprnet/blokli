@@ -1,7 +1,8 @@
 use blokli_api::{
     query::QueryRoot,
-    schema::{ChainId, ExpectedBlockTime, Finality, NetworkName},
+    schema::{ChainId, ConfirmationRule, ExpectedBlockTime, Finality, NetworkName},
 };
+use blokli_chain_rpc::tip::ConfirmationMode as ChainConfirmationMode;
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb, info::BlokliDbInfoOperations};
 
@@ -29,6 +30,7 @@ async fn test_channel_closure_grace_period_always_non_null() {
     .data(NetworkName("test-network".to_string()))
     .data(ExpectedBlockTime(1))
     .data(Finality(3))
+    .data(ConfirmationRule(ChainConfirmationMode::Depth))
     .data(blokli_api::schema::GasMultiplier(1.0))
     .finish();
 
@@ -103,6 +105,7 @@ async fn test_channel_closure_grace_period_with_custom_value() {
     .data(NetworkName("test-network".to_string()))
     .data(ExpectedBlockTime(1))
     .data(Finality(3))
+    .data(ConfirmationRule(ChainConfirmationMode::Depth))
     .data(blokli_api::schema::GasMultiplier(1.0))
     .finish();
 

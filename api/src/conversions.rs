@@ -6,14 +6,16 @@
 //! independent of GraphQL presentation types.
 
 use blokli_api_types::{
-    Announcement, Hex32, QueryFailedError, SafeExecution, ServiceEntry, ServiceRegistryConfig, ServiceTypeInfo,
-    TokenValueString, Transaction, TransactionDiagnosis, TransactionFees, TransactionStatus as GqlTransactionStatus,
-    UInt64, UnminedReason as GqlUnminedReason,
+    Announcement, ConfirmationMode as GqlConfirmationMode, FcrStatus as GqlFcrStatus, Hex32, QueryFailedError,
+    SafeExecution, ServiceEntry, ServiceRegistryConfig, ServiceTypeInfo, TokenValueString, Transaction,
+    TransactionDiagnosis, TransactionFees, TransactionStatus as GqlTransactionStatus, UInt64,
+    UnminedReason as GqlUnminedReason,
 };
 use blokli_chain_api::transaction_store::{
     FeePair, SafeExecutionResult, TransactionDiagnosis as StoreTransactionDiagnosis, TransactionRecord,
     TransactionStatus as StoreTransactionStatus, UnminedReason,
 };
+use blokli_chain_rpc::tip::{ConfirmationMode as ChainConfirmationMode, FcrState as ChainFcrState};
 use blokli_db_entity::{
     conversions::service_aggregation::{AggregatedServiceEntry, AggregatedServiceType},
     service_registry_config,
@@ -86,6 +88,25 @@ pub fn convert_transaction_status(status: StoreTransactionStatus) -> GqlTransact
         StoreTransactionStatus::Timeout => GqlTransactionStatus::Timeout,
         StoreTransactionStatus::ValidationFailed => GqlTransactionStatus::ValidationFailed,
         StoreTransactionStatus::SubmissionFailed => GqlTransactionStatus::SubmissionFailed,
+    }
+}
+
+/// Convert [`ChainConfirmationMode`] to GraphQL [`GqlConfirmationMode`]
+pub fn convert_confirmation_mode(mode: ChainConfirmationMode) -> GqlConfirmationMode {
+    match mode {
+        ChainConfirmationMode::Depth => GqlConfirmationMode::Depth,
+        ChainConfirmationMode::SafeOrDepth => GqlConfirmationMode::SafeOrDepth,
+        ChainConfirmationMode::Safe => GqlConfirmationMode::Safe,
+        ChainConfirmationMode::Finalized => GqlConfirmationMode::Finalized,
+    }
+}
+
+/// Convert [`ChainFcrState`] to GraphQL [`GqlFcrStatus`]
+pub fn convert_fcr_status(state: ChainFcrState) -> GqlFcrStatus {
+    match state {
+        ChainFcrState::Unavailable => GqlFcrStatus::Unavailable,
+        ChainFcrState::Degraded => GqlFcrStatus::Degraded,
+        ChainFcrState::Healthy => GqlFcrStatus::Healthy,
     }
 }
 
@@ -170,7 +191,10 @@ pub fn service_type_from_aggregate(info: AggregatedServiceType) -> Result<Servic
 
 #[cfg(test)]
 mod tests {
-    use blokli_api_types::ChannelStatus;
+    use blokli_api_types::{ChannelStatus, ConfirmationMode, FcrStatus};
+    use blokli_chain_rpc::tip::{ConfirmationMode as ChainConfirmationMode, FcrState as ChainFcrState};
+
+    use super::{convert_confirmation_mode, convert_fcr_status};
 
     #[test]
     fn test_channel_status_to_i16_mapping() {
@@ -192,5 +216,32 @@ mod tests {
             ChannelStatus::from(i16::from(ChannelStatus::PendingToClose)),
             ChannelStatus::PendingToClose
         );
+    }
+
+    #[test]
+    fn test_confirmation_mode_conversion_covers_every_variant() {
+        assert_eq!(
+            convert_confirmation_mode(ChainConfirmationMode::Depth),
+            ConfirmationMode::Depth
+        );
+        assert_eq!(
+            convert_confirmation_mode(ChainConfirmationMode::SafeOrDepth),
+            ConfirmationMode::SafeOrDepth
+        );
+        assert_eq!(
+            convert_confirmation_mode(ChainConfirmationMode::Safe),
+            ConfirmationMode::Safe
+        );
+        assert_eq!(
+            convert_confirmation_mode(ChainConfirmationMode::Finalized),
+            ConfirmationMode::Finalized
+        );
+    }
+
+    #[test]
+    fn test_fcr_status_conversion_covers_every_variant() {
+        assert_eq!(convert_fcr_status(ChainFcrState::Unavailable), FcrStatus::Unavailable);
+        assert_eq!(convert_fcr_status(ChainFcrState::Degraded), FcrStatus::Degraded);
+        assert_eq!(convert_fcr_status(ChainFcrState::Healthy), FcrStatus::Healthy);
     }
 }
