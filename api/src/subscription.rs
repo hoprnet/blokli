@@ -73,11 +73,60 @@ fn synchronized_read_timed_out(operation: &str) -> async_graphql::Error {
 
 /// Runs the database load of a snapshot once the limiter admits it
 ///
-/// Every multi-row load a subscription starts with goes through here, so that subscriptions
-/// arriving together queue for the database instead of each taking a connection at once.
+/// Every multi-row load a subscription starts with goes through here, as does every Curvy history
+/// scan, so that subscriptions arriving together queue for the database instead of each taking a
+/// connection at once.
 async fn load_snapshot<T>(limiter: &SnapshotLimiter, load: impl Future<Output = Result<T>>) -> Result<T> {
     let _permit = limiter.acquire().await.map_err(errors::graphql_error)?;
     load.await
+}
+
+/// Waits for a Phase 1 load, returning `None` when a reorganization ends the subscription first
+async fn load_phase1<T>(
+    load: impl Future<Output = Result<T>>,
+    shutdown_receiver: &mut Receiver<()>,
+) -> Option<Result<T>> {
+    tokio::pin!(load);
+    loop {
+        tokio::select! {
+            biased;
+            shutdown_result = shutdown_receiver.recv() => {
+                match shutdown_result {
+                    Ok(_) => {
+                        info!("Subscription shutting down due to reorg");
+                        return None;
+                    }
+                    Err(async_broadcast::RecvError::Closed) => {
+                        warn!("Shutdown channel closed");
+                        return None;
+                    }
+                    Err(async_broadcast::RecvError::Overflowed(n)) => {
+                        warn!("Shutdown signal overflowed, missed {} signals", n);
+                    }
+                }
+            }
+            result = &mut load => return Some(result),
+        }
+    }
+}
+
+/// Tells whether a reorganization is already waiting before a Phase 1 row is emitted
+fn phase1_shutdown_requested(shutdown_receiver: &mut Receiver<()>) -> bool {
+    match shutdown_receiver.try_recv() {
+        Err(async_broadcast::TryRecvError::Empty) => false,
+        Ok(_) => {
+            info!("Subscription shutting down due to reorg");
+            true
+        }
+        Err(async_broadcast::TryRecvError::Closed) => {
+            warn!("Shutdown channel closed");
+            true
+        }
+        Err(async_broadcast::TryRecvError::Overflowed(n)) => {
+            warn!("Shutdown signal overflowed, missed {} signals", n);
+            true
+        }
+    }
 }
 
 /// Returns the positions of `len` rows in random order
@@ -710,6 +759,7 @@ impl CurvyPositioned for CurvyCommittedNullifier {
 }
 
 fn curvy_history_stream<E, T, F>(
+    limiter: SnapshotLimiter,
     db: DatabaseConnection,
     query: Select<E>,
     operation: &'static str,
@@ -722,6 +772,7 @@ where
     F: Fn(E::Model) -> std::result::Result<T, blokli_api_types::QueryFailedError> + Send + Sync + 'static,
 {
     try_stream! {
+        let _permit = limiter.acquire().await.map_err(errors::graphql_error)?;
         let mut rows = query
             .stream(&db)
             .await
@@ -844,6 +895,7 @@ impl SubscriptionRoot {
     ) -> Result<impl Stream<Item = Result<CurvyPendingNote>>> {
         let db = ctx.data::<DatabaseConnection>()?.clone();
         let indexer_state = ctx.data::<IndexerState>()?.clone();
+        let snapshots = ctx.data::<SubscriptionSnapshots>()?.clone();
         let (watermark, event_receiver, shutdown_receiver) =
             capture_watermark_synchronized(&indexer_state, &db).await?;
         let start_block = curvy_start_block(from_block)?;
@@ -853,6 +905,7 @@ impl SubscriptionRoot {
             query = query.filter(curvy_pending_note::Column::PublishedBlock.gte(start_block.database));
         }
         let historical = curvy_history_stream(
+            snapshots.limiter.clone(),
             db,
             query
                 .order_by_asc(curvy_pending_note::Column::PublishedBlock)
@@ -887,6 +940,7 @@ impl SubscriptionRoot {
     ) -> Result<impl Stream<Item = Result<CurvyCommittedNote>>> {
         let db = ctx.data::<DatabaseConnection>()?.clone();
         let indexer_state = ctx.data::<IndexerState>()?.clone();
+        let snapshots = ctx.data::<SubscriptionSnapshots>()?.clone();
         let (watermark, event_receiver, shutdown_receiver) =
             capture_watermark_synchronized(&indexer_state, &db).await?;
         let start_block = curvy_start_block(from_block)?;
@@ -896,6 +950,7 @@ impl SubscriptionRoot {
             query = query.filter(curvy_committed_note::Column::PublishedBlock.gte(start_block.database));
         }
         let historical = curvy_history_stream(
+            snapshots.limiter.clone(),
             db,
             query
                 .order_by_asc(curvy_committed_note::Column::PublishedBlock)
@@ -930,6 +985,7 @@ impl SubscriptionRoot {
     ) -> Result<impl Stream<Item = Result<CurvyCommittedNullifier>>> {
         let db = ctx.data::<DatabaseConnection>()?.clone();
         let indexer_state = ctx.data::<IndexerState>()?.clone();
+        let snapshots = ctx.data::<SubscriptionSnapshots>()?.clone();
         let (watermark, event_receiver, shutdown_receiver) =
             capture_watermark_synchronized(&indexer_state, &db).await?;
         let start_block = curvy_start_block(from_block)?;
@@ -939,6 +995,7 @@ impl SubscriptionRoot {
             query = query.filter(curvy_committed_nullifier::Column::PublishedBlock.gte(start_block.database));
         }
         let historical = curvy_history_stream(
+            snapshots.limiter.clone(),
             db,
             query
                 .order_by_asc(curvy_committed_nullifier::Column::PublishedBlock)
@@ -1220,47 +1277,59 @@ impl SubscriptionRoot {
         Ok(stream! {
             match after {
                 // Phase 1, resumed: every channel that changed after the client's cursor, closed ones included
-                Some(after) => match load_snapshot(
-                    &snapshots.limiter,
-                    query_channel_changes_after(&db, &after, &watermark),
+                Some(after) => match load_phase1(
+                    load_snapshot(
+                        &snapshots.limiter,
+                        query_channel_changes_after(&db, &after, &watermark),
+                    ),
+                    &mut shutdown_receiver,
                 )
                 .await
                 {
-                    Ok(changed_channels) => {
+                    Some(Ok(changed_channels)) => {
                         for channel_update in changed_channels {
+                            if phase1_shutdown_requested(&mut shutdown_receiver) {
+                                return;
+                            }
                             let cursor = channel_update.position;
                             yield channel_update_to_graph_entry(channel_update, cursor);
                         }
                     }
-                    Err(e) => {
+                    Some(Err(e)) => {
                         error!(error = ?e, "failed to query channel changes to resume from");
                         return; // Terminate subscription on error
                     }
+                    None => return,
                 },
                 // Phase 1: Stream historical snapshot of all non-closed channels at watermark.
                 // Every subscription that starts at the same point gets the same rows, so they are
                 // loaded once and shared.
-                None => match snapshots
-                    .channel_graph
-                    .get_or_load(point, {
+                None => match load_phase1(
+                    snapshots.channel_graph.get_or_load(point, {
                         let (db, limiter) = (db.clone(), snapshots.limiter.clone());
                         async move { load_snapshot(&limiter, query_channels_at_watermark(&db, &watermark)).await }
-                    })
-                    .await
+                    }),
+                    &mut shutdown_receiver,
+                )
+                .await
                 {
-                    Ok(historical_channels) => {
+                    Some(Ok(historical_channels)) => {
                         // Only the last entry carries a cursor: a client cut off earlier has not seen the whole
                         // snapshot, so it must start over rather than resume.
                         let last = historical_channels.len().saturating_sub(1);
                         for (index, row) in shuffled_order(historical_channels.len()).into_iter().enumerate() {
+                            if phase1_shutdown_requested(&mut shutdown_receiver) {
+                                return;
+                            }
                             let cursor = (index == last).then(|| watermark_position(&watermark)).flatten();
                             yield channel_update_to_graph_entry(historical_channels[row].clone(), cursor);
                         }
                     }
-                    Err(e) => {
+                    Some(Err(e)) => {
                         error!(error = ?e, "failed to query historical channels");
                         return; // Terminate subscription on error
                     }
+                    None => return,
                 },
             }
 
@@ -4213,6 +4282,29 @@ mod tests {
         Ok(())
     }
 
+    /// Inserts one Curvy pending note published at `block`
+    async fn create_curvy_pending_note(conn: &DatabaseConnection, index: u8, block: i64) -> anyhow::Result<()> {
+        curvy_pending_note::ActiveModel {
+            note_id: Set(vec![index; 32]),
+            ephemeral_key_x: Set(vec![index; 32]),
+            ephemeral_key_y: Set(vec![index; 32]),
+            view_tag: Set(i64::from(index)),
+            token_id: Set(vec![index; 32]),
+            amount: Set(vec![index; 32]),
+            is_plaintext: Set(false),
+            event_item_index: Set(0),
+            chain_tx_hash: Set(vec![index; 32]),
+            block_hash: Set(vec![index; 32]),
+            published_block: Set(block),
+            published_tx_index: Set(0),
+            published_log_index: Set(i64::from(index)),
+            ..Default::default()
+        }
+        .insert(conn)
+        .await?;
+        Ok(())
+    }
+
     const GRAPH_SNAPSHOT_QUERY: &str = "subscription { openedChannelGraphUpdated { channel { concreteChannelId } } }";
     const ACCOUNT_SNAPSHOT_QUERY: &str = "subscription { accountUpdated { keyid } }";
 
@@ -4479,6 +4571,180 @@ mod tests {
         for query in queries {
             assert_ne!(collect_snapshot_items(&schema, query).await.len(), 0, "{query}");
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_opened_channel_graph_snapshot_ends_when_a_reorg_is_signaled_while_the_load_waits()
+    -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let conn = db.conn(blokli_db::TargetDb::Index);
+        init_chain_info(conn, 100, 0, 0).await?;
+        for index in 0..3 {
+            create_open_channel(conn, index, 50).await?;
+        }
+        let indexer_state = IndexerState::new(10, 100);
+        let snapshots = SubscriptionSnapshots::new(1, Duration::from_secs(5));
+        let schema = snapshot_test_schema(conn, &indexer_state, &snapshots);
+        let slot = snapshots
+            .limiter
+            .acquire()
+            .await
+            .map_err(|e| anyhow::anyhow!(e.message))?;
+
+        let subscription = tokio::spawn({
+            let schema = schema.clone();
+            async move {
+                let mut stream = schema.execute_stream(GRAPH_SNAPSHOT_QUERY).boxed();
+                let mut items = Vec::new();
+                while let Some(item) = stream.next().await {
+                    items.push(item);
+                }
+                items
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        indexer_state.signal_shutdown();
+        drop(slot);
+
+        let items = tokio::time::timeout(Duration::from_secs(2), subscription).await??;
+        assert!(
+            items.is_empty(),
+            "a reorg during the load must end the stream before any row"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_opened_channel_graph_snapshot_ends_when_a_reorg_is_signaled_during_emission() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let conn = db.conn(blokli_db::TargetDb::Index);
+        init_chain_info(conn, 100, 0, 0).await?;
+        for index in 0..3 {
+            create_open_channel(conn, index, 50).await?;
+        }
+        let indexer_state = IndexerState::new(10, 100);
+        let schema = snapshot_test_schema(conn, &indexer_state, &SubscriptionSnapshots::default());
+        let mut stream = schema.execute_stream(GRAPH_SNAPSHOT_QUERY).boxed();
+
+        let first = tokio::time::timeout(Duration::from_secs(2), stream.next())
+            .await
+            .expect("timeout waiting for the first snapshot row")
+            .expect("stream ended before the first snapshot row");
+        first.into_result().expect("first snapshot row failed");
+
+        indexer_state.signal_shutdown();
+        let next = tokio::time::timeout(Duration::from_secs(2), stream.next())
+            .await
+            .expect("a reorg during emission must end the stream");
+        assert!(next.is_none(), "no row, and no cursor, may follow a reorg signal");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_opened_channel_graph_resume_ends_when_a_reorg_is_signaled_while_the_load_waits() -> anyhow::Result<()>
+    {
+        let db = BlokliDb::new_in_memory().await?;
+        let conn = db.conn(blokli_db::TargetDb::Index);
+        init_chain_info(conn, 100, 0, 0).await?;
+        for index in 0..3 {
+            create_open_channel(conn, index, 50).await?;
+        }
+        let indexer_state = IndexerState::new(10, 100);
+        let snapshots = SubscriptionSnapshots::new(1, Duration::from_secs(5));
+        let schema = snapshot_test_schema(conn, &indexer_state, &snapshots);
+        let slot = snapshots
+            .limiter
+            .acquire()
+            .await
+            .map_err(|e| anyhow::anyhow!(e.message))?;
+        let query = r#"subscription { openedChannelGraphUpdated(after: { block: "0", transactionIndex: "0", logIndex: "0" }) { channel { concreteChannelId } } }"#;
+
+        let subscription = tokio::spawn({
+            let schema = schema.clone();
+            async move {
+                let mut stream = schema.execute_stream(query).boxed();
+                let mut items = Vec::new();
+                while let Some(item) = stream.next().await {
+                    items.push(item);
+                }
+                items
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        indexer_state.signal_shutdown();
+        drop(slot);
+
+        let items = tokio::time::timeout(Duration::from_secs(2), subscription).await??;
+        assert!(
+            items.is_empty(),
+            "a reorg during the resumed load must end the stream before any row"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_curvy_history_reports_the_snapshot_queue_timeout() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let conn = db.conn(blokli_db::TargetDb::Index);
+        init_chain_info(conn, 100, 0, 0).await?;
+        create_curvy_pending_note(conn, 1, 50).await?;
+        let indexer_state = IndexerState::new(10, 100);
+        let snapshots = SubscriptionSnapshots::new(1, Duration::from_millis(50));
+        let schema = snapshot_test_schema(conn, &indexer_state, &snapshots);
+        let slot = snapshots
+            .limiter
+            .acquire()
+            .await
+            .map_err(|e| anyhow::anyhow!(e.message))?;
+
+        let mut stream = schema
+            .execute_stream("subscription { curvyPendingNote { noteId } }")
+            .boxed();
+        let response = tokio::time::timeout(Duration::from_secs(2), stream.next())
+            .await
+            .expect("timeout waiting for the Curvy history to report its queue timeout")
+            .expect("Curvy history ended without an item");
+        let errors = response
+            .into_result()
+            .expect_err("Curvy history must yield the queue timeout instead of rows");
+        assert_eq!(
+            errors[0].message,
+            errors::messages::snapshot_queue_timed_out(Duration::from_millis(50))
+        );
+        drop(slot);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_curvy_history_holds_its_snapshot_permit_until_it_ends() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let conn = db.conn(blokli_db::TargetDb::Index);
+        init_chain_info(conn, 100, 0, 0).await?;
+        create_curvy_pending_note(conn, 1, 50).await?;
+        create_curvy_pending_note(conn, 2, 60).await?;
+        let indexer_state = IndexerState::new(10, 100);
+        let snapshots = SubscriptionSnapshots::new(1, Duration::from_millis(50));
+        let schema = snapshot_test_schema(conn, &indexer_state, &snapshots);
+        let mut stream = schema
+            .execute_stream("subscription { curvyPendingNote { noteId } }")
+            .boxed();
+
+        let first = tokio::time::timeout(Duration::from_secs(2), stream.next())
+            .await
+            .expect("timeout waiting for the first Curvy history row")
+            .expect("Curvy history ended before its first row");
+        first.into_result().expect("first Curvy history row failed");
+
+        assert!(
+            snapshots.limiter.acquire().await.is_err(),
+            "a running Curvy history must hold its snapshot permit"
+        );
+        drop(stream);
+        assert!(
+            snapshots.limiter.acquire().await.is_ok(),
+            "dropping a Curvy history must release its snapshot permit"
+        );
         Ok(())
     }
 }
