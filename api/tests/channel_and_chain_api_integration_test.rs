@@ -23,6 +23,7 @@ use blokli_api::{
     query::QueryRoot,
     schema::{ChainId, ExpectedBlockTime, Finality, GasMultiplier, NetworkName},
 };
+use blokli_chain_indexer::IndexerState;
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{
     BlokliDbGeneralModelOperations, TargetDb, accounts::BlokliDbAccountOperations, channels::BlokliDbChannelOperations,
@@ -1328,6 +1329,70 @@ async fn test_safe_channel_lookup_without_loader_reports_context_error() -> Resu
     let data = response.data.into_json()?;
     assert_eq!(data["a"]["__typename"], "QueryFailedError");
     assert_eq!(data["a"]["code"], "CONTEXT_ERROR");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_channel_stats_cached_until_reorganization_advances_epoch() -> Result<()> {
+    let db = BlokliDb::new_in_memory().await?;
+    setup_chain_info(&db).await?;
+
+    let keypair1 = random_keypair();
+    let keypair2 = random_keypair();
+    let keypair3 = random_keypair();
+    let addr1 = keypair1.public().to_address();
+    let addr2 = keypair2.public().to_address();
+    let addr3 = keypair3.public().to_address();
+    for (id, addr) in [(1, addr1), (2, addr2), (3, addr3)] {
+        db.upsert_account(None, id, addr, *random_offchain_keypair().public(), None, 100, 0, 0)
+            .await?;
+    }
+
+    let balance = HoprBalance::from_str("1000 wxHOPR")?;
+    db.upsert_channel(
+        None,
+        build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 1),
+        100,
+        0,
+        0,
+    )
+    .await?;
+
+    let indexer_state = IndexerState::new(10, 100);
+    let schema = async_graphql::Schema::build(
+        QueryRoot,
+        async_graphql::EmptyMutation,
+        async_graphql::EmptySubscription,
+    )
+    .data(db.conn(TargetDb::Index).clone())
+    .data(ChannelStatsCache::default())
+    .data(indexer_state.clone())
+    .finish();
+
+    let all = "query { channelStats { __typename ... on ChannelStats { count balance } } }";
+    let count_of = |data: &serde_json::Value| data["channelStats"]["count"].as_i64();
+
+    let first = execute_graphql_query(&schema, all).await.data.into_json()?;
+    assert_eq!(count_of(&first), Some(1));
+
+    // A second channel is written without the indexed block advancing: the cached value is served.
+    db.upsert_channel(
+        None,
+        build_channel_entry(addr2, addr3, balance, 0, ChannelStatus::Open, 1),
+        101,
+        0,
+        0,
+    )
+    .await?;
+    let stale = execute_graphql_query(&schema, all).await.data.into_json()?;
+    assert_eq!(count_of(&stale), Some(1));
+
+    // A reorganization rewrites channel rows while the indexed block stays where it was.
+    indexer_state.signal_shutdown();
+    let fresh = execute_graphql_query(&schema, all).await.data.into_json()?;
+    assert_eq!(count_of(&fresh), Some(2));
+    assert_eq!(fresh["channelStats"]["balance"], "2000 wxHOPR");
 
     Ok(())
 }

@@ -1846,6 +1846,14 @@ impl QueryRoot {
 
         let status_i16: Option<i16> = status.map(|s| s.into());
 
+        // Read the reorganization epoch before the indexed block and the aggregate: a reorganization can rewrite
+        // channel rows while leaving the indexed block unchanged, so the epoch has to be part of what identifies
+        // the state the result was computed for.
+        let reorg_epoch = ctx
+            .data_opt::<IndexerState>()
+            .map(IndexerState::reorg_epoch)
+            .unwrap_or(0);
+
         // Read the indexed block before the aggregate: the indexer advances it after committing a block's channel
         // writes, so a result computed afterwards is at least as new as the block it is stored under.
         let last_indexed_block = match chain_info::Entity::find_by_id(1).one(db).await {
@@ -1861,6 +1869,7 @@ impl QueryRoot {
         let cache = ctx.data_opt::<ChannelStatsCache>().cloned().unwrap_or_default();
         let key = ChannelStatsKey {
             block: last_indexed_block,
+            reorg_epoch,
             source_key_id,
             destination_key_id,
             concrete_channel_id: concrete_channel_id
