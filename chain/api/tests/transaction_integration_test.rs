@@ -26,7 +26,8 @@ use hopr_bindings::exports::alloy::{
     consensus::{SignableTransaction, TxLegacy},
     eips::eip2718::Encodable2718,
     node_bindings::AnvilInstance,
-    primitives::{Address as AlloyAddress, TxKind, U256},
+    primitives::{Address as AlloyAddress, B256, TxKind, U256},
+    providers::{Provider, ProviderBuilder},
     rpc::client::ClientBuilder,
     signers::{Signer, local::PrivateKeySigner},
     transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
@@ -396,6 +397,34 @@ async fn test_sync_mode_waits_for_confirmations() -> anyhow::Result<()> {
     // Should be confirmed
     assert_eq!(record.status, TransactionStatus::Confirmed);
     assert_ne!(record.transaction_hash, Hash::default());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_sync_mode_default_waits_for_the_confirmed_tip() -> anyhow::Result<()> {
+    let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
+
+    let recipient = random_address();
+    let raw_tx = create_eth_transfer_tx(&ctx, recipient, 1000, 0).await?;
+
+    // No explicit count: the wait follows the configured confirmation mode (depth 2 here).
+    let record = ctx.executor.send_raw_transaction_sync(raw_tx, None).await?;
+    assert_eq!(record.status, TransactionStatus::Confirmed);
+
+    let provider = ProviderBuilder::new().connect_http(ctx.anvil.endpoint_url());
+    let receipt = provider
+        .get_transaction_receipt(B256::from_slice(record.transaction_hash.as_ref()))
+        .await?
+        .expect("the confirmed transaction must have a receipt");
+    let receipt_block = receipt.block_number.expect("the receipt must be in a block");
+    let latest = provider.get_block_number().await?;
+
+    assert!(
+        latest.saturating_sub(2) >= receipt_block,
+        "a depth-2 wait must only return once latest - 2 reaches the receipt block, latest {latest}, receipt \
+         {receipt_block}"
+    );
 
     Ok(())
 }

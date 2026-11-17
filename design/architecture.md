@@ -343,7 +343,7 @@ The schema is organized into three root types following GraphQL best practices:
 
 - Fire-and-forget: Returns transaction hash immediately, no tracking
 - Async: Returns UUID for status tracking, background monitoring
-- Sync: Waits for blockchain confirmations before returning
+- Sync: Waits for the confirmed chain tip, or a requested block depth, before returning
 
 **Subscription Operations** (via SSE):
 
@@ -433,8 +433,9 @@ selectors against permitted operations. Prevents submission of malicious or unin
 2. **Async Mode**: Submits transaction, stores record with generated UUID, returns immediately. Background monitor tracks confirmation.
    Suitable for most applications needing status tracking.
 
-3. **Sync Mode**: Submits transaction and waits for specified number of confirmations before returning. Highest certainty, suitable for
-   critical operations requiring immediate confirmation.
+3. **Sync Mode**: Submits transaction and waits until the chain tip tracker confirms the receipt block, or for a requested number of blocks,
+   before returning. Without an explicit depth it follows the same confirmation rule as the indexer, so callers see the same latency gain
+   and the same reorg guarantee. Highest certainty, suitable for critical operations requiring immediate confirmation.
 
 **TransactionStore**: In-memory storage using concurrent hash map (DashMap) for thread-safe access. Tracks transaction records with UUID
 identifiers, maintains status lifecycle, and provides query interface for GraphQL resolvers.

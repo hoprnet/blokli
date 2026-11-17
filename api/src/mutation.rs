@@ -156,14 +156,18 @@ impl MutationRoot {
 
     /// Submit a transaction synchronously
     ///
-    /// Validates the pre-signed raw transaction data, submits it to the chain, and waits for
-    /// the specified number of confirmations (default: 3 blocks, max: 64) before returning.
-    /// Transaction is persisted to store and can be queried later.
+    /// Validates the pre-signed raw transaction data, submits it to the chain, and waits for the
+    /// block that included it to be confirmed before returning. When `confirmations` is omitted,
+    /// the wait follows the node's confirmation rule reported by `chainInfo.confirmationMode`;
+    /// when it is given, the wait covers that many blocks (max: 64). Transaction is persisted to
+    /// store and can be queried later.
     #[graphql(name = "sendTransactionSync")]
     async fn send_transaction_sync(
         &self,
         ctx: &Context<'_>,
         input: TransactionInput,
+        #[graphql(desc = "Blocks to wait for. Omitted: wait until the node's confirmation rule \
+                          (chainInfo.confirmationMode) confirms the block")]
         confirmations: Option<i32>,
     ) -> Result<SendTransactionSyncResult> {
         let executor = ctx
@@ -187,10 +191,10 @@ impl MutationRoot {
 /// `operation` reported when a resubmitted raw transaction is deduplicated by its hash.
 const RAW_TRANSACTION_OPERATION: &str = "raw_transaction";
 
-/// Maximum number of confirmations `sendTransactionSync` will wait for.
+/// Maximum number of blocks `sendTransactionSync` will wait for when a count is given.
 const MAX_SYNC_CONFIRMATIONS: u64 = 64;
 
-/// Validate the requested confirmations: non-negative and at most [`MAX_SYNC_CONFIRMATIONS`].
+/// Validate the requested block count: non-negative and at most [`MAX_SYNC_CONFIRMATIONS`].
 fn validate_sync_confirmations(confirmations: Option<i32>) -> Result<Option<u64>> {
     let Some(c) = confirmations else {
         return Ok(None);
@@ -320,6 +324,8 @@ fn executor_error_to_sync_result(error: TransactionExecutorError) -> SendTransac
 
 #[cfg(test)]
 mod tests {
+    use blokli_chain_rpc::confirmation::ConfirmationTarget;
+
     use super::*;
 
     #[test]
@@ -332,5 +338,14 @@ mod tests {
         assert!(too_high.message.contains("64"));
         assert!(validate_sync_confirmations(Some(-1)).is_err());
         assert!(validate_sync_confirmations(Some(i32::MAX)).is_err());
+    }
+
+    #[test]
+    fn test_sync_confirmations_select_the_confirmation_target() {
+        let default_target = ConfirmationTarget::from_blocks(validate_sync_confirmations(None).unwrap());
+        assert_eq!(default_target, ConfirmationTarget::ConfirmedTip);
+
+        let explicit_target = ConfirmationTarget::from_blocks(validate_sync_confirmations(Some(7)).unwrap());
+        assert_eq!(explicit_target, ConfirmationTarget::Blocks(7));
     }
 }

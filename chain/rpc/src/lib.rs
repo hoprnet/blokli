@@ -34,6 +34,7 @@ use tokio::sync::watch;
 use crate::{RetryAction::NoRetry, errors::Result, tip::ChainTip};
 
 pub mod client;
+pub mod confirmation;
 pub mod errors;
 pub mod head;
 pub mod indexer;
