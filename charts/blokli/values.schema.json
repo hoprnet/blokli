@@ -134,6 +134,11 @@
           "format": "uri",
           "description": "Blockchain RPC URL"
         },
+        "rpcWsUrl": {
+          "type": "string",
+          "pattern": "^(wss?://\\S*)?$",
+          "description": "WebSocket RPC URL used for newHeads (empty derives it from rpcUrl)"
+        },
         "maxRpcRequestsPerSec": {
           "type": "integer",
           "minimum": 0,
@@ -173,6 +178,46 @@
               "type": "string",
               "description": "Expected SHA-256 hex digest of the logs snapshot archive",
               "pattern": "^([0-9a-fA-F]{64})?$"
+            },
+            "headTracking": {
+              "type": "object",
+              "properties": {
+                "headSubscription": {
+                  "type": "boolean",
+                  "description": "Use newHeads over WebSocket when the RPC endpoint supports it"
+                },
+                "headPollInterval": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Polling interval used when newHeads is unavailable or disabled"
+                }
+              }
+            },
+            "confirmation": {
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": ["", "depth", "safe_or_depth", "safe", "finalized"],
+                  "description": "Confirmation rule (empty uses the network default)"
+                },
+                "depth": {
+                  "oneOf": [
+                    { "type": "integer", "minimum": 1, "maximum": 100 },
+                    { "type": "string", "maxLength": 0 }
+                  ],
+                  "description": "Blocks behind latest used by depth-based modes (empty uses the network default)"
+                },
+                "maxSafeGap": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "Latest-to-safe gap at or above which the Fast Confirmation Rule counts as degraded"
+                },
+                "verifyFinalized": {
+                  "type": "boolean",
+                  "description": "Re-check indexed blocks against the canonical chain once they become final"
+                }
+              }
             }
           },
           "allOf": [

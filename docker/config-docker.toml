@@ -41,3 +41,15 @@ enable_logs_snapshot = false
 # Expected SHA-256 digest of the snapshot archive
 # (required when enable_logs_snapshot = true or logs_snapshot_url is set)
 # logs_snapshot_sha256 = "<64 hex characters>"
+
+# Chain head tracking and confirmation rule
+# Omit these sections to use the daemon defaults: newHeads over WebSocket when the
+# endpoint supports it, polling otherwise, and the network's confirmation mode.
+# [indexer.head_tracking]
+# head_subscription = true
+# head_poll_interval = "1s"
+# [indexer.confirmation]
+# mode = "depth" # observe-only rollout on Gnosis
+# depth = 3
+# max_safe_gap = 32
+# verify_finalized = true

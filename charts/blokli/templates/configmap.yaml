@@ -44,6 +44,22 @@ data:
     logs_snapshot_sha256 = "{{ required "config.indexer.logsSnapshotSha256 is required" .Values.config.indexer.logsSnapshotSha256 }}"
     {{- end }}
 
+    # Chain head tracking
+    [indexer.head_tracking]
+    head_subscription = {{ .Values.config.indexer.headTracking.headSubscription }}
+    head_poll_interval = {{ .Values.config.indexer.headTracking.headPollInterval | quote }}
+
+    # Confirmation rule
+    [indexer.confirmation]
+    {{- if .Values.config.indexer.confirmation.mode }}
+    mode = {{ .Values.config.indexer.confirmation.mode | quote }}
+    {{- end }}
+    {{- if .Values.config.indexer.confirmation.depth }}
+    depth = {{ .Values.config.indexer.confirmation.depth | int }}
+    {{- end }}
+    max_safe_gap = {{ .Values.config.indexer.confirmation.maxSafeGap | int }}
+    verify_finalized = {{ .Values.config.indexer.confirmation.verifyFinalized }}
+
     # Indexer subscription configuration
     [indexer.subscription]
     event_bus_capacity = {{ .Values.config.indexer.subscription.eventBusCapacity }}

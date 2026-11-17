@@ -130,6 +130,33 @@ spec:
         namespace: {{ $namespace }}
     {{- end }}
     {{- end }}
+    {{- with $r.fcrFalseConfirmation }}
+    {{- if .enabled }}
+    - alert: blokli-fcr-false-confirmation
+      annotations:
+        summary: Blokli verified a block range that the canonical chain no longer contains.
+        # A false confirmation means a range indexed above finality differed from the canonical logs once
+        # it became final: either an indexed log was reorged out or a canonical log was missed. The
+        # readiness check also reports the dedicated verification_failed status, and the indexer stops
+        # advancing until an operator intervenes. See runbooks/fast-confirmation.md.
+        description: >-
+          Blokli in network {{ $network }} recorded at least one false confirmation over the last
+          {{ .windowMinutes }}m, or its readiness check reports the "verification_failed" status, for over
+          {{ .for }}. Data indexed above finality no longer matches the canonical chain and the indexer is
+          halted.
+        runbook_url: https://github.com/hoprnet/blokli/blob/main/runbooks/fast-confirmation.md
+      expr: |-
+        increase(blokli_fcr_false_confirmations_total{job="{{ $fullname }}"}[{{ .windowMinutes }}m]) > 0
+        or
+        blokli_health{status="verification_failed", job="{{ $fullname }}"} == 1
+      for: {{ .for }}
+      labels:
+        severity: critical
+        network: {{ $network }}
+        namespace: {{ $namespace }}
+        app_kubernetes_io_name: {{ $appName }}
+    {{- end }}
+    {{- end }}
     {{- with $r.transactionFailedShort }}
     {{- if .enabled }}
     - alert: blokli-transaction-failed-short

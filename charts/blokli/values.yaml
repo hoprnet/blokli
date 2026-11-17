@@ -271,6 +271,16 @@ monitoring:
         ## @param monitoring.prometheusRule.rules.stateCorrupted.for How long the corrupted status must persist before firing
         ##
         for: 1m
+      fcrFalseConfirmation:
+        ## @param monitoring.prometheusRule.rules.fcrFalseConfirmation.enabled Enable the blokli-fcr-false-confirmation alert
+        ##
+        enabled: true
+        ## @param monitoring.prometheusRule.rules.fcrFalseConfirmation.windowMinutes Look-back window (minutes) used to count block ranges whose post-finality verification found a false confirmation
+        ##
+        windowMinutes: 10
+        ## @param monitoring.prometheusRule.rules.fcrFalseConfirmation.for How long the condition must persist across evaluations before firing
+        ##
+        for: 1m
       transactionFailedShort:
         ## @param monitoring.prometheusRule.rules.transactionFailedShort.enabled Enable the blokli-transaction-failed-short alert
         ##
@@ -456,6 +466,9 @@ config:
   ## @param config.rpcUrl Blockchain RPC URL
   ##
   rpcUrl: ""
+  ## @param config.rpcWsUrl WebSocket RPC URL used for newHeads. Leave empty to derive it from rpcUrl by replacing http(s) with ws(s). Set it when the provider serves WebSocket on a different path or port
+  ##
+  rpcWsUrl: ""
   ## @param config.maxRpcRequestsPerSec Hard cap on RPC requests per second, retries included (0 = unlimited)
   ##
   maxRpcRequestsPerSec: 0
@@ -488,6 +501,28 @@ config:
     ## @param config.indexer.logsSnapshotSha256 Expected SHA-256 hex digest of the logs snapshot archive (required when enableLogsSnapshot is true or logsSnapshotUrl is set)
     ##
     logsSnapshotSha256: ""
+    # Chain head tracking
+    headTracking:
+      ## @param config.indexer.headTracking.headSubscription Use newHeads over WebSocket when the RPC endpoint supports it. false forces polling
+      ##
+      headSubscription: true
+      ## @param config.indexer.headTracking.headPollInterval Polling interval used when newHeads is unavailable or disabled (humantime, e.g. "1s")
+      ##
+      headPollInterval: "1s"
+    # Confirmation rule
+    confirmation:
+      ## @param config.indexer.confirmation.mode Confirmation rule: depth, safe_or_depth, safe or finalized. Leave empty for the network default (safe_or_depth on Gnosis, depth on anvil-localhost)
+      ##
+      mode: ""
+      ## @param config.indexer.confirmation.depth Blocks behind latest used by depth and as the safe_or_depth fallback (1-100). Leave empty for the network default
+      ##
+      depth: ""
+      ## @param config.indexer.confirmation.maxSafeGap Latest-to-safe gap in blocks at or above which the Fast Confirmation Rule counts as degraded
+      ##
+      maxSafeGap: 32
+      ## @param config.indexer.confirmation.verifyFinalized Re-check indexed blocks against the canonical chain once they become final
+      ##
+      verifyFinalized: true
     # Subscription behavior configuration
     subscription:
       ## @param config.indexer.subscription.eventBusCapacity Capacity of the event bus buffer for channel events

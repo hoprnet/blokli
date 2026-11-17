@@ -22,6 +22,10 @@ Operational guidance for the confirmation modes, the chain head source and the F
 | ----------------------------------------- | --------------------------------------------------------------------------------------------- |
 | [Fast Confirmation](fast-confirmation.md) | Confirmation modes, endpoint trust, hard forks, false confirmations and WebSocket head source |
 
+| Alert                                          | Severity | Responsible     | Description                                                                                           |
+| ---------------------------------------------- | -------- | --------------- | ----------------------------------------------------------------------------------------------------- |
+| [FCR False Confirmation](fast-confirmation.md) | Critical | DevOps Engineer | An indexed range no longer matches the canonical chain once final, or verification halted the indexer |
+
 ## Readiness
 
 Alerts derived from the same readiness logic that gates the `/readyz` endpoint.
