@@ -643,8 +643,9 @@ synchronization prevents gaps or duplicates between phases.
 results. Reconnecting clients will receive entries in a different order each time.
 
 **Snapshot Admission**: Loading a snapshot is the most expensive part of a subscription, and clients tend to subscribe together, for example
-all at once after a restart. The number of snapshots loaded from the database at the same time is therefore limited to fewer than the API
-pool holds connections. Further loads wait their turn. A subscription that waits too long ends: one that loads its snapshot before the
+all at once after a restart. The number of snapshots loaded from the database at the same time is therefore limited by a configurable bound.
+The bound is not checked against the size of the API pool: the default is below it, and the operator keeps it below so that queries always
+find a free connection. Further loads wait their turn. A subscription that waits too long ends: one that loads its snapshot before the
 stream starts returns a timeout error, while `channelUpdated`, `openedChannelGraphUpdated` and `accountUpdated` end their stream without an
 error payload. The timeout is logged and counted in `blokli_errors_total`, and clients are expected to reconnect with jittered backoff.
 
