@@ -1,5 +1,7 @@
 #[cfg(test)]
 use std::error::Error as StdError;
+#[cfg(test)]
+use std::sync::Mutex;
 use std::{
     collections::HashSet,
     fmt::Display as FmtDisplay,
@@ -15,6 +17,8 @@ use std::{
 
 use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
 use blokli_chain_types::AlloyAddressExt;
+#[cfg(test)]
+use blokli_db::api::errors::DbError;
 use blokli_db::{
     BlokliDbGeneralModelOperations, TargetDb, api::logs::BlokliDbLogOperations, info::BlokliDbInfoOperations,
     safe_contracts::BlokliDbSafeContractOperations, safe_history::BlokliDbSafeHistoryOperations,
@@ -208,11 +212,75 @@ fn checksum_low_32_bits(checksum_hash: &Hash) -> u32 {
 ///
 /// Repeating such a read cannot apply anything twice, and it lets indexing ride out a short
 /// database outage - a failover, a momentarily exhausted connection pool - instead of ending the
-/// process.
+/// process. The retries run while block processing holds the processing lock that synchronized API
+/// reads wait for, so these attempts and their backoff bound how long such a read can stall: four
+/// attempts with 500 ms, 1 s and 2 s waits between them (3.5 s in total), plus whatever each
+/// attempt spends waiting for a pooled connection.
 const PRE_WRITE_READ_ATTEMPTS: u32 = 4;
 
 /// Wait before the first retry of a failed pre-write read; it doubles after every failure.
+#[cfg(not(test))]
 const PRE_WRITE_READ_INITIAL_BACKOFF: Duration = Duration::from_millis(500);
+
+/// Test builds use a short wait so retry-exhaustion tests finish immediately.
+#[cfg(test)]
+const PRE_WRITE_READ_INITIAL_BACKOFF: Duration = Duration::from_millis(1);
+
+#[cfg(test)]
+static PRE_WRITE_READ_FAILURES: Mutex<Vec<(u64, u32)>> = Mutex::new(Vec::new());
+#[cfg(test)]
+static PRE_WRITE_READ_COUNTS: Mutex<Vec<(u64, u32)>> = Mutex::new(Vec::new());
+
+/// Makes the next `failures` processed-log reads of `block_id` fail.
+#[cfg(test)]
+fn inject_pre_write_read_failures(block_id: u64, failures: u32) {
+    let mut injected = PRE_WRITE_READ_FAILURES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match injected.iter_mut().find(|(block, _)| *block == block_id) {
+        Some((_, remaining)) => *remaining = failures,
+        None => injected.push((block_id, failures)),
+    }
+}
+
+/// Consumes one injected failure for `block_id`, if any is left.
+#[cfg(test)]
+fn take_pre_write_read_failure(block_id: u64) -> bool {
+    let mut injected = PRE_WRITE_READ_FAILURES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match injected.iter_mut().find(|(block, _)| *block == block_id) {
+        Some((_, remaining)) if *remaining > 0 => {
+            *remaining -= 1;
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Counts one processed-log read attempt for `block_id`.
+#[cfg(test)]
+fn record_pre_write_read_attempt(block_id: u64) {
+    let mut counts = PRE_WRITE_READ_COUNTS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match counts.iter_mut().find(|(block, _)| *block == block_id) {
+        Some((_, attempts)) => *attempts += 1,
+        None => counts.push((block_id, 1)),
+    }
+}
+
+/// Returns how often the processed-log read of `block_id` was attempted.
+#[cfg(test)]
+fn pre_write_read_attempts(block_id: u64) -> u32 {
+    PRE_WRITE_READ_COUNTS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .iter()
+        .find(|(block, _)| *block == block_id)
+        .map(|(_, attempts)| *attempts)
+        .unwrap_or_default()
+}
 
 /// Indexer
 ///
@@ -1148,8 +1216,15 @@ where
         let processed_logs = if block.logs.is_empty() {
             HashSet::new()
         } else {
-            match retry_with_backoff(PRE_WRITE_READ_ATTEMPTS, PRE_WRITE_READ_INITIAL_BACKOFF, || {
-                db.get_processed_log_identities(block_id)
+            match retry_with_backoff(PRE_WRITE_READ_ATTEMPTS, PRE_WRITE_READ_INITIAL_BACKOFF, || async {
+                #[cfg(test)]
+                {
+                    record_pre_write_read_attempt(block_id);
+                    if take_pre_write_read_failure(block_id) {
+                        return Err(DbError::General("injected pre-write read failure".to_string()));
+                    }
+                }
+                db.get_processed_log_identities(block_id).await
             })
             .await
             {
@@ -1693,7 +1768,7 @@ mod tests {
         account, channel,
         prelude::{Account, Channel},
     };
-    use futures::{Stream, channel::mpsc::unbounded, join};
+    use futures::{FutureExt, Stream, channel::mpsc::unbounded, join};
     use hex_literal::hex;
     use hopr_bindings::{
         exports::alloy::{
@@ -2925,6 +3000,87 @@ mod tests {
         assert!(result.is_some());
         assert!(handler.collect_called.load(StdOrdering::SeqCst));
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_block_retries_a_failed_processed_log_read() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let handler = DispatchTrackingLogHandler::default();
+        let log = SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: vec![Hash::create(&[b"my topic"]).into()],
+            data: vec![1, 2, 3],
+            tx_hash: Hash::create(&[b"my tx hash"]).into(),
+            block_hash: Hash::create(&[b"my block hash"]).into(),
+            tx_index: 1,
+            block_number: 700_001,
+            log_index: 2,
+            ..Default::default()
+        };
+        db.store_log(log.clone()).await?;
+        inject_pre_write_read_failures(log.block_number, 1);
+
+        let result = Indexer::<MockHoprIndexerOps, DispatchTrackingLogHandler, BlokliDb>::process_block(
+            &db,
+            &handler,
+            BlockWithLogs {
+                block_id: log.block_number,
+                logs: BTreeSet::from([log.clone()]),
+            },
+            false,
+            false,
+            &IndexerState::default(),
+            false,
+            PrefetchedLogData::default(),
+        )
+        .await;
+
+        assert!(result.is_some());
+        assert!(handler.collect_called.load(StdOrdering::SeqCst));
+        assert_eq!(pre_write_read_attempts(log.block_number), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_block_stops_when_the_processed_log_read_keeps_failing() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let handler = DispatchTrackingLogHandler::default();
+        let log = SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: vec![Hash::create(&[b"my topic"]).into()],
+            data: vec![1, 2, 3],
+            tx_hash: Hash::create(&[b"my tx hash"]).into(),
+            block_hash: Hash::create(&[b"my block hash"]).into(),
+            tx_index: 1,
+            block_number: 700_002,
+            log_index: 2,
+            ..Default::default()
+        };
+        db.store_log(log.clone()).await?;
+        inject_pre_write_read_failures(log.block_number, PRE_WRITE_READ_ATTEMPTS);
+
+        let result = std::panic::AssertUnwindSafe(
+            Indexer::<MockHoprIndexerOps, DispatchTrackingLogHandler, BlokliDb>::process_block(
+                &db,
+                &handler,
+                BlockWithLogs {
+                    block_id: log.block_number,
+                    logs: BTreeSet::from([log.clone()]),
+                },
+                false,
+                false,
+                &IndexerState::default(),
+                false,
+                PrefetchedLogData::default(),
+            ),
+        )
+        .catch_unwind()
+        .await;
+
+        assert!(result.is_err(), "an unrecoverable processed-log read must panic");
+        assert!(!handler.collect_called.load(StdOrdering::SeqCst));
+        assert_eq!(pre_write_read_attempts(log.block_number), PRE_WRITE_READ_ATTEMPTS);
         Ok(())
     }
 
