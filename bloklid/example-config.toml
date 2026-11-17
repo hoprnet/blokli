@@ -209,8 +209,10 @@ max_query_depth = 8
 # (e.g. aliased nativeBalance calls) to ~10 per request.
 max_query_complexity = 500
 
-# Size of the API server's own PostgreSQL connection pool (default: 10). API load cannot take
-# connections from the indexer, whose pool is sized by database.max_connections.
+# Size of the API server's own PostgreSQL connection pool (default: 10). Queries and
+# subscriptions cannot take connections from the indexer, whose pool is sized by
+# database.max_connections. Transaction submission and monitoring still look up Safes and
+# channels through the indexer's pool.
 # SQLite and in-memory databases share the indexer's connections and ignore this setting.
 database_max_connections = 10
 

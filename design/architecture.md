@@ -268,10 +268,12 @@ contention in SQLite's locking model.
 management, and connection pooling. The trait-based design allows transaction-agnostic APIs.
 
 **Connection Pools**: On PostgreSQL one process holds two pools: one for the indexer and everything else that writes chain state, and one
-for the API server. They are sized independently, so a burst of API requests can exhaust only the API pool and never takes a connection the
-indexer needs to keep up with the chain. Each pool reports its role and host to PostgreSQL as its application name, which makes its backends
-attributable. SQLite and in-memory databases keep a single shared set of connections. The indexer repeats a failed read that precedes a
-block's writes a few times before it gives up, so a short database outage does not end the process.
+for the queries and subscriptions of the API server. They are sized independently, so a burst of queries or subscriptions can exhaust only
+the API pool and never takes a connection the indexer needs to keep up with the chain. Transaction submission and monitoring are the
+exception: their Safe and channel lookups are short single-row reads through the indexer's pool. Each pool reports its role and host to
+PostgreSQL as its application name, which makes its backends attributable. SQLite and in-memory databases keep a single shared set of
+connections. The indexer repeats a failed read that precedes a block's writes a few times before it gives up, so a short database outage
+does not end the process.
 
 ### 5. GraphQL API Server
 
