@@ -1197,30 +1197,37 @@ impl SubscriptionRoot {
 
         Ok(stream! {
             // Phase 1: Stream historical snapshot of all matching channels at watermark
-            match load_snapshot(
-                &snapshots.limiter,
-                query_channels_at_watermark_with_filters(
-                    &db,
-                    &watermark,
-                    source_key_id,
-                    destination_key_id,
-                    concrete_channel_id.clone(),
-                    status,
+            match load_phase1(
+                load_snapshot(
+                    &snapshots.limiter,
+                    query_channels_at_watermark_with_filters(
+                        &db,
+                        &watermark,
+                        source_key_id,
+                        destination_key_id,
+                        concrete_channel_id.clone(),
+                        status,
+                    ),
                 ),
+                &mut shutdown_receiver,
             )
             .await
             {
-                Ok(mut historical_channels) => {
+                Some(Ok(mut historical_channels)) => {
                     historical_channels.shuffle(&mut rand::rng());
                     debug!("Phase 1: Yielding {} historical channels", historical_channels.len());
                     for channel in historical_channels {
+                        if phase1_shutdown_requested(&mut shutdown_receiver) {
+                            return;
+                        }
                         yield channel;
                     }
                 }
-                Err(e) => {
+                Some(Err(e)) => {
                     error!(error = ?e, "failed to query historical channels");
                     return; // Terminate subscription on error
                 }
+                None => return,
             }
 
             debug!("Phase 2: Listening for channel update events");
@@ -1654,20 +1661,35 @@ impl SubscriptionRoot {
         let (watermark, mut event_receiver, mut shutdown_receiver) =
             capture_watermark_synchronized(&indexer_state, &db).await?;
         let snapshots = ctx.data::<SubscriptionSnapshots>()?;
-        let initial = load_snapshot(
-            &snapshots.limiter,
-            query_service_entries_at_watermark(
-                &db,
-                &watermark,
-                parsed_service_type.as_ref().map(AsRef::as_ref),
-                node_address.as_ref().map(AsRef::as_ref),
+        let initial = match load_phase1(
+            load_snapshot(
+                &snapshots.limiter,
+                query_service_entries_at_watermark(
+                    &db,
+                    &watermark,
+                    parsed_service_type.as_ref().map(AsRef::as_ref),
+                    node_address.as_ref().map(AsRef::as_ref),
+                ),
             ),
+            &mut shutdown_receiver,
         )
-        .await?;
+        .await
+        {
+            Some(initial) => Some(initial?),
+            None => None,
+        };
 
         Ok(stream! {
-            for update in initial {
-                yield update;
+            match initial {
+                Some(initial) => {
+                    for update in initial {
+                        if phase1_shutdown_requested(&mut shutdown_receiver) {
+                            return;
+                        }
+                        yield update;
+                    }
+                }
+                None => return,
             }
             loop {
                 tokio::select! {
@@ -2716,7 +2738,10 @@ mod tests {
     use blokli_api_types::{CurvyCommittedNote, CurvyEventPosition, Hex32, QueryFailedError, RedemptionResult, UInt64};
     use blokli_chain_indexer::state::{IndexerEvent, RedeemTicketDetailsInfo};
     use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb};
-    use blokli_db_entity::{hopr_safe_contract, hopr_safe_contract_state, service_registry_config};
+    use blokli_db_entity::{
+        hopr_safe_contract, hopr_safe_contract_state, service_entry, service_entry_state, service_registry_config,
+        service_type,
+    };
     use futures::{StreamExt, pin_mut, stream};
     use hopr_types::primitive::traits::BytesRepresentable;
     use sea_orm::{ActiveModelTrait, Set};
@@ -4385,6 +4410,52 @@ mod tests {
         Ok(())
     }
 
+    /// Creates a registered entry of the GVPN exit service type for a new node, with its state
+    /// published at `block`
+    async fn create_service_entry(conn: &DatabaseConnection, index: u8, block: i64) -> anyhow::Result<()> {
+        let raw_type = ServiceType::GVPN_EXIT.as_ref().to_vec();
+        let service_type_id = match service_type::Entity::find()
+            .filter(service_type::Column::ServiceType.eq(raw_type.clone()))
+            .one(conn)
+            .await?
+        {
+            Some(row) => row.id,
+            None => {
+                service_type::ActiveModel {
+                    service_type: Set(raw_type),
+                    ..Default::default()
+                }
+                .insert(conn)
+                .await?
+                .id
+            }
+        };
+
+        let entry = service_entry::ActiveModel {
+            service_type_id: Set(service_type_id),
+            node_address: Set(vec![index + 1; 20]),
+            ..Default::default()
+        }
+        .insert(conn)
+        .await?;
+
+        service_entry_state::ActiveModel {
+            service_entry_id: Set(entry.id),
+            safe_address: Set(Some(vec![index + 1; 20])),
+            metadata: Set(Some(vec![index; 4])),
+            registered_at: Set(Some(Utc::now().into())),
+            updated_at: Set(Some(Utc::now().into())),
+            deregistered: Set(false),
+            published_block: Set(block),
+            published_tx_index: Set(0),
+            published_log_index: Set(i64::from(index)),
+            ..Default::default()
+        }
+        .insert(conn)
+        .await?;
+        Ok(())
+    }
+
     /// Inserts one Curvy pending note at a chain position
     async fn create_curvy_pending_note_at(
         conn: &DatabaseConnection,
@@ -4422,6 +4493,8 @@ mod tests {
 
     const GRAPH_SNAPSHOT_QUERY: &str = "subscription { openedChannelGraphUpdated { channel { concreteChannelId } } }";
     const ACCOUNT_SNAPSHOT_QUERY: &str = "subscription { accountUpdated { keyid } }";
+    const CHANNEL_SNAPSHOT_QUERY: &str = "subscription { channelUpdated { concreteChannelId } }";
+    const SERVICE_SNAPSHOT_QUERY: &str = "subscription { serviceUpdated { node } }";
 
     #[tokio::test]
     async fn test_capture_snapshot_point_pairs_the_block_with_the_reorg_epoch() -> anyhow::Result<()> {
@@ -4901,6 +4974,138 @@ mod tests {
             items.is_empty(),
             "a reorg during the resumed load must end the stream before any row"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_channel_updated_snapshot_ends_when_a_reorg_is_signaled_while_the_load_waits() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let conn = db.conn(blokli_db::TargetDb::Index);
+        init_chain_info(conn, 100, 0, 0).await?;
+        for index in 0..3 {
+            create_open_channel(conn, index, 50).await?;
+        }
+        let indexer_state = IndexerState::new(10, 100);
+        let snapshots = SubscriptionSnapshots::new(1, Duration::from_secs(5));
+        let schema = snapshot_test_schema(conn, &indexer_state, &snapshots);
+        let slot = snapshots
+            .limiter
+            .acquire()
+            .await
+            .map_err(|e| anyhow::anyhow!(e.message))?;
+
+        let subscription = tokio::spawn({
+            let schema = schema.clone();
+            async move {
+                let mut stream = schema.execute_stream(CHANNEL_SNAPSHOT_QUERY).boxed();
+                let mut items = Vec::new();
+                while let Some(item) = stream.next().await {
+                    items.push(item);
+                }
+                items
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        indexer_state.signal_shutdown();
+        drop(slot);
+
+        let items = tokio::time::timeout(Duration::from_secs(2), subscription).await??;
+        assert!(
+            items.is_empty(),
+            "a reorg during the channel load must end the stream before any channel"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_channel_updated_snapshot_ends_when_a_reorg_is_signaled_during_emission() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let conn = db.conn(blokli_db::TargetDb::Index);
+        init_chain_info(conn, 100, 0, 0).await?;
+        for index in 0..3 {
+            create_open_channel(conn, index, 50).await?;
+        }
+        let indexer_state = IndexerState::new(10, 100);
+        let schema = snapshot_test_schema(conn, &indexer_state, &SubscriptionSnapshots::default());
+        let mut stream = schema.execute_stream(CHANNEL_SNAPSHOT_QUERY).boxed();
+
+        let first = tokio::time::timeout(Duration::from_secs(2), stream.next())
+            .await
+            .expect("timeout waiting for the first channel snapshot row")
+            .expect("stream ended before the first channel snapshot row");
+        first.into_result().expect("first channel snapshot row failed");
+
+        indexer_state.signal_shutdown();
+        let next = tokio::time::timeout(Duration::from_secs(2), stream.next())
+            .await
+            .expect("a reorg during channel emission must end the stream");
+        assert!(next.is_none(), "no channel may follow a reorg signal");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_service_updated_snapshot_ends_when_a_reorg_is_signaled_while_the_load_waits() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let conn = db.conn(blokli_db::TargetDb::Index);
+        init_chain_info(conn, 100, 0, 0).await?;
+        for index in 0..3 {
+            create_service_entry(conn, index, 50).await?;
+        }
+        let indexer_state = IndexerState::new(10, 100);
+        let snapshots = SubscriptionSnapshots::new(1, Duration::from_secs(5));
+        let schema = snapshot_test_schema(conn, &indexer_state, &snapshots);
+        let slot = snapshots
+            .limiter
+            .acquire()
+            .await
+            .map_err(|e| anyhow::anyhow!(e.message))?;
+
+        let subscription = tokio::spawn({
+            let schema = schema.clone();
+            async move {
+                let mut stream = schema.execute_stream(SERVICE_SNAPSHOT_QUERY).boxed();
+                let mut items = Vec::new();
+                while let Some(item) = stream.next().await {
+                    items.push(item);
+                }
+                items
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        indexer_state.signal_shutdown();
+        drop(slot);
+
+        let items = tokio::time::timeout(Duration::from_secs(2), subscription).await??;
+        assert!(
+            items.is_empty(),
+            "a reorg during the service entry load must end the stream before any entry"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_service_updated_snapshot_ends_when_a_reorg_is_signaled_during_emission() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let conn = db.conn(blokli_db::TargetDb::Index);
+        init_chain_info(conn, 100, 0, 0).await?;
+        for index in 0..3 {
+            create_service_entry(conn, index, 50).await?;
+        }
+        let indexer_state = IndexerState::new(10, 100);
+        let schema = snapshot_test_schema(conn, &indexer_state, &SubscriptionSnapshots::default());
+        let mut stream = schema.execute_stream(SERVICE_SNAPSHOT_QUERY).boxed();
+
+        let first = tokio::time::timeout(Duration::from_secs(2), stream.next())
+            .await
+            .expect("timeout waiting for the first service entry snapshot row")
+            .expect("stream ended before the first service entry snapshot row");
+        first.into_result().expect("first service entry snapshot row failed");
+
+        indexer_state.signal_shutdown();
+        let next = tokio::time::timeout(Duration::from_secs(2), stream.next())
+            .await
+            .expect("a reorg during service entry emission must end the stream");
+        assert!(next.is_none(), "no service entry may follow a reorg signal");
         Ok(())
     }
 
