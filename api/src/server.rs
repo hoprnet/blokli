@@ -330,7 +330,8 @@ pub async fn build_app(
 ) -> ApiResult<Router> {
     let db = databases.index;
     let logs_db = databases.logs;
-    let readiness_checker = ReadinessChecker::new(db.clone(), rpc_operations.clone(), config.health.clone());
+    let readiness_checker = ReadinessChecker::new(db.clone(), rpc_operations.clone(), config.health.clone())
+        .with_verification_status(indexer_state.verification_status());
     // One instance for every schema: the limit on snapshot loads protects the connection pool,
     // which all schema versions share.
     let subscription_snapshots =

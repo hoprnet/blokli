@@ -465,6 +465,10 @@ impl Config {
             "  indexer.confirmation.max_safe_gap: {}\n",
             self.indexer.confirmation.max_safe_gap
         ));
+        output.push_str(&format!(
+            "  indexer.confirmation.verify_finalized: {}\n",
+            self.indexer.confirmation.verify_finalized
+        ));
 
         if let Some(snapshot_url) = &self.indexer.logs_snapshot_url {
             output.push_str(&format!("  indexer.logs_snapshot_url: {}\n", redact_url(snapshot_url)));
@@ -655,6 +659,13 @@ pub struct IndexerConfirmationConfig {
     #[default(32)]
     #[serde(default = "default_max_safe_gap")]
     pub max_safe_gap: u64,
+
+    /// Re-check indexed blocks against the canonical chain once they become final.
+    ///
+    /// Default is `true`.
+    #[default(true)]
+    #[serde(default = "default_true")]
+    pub verify_finalized: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
@@ -1452,6 +1463,7 @@ mod tests {
         assert_eq!(config.indexer.confirmation.mode, None);
         assert_eq!(config.indexer.confirmation.depth, None);
         assert_eq!(config.indexer.confirmation.max_safe_gap, 32);
+        assert!(config.indexer.confirmation.verify_finalized);
 
         // Check API config
         assert!(config.api.enabled);
@@ -1570,6 +1582,7 @@ mod tests {
         assert_eq!(cfg.indexer.confirmation.mode, None); // Network-specific default
         assert_eq!(cfg.indexer.confirmation.depth, None); // Network-specific default
         assert_eq!(cfg.indexer.confirmation.max_safe_gap, 32); // Default
+        assert!(cfg.indexer.confirmation.verify_finalized); // Default
     }
 
     #[test]
@@ -1582,6 +1595,7 @@ mod tests {
          mode = "safe_or_depth"
          depth = 5
          max_safe_gap = 20
+         verify_finalized = false
          [database]
          type = "sqlite"
          index_path = ":memory:"
@@ -1594,6 +1608,7 @@ mod tests {
         assert_eq!(cfg.indexer.confirmation.mode, Some(ConfirmationMode::SafeOrDepth));
         assert_eq!(cfg.indexer.confirmation.depth, Some(5));
         assert_eq!(cfg.indexer.confirmation.max_safe_gap, 20);
+        assert!(!cfg.indexer.confirmation.verify_finalized);
         assert!(cfg.indexer.validate().is_ok());
     }
 

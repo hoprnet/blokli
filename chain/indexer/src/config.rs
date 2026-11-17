@@ -144,6 +144,15 @@ pub struct IndexerConfig {
     /// Tuning for the concurrent pre-fetch of Safe transactions.
     #[default(_code = "SafeTxPrefetchConfig::default()")]
     pub safe_tx_prefetch: SafeTxPrefetchConfig,
+
+    /// Whether to re-check indexed blocks against the canonical chain once they become final.
+    ///
+    /// A detected mismatch halts the indexer, so this can be turned off for deployments that
+    /// accept the risk in exchange for no verification traffic.
+    ///
+    /// Default is `true`.
+    #[default(true)]
+    pub verify_finalized: bool,
 }
 
 impl IndexerConfig {
@@ -192,6 +201,7 @@ impl IndexerConfig {
             head_subscription: true,
             head_ws_url: None,
             safe_tx_prefetch: SafeTxPrefetchConfig::default(),
+            verify_finalized: true,
         }
     }
 
@@ -306,6 +316,12 @@ mod tests {
 
         cfg.validate().expect("Failed to validate snapshot configuration");
         assert!(cfg.is_valid(), "Valid configuration should return true for is_valid()");
+    }
+
+    #[test]
+    fn test_post_finality_verification_is_enabled_by_default() {
+        assert!(IndexerConfig::default().verify_finalized);
+        assert!(IndexerConfig::new(0, true, false, false, None, None, "".to_string(), 1000, 10,).verify_finalized);
     }
 
     #[test]

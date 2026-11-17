@@ -162,6 +162,8 @@ head_poll_interval = "1s"
 # depth = 3
 # latest - safe at or above this marks FCR as degraded (default: 32).
 max_safe_gap = 32
+# Re-check indexed blocks against the canonical chain once they become final (default: true).
+# verify_finalized = true
 
 # Deprecated: the indexer no longer pre-fetches transactions, so the keys in this
 # section are accepted and ignored. They are kept so existing configs still start.

@@ -25,6 +25,8 @@ use blokli_api_types::{
 use hopr_types::primitive::prelude::Address;
 use tokio::{sync::RwLock, time::error::Elapsed};
 
+use crate::verification::VerificationStatus;
+
 /// Internal event payload for a ticket redemption observed on-chain.
 ///
 /// Carries all fields needed to identify the ticket and report the outcome.
@@ -181,6 +183,12 @@ pub struct IndexerState {
 
     /// Coordination between block processing and the Safe owner refresh task.
     safe_owner_sync: Arc<SafeOwnerSync>,
+
+    /// Sticky flag recording that post-finality verification found a mismatch.
+    ///
+    /// Shared with the API readiness checker, which reports the service as not ready while it is
+    /// set, and with the indexer, which stops advancing while it is set.
+    verification_status: VerificationStatus,
 }
 
 /// Shared bookkeeping between block processing and the background Safe owner refresh.
@@ -215,6 +223,7 @@ impl std::fmt::Debug for IndexerState {
             .field("reorg_epoch", &"Arc<AtomicU64>")
             .field("failed_indexed_block_updates", &"Arc<AtomicU64>")
             .field("safe_owner_sync", &"Arc<SafeOwnerSync>")
+            .field("verification_status", &self.verification_status)
             .finish()
     }
 }
@@ -249,6 +258,7 @@ impl IndexerState {
             reorg_epoch: Arc::new(AtomicU64::new(0)),
             failed_indexed_block_updates: Arc::new(AtomicU64::new(0)),
             safe_owner_sync: Arc::new(SafeOwnerSync::default()),
+            verification_status: VerificationStatus::default(),
         }
     }
 
@@ -492,6 +502,23 @@ impl IndexerState {
     /// Marks the current Safe filter set as stale and returns the new epoch.
     pub fn mark_safe_filters_dirty(&self) -> u64 {
         self.safe_filter_epoch.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    /// Returns the post-finality verification status shared with the rest of the process.
+    pub fn verification_status(&self) -> VerificationStatus {
+        self.verification_status.clone()
+    }
+
+    /// Returns whether post-finality verification found a mismatch.
+    pub fn verification_failed(&self) -> bool {
+        self.verification_status.failed()
+    }
+
+    /// Records that post-finality verification found a mismatch.
+    ///
+    /// The flag is sticky: only a process restart clears it.
+    pub fn mark_verification_failed(&self) {
+        self.verification_status.mark_failed();
     }
 }
 

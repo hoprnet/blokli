@@ -145,6 +145,10 @@ impl Args {
                 "indexer.confirmation.max_safe_gap",
             ),
             (
+                "BLOKLI_INDEXER_CONFIRMATION_VERIFY_FINALIZED",
+                "indexer.confirmation.verify_finalized",
+            ),
+            (
                 "BLOKLI_INDEXER_SUBSCRIPTION_EVENT_BUS_CAPACITY",
                 "indexer.subscription.event_bus_capacity",
             ),
@@ -263,6 +267,7 @@ impl Args {
             "indexer.enable_logs_snapshot",
             "indexer.enable_curvy_indexing",
             "indexer.head_tracking.head_subscription",
+            "indexer.confirmation.verify_finalized",
             "api.enabled",
             "api.playground_enabled",
             "api.transactions.enable_revert_reason_tracing",

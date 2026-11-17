@@ -232,6 +232,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                     batch_size: cfg.indexer.safe_tx_prefetch.batch_size,
                     concurrency: cfg.indexer.safe_tx_prefetch.concurrency,
                 },
+                verify_finalized: cfg.indexer.confirmation.verify_finalized,
             };
 
             (

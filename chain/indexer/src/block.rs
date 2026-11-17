@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use std::{
     collections::HashSet,
     fmt::Display as FmtDisplay,
-    future::Future,
+    future::{Future, pending},
     path::Path,
     result::Result as StdResult,
     sync::{
@@ -58,6 +58,7 @@ use crate::{
     snapshot::{SnapshotInfo, SnapshotManager},
     traits::{ChainLogHandler, PrefetchedLogData},
     utils::AbortOnDrop,
+    verification::run_verification,
 };
 
 /// Number of not-yet-committed blocks whose chain data the indexer fetches ahead of time.
@@ -148,8 +149,29 @@ where
     Ok(queued)
 }
 
+/// Runs indexing to completion while the verification task is allowed to finish first.
+///
+/// The combined future completes as soon as indexing finishes, dropping the verification task with
+/// it. Verification finishing earlier only ends its own work; indexing keeps running.
+async fn run_until_indexing_ends<Indexing, Verification>(indexing: Indexing, verification: Verification)
+where
+    Indexing: Future<Output = ()>,
+    Verification: Future<Output = ()>,
+{
+    tokio::pin!(indexing);
+    tokio::pin!(verification);
+    let mut verification_running = true;
+
+    loop {
+        tokio::select! {
+            _ = &mut indexing => break,
+            _ = &mut verification, if verification_running => verification_running = false,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Display)]
-enum LogFilterPhase {
+pub(crate) enum LogFilterPhase {
     HistoricalDiscovery,
     Continuous,
 }
@@ -573,228 +595,273 @@ where
         info!(next_block_to_process, "Indexer start point");
 
         let indexer_state = self.indexer_state.clone();
+        let tip_updates = if self.cfg.verify_finalized {
+            rpc.subscribe_tip()
+        } else {
+            info!("post-finality verification is disabled by configuration");
+            None
+        };
+        let verification_db = db.clone();
+        let verification_handler = logs_handler.clone();
+        let verification_state = indexer_state.clone();
         let (indexing_process, indexing_abort_handle) = abortable(async move {
-            // Update the chain head once again
-            debug!("Updating chain head at indexer startup");
-            let historical_sync_head = Self::update_chain_head(&rpc, chain_head.clone()).await;
-
-            #[cfg(all(feature = "telemetry", not(test)))]
-            {
-                if let Some(metric) = METRIC_INDEXER_SYNC_SOURCE.as_ref() {
-                    metric.set(&["fast-sync"], 0.0);
-                    metric.set(&["rpc"], 1.0);
-                }
-                if let Some(metric) = METRIC_INDEXER_SYNC_PROGRESS.as_ref() {
-                    metric.set(&[&LogFilterPhase::HistoricalDiscovery.to_string()], 0.0);
-                    metric.set(&[&LogFilterPhase::Continuous.to_string()], 0.0);
-                }
-            }
-
-            let mut stream_start_block = next_block_to_process;
-
-            if stream_start_block <= historical_sync_head {
-                let historical_sync_head_u32 = match u64_to_u32(historical_sync_head, "block_number") {
-                    Ok(block_number) => block_number,
-                    Err(error) => {
-                        error!(
-                            historical_sync_head,
-                            %error,
-                            "historical sync head does not fit into u32, terminating indexer task"
-                        );
-                        return;
-                    }
-                };
-
-                info!(
-                    start_block = stream_start_block,
-                    end_block = historical_sync_head,
-                    "Starting historical discovery phase (Safe discovery only, no Safe log filters)"
-                );
-                if let Err(error) = Self::run_historical_phase(
-                    &rpc,
-                    &db,
-                    &logs_handler,
-                    &indexer_state,
-                    stream_start_block,
-                    historical_sync_head,
-                    LogFilterPhase::HistoricalDiscovery,
-                    "discover-safes",
-                )
-                .await
-                {
-                    error!(%error, "historical discovery phase failed");
-                    return;
-                }
-
-                let checksum = match db.update_logs_checksums().await {
-                    Ok(checksum) => checksum,
-                    Err(error) => {
-                        error!(%error, "historical sync checksum finalization failed");
-                        return;
-                    }
-                };
-                if let Err(error) = db.set_indexer_state_info(None, historical_sync_head_u32).await {
-                    error!(%error, "historical sync state finalization failed");
-                    return;
-                }
-
-                info!(
-                    latest_block = historical_sync_head,
-                    checksum = %checksum,
-                    "Historical sync phases completed successfully"
-                );
-
-                stream_start_block = historical_sync_head.saturating_add(1);
-            }
-
-            is_synced.store(true, Ordering::Relaxed);
-            if let Err(error) = tx.try_send(()) {
-                error!(%error, "failed to notify about achieving indexer synchronization")
-            }
-            #[cfg(all(feature = "telemetry", not(test)))]
-            if let Some(metric) = METRIC_INDEXER_SYNC_PROGRESS.as_ref() {
-                metric.set(&[&LogFilterPhase::Continuous.to_string()], 1.0);
-            }
-            let mut safe_filter_epoch = indexer_state.safe_filter_epoch();
-
-            // Owners and threshold come from the chain. The refresh runs as its own task and only performs
-            // RPC reads; this loop lists the pending Safes, stores the results between blocks and reports
-            // Safes that need another read (see `safe_owner_refresh`). The task lives as long as this one.
-            let refresh_goal_block = stream_start_block.saturating_sub(1);
-            let latest_processed_block = Arc::new(AtomicU64::new(refresh_goal_block));
-            let (snapshot_tx, mut snapshot_rx) = channel::<SafeSnapshotRead>(SAFE_SNAPSHOT_CONCURRENCY * 2);
+            // Shared by the verification task, the indexing loop and the Safe owner refresh task.
             let rpc = Arc::new(rpc);
-            // The lookup of the Safes to refresh is retried; if it keeps failing the phase fails below, because
-            // nothing rescans later and Safes whose owners changed during downtime would stay stale.
-            let mut startup_failure: Option<String> = None;
-            let _owner_refresh_guard = {
-                match queue_pending_safe_owner_snapshots(
-                    || db.get_safes_pending_owner_snapshot(None, refresh_goal_block),
-                    &indexer_state,
-                    PENDING_SAFES_LOOKUP_ATTEMPTS,
-                    PENDING_SAFES_LOOKUP_INITIAL_BACKOFF,
-                )
-                .await
-                {
-                    Ok(queued) => {
-                        info!(
-                            safes = queued,
-                            snapshot_block = refresh_goal_block,
-                            "Safes pending an owner snapshot"
-                        );
-                        Some(AbortOnDrop(tokio::spawn(supervise_safe_owner_refresh(
-                            rpc.clone(),
-                            indexer_state.clone(),
-                            latest_processed_block.clone(),
-                            snapshot_tx,
-                            RefreshTimings::default(),
-                        ))))
-                    }
-                    Err(error) => {
-                        startup_failure = Some(format!("failed to list Safes pending an owner snapshot: {error}"));
-                        None
-                    }
-                }
-            };
-
-            // Reason why the continuous phase stopped, if it stopped because of a failure.
-            // A failure here must not leave the process running without an indexer, so it is
-            // funnelled into the same termination handling as an exhausted event stream.
-            let termination_reason: Option<String> = 'stream_refresh: loop {
-                if let Some(reason) = startup_failure.take() {
-                    break 'stream_refresh Some(reason);
-                }
-                let log_filters = match Self::generate_log_filters(&db, &logs_handler, LogFilterPhase::Continuous).await
-                {
-                    Ok(log_filters) => log_filters,
-                    Err(error) => {
-                        break 'stream_refresh Some(format!("failed to construct continuous log filters: {error}"));
-                    }
-                };
-                let block_stream = match rpc.try_stream_logs(stream_start_block, log_filters, true) {
-                    Ok(block_stream) => block_stream,
-                    Err(error) => {
-                        break 'stream_refresh Some(format!("failed to construct continuous block stream: {error}"));
-                    }
-                };
-                let mut event_stream = Box::pin(Self::prefetch_block_data(&logs_handler, block_stream, true));
-
-                loop {
-                    let (block, prefetched) = tokio::select! {
-                        item = event_stream.next() => match item {
-                            Some(item) => item,
-                            None => break,
-                        },
-                        read = snapshot_rx.next() => {
-                            match read {
-                                Some(read) => store_safe_owner_snapshot(&db, &indexer_state, read).await,
-                                // The supervisor only ends when it gave up restarting the task. Without the
-                                // refresh, Safes would silently keep missing owners: fail like any other
-                                // unrecoverable indexer failure.
-                                None => {
-                                    error!("Safe owner refresh task has stopped");
-                                    break 'stream_refresh Some("the Safe owner refresh task has stopped".into());
-                                }
-                            }
-                            continue;
-                        }
-                    };
-                    let store_started = Instant::now();
-                    if let Err(error) = Self::store_block_logs(&db, &logs_handler, &block).await {
-                        break 'stream_refresh Some(format!(
-                            "failed to store logs of live block {}: {error}",
-                            block.block_id
-                        ));
-                    }
-                    record_block_step("store", store_started);
-
-                    let process_started = Instant::now();
-                    Self::process_block(
-                        &db,
-                        &logs_handler,
-                        block.clone(),
-                        false,
-                        true,
-                        &indexer_state,
-                        true,
-                        prefetched,
+            let verification = async {
+                if let Some(tip_updates) = tip_updates {
+                    run_verification(
+                        tip_updates,
+                        rpc.as_ref(),
+                        verification_db,
+                        verification_handler,
+                        verification_state,
+                        None,
                     )
                     .await;
-                    record_block_step("process", process_started);
-
-                    stream_start_block = block.block_id.saturating_add(1);
-                    latest_processed_block.store(block.block_id, Ordering::Relaxed);
-
-                    let latest_safe_filter_epoch = indexer_state.safe_filter_epoch();
-                    if latest_safe_filter_epoch != safe_filter_epoch {
-                        safe_filter_epoch = latest_safe_filter_epoch;
-                        info!(
-                            next_block = stream_start_block,
-                            safe_filter_epoch, "Refreshing RPC log filters after Safe discovery"
-                        );
-                        continue 'stream_refresh;
-                    }
+                } else {
+                    debug!("chain tip tracking is unavailable, post-finality verification is off");
                 }
-
-                break 'stream_refresh None;
             };
 
-            match termination_reason {
-                Some(reason) => {
-                    error!(reason, "Indexer has terminated due to an unrecoverable failure");
-                    if panic_on_completion {
-                        panic!("Indexer has terminated due to an unrecoverable failure: {reason}");
+            let indexing = async {
+                // Update the chain head once again
+                debug!("Updating chain head at indexer startup");
+                let historical_sync_head = Self::update_chain_head(&rpc, chain_head.clone()).await;
+
+                #[cfg(all(feature = "telemetry", not(test)))]
+                {
+                    if let Some(metric) = METRIC_INDEXER_SYNC_SOURCE.as_ref() {
+                        metric.set(&["fast-sync"], 0.0);
+                        metric.set(&["rpc"], 1.0);
+                    }
+                    if let Some(metric) = METRIC_INDEXER_SYNC_PROGRESS.as_ref() {
+                        metric.set(&[&LogFilterPhase::HistoricalDiscovery.to_string()], 0.0);
+                        metric.set(&[&LogFilterPhase::Continuous.to_string()], 0.0);
                     }
                 }
-                None => {
-                    if panic_on_completion {
-                        panic!(
-                            "Indexer event stream has been terminated. This error may be caused by a failed RPC \
-                             connection."
-                        );
+
+                let mut stream_start_block = next_block_to_process;
+
+                if stream_start_block <= historical_sync_head {
+                    let historical_sync_head_u32 = match u64_to_u32(historical_sync_head, "block_number") {
+                        Ok(block_number) => block_number,
+                        Err(error) => {
+                            error!(
+                                historical_sync_head,
+                                %error,
+                                "historical sync head does not fit into u32, terminating indexer task"
+                            );
+                            return;
+                        }
+                    };
+
+                    info!(
+                        start_block = stream_start_block,
+                        end_block = historical_sync_head,
+                        "Starting historical discovery phase (Safe discovery only, no Safe log filters)"
+                    );
+                    if let Err(error) = Self::run_historical_phase(
+                        &rpc,
+                        &db,
+                        &logs_handler,
+                        &indexer_state,
+                        stream_start_block,
+                        historical_sync_head,
+                        LogFilterPhase::HistoricalDiscovery,
+                        "discover-safes",
+                    )
+                    .await
+                    {
+                        error!(%error, "historical discovery phase failed");
+                        return;
+                    }
+
+                    let checksum = match db.update_logs_checksums().await {
+                        Ok(checksum) => checksum,
+                        Err(error) => {
+                            error!(%error, "historical sync checksum finalization failed");
+                            return;
+                        }
+                    };
+                    if let Err(error) = db.set_indexer_state_info(None, historical_sync_head_u32).await {
+                        error!(%error, "historical sync state finalization failed");
+                        return;
+                    }
+
+                    info!(
+                        latest_block = historical_sync_head,
+                        checksum = %checksum,
+                        "Historical sync phases completed successfully"
+                    );
+
+                    stream_start_block = historical_sync_head.saturating_add(1);
+                }
+
+                is_synced.store(true, Ordering::Relaxed);
+                if let Err(error) = tx.try_send(()) {
+                    error!(%error, "failed to notify about achieving indexer synchronization")
+                }
+                #[cfg(all(feature = "telemetry", not(test)))]
+                if let Some(metric) = METRIC_INDEXER_SYNC_PROGRESS.as_ref() {
+                    metric.set(&[&LogFilterPhase::Continuous.to_string()], 1.0);
+                }
+                let mut safe_filter_epoch = indexer_state.safe_filter_epoch();
+
+                // Owners and threshold come from the chain. The refresh runs as its own task and only performs
+                // RPC reads; this loop lists the pending Safes, stores the results between blocks and reports
+                // Safes that need another read (see `safe_owner_refresh`). The task lives as long as this one.
+                let refresh_goal_block = stream_start_block.saturating_sub(1);
+                let latest_processed_block = Arc::new(AtomicU64::new(refresh_goal_block));
+                let (snapshot_tx, mut snapshot_rx) = channel::<SafeSnapshotRead>(SAFE_SNAPSHOT_CONCURRENCY * 2);
+                // The lookup of the Safes to refresh is retried; if it keeps failing the phase fails below, because
+                // nothing rescans later and Safes whose owners changed during downtime would stay stale.
+                let mut startup_failure: Option<String> = None;
+                let _owner_refresh_guard = {
+                    match queue_pending_safe_owner_snapshots(
+                        || db.get_safes_pending_owner_snapshot(None, refresh_goal_block),
+                        &indexer_state,
+                        PENDING_SAFES_LOOKUP_ATTEMPTS,
+                        PENDING_SAFES_LOOKUP_INITIAL_BACKOFF,
+                    )
+                    .await
+                    {
+                        Ok(queued) => {
+                            info!(
+                                safes = queued,
+                                snapshot_block = refresh_goal_block,
+                                "Safes pending an owner snapshot"
+                            );
+                            Some(AbortOnDrop(tokio::spawn(supervise_safe_owner_refresh(
+                                rpc.clone(),
+                                indexer_state.clone(),
+                                latest_processed_block.clone(),
+                                snapshot_tx,
+                                RefreshTimings::default(),
+                            ))))
+                        }
+                        Err(error) => {
+                            startup_failure = Some(format!("failed to list Safes pending an owner snapshot: {error}"));
+                            None
+                        }
+                    }
+                };
+
+                // Reason why the continuous phase stopped, if it stopped because of a failure.
+                // A failure here must not leave the process running without an indexer, so it is
+                // funnelled into the same termination handling as an exhausted event stream.
+                let termination_reason: Option<String> = 'stream_refresh: loop {
+                    if let Some(reason) = startup_failure.take() {
+                        break 'stream_refresh Some(reason);
+                    }
+                    let log_filters = match Self::generate_log_filters(&db, &logs_handler, LogFilterPhase::Continuous)
+                        .await
+                    {
+                        Ok(log_filters) => log_filters,
+                        Err(error) => {
+                            break 'stream_refresh Some(format!("failed to construct continuous log filters: {error}"));
+                        }
+                    };
+                    let block_stream = match rpc.try_stream_logs(stream_start_block, log_filters, true) {
+                        Ok(block_stream) => block_stream,
+                        Err(error) => {
+                            break 'stream_refresh Some(format!(
+                                "failed to construct continuous block stream: {error}"
+                            ));
+                        }
+                    };
+                    let mut event_stream = Box::pin(Self::prefetch_block_data(&logs_handler, block_stream, true));
+
+                    loop {
+                        let (block, prefetched) = tokio::select! {
+                            item = event_stream.next() => match item {
+                                Some(item) => item,
+                                None => break,
+                            },
+                            read = snapshot_rx.next() => {
+                                match read {
+                                    Some(read) => store_safe_owner_snapshot(&db, &indexer_state, read).await,
+                                    // The supervisor only ends when it gave up restarting the task. Without the
+                                    // refresh, Safes would silently keep missing owners: fail like any other
+                                    // unrecoverable indexer failure.
+                                    None => {
+                                        error!("Safe owner refresh task has stopped");
+                                        break 'stream_refresh Some("the Safe owner refresh task has stopped".into());
+                                    }
+                                }
+                                continue;
+                            }
+                        };
+                        if indexer_state.verification_failed() {
+                            error!(
+                                block_id = block.block_id,
+                                "post-finality verification failed, the indexer stops advancing until the daemon \
+                                 restarts"
+                            );
+                            // The flag is sticky, so the indexer never advances again. Awaiting forever
+                            // keeps the process alive: the API keeps serving the already indexed data
+                            // until an operator restarts the daemon.
+                            pending::<()>().await;
+                        }
+
+                        let store_started = Instant::now();
+                        if let Err(error) = Self::store_block_logs(&db, &logs_handler, &block).await {
+                            break 'stream_refresh Some(format!(
+                                "failed to store logs of live block {}: {error}",
+                                block.block_id
+                            ));
+                        }
+                        record_block_step("store", store_started);
+
+                        let process_started = Instant::now();
+                        Self::process_block(
+                            &db,
+                            &logs_handler,
+                            block.clone(),
+                            false,
+                            true,
+                            &indexer_state,
+                            true,
+                            prefetched,
+                        )
+                        .await;
+                        record_block_step("process", process_started);
+
+                        stream_start_block = block.block_id.saturating_add(1);
+                        latest_processed_block.store(block.block_id, Ordering::Relaxed);
+
+                        let latest_safe_filter_epoch = indexer_state.safe_filter_epoch();
+                        if latest_safe_filter_epoch != safe_filter_epoch {
+                            safe_filter_epoch = latest_safe_filter_epoch;
+                            info!(
+                                next_block = stream_start_block,
+                                safe_filter_epoch, "Refreshing RPC log filters after Safe discovery"
+                            );
+                            continue 'stream_refresh;
+                        }
+                    }
+
+                    break 'stream_refresh None;
+                };
+
+                match termination_reason {
+                    Some(reason) => {
+                        error!(reason, "Indexer has terminated due to an unrecoverable failure");
+                        if panic_on_completion {
+                            panic!("Indexer has terminated due to an unrecoverable failure: {reason}");
+                        }
+                    }
+                    None => {
+                        if panic_on_completion {
+                            panic!(
+                                "Indexer event stream has been terminated. This error may be caused by a failed RPC \
+                                 connection."
+                            );
+                        }
                     }
                 }
-            }
+            };
+
+            run_until_indexing_ends(indexing, verification).await;
         });
         let _indexing_task = tokio::spawn(indexing_process);
 
@@ -877,7 +944,7 @@ where
     /// * `all` contains every active filter.
     /// * `token` contains owner-filtered token Approval filters.
     /// * `no_token` contains non-token filters for historical discovery.
-    async fn generate_log_filters(db: &Db, logs_handler: &U, phase: LogFilterPhase) -> Result<FilterSet> {
+    pub(crate) async fn generate_log_filters(db: &Db, logs_handler: &U, phase: LogFilterPhase) -> Result<FilterSet> {
         let static_addresses = logs_handler.contract_addresses();
         let addresses_no_token = static_addresses
             .iter()
@@ -1785,7 +1852,7 @@ mod tests {
     };
 
     use async_trait::async_trait;
-    use blokli_chain_rpc::{BlockWithLogs, SafeOwnersSnapshot, errors::RpcError};
+    use blokli_chain_rpc::{BlockWithLogs, SafeOwnersSnapshot, errors::RpcError, tip::ChainTip};
     use blokli_chain_types::{ContractAddresses, chain_events::ChainEventType};
     use blokli_db::{
         TargetDb, accounts::BlokliDbAccountOperations, db::BlokliDb, errors::DbSqlError,
@@ -1814,11 +1881,13 @@ mod tests {
     };
     use mockall::{mock, predicate};
     use multiaddr::Multiaddr;
+    use tokio::sync::watch;
 
     use super::*;
     use crate::{
         safe_owner_refresh::SAFE_SNAPSHOT_BATCH_SIZE,
         traits::{ChainLogHandler, MockChainLogHandler, PrefetchedTransactions},
+        verification::compare_logs,
     };
 
     lazy_static::lazy_static! {
@@ -1912,7 +1981,22 @@ mod tests {
             async fn get_transaction_count(&self, address: Address) -> blokli_chain_rpc::errors::Result<u64>;
             async fn get_channel_closure_notice_period(&self) -> blokli_chain_rpc::errors::Result<std::time::Duration>;
             async fn get_hopr_module_from_safe(&self, safe_address: Address) -> blokli_chain_rpc::errors::Result<Option<Address>>;
+
+            fn subscribe_tip(&self) -> Option<watch::Receiver<Option<ChainTip>>>;
+            async fn get_logs_for_block_range(
+                &self,
+                filters: Vec<Filter>,
+                from_block: u64,
+                to_block: u64,
+            ) -> blokli_chain_rpc::errors::Result<Vec<SerializableLog>>;
         }
+    }
+
+    /// Mock RPC operations that do not expose a chain tip, so post-finality verification stays off.
+    fn mock_rpc() -> MockHoprIndexerOps {
+        let mut rpc = MockHoprIndexerOps::new();
+        rpc.expect_subscribe_tip().returning(|| None);
+        rpc
     }
 
     #[derive(Clone)]
@@ -3323,7 +3407,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_indexer_refreshes_safe_filters_after_safe_discovery() -> anyhow::Result<()> {
-        let mut rpc = MockHoprIndexerOps::new();
+        let mut rpc = mock_rpc();
         let db = BlokliDb::new_in_memory().await?;
         let indexer_state = IndexerState::default();
         let cfg = IndexerConfig::default();
@@ -3411,10 +3495,226 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_indexer_halts_without_processing_blocks_when_verification_failed() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let addr = Address::new(b"my address 123456789");
+        let topic = Hash::create(&[b"my topic"]);
+        db.ensure_logs_origin(vec![(addr, topic)]).await?;
+
+        let head_block = 10;
+        let block = BlockWithLogs {
+            block_id: head_block + 1,
+            logs: build_announcement_logs(addr, 1, head_block + 1, 1)?
+                .into_iter()
+                .collect(),
+        };
+
+        let mut handlers = MockChainLogHandler::new();
+        handlers.expect_contract_addresses().return_const(vec![addr]);
+        handlers
+            .expect_contract_address_topics()
+            .withf(move |x| x == &addr)
+            .return_const(vec![B256::from_slice(topic.as_ref())]);
+        handlers
+            .expect_contract_addresses_map()
+            .return_const(ContractAddresses::default());
+
+        let mut rpc = mock_rpc();
+        rpc.expect_block_number().times(2).returning(move || Ok(head_block));
+        rpc.expect_get_channel_closure_notice_period()
+            .returning(|| Ok(Duration::from_secs(1)));
+        rpc.expect_try_stream_logs()
+            .times(1)
+            .withf(move |start: &u64, _filters: &FilterSet, is_synced: &bool| *start == head_block + 1 && *is_synced)
+            .return_once(move |_, _, _| Ok(Box::pin(futures::stream::iter(vec![block]))));
+
+        let indexer_state = IndexerState::default();
+        indexer_state.mark_verification_failed();
+
+        let indexer_cfg = IndexerConfig::new(
+            head_block + 1,
+            true,
+            false,
+            false,
+            None,
+            None,
+            "/tmp/test_data".to_string(),
+            1000,
+            10,
+        );
+        let indexer = Indexer::new(rpc, handlers, db.clone(), indexer_cfg, indexer_state).without_panic_on_completion();
+
+        let abort_handle = indexer.start().await.expect("indexer should start successfully");
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        abort_handle.abort();
+
+        assert_eq!(
+            db.get_logs_count(None, None).await?,
+            0,
+            "no block may be stored while post-finality verification has failed"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_indexing_completion_ends_the_task_while_verification_runs() {
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            run_until_indexing_ends(async {}, std::future::pending::<()>()),
+        )
+        .await
+        .expect("indexing completion must not wait for the verification task");
+    }
+
+    #[tokio::test]
+    async fn test_verification_completion_does_not_end_indexing() {
+        let completed = Arc::new(StdAtomicBool::new(false));
+        let completed_in_indexing = completed.clone();
+        let indexing = async move {
+            tokio::task::yield_now().await;
+            completed_in_indexing.store(true, StdOrdering::SeqCst);
+        };
+
+        run_until_indexing_ends(indexing, async {}).await;
+
+        assert!(
+            completed.load(StdOrdering::SeqCst),
+            "indexing must run to completion after verification finishes"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_stored_block_logs_match_the_canonical_no_token_set() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let announcement_address = Address::from([0x11; 20]);
+        let token_address = Address::from([0x22; 20]);
+        let block_hash: Hash = Hash::create(&[b"block 11"]);
+
+        let mut handlers = MockChainLogHandler::new();
+        handlers
+            .expect_contract_addresses()
+            .return_const(vec![announcement_address, token_address]);
+        handlers
+            .expect_contract_addresses_map()
+            .return_const(ContractAddresses {
+                token: token_address,
+                ..ContractAddresses::default()
+            });
+        handlers.expect_contract_address_topics().return_const(Vec::new());
+
+        let base_log = build_announcement_logs(announcement_address, 1, 11, 0)?
+            .into_iter()
+            .next()
+            .expect("a log should be built");
+        let token_log = SerializableLog {
+            address: token_address,
+            topics: vec![Approval::SIGNATURE_HASH.0],
+            data: vec![1, 2, 3],
+            tx_index: 1,
+            block_number: 11,
+            block_hash: block_hash.into(),
+            tx_hash: Hash::create(&[b"token tx"]).into(),
+            log_index: 1,
+            removed: false,
+            ..Default::default()
+        };
+        let block = BlockWithLogs {
+            block_id: 11,
+            logs: BTreeSet::from([base_log.clone(), token_log]),
+        };
+
+        Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::store_block_logs(&db, &handlers, &block).await?;
+
+        let stored = db.get_logs(Some(11), Some(0)).await?;
+        assert_eq!(stored.len(), 1, "token logs are filtered out before storage");
+
+        // The canonical set as an `eth_getLogs` call with the non-token filters returns it.
+        let canonical = vec![base_log];
+        let static_addresses = BTreeSet::from([announcement_address, token_address]);
+        let mismatch = compare_logs(&stored, &canonical, &static_addresses);
+
+        assert!(
+            mismatch.is_empty(),
+            "the stored non-token logs must match the canonical non-token set: {mismatch:?}"
+        );
+
+        Ok(())
+    }
+
+    /// Starts the indexer with the given verification setting and returns how often it subscribed
+    /// to chain tip updates.
+    async fn start_indexer_and_count_tip_subscriptions(verify_finalized: bool) -> anyhow::Result<usize> {
+        let db = BlokliDb::new_in_memory().await?;
+        let addr = Address::new(b"my address 123456789");
+        let topic = Hash::create(&[b"my topic"]);
+        db.ensure_logs_origin(vec![(addr, topic)]).await?;
+
+        let mut handlers = MockChainLogHandler::new();
+        handlers.expect_contract_addresses().return_const(vec![addr]);
+        handlers
+            .expect_contract_address_topics()
+            .withf(move |x| x == &addr)
+            .return_const(vec![B256::from_slice(topic.as_ref())]);
+        handlers
+            .expect_contract_addresses_map()
+            .return_const(ContractAddresses::default());
+
+        let head_block = 10;
+        let subscribe_calls = Arc::new(StdAtomicUsize::new(0));
+        let calls = subscribe_calls.clone();
+        let mut rpc = MockHoprIndexerOps::new();
+        rpc.expect_subscribe_tip().returning(move || {
+            calls.fetch_add(1, StdOrdering::SeqCst);
+            None
+        });
+        rpc.expect_block_number().times(2).returning(move || Ok(head_block));
+        rpc.expect_get_channel_closure_notice_period()
+            .returning(|| Ok(Duration::from_secs(1)));
+        rpc.expect_try_stream_logs()
+            .times(1)
+            .withf(move |start: &u64, _filters: &FilterSet, is_synced: &bool| *start == head_block + 1 && *is_synced)
+            .return_once(|_, _, _| Ok(Box::pin(futures::stream::empty())));
+
+        let mut cfg = IndexerConfig::new(
+            head_block + 1,
+            true,
+            false,
+            false,
+            None,
+            None,
+            "/tmp/test_data".to_string(),
+            1000,
+            10,
+        );
+        cfg.verify_finalized = verify_finalized;
+        let indexer = Indexer::new(rpc, handlers, db, cfg, IndexerState::default()).without_panic_on_completion();
+
+        let abort_handle = indexer.start().await.expect("indexer should start successfully");
+        let subscriptions = subscribe_calls.load(StdOrdering::SeqCst);
+        abort_handle.abort();
+
+        Ok(subscriptions)
+    }
+
+    #[tokio::test]
+    async fn test_post_finality_verification_subscribes_to_the_tip_when_enabled() -> anyhow::Result<()> {
+        assert_eq!(start_indexer_and_count_tip_subscriptions(true).await?, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_post_finality_verification_does_not_start_when_disabled() -> anyhow::Result<()> {
+        assert_eq!(start_indexer_and_count_tip_subscriptions(false).await?, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_indexer_should_check_the_db_for_last_processed_block_and_supply_none_if_none_is_found()
     -> anyhow::Result<()> {
         let mut handlers = MockChainLogHandler::new();
-        let mut rpc = MockHoprIndexerOps::new();
+        let mut rpc = mock_rpc();
         let db = BlokliDb::new_in_memory().await?;
 
         let addr = Address::new(b"my address 123456789");
@@ -3467,7 +3767,7 @@ mod tests {
     async fn test_indexer_should_check_the_db_for_last_processed_block_and_supply_it_when_found() -> anyhow::Result<()>
     {
         let mut handlers = MockChainLogHandler::new();
-        let mut rpc = MockHoprIndexerOps::new();
+        let mut rpc = mock_rpc();
         let db = BlokliDb::new_in_memory().await?;
         let head_block = 1000;
         let latest_block = 15u64;
@@ -3544,7 +3844,7 @@ mod tests {
     #[tokio::test]
     async fn test_indexer_should_pass_blocks_that_are_finalized() -> anyhow::Result<()> {
         let mut handlers = MockChainLogHandler::new();
-        let mut rpc = MockHoprIndexerOps::new();
+        let mut rpc = mock_rpc();
         let db = BlokliDb::new_in_memory().await?;
 
         let cfg = IndexerConfig::default();
@@ -3638,7 +3938,7 @@ mod tests {
             let (tx, rx) = unbounded::<BlockWithLogs>();
 
             let head_block = 5;
-            let mut rpc = MockHoprIndexerOps::new();
+            let mut rpc = mock_rpc();
             rpc.expect_block_number().returning(move || Ok(head_block));
             rpc.expect_try_stream_logs()
                 .times(1)
@@ -3738,7 +4038,7 @@ mod tests {
             let (tx, rx) = unbounded::<BlockWithLogs>();
 
             let head_block = 5;
-            let mut rpc = MockHoprIndexerOps::new();
+            let mut rpc = mock_rpc();
             rpc.expect_block_number().returning(move || Ok(head_block));
             rpc.expect_try_stream_logs()
                 .times(1)
@@ -3798,7 +4098,7 @@ mod tests {
     #[tokio::test]
     async fn test_pre_start_fails_when_configured_snapshot_restore_fails() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
-        let rpc = MockHoprIndexerOps::new();
+        let rpc = mock_rpc();
         let handlers = MockChainLogHandler::new();
         let temp_dir = tempfile::tempdir()?;
 
@@ -3844,7 +4144,7 @@ mod tests {
     #[test_log::test(tokio::test)]
     async fn test_indexer_should_yield_back_once_the_past_events_are_indexed() -> anyhow::Result<()> {
         let mut handlers = MockChainLogHandler::new();
-        let mut rpc = MockHoprIndexerOps::new();
+        let mut rpc = mock_rpc();
         let db = BlokliDb::new_in_memory().await?;
 
         let cfg = IndexerConfig::default();
@@ -3941,7 +4241,7 @@ mod tests {
 
         let (mut tx, rx) = unbounded::<BlockWithLogs>();
 
-        let mut rpc = MockHoprIndexerOps::new();
+        let mut rpc = mock_rpc();
         rpc.expect_try_stream_logs()
             .once()
             .withf(move |x: &u64, _y: &FilterSet, is_synced: &bool| *x == last_processed_block + 1 && !*is_synced)

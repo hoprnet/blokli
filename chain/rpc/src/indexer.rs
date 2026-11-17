@@ -34,6 +34,7 @@ use hopr_bindings::exports::alloy::{
 use hopr_types::telemetry::SimpleGauge;
 use hopr_types::{crypto::types::Hash, primitive::prelude::*};
 use rust_stream_ext_concurrent::then_concurrent::StreamThenConcurrentExt;
+use tokio::sync::watch;
 use tracing::{debug, error, trace, warn};
 
 use crate::{
@@ -44,6 +45,7 @@ use crate::{
         SafeSingleton::{getOwnersCall, getThresholdCall},
         is_log_block_range_limit_error,
     },
+    tip::ChainTip,
     transport::HttpRequestor,
 };
 
@@ -675,6 +677,28 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
             });
         }
         Ok(snapshots)
+    }
+
+    fn subscribe_tip(&self) -> Option<watch::Receiver<Option<ChainTip>>> {
+        self.tip_tracker().ensure_started();
+        Some(self.tip_tracker().subscribe())
+    }
+
+    async fn get_logs_for_block_range(
+        &self,
+        filters: Vec<Filter>,
+        from_block: u64,
+        to_block: u64,
+    ) -> Result<Vec<SerializableLog>> {
+        let mut logs = Vec::new();
+        let mut log_stream = self.stream_logs(filters, from_block, to_block);
+
+        while let Some(result) = log_stream.next().await {
+            logs.push(SerializableLog::from(result?));
+        }
+
+        logs.sort_by_key(|log| (log.block_number, log.tx_index, log.log_index));
+        Ok(logs)
     }
 
     async fn get_xdai_balance(&self, address: Address) -> Result<XDaiBalance> {

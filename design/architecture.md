@@ -184,6 +184,9 @@ RPC Endpoint
   catches up over RPC from the snapshot watermark for faster initial sync
 - **Finality Awareness**: Only processes blocks after configured confirmation count to avoid reorg complications
 - **Reorg Handling**: Detects blockchain reorganizations by tracking block hashes and marks affected logs as removed
+- **Post-Finality Verification**: Re-checks every block that was indexed before it was final once the chain reports it final, by re-fetching
+  the canonical logs of the finalized range and comparing them with the stored ones. A difference halts the indexer, marks the service as
+  not ready, and is counted in a metric, while a failed fetch is retried on the next tip update.
 - **Watermark Tracking**: Maintains precise last processed position using (block, tx_index, log_index) triplet for exact resume capability
 - **Dual Database Support**: Separates logs (high write volume) from indexed state (frequent reads) to reduce contention
 

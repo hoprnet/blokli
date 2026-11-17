@@ -5,6 +5,7 @@
 //! 1. Database is connected and has chain info
 //! 2. RPC is reachable
 //! 3. Indexer lag is within acceptable limits
+//! 4. Post-finality verification has not found a mismatch
 //!
 //! The readiness state is cached and updated periodically, with out-of-band refreshes for fast transitions.
 //! Updates are triggered by:
@@ -17,6 +18,7 @@ use std::sync::Arc;
 
 use async_broadcast::{Receiver, Sender, broadcast};
 use async_graphql::Enum;
+use blokli_chain_indexer::verification::VerificationStatus;
 use blokli_chain_rpc::rpc::RpcOperations;
 use blokli_db_entity::prelude::ChainInfo;
 use sea_orm::{DatabaseConnection, EntityTrait};
@@ -43,6 +45,7 @@ pub struct ReadinessChecker {
     db: DatabaseConnection,
     rpc_operations: Arc<RpcOperations<blokli_chain_rpc::transport::ReqwestClient>>,
     health_config: HealthConfig,
+    verification_status: VerificationStatus,
 }
 
 impl ReadinessChecker {
@@ -62,7 +65,14 @@ impl ReadinessChecker {
             db,
             rpc_operations,
             health_config,
+            verification_status: VerificationStatus::default(),
         }
+    }
+
+    /// Attaches the post-finality verification status checked for readiness.
+    pub fn with_verification_status(mut self, verification_status: VerificationStatus) -> Self {
+        self.verification_status = verification_status;
+        self
     }
 
     /// Get the current cached readiness state (fast, non-blocking)
@@ -127,6 +137,14 @@ impl ReadinessChecker {
     /// Returns a tuple of (`ReadinessState`, health status label) where the
     /// health status label is one of the `metrics::HEALTH_STATUS_*` constants.
     async fn check_readiness(&self) -> (ReadinessState, &'static str) {
+        // A post-finality verification mismatch means the indexed data can no longer be trusted,
+        // so readiness stays failed until an operator restarts the daemon. Checking it first makes
+        // it win over the other conditions; the transition log reports the change once.
+        if self.verification_status.failed() {
+            debug!("Post-finality verification found a mismatch, indexed data is no longer trusted");
+            return (ReadinessState::NotReady, metrics::HEALTH_STATUS_VERIFICATION_FAILED);
+        }
+
         // 1. Check database connectivity by querying chain_info
         let indexed_block = match ChainInfo::find().one(&self.db).await {
             Ok(Some(info)) => Some(info.last_indexed_block),
@@ -179,5 +197,52 @@ impl ReadinessChecker {
         }
 
         (ReadinessState::Ready, metrics::HEALTH_STATUS_OK)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use blokli_chain_indexer::IndexerState;
+    use blokli_chain_rpc::{
+        rpc::{RpcOperations, RpcOperationsConfig},
+        transport::ReqwestClient,
+    };
+    use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
+    use hopr_bindings::exports::alloy::{rpc::client::ClientBuilder, transports::http::ReqwestTransport};
+
+    use super::{ReadinessChecker, ReadinessState};
+    use crate::{config::HealthConfig, metrics};
+
+    fn test_rpc_operations() -> Arc<RpcOperations<ReqwestClient>> {
+        let transport = ReqwestTransport::new("http://localhost:8545".parse().expect("valid transport URL"));
+        let rpc_client = ClientBuilder::default().transport(transport.clone(), transport.guess_local());
+
+        Arc::new(
+            RpcOperations::new(rpc_client, ReqwestClient::new(), RpcOperationsConfig::default(), None)
+                .expect("RPC operations should be constructible"),
+        )
+    }
+
+    #[tokio::test]
+    async fn verification_failure_reports_not_ready() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let indexer_state = IndexerState::default();
+        indexer_state.mark_verification_failed();
+
+        let checker = ReadinessChecker::new(
+            db.conn(TargetDb::Index).clone(),
+            test_rpc_operations(),
+            HealthConfig::default(),
+        )
+        .with_verification_status(indexer_state.verification_status());
+
+        let (state, health_status) = checker.check_readiness().await;
+
+        assert_eq!(state, ReadinessState::NotReady);
+        assert_eq!(health_status, metrics::HEALTH_STATUS_VERIFICATION_FAILED);
+
+        Ok(())
     }
 }

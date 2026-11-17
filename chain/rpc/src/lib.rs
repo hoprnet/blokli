@@ -29,8 +29,9 @@ use hopr_bindings::exports::alloy::{
 };
 use hopr_types::{crypto::types::Hash, internal::prelude::WinningProbability, primitive::prelude::*};
 use serde::{Deserialize, Serialize};
+use tokio::sync::watch;
 
-use crate::{RetryAction::NoRetry, errors::Result};
+use crate::{RetryAction::NoRetry, errors::Result, tip::ChainTip};
 
 pub mod client;
 pub mod errors;
@@ -578,6 +579,30 @@ pub trait HoprIndexerRpcOperations {
             snapshots.push(self.get_safe_owners_and_threshold(safe_address, block).await);
         }
         Ok(snapshots)
+    }
+
+    /// Subscribes to the chain tip updates that drive post-finality verification.
+    ///
+    /// The indexer re-checks the blocks it indexed before they were final once the chain tip
+    /// tracker publishes that they are. Implementations that do not track the chain tip return
+    /// `None`, which leaves post-finality verification off.
+    fn subscribe_tip(&self) -> Option<watch::Receiver<Option<ChainTip>>> {
+        None
+    }
+
+    /// Fetches the canonical logs of an inclusive block range with the given filters.
+    ///
+    /// This is the range counterpart of [`Self::try_stream_logs`]: it uses the same filters and the
+    /// same `eth_getLogs` request path, including its block range chunking, but does not wait for
+    /// the tip to advance. The default implementation reports that the range cannot be fetched.
+    async fn get_logs_for_block_range(
+        &self,
+        filters: Vec<Filter>,
+        from_block: u64,
+        to_block: u64,
+    ) -> Result<Vec<SerializableLog>> {
+        let _ = (filters, from_block, to_block);
+        Err(errors::RpcError::Other("log range fetch is not supported".to_string()))
     }
 
     /// Retrieves on-chain xdai balance of the given address.
