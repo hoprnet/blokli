@@ -60,12 +60,6 @@ pub struct IndexerConfig {
     #[default(false)]
     pub enable_logs_snapshot: bool,
 
-    /// Whether to index Safe contract events for discovered Safes.
-    ///
-    /// Default is `false`.
-    #[default(false)]
-    pub enable_safe_indexing: bool,
-
     /// Whether to index note and nullifier events from the configured Curvy Aggregator.
     ///
     /// Default is `false`.
@@ -121,7 +115,6 @@ impl IndexerConfig {
     /// * `start_block_number` - The block number from which to start indexing
     /// * `fast_sync` - Whether to enable fast synchronization during startup
     /// * `enable_logs_snapshot` - Whether to enable logs snapshot download
-    /// * `enable_safe_indexing` - Whether to index Safe contract events for discovered Safes
     /// * `enable_curvy_indexing` - Whether to index Curvy Aggregator note and nullifier events
     /// * `logs_snapshot_url` - URL to download logs snapshot from
     /// * `logs_snapshot_sha256` - Expected SHA-256 hex digest of the logs snapshot archive
@@ -137,7 +130,6 @@ impl IndexerConfig {
         start_block_number: u64,
         fast_sync: bool,
         enable_logs_snapshot: bool,
-        enable_safe_indexing: bool,
         enable_curvy_indexing: bool,
         logs_snapshot_url: Option<String>,
         logs_snapshot_sha256: Option<String>,
@@ -149,7 +141,6 @@ impl IndexerConfig {
             start_block_number,
             fast_sync,
             enable_logs_snapshot,
-            enable_safe_indexing,
             enable_curvy_indexing,
             logs_snapshot_url,
             logs_snapshot_sha256,
@@ -263,7 +254,6 @@ mod tests {
             true,
             true,
             false,
-            false,
             Some(logs_snapshot_url),
             Some(VALID_SHA256.to_string()),
             data_directory.into(),
@@ -280,7 +270,6 @@ mod tests {
         let cfg = IndexerConfig::new(
             0,
             true,
-            false,
             false,
             false,
             Some("".to_string()),
@@ -303,7 +292,6 @@ mod tests {
             true,
             true,
             false,
-            false,
             Some("file:///tmp/snapshot.tar.xz".to_string()),
             None,
             "/tmp/hopr_test_data".to_string(),
@@ -320,7 +308,7 @@ mod tests {
 
     #[test]
     fn test_snapshot_sha256_validated_even_when_snapshot_disabled() {
-        let mut cfg = IndexerConfig::new(0, true, false, false, false, None, None, "".to_string(), 1000, 10);
+        let mut cfg = IndexerConfig::new(0, true, false, false, None, None, "".to_string(), 1000, 10);
         cfg.logs_snapshot_sha256 = Some("   ".to_string());
         assert!(cfg.validate().is_err());
         cfg.logs_snapshot_sha256 = Some(format!(" {} ", "AB".repeat(32)));
@@ -333,7 +321,6 @@ mod tests {
             0,
             true,
             true,
-            false,
             false,
             Some("file:///tmp/snapshot.tar.xz".to_string()),
             None,
@@ -358,7 +345,6 @@ mod tests {
             true,
             false,
             false,
-            false,
             Some("https://example.com/snapshot.tar.xz".to_string()),
             None,
             "/tmp/hopr_test_data".to_string(),
@@ -377,13 +363,12 @@ mod tests {
 
     #[test]
     fn test_snapshot_sha256_not_required_without_snapshot() {
-        let cfg = IndexerConfig::new(0, true, false, false, false, None, None, "".to_string(), 1000, 10);
+        let cfg = IndexerConfig::new(0, true, false, false, None, None, "".to_string(), 1000, 10);
         assert!(cfg.validate().is_ok());
 
         let cfg = IndexerConfig::new(
             0,
             true,
-            false,
             false,
             false,
             Some("  ".to_string()),
@@ -404,7 +389,6 @@ mod tests {
             0,
             true,
             true,
-            false,
             false,
             None,
             Some(VALID_SHA256.to_string()),

@@ -522,7 +522,6 @@ where
                     historical_sync_head,
                     LogFilterPhase::HistoricalDiscovery,
                     "discover-safes",
-                    self.cfg.enable_safe_indexing,
                 )
                 .await
                 {
@@ -571,7 +570,7 @@ where
             // The lookup of the Safes to refresh is retried; if it keeps failing the phase fails below, because
             // nothing rescans later and Safes whose owners changed during downtime would stay stale.
             let mut startup_failure: Option<String> = None;
-            let _owner_refresh_guard = if self.cfg.enable_safe_indexing {
+            let _owner_refresh_guard = {
                 match queue_pending_safe_owner_snapshots(
                     || db.get_safes_pending_owner_snapshot(None, refresh_goal_block),
                     &indexer_state,
@@ -599,10 +598,7 @@ where
                         None
                     }
                 }
-            } else {
-                None
             };
-            let snapshot_rx_open = self.cfg.enable_safe_indexing;
 
             // Reason why the continuous phase stopped, if it stopped because of a failure.
             // A failure here must not leave the process running without an indexer, so it is
@@ -611,13 +607,7 @@ where
                 if let Some(reason) = startup_failure.take() {
                     break 'stream_refresh Some(reason);
                 }
-                let log_filters = match Self::generate_log_filters(
-                    &db,
-                    &logs_handler,
-                    LogFilterPhase::Continuous,
-                    self.cfg.enable_safe_indexing,
-                )
-                .await
+                let log_filters = match Self::generate_log_filters(&db, &logs_handler, LogFilterPhase::Continuous).await
                 {
                     Ok(log_filters) => log_filters,
                     Err(error) => {
@@ -638,7 +628,7 @@ where
                             Some(item) => item,
                             None => break,
                         },
-                        read = snapshot_rx.next(), if snapshot_rx_open => {
+                        read = snapshot_rx.next() => {
                             match read {
                                 Some(read) => store_safe_owner_snapshot(&db, &indexer_state, read).await,
                                 // The supervisor only ends when it gave up restarting the task. Without the
@@ -790,12 +780,7 @@ where
     /// * `all` contains every active filter.
     /// * `token` contains owner-filtered token Approval filters.
     /// * `no_token` contains non-token filters for historical discovery.
-    async fn generate_log_filters(
-        db: &Db,
-        logs_handler: &U,
-        phase: LogFilterPhase,
-        enable_safe_indexing: bool,
-    ) -> Result<FilterSet> {
+    async fn generate_log_filters(db: &Db, logs_handler: &U, phase: LogFilterPhase) -> Result<FilterSet> {
         let static_addresses = logs_handler.contract_addresses();
         let addresses_no_token = static_addresses
             .iter()
@@ -818,7 +803,7 @@ where
             .address(filter_base_addresses)
             .event_signature(filter_base_topics);
         let safe_addresses = db.get_safe_contract_addresses(None).await?;
-        let safe_filter = (enable_safe_indexing && !safe_addresses.is_empty()).then(|| {
+        let safe_filter = (!safe_addresses.is_empty()).then(|| {
             Filter::new()
                 .address(
                     safe_addresses
@@ -994,7 +979,6 @@ where
         end_block: u64,
         filter_phase: LogFilterPhase,
         phase_name: &str,
-        enable_safe_indexing: bool,
     ) -> Result<()>
     where
         T: HoprIndexerRpcOperations + 'static,
@@ -1005,7 +989,7 @@ where
             return Ok(());
         }
 
-        let log_filters = Self::generate_log_filters(db, logs_handler, filter_phase, enable_safe_indexing).await?;
+        let log_filters = Self::generate_log_filters(db, logs_handler, filter_phase).await?;
         if log_filters.no_token.is_empty() {
             info!(
                 phase = phase_name,
@@ -1910,7 +1894,6 @@ mod tests {
             &db,
             &handler,
             LogFilterPhase::Continuous,
-            false,
         )
         .await?;
 
@@ -1971,7 +1954,6 @@ mod tests {
             &db,
             &handler,
             LogFilterPhase::HistoricalDiscovery,
-            true,
         )
         .await?;
 
@@ -1988,7 +1970,6 @@ mod tests {
             &db,
             &handler,
             LogFilterPhase::Continuous,
-            true,
         )
         .await?;
         assert!(
@@ -3108,10 +3089,7 @@ mod tests {
         let mut rpc = MockHoprIndexerOps::new();
         let db = BlokliDb::new_in_memory().await?;
         let indexer_state = IndexerState::default();
-        let cfg = IndexerConfig {
-            enable_safe_indexing: true,
-            ..Default::default()
-        };
+        let cfg = IndexerConfig::default();
 
         let primary_address = Address::new(b"my address 123456789");
         let primary_topic = B256::from_slice(Hash::create(&[b"my topic"]).as_ref());
@@ -3458,7 +3436,6 @@ mod tests {
                 true,
                 false,
                 false,
-                false,
                 None,
                 None,
                 "/tmp/test_data".to_string(),
@@ -3560,7 +3537,6 @@ mod tests {
                 true,
                 false,
                 false,
-                false,
                 None,
                 None,
                 "/tmp/test_data".to_string(),
@@ -3597,7 +3573,6 @@ mod tests {
                 0,
                 true,
                 true,
-                false,
                 false,
                 Some("file:///definitely/missing/snapshot.tar.xz".to_string()),
                 Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()),
@@ -3771,7 +3746,6 @@ mod tests {
 
         let indexer_cfg = IndexerConfig::new(
             0,
-            false,
             false,
             false,
             false,

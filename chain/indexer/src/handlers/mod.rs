@@ -86,7 +86,6 @@ pub struct ContractEventHandlers<T, Db> {
     _rpc_operations: T,
     /// indexer state for publishing events to subscribers
     pub(super) indexer_state: IndexerState,
-    pub(super) enable_safe_indexing: bool,
     pub(super) enable_curvy_indexing: bool,
 }
 
@@ -124,7 +123,6 @@ where
         db: Db,
         rpc_operations: T,
         indexer_state: IndexerState,
-        enable_safe_indexing: bool,
         enable_curvy_indexing: bool,
     ) -> Self {
         Self {
@@ -132,7 +130,6 @@ where
             db,
             _rpc_operations: rpc_operations,
             indexer_state,
-            enable_safe_indexing,
             enable_curvy_indexing,
         }
     }
@@ -256,10 +253,6 @@ where
             .await?
             .is_some()
         {
-            if !self.enable_safe_indexing {
-                debug!(address = %log.address, "Ignoring Safe contract event because Safe indexing is disabled");
-                return Ok(vec![]);
-            }
             let event = SafeContractEvents::decode_log(&primitive_log)?;
             self.on_safe_contract_event(tx, log.address, &log, event.data, is_synced)
                 .await
