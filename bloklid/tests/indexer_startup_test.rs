@@ -208,6 +208,7 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
         event_bus_capacity: 1000,
         shutdown_signal_capacity: 10,
         safe_tx_prefetch: Default::default(),
+        ..Default::default()
     };
 
     // Create indexer
@@ -298,6 +299,7 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
         event_bus_capacity: 1000,
         shutdown_signal_capacity: 10,
         safe_tx_prefetch: Default::default(),
+        ..Default::default()
     };
 
     // Create indexer
@@ -508,6 +510,7 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         event_bus_capacity: 1000,
         shutdown_signal_capacity: 10,
         safe_tx_prefetch: Default::default(),
+        ..Default::default()
     };
 
     // Create and start indexer
@@ -620,6 +623,7 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
         event_bus_capacity: 1000,
         shutdown_signal_capacity: 10,
         safe_tx_prefetch: Default::default(),
+        ..Default::default()
     };
 
     // Create indexer

@@ -140,8 +140,8 @@ impl ReadinessChecker {
             }
         };
 
-        // 2. Check RPC connectivity and get current block
-        // NOTE: get_block_number() returns finality-adjusted blocks (RPC block - confirmations)
+        // 2. Check RPC connectivity and get the tracker's confirmed tip
+        // NOTE: get_block_number() returns the chain tip tracker's confirmed block
         // This ensures we only compare lag against confirmed blocks, not unconfirmed chain head
         let rpc_block = match self.rpc_operations.get_block_number().await {
             Ok(block) => Some(block),
@@ -162,7 +162,7 @@ impl ReadinessChecker {
                     confirmed_block = %rpc_block,
                     %indexed,
                     max_lag = self.health_config.max_indexer_lag,
-                    "Indexer lag exceeds threshold (lag compared against finality-adjusted RPC block)"
+                    "Indexer lag exceeds threshold (lag compared against the tracker's confirmed tip)"
                 );
                 return (ReadinessState::NotReady, metrics::HEALTH_STATUS_UNSYNCHED);
             }

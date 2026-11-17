@@ -683,7 +683,7 @@ async fn readyz_handler(State(state): State<AppState>) -> impl IntoResponse {
         }
     };
 
-    // 2. Check RPC connectivity and get current block
+    // 2. Check RPC connectivity and get the tracker's confirmed tip
     let rpc_block = match state.rpc_operations.get_block_number().await {
         Ok(block) => {
             checks.rpc.block_number = Some(block);

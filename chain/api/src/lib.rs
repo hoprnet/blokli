@@ -122,6 +122,9 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
             expected_block_time: Duration::from_secs(chain_config.expected_block_time),
             tx_polling_interval: Duration::from_millis(chain_config.tx_polling_interval),
             finality: chain_config.confirmations as u32,
+            confirmation_mode: indexer_cfg.confirmation_mode,
+            max_safe_gap: indexer_cfg.max_safe_gap,
+            head_poll_interval: indexer_cfg.head_poll_interval,
             max_block_range_fetch_size: chain_config.max_block_range as u64,
             log_block_range_reprobe_interval: chain_config.block_range_reprobe_interval as u64,
             ..Default::default()

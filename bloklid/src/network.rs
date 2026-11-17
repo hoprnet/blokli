@@ -5,6 +5,7 @@
 
 use std::{fmt, str::FromStr};
 
+use blokli_chain_rpc::tip::ConfirmationMode;
 use hopr_bindings::config::{NetworksWithContractAddresses, SingleNetworkContractAddresses};
 use serde::{Deserialize, Serialize};
 
@@ -119,6 +120,21 @@ impl Network {
         }
     }
 
+    /// Returns the default confirmation mode for the network.
+    ///
+    /// Anvil has no consensus layer, so its safe tag carries no meaning and depth is used. Gnosis
+    /// networks default to the safe tip with a depth fallback.
+    pub fn default_confirmation_mode(&self) -> ConfirmationMode {
+        match self {
+            Network::AnvilLocalhost => ConfirmationMode::Depth,
+            Network::JuraDev => ConfirmationMode::SafeOrDepth,
+            Network::JuraProd => ConfirmationMode::SafeOrDepth,
+            Network::PizPaluDev => ConfirmationMode::SafeOrDepth,
+            Network::PizPaluStaging => ConfirmationMode::SafeOrDepth,
+            Network::PizPaluProd => ConfirmationMode::SafeOrDepth,
+        }
+    }
+
     /// Returns the expected block time in seconds.
     pub fn expected_block_time(&self) -> u64 {
         match self {
@@ -223,6 +239,25 @@ mod tests {
     #[test]
     fn test_network_default() {
         assert_eq!(Network::default(), Network::JuraDev);
+    }
+
+    #[test]
+    fn test_default_confirmation_mode_per_network() {
+        assert_eq!(
+            Network::AnvilLocalhost.default_confirmation_mode(),
+            ConfirmationMode::Depth
+        );
+
+        for network in Network::all()
+            .into_iter()
+            .filter(|network| *network != Network::AnvilLocalhost)
+        {
+            assert_eq!(
+                network.default_confirmation_mode(),
+                ConfirmationMode::SafeOrDepth,
+                "{network} should default to safe_or_depth"
+            );
+        }
     }
 
     #[test]

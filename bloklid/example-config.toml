@@ -141,6 +141,22 @@ enable_logs_snapshot = false
 # PortalFactory is allowed, but Portal-specific GraphQL queries are unavailable.
 enable_curvy_indexing = false
 
+# Chain tip polling used by the HTTP head source.
+[indexer.head_tracking]
+# Polling interval of the chain tip (default: 1s).
+head_poll_interval = "1s"
+
+# Rule used to derive the confirmed block from the observed chain tip.
+[indexer.confirmation]
+# depth | safe_or_depth | safe | finalized
+# Omit to use the network default (safe_or_depth on Gnosis networks, depth on anvil-localhost).
+# mode = "safe_or_depth"
+# Blocks behind latest used by `depth` and as the fallback of `safe_or_depth`.
+# Defaults to the network value (3 on Gnosis, 1 on anvil-localhost).
+# depth = 3
+# latest - safe at or above this marks FCR as degraded (default: 32).
+max_safe_gap = 32
+
 # Deprecated: the indexer no longer pre-fetches transactions, so the keys in this
 # section are accepted and ignored. They are kept so existing configs still start.
 [indexer.safe_tx_prefetch]

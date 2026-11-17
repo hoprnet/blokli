@@ -37,6 +37,7 @@ pub mod errors;
 pub mod indexer;
 pub mod rate_limit;
 pub mod rpc;
+pub mod tip;
 pub mod transport;
 
 #[cfg(feature = "runtime-tokio")]

@@ -1,6 +1,7 @@
 use std::{fmt, time::Duration};
 
 use blokli_chain_indexer::{snapshot::download::normalize_sha256_hex, utils::redact_url};
+use blokli_chain_rpc::tip::ConfirmationMode;
 use blokli_chain_types::{ChainConfig, ContractAddresses};
 use blokli_db::utils::redact_database_url;
 use hopr_types::primitive::primitives::Address;
@@ -34,6 +35,14 @@ fn default_max_block_range() -> u32 {
 
 fn default_block_range_reprobe_interval() -> u32 {
     100
+}
+
+fn default_head_poll_interval() -> Duration {
+    Duration::from_secs(1)
+}
+
+fn default_max_safe_gap() -> u64 {
+    32
 }
 
 /// PostgreSQL database configuration
@@ -412,6 +421,22 @@ impl Config {
             "  indexer.enable_curvy_indexing: {}\n",
             self.indexer.enable_curvy_indexing
         ));
+        output.push_str(&format!(
+            "  indexer.head_tracking.head_poll_interval: {:?}\n",
+            self.indexer.head_tracking.head_poll_interval
+        ));
+        output.push_str(&format!(
+            "  indexer.confirmation.mode: {:?}\n",
+            self.indexer.confirmation.mode
+        ));
+        output.push_str(&format!(
+            "  indexer.confirmation.depth: {:?}\n",
+            self.indexer.confirmation.depth
+        ));
+        output.push_str(&format!(
+            "  indexer.confirmation.max_safe_gap: {}\n",
+            self.indexer.confirmation.max_safe_gap
+        ));
 
         if let Some(snapshot_url) = &self.indexer.logs_snapshot_url {
             output.push_str(&format!("  indexer.logs_snapshot_url: {}\n", redact_url(snapshot_url)));
@@ -572,6 +597,32 @@ pub struct TelemetryConfig {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
 #[serde(deny_unknown_fields)]
+pub struct HeadTrackingConfig {
+    /// Interval at which the chain tip is polled.
+    #[default(_code = "default_head_poll_interval()")]
+    #[serde(default = "default_head_poll_interval", with = "humantime_serde")]
+    pub head_poll_interval: Duration,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
+#[serde(deny_unknown_fields)]
+pub struct IndexerConfirmationConfig {
+    /// Confirmation rule. Defaults to the network-specific mode when unset.
+    #[serde(default)]
+    pub mode: Option<ConfirmationMode>,
+
+    /// Number of blocks behind latest used by depth-based modes. Defaults to the network value when unset.
+    #[serde(default)]
+    pub depth: Option<u16>,
+
+    /// Latest-to-safe gap at or above which FCR is considered degraded.
+    #[default(32)]
+    #[serde(default = "default_max_safe_gap")]
+    pub max_safe_gap: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
+#[serde(deny_unknown_fields)]
 pub struct IndexerConfig {
     #[default(true)]
     #[serde(default = "default_true")]
@@ -598,6 +649,12 @@ pub struct IndexerConfig {
     pub subscription: SubscriptionConfig,
 
     #[serde(default)]
+    pub head_tracking: HeadTrackingConfig,
+
+    #[serde(default)]
+    pub confirmation: IndexerConfirmationConfig,
+
+    #[serde(default)]
     pub safe_tx_prefetch: SafeTxPrefetchConfig,
 }
 
@@ -622,6 +679,20 @@ impl IndexerConfig {
     /// `logs_snapshot_sha256` is required when `enable_logs_snapshot` is true or a non-empty
     /// `logs_snapshot_url` is set, and must be a SHA-256 digest of 64 hex characters when present.
     pub fn validate(&self) -> Result<(), String> {
+        if self.head_tracking.head_poll_interval.is_zero() {
+            return Err("indexer.head_tracking.head_poll_interval must be greater than 0".to_string());
+        }
+
+        if let Some(depth) = self.confirmation.depth
+            && !(1..=100).contains(&depth)
+        {
+            return Err("indexer.confirmation.depth must be between 1 and 100".to_string());
+        }
+
+        if self.confirmation.max_safe_gap == 0 {
+            return Err("indexer.confirmation.max_safe_gap must be at least 1".to_string());
+        }
+
         let snapshot_url_set = self
             .logs_snapshot_url
             .as_deref()
@@ -1340,6 +1411,10 @@ mod tests {
         assert!(config.indexer.fast_sync);
         assert!(!config.indexer.enable_curvy_indexing);
         assert_eq!(config.indexer.subscription.event_bus_capacity, 1000);
+        assert_eq!(config.indexer.head_tracking.head_poll_interval, Duration::from_secs(1));
+        assert_eq!(config.indexer.confirmation.mode, None);
+        assert_eq!(config.indexer.confirmation.depth, None);
+        assert_eq!(config.indexer.confirmation.max_safe_gap, 32);
 
         // Check API config
         assert!(config.api.enabled);
@@ -1453,6 +1528,67 @@ mod tests {
         assert!(!cfg.indexer.enable_logs_snapshot); // Default
         assert!(!cfg.indexer.enable_curvy_indexing); // Default
         assert_eq!(cfg.indexer.subscription.event_bus_capacity, 1000); // Default
+        assert_eq!(cfg.indexer.head_tracking.head_poll_interval, Duration::from_secs(1)); // Default
+        assert_eq!(cfg.indexer.confirmation.mode, None); // Network-specific default
+        assert_eq!(cfg.indexer.confirmation.depth, None); // Network-specific default
+        assert_eq!(cfg.indexer.confirmation.max_safe_gap, 32); // Default
+    }
+
+    #[test]
+    fn test_indexer_head_tracking_and_confirmation_config() {
+        let config = r#"
+         [indexer.head_tracking]
+         head_poll_interval = "2s"
+         [indexer.confirmation]
+         mode = "safe_or_depth"
+         depth = 5
+         max_safe_gap = 20
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
+
+        let cfg: Config = toml::from_str(config).expect("head tracking and confirmation should parse");
+        assert_eq!(cfg.indexer.head_tracking.head_poll_interval, Duration::from_secs(2));
+        assert_eq!(cfg.indexer.confirmation.mode, Some(ConfirmationMode::SafeOrDepth));
+        assert_eq!(cfg.indexer.confirmation.depth, Some(5));
+        assert_eq!(cfg.indexer.confirmation.max_safe_gap, 20);
+        assert!(cfg.indexer.validate().is_ok());
+    }
+
+    #[test]
+    fn test_indexer_confirmation_rejects_invalid_values() {
+        let invalid = [
+            r#"mode = "unknown""#,
+            r#"depth = 0"#,
+            r#"depth = 101"#,
+            r#"max_safe_gap = 0"#,
+        ];
+
+        for entry in invalid {
+            let config = format!(
+                "[indexer.confirmation]\n{entry}\n[database]\ntype = \"sqlite\"\nindex_path = \":memory:\"\nlogs_path \
+                 = \":memory:\"\n"
+            );
+            let parsed: Result<Config, _> = toml::from_str(&config);
+            let rejected = match parsed {
+                Err(_) => true,
+                Ok(cfg) => cfg.indexer.validate().is_err(),
+            };
+            assert!(rejected, "{entry} must be rejected");
+        }
+
+        let zero_interval = r#"
+         [indexer.head_tracking]
+         head_poll_interval = "0s"
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
+        let cfg: Config = toml::from_str(zero_interval).expect("zero interval should parse");
+        assert!(cfg.indexer.validate().is_err(), "zero poll interval must be rejected");
     }
 
     #[test]

@@ -2184,6 +2184,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "smart-default",
+ "strum 0.28.0",
  "tempfile",
  "test-log",
  "thiserror",

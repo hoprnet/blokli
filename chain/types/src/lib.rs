@@ -86,7 +86,7 @@ pub struct ChainConfig {
     pub chain_id: u64,
     /// Transaction polling interval in milliseconds
     pub tx_polling_interval: u64,
-    /// Number of confirmations required (finality)
+    /// Effective confirmation depth used by depth-based confirmation modes
     pub confirmations: u16,
     /// Maximum block range ceiling for adaptive RPC log queries
     pub max_block_range: u32,

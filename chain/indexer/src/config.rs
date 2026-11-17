@@ -1,3 +1,7 @@
+use std::time::Duration;
+
+use blokli_chain_rpc::tip::ConfirmationMode;
+
 use crate::snapshot::download::normalize_sha256_hex;
 
 /// Tuning for the concurrent pre-fetch of transactions needed to decode Safe execution failures.
@@ -102,6 +106,24 @@ pub struct IndexerConfig {
     #[default(10)]
     pub shutdown_signal_capacity: usize,
 
+    /// Rule used to derive the confirmed block from the chain tip.
+    ///
+    /// Default is `ConfirmationMode::Depth`.
+    #[default(_code = "ConfirmationMode::Depth")]
+    pub confirmation_mode: ConfirmationMode,
+
+    /// Latest-to-safe gap at or above which FCR is considered degraded.
+    ///
+    /// Default is `32`.
+    #[default(32)]
+    pub max_safe_gap: u64,
+
+    /// Interval at which the chain tip is polled.
+    ///
+    /// Default is `1s`.
+    #[default(_code = "Duration::from_secs(1)")]
+    pub head_poll_interval: Duration,
+
     /// Tuning for the concurrent pre-fetch of Safe transactions.
     #[default(_code = "SafeTxPrefetchConfig::default()")]
     pub safe_tx_prefetch: SafeTxPrefetchConfig,
@@ -147,6 +169,9 @@ impl IndexerConfig {
             data_directory,
             event_bus_capacity,
             shutdown_signal_capacity,
+            confirmation_mode: ConfirmationMode::default(),
+            max_safe_gap: 32,
+            head_poll_interval: Duration::from_secs(1),
             safe_tx_prefetch: SafeTxPrefetchConfig::default(),
         }
     }

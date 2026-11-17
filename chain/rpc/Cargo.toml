@@ -32,7 +32,9 @@ serde_json                 = { workspace = true }
 serde_with                 = { workspace = true }
 serde_yaml                 = { workspace = true }
 smart-default              = { workspace = true }
+strum                      = { workspace = true }
 thiserror                  = { workspace = true }
+tokio                      = { workspace = true, features = ["rt", "sync", "time"] }
 url                        = { workspace = true }
 validator                  = { workspace = true }
 

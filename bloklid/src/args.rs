@@ -130,6 +130,16 @@ impl Args {
             ("BLOKLI_INDEXER_LOGS_SNAPSHOT_URL", "indexer.logs_snapshot_url"),
             ("BLOKLI_INDEXER_LOGS_SNAPSHOT_SHA256", "indexer.logs_snapshot_sha256"),
             (
+                "BLOKLI_INDEXER_HEAD_TRACKING_HEAD_POLL_INTERVAL",
+                "indexer.head_tracking.head_poll_interval",
+            ),
+            ("BLOKLI_INDEXER_CONFIRMATION_MODE", "indexer.confirmation.mode"),
+            ("BLOKLI_INDEXER_CONFIRMATION_DEPTH", "indexer.confirmation.depth"),
+            (
+                "BLOKLI_INDEXER_CONFIRMATION_MAX_SAFE_GAP",
+                "indexer.confirmation.max_safe_gap",
+            ),
+            (
                 "BLOKLI_INDEXER_SUBSCRIPTION_EVENT_BUS_CAPACITY",
                 "indexer.subscription.event_bus_capacity",
             ),
@@ -332,7 +342,11 @@ impl Args {
         let chain_config = ChainConfig {
             chain_id: network_config.chain_id,
             tx_polling_interval: config.network.tx_polling_interval(),
-            confirmations: config.network.confirmations(),
+            confirmations: config
+                .indexer
+                .confirmation
+                .depth
+                .unwrap_or_else(|| config.network.confirmations()),
             max_block_range: config.max_block_range,
             block_range_reprobe_interval: config.block_range_reprobe_interval,
             channel_contract_deploy_block: network_config.indexer_start_block_number,

@@ -209,6 +209,13 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 data_directory: cfg.data_directory.clone(),
                 event_bus_capacity: cfg.indexer.subscription.event_bus_capacity,
                 shutdown_signal_capacity: cfg.indexer.subscription.shutdown_signal_capacity,
+                confirmation_mode: cfg
+                    .indexer
+                    .confirmation
+                    .mode
+                    .unwrap_or_else(|| cfg.network.default_confirmation_mode()),
+                max_safe_gap: cfg.indexer.confirmation.max_safe_gap,
+                head_poll_interval: cfg.indexer.head_tracking.head_poll_interval,
                 safe_tx_prefetch: blokli_chain_indexer::SafeTxPrefetchConfig {
                     batch_size: cfg.indexer.safe_tx_prefetch.batch_size,
                     concurrency: cfg.indexer.safe_tx_prefetch.concurrency,
@@ -372,7 +379,9 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                     cfg.rpc_url.clone(),
                     cfg.contracts,
                     cfg.network.expected_block_time(),
-                    cfg.network.confirmations(),
+                    cfg.chain_network
+                        .as_ref()
+                        .map_or_else(|| cfg.network.confirmations(), |chain| chain.confirmations),
                 )
             };
 
