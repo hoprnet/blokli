@@ -2910,11 +2910,9 @@ mod tests {
     use async_graphql::Schema;
     use blokli_chain_types::ContractAddresses;
     use blokli_db::{
-        BlokliDbGeneralModelOperations, TargetDb,
-        db::BlokliDb,
+        BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb,
         node_safe_registrations::BlokliDbNodeSafeRegistrationOperations,
-        safe_contracts::BlokliDbSafeContractOperations,
-        safe_history::{BlokliDbSafeHistoryOperations, SafeActivityKind},
+        safe_contracts::BlokliDbSafeContractOperations, safe_history::BlokliDbSafeHistoryOperations,
     };
     use blokli_db_entity::conversions::safe_aggregation::{
         CurrentSafe, fetch_safe_addresses, fetch_safe_threshold_by_address, fetch_safes_by_chain_key,
@@ -3179,33 +3177,10 @@ mod tests {
             .await?;
         db.upsert_safe_owner_state(None, safe_address, owner_two, true, 102, 0, 0)
             .await?;
-        db.record_safe_setup(
-            None,
-            safe_address,
-            random_hash(),
-            vec![owner_one, owner_two],
-            "2".to_string(),
-            Some(owner_one),
-            101,
-            0,
-            0,
-        )
-        .await?;
-        db.record_safe_activity(
-            None,
-            safe_address,
-            SafeActivityKind::ChangedThreshold,
-            random_hash(),
-            None,
-            None,
-            Some("3".to_string()),
-            None,
-            None,
-            105,
-            0,
-            0,
-        )
-        .await?;
+        db.upsert_safe_threshold_state(None, safe_address, "2".to_string(), 101, 0, 0)
+            .await?;
+        db.upsert_safe_threshold_state(None, safe_address, "3".to_string(), 105, 0, 0)
+            .await?;
 
         let conn = db.conn(TargetDb::Index);
 

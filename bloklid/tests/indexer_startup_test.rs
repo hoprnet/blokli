@@ -1,9 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use blokli_chain_indexer::{
-    IndexerConfig, SafeTxPrefetchConfig, block::Indexer, handlers::ContractEventHandlers, traits::ChainLogHandler,
-};
+use blokli_chain_indexer::{IndexerConfig, block::Indexer, handlers::ContractEventHandlers, traits::ChainLogHandler};
 use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{api::logs::BlokliDbLogOperations, db::BlokliDb, info::BlokliDbInfoOperations};
@@ -96,6 +94,17 @@ impl HoprIndexerRpcOperations for MockRpcOperations {
         Ok(vec![])
     }
 
+    async fn get_safe_owners_and_threshold(
+        &self,
+        _safe_address: Address,
+        _block: u64,
+    ) -> blokli_chain_rpc::errors::Result<blokli_chain_rpc::SafeOwnersSnapshot> {
+        Ok(blokli_chain_rpc::SafeOwnersSnapshot {
+            owners: vec![],
+            threshold: 1,
+        })
+    }
+
     async fn get_xdai_balance(&self, _address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance> {
         Ok(self.xdai_balance)
     }
@@ -173,8 +182,6 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
         mock_rpc.clone(),
         indexer_state.clone(),
         false,
-        false,
-        SafeTxPrefetchConfig::default(),
     );
 
     // Initialize logs origin data using the proper contract addresses and topics
@@ -194,7 +201,6 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
         start_block_number: 0,
         fast_sync: false, // Disable fast sync for testing
         enable_logs_snapshot: false,
-        enable_safe_indexing: false,
         enable_curvy_indexing: false,
         logs_snapshot_url: None,
         logs_snapshot_sha256: None,
@@ -266,8 +272,6 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
         mock_rpc.clone(),
         indexer_state.clone(),
         false,
-        false,
-        SafeTxPrefetchConfig::default(),
     );
 
     // Initialize logs origin data using the proper contract addresses and topics
@@ -287,7 +291,6 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
         start_block_number: 100, // Start from a later block
         fast_sync: true,
         enable_logs_snapshot: false, // Don't try to download snapshots
-        enable_safe_indexing: false,
         enable_curvy_indexing: false,
         logs_snapshot_url: None,
         logs_snapshot_sha256: None,
@@ -399,6 +402,14 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
                 .await
         }
 
+        async fn get_safe_owners_and_threshold(
+            &self,
+            safe_address: Address,
+            block: u64,
+        ) -> blokli_chain_rpc::errors::Result<blokli_chain_rpc::SafeOwnersSnapshot> {
+            self.inner.get_safe_owners_and_threshold(safe_address, block).await
+        }
+
         async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance> {
             self.inner.get_xdai_balance(address).await
         }
@@ -470,8 +481,6 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         tracking_rpc.clone(),
         indexer_state.clone(),
         false,
-        false,
-        SafeTxPrefetchConfig::default(),
     );
 
     // Initialize logs origin data using the proper contract addresses and topics
@@ -492,7 +501,6 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         start_block_number: expected_start_block,
         fast_sync: false,
         enable_logs_snapshot: false,
-        enable_safe_indexing: false,
         enable_curvy_indexing: false,
         logs_snapshot_url: None,
         logs_snapshot_sha256: None,
@@ -586,8 +594,6 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
         mock_rpc.clone(),
         indexer_state.clone(),
         false,
-        false,
-        SafeTxPrefetchConfig::default(),
     );
 
     // Initialize logs origin data
@@ -607,7 +613,6 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
         start_block_number: 0,
         fast_sync: false,
         enable_logs_snapshot: false,
-        enable_safe_indexing: false,
         enable_curvy_indexing: false,
         logs_snapshot_url: None,
         logs_snapshot_sha256: None,
@@ -663,8 +668,6 @@ async fn test_service_registry_is_in_the_handler_filter_set() -> anyhow::Result<
         MockRpcOperations::new(),
         blokli_chain_indexer::IndexerState::new(1000, 10),
         false,
-        false,
-        SafeTxPrefetchConfig::default(),
     );
 
     let addresses = handlers.contract_addresses();
@@ -703,8 +706,6 @@ async fn test_zero_service_registry_is_not_monitored() -> anyhow::Result<()> {
         MockRpcOperations::new(),
         blokli_chain_indexer::IndexerState::new(1000, 10),
         false,
-        false,
-        SafeTxPrefetchConfig::default(),
     );
 
     let addresses = handlers.contract_addresses();

@@ -19,11 +19,9 @@ use anyhow::{Context, Result, bail};
 use blokli_db_entity::{
     account, account_state, announcement, chain_info, channel, channel_state, curvy_committed_note,
     curvy_committed_nullifier, curvy_pending_note, curvy_shard_root, curvy_sync_checkpoint, hopr_balance,
-    hopr_node_safe_registration, hopr_safe_contract, hopr_safe_contract_state, hopr_safe_event,
-    hopr_safe_execution_event, hopr_safe_owner_change_event, hopr_safe_owner_state, hopr_safe_redeemed_stats,
-    hopr_safe_setup_event, hopr_safe_setup_owner, hopr_safe_threshold_change_event, hopr_safe_threshold_state, log,
-    log_status, log_topic_info, native_balance, schema_version, service_entry, service_entry_state,
-    service_registry_config, service_type, service_type_state,
+    hopr_node_safe_registration, hopr_safe_contract, hopr_safe_contract_state, hopr_safe_owner_state,
+    hopr_safe_redeemed_stats, hopr_safe_threshold_state, log, log_status, log_topic_info, native_balance,
+    schema_version, service_entry, service_entry_state, service_registry_config, service_type, service_type_state,
     views::{
         account_current, channel_current, safe_contract_current, safe_owner_current, safe_threshold_current,
         service_entry_current, service_type_current,
@@ -89,14 +87,8 @@ fn all_entities() -> Vec<(String, Vec<EntityColumn>)> {
         entity_columns::<hopr_node_safe_registration::Entity>(),
         entity_columns::<hopr_safe_contract::Entity>(),
         entity_columns::<hopr_safe_contract_state::Entity>(),
-        entity_columns::<hopr_safe_event::Entity>(),
-        entity_columns::<hopr_safe_execution_event::Entity>(),
-        entity_columns::<hopr_safe_owner_change_event::Entity>(),
         entity_columns::<hopr_safe_owner_state::Entity>(),
         entity_columns::<hopr_safe_redeemed_stats::Entity>(),
-        entity_columns::<hopr_safe_setup_event::Entity>(),
-        entity_columns::<hopr_safe_setup_owner::Entity>(),
-        entity_columns::<hopr_safe_threshold_change_event::Entity>(),
         entity_columns::<hopr_safe_threshold_state::Entity>(),
         entity_columns::<log::Entity>(),
         entity_columns::<log_status::Entity>(),
@@ -286,4 +278,81 @@ async fn entities_match_postgres_schema() -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Runs m014 on PostgreSQL over rows written by the previous schema and checks that only the
+/// latest row per key survives and that the six history tables are gone.
+async fn check_safe_owner_snapshot_migration(url: &Url) -> Result<()> {
+    let db = Database::connect(url.as_str()).await?;
+    Migrator::up(&db, Some(13))
+        .await
+        .context("migrations up to m013 failed")?;
+
+    for statement in [
+        "INSERT INTO hopr_safe_contract (id, address) VALUES (1, decode(repeat('01', 20), 'hex'))",
+        "INSERT INTO hopr_safe_owner_state (hopr_safe_contract_id, owner_address, is_current_owner, published_block, \
+         published_tx_index, published_log_index) VALUES (1, decode(repeat('02', 20), 'hex'), TRUE, 10, 0, 0), (1, \
+         decode(repeat('02', 20), 'hex'), FALSE, 20, 0, 0), (1, decode(repeat('03', 20), 'hex'), TRUE, 15, 0, 0)",
+        "INSERT INTO hopr_safe_threshold_state (hopr_safe_contract_id, threshold, published_block, \
+         published_tx_index, published_log_index) VALUES (1, '1', 10, 0, 0), (1, '2', 30, 0, 0)",
+    ] {
+        db.execute_unprepared(statement).await?;
+    }
+
+    Migrator::up(&db, None).await.context("m014 failed on PostgreSQL")?;
+
+    let scalar = |sql: &'static str| {
+        let db = &db;
+        async move {
+            let row = db
+                .query_one_raw(Statement::from_string(DbBackend::Postgres, sql.to_string()))
+                .await?
+                .context("query returned no row")?;
+            Ok::<i64, anyhow::Error>(row.try_get::<i64>("", "n")?)
+        }
+    };
+
+    assert_eq!(scalar("SELECT COUNT(*) AS n FROM hopr_safe_owner_state").await?, 2);
+    assert_eq!(scalar("SELECT COUNT(*) AS n FROM safe_owner_current").await?, 1);
+    assert_eq!(
+        scalar("SELECT threshold::BIGINT AS n FROM safe_threshold_current").await?,
+        2
+    );
+    assert_eq!(
+        scalar(
+            "SELECT COUNT(*) AS n FROM information_schema.tables WHERE table_schema = current_schema() AND table_name \
+             IN ('hopr_safe_event', 'hopr_safe_setup_event', 'hopr_safe_setup_owner', 'hopr_safe_owner_change_event', \
+             'hopr_safe_threshold_change_event', 'hopr_safe_execution_event')"
+        )
+        .await?,
+        0
+    );
+
+    db.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "needs PostgreSQL, run with `just test-postgres-schema`"]
+async fn safe_owner_snapshot_migration_keeps_latest_rows_on_postgres() -> Result<()> {
+    let admin_url: Url = env::var(POSTGRES_URL_VAR)
+        .with_context(|| format!("{POSTGRES_URL_VAR} must point at a PostgreSQL server"))?
+        .parse()?;
+
+    let scratch_db = format!("blokli_m014_check_{}", process::id());
+    let mut scratch_url = admin_url.clone();
+    scratch_url.set_path(&scratch_db);
+
+    let admin = Database::connect(admin_url.as_str()).await?;
+    admin
+        .execute_unprepared(&format!("CREATE DATABASE \"{scratch_db}\""))
+        .await?;
+
+    let result = check_safe_owner_snapshot_migration(&scratch_url).await;
+
+    admin
+        .execute_unprepared(&format!("DROP DATABASE IF EXISTS \"{scratch_db}\""))
+        .await?;
+
+    result
 }

@@ -138,7 +138,7 @@ async fn seed_safes(db: &BlokliDb, safes: i64) {
              hopr_safe_contract;
              INSERT INTO hopr_safe_threshold_state (hopr_safe_contract_id, threshold, published_block, \
              published_tx_index, published_log_index)
-             SELECT id, k::text, id * 10 + k, 0, 0 FROM hopr_safe_contract, generate_series(1, 3) k;
+             SELECT id, '3', id * 10, 0, 0 FROM hopr_safe_contract;
              ANALYZE;"
         ),
     )

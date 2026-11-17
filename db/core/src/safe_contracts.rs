@@ -6,7 +6,7 @@ use blokli_db_entity::{
     prelude::{HoprSafeContract, HoprSafeContractState},
     views::safe_contract_current,
 };
-use hopr_types::{crypto::types::Hash, primitive::prelude::Address};
+use hopr_types::primitive::prelude::Address;
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, Set};
 use sea_query::OnConflict;
 
@@ -135,18 +135,19 @@ fn parse_csv_entry(line: &str, line_number: usize) -> Result<Option<SafeCsvEntry
     }))
 }
 
-async fn persist_preseeded_safe_history<'a, Db>(db: &'a Db, tx: OptTx<'a>, entry: &SafeCsvEntry) -> Result<()>
+/// Writes the owners and threshold of a CSV entry straight into the current-state tables.
+///
+/// The Safe keeps no owner snapshot block, so the refresh at the switch to continuous mode
+/// re-reads it from the chain.
+async fn persist_preseeded_safe_owner_state<'a, Db>(db: &'a Db, tx: OptTx<'a>, entry: &SafeCsvEntry) -> Result<()>
 where
     Db: BlokliDbSafeHistoryOperations + Sync,
 {
     if let Some(threshold) = entry.threshold {
-        db.record_safe_setup(
+        db.upsert_safe_threshold_state(
             tx,
             entry.address,
-            Hash::default(),
-            entry.owners.clone(),
             threshold.to_string(),
-            None,
             PRESEEDED_BLOCK_U64,
             entry.deployed_tx_index,
             entry.deployed_log_index,
@@ -215,7 +216,7 @@ where
             entry.deployed_log_index,
         )
         .await?;
-        persist_preseeded_safe_history(db, Some(&tx), &entry).await?;
+        persist_preseeded_safe_owner_state(db, Some(&tx), &entry).await?;
         loaded += 1;
     }
 
@@ -829,10 +830,7 @@ mod tests {
     use sea_orm::PaginatorTrait;
 
     use super::*;
-    use crate::{
-        db::BlokliDb,
-        safe_history::{BlokliDbSafeHistoryOperations, SafeActivityKind},
-    };
+    use crate::{db::BlokliDb, safe_history::BlokliDbSafeHistoryOperations};
 
     /// Generates a new random `Address` from cryptographically secure random bytes.
     fn random_address() -> Address {
@@ -877,12 +875,12 @@ mod tests {
         let owners = db.get_safe_owners(None, safe_address).await?;
         assert_eq!(owners, vec![owner_one, owner_two]);
 
-        let activity = db.get_safe_activity(None, safe_address).await?;
-        assert_eq!(activity.len(), 1);
-        assert_eq!(activity[0].event_kind, SafeActivityKind::SafeSetup.as_str());
-        assert_eq!(activity[0].threshold.as_deref(), Some("2"));
-        assert_eq!(activity[0].published_tx_index, 0);
-        assert_eq!(activity[0].published_log_index, 1);
+        assert_eq!(db.get_safe_threshold(None, safe_address).await?.as_deref(), Some("2"));
+        assert_eq!(
+            db.get_safe_owners_synced_block(None, safe_address).await?,
+            None,
+            "the preseed is not a chain snapshot"
+        );
 
         Ok(())
     }

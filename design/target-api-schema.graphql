@@ -1954,11 +1954,15 @@ type RedeemedStats {
 	"""
 	redemptionCount: UInt64!
 	"""
-	Total amount from matching failed ticket redemption attempts
+	Total amount from matching failed ticket redemption attempts.
+	
+	Deprecated: failed redemptions are no longer indexed, so this is 0 for newly built indexes.
 	"""
 	rejectedAmount: TokenValueString!
 	"""
-	Total number of matching failed ticket redemption attempts
+	Total number of matching failed ticket redemption attempts.
+	
+	Deprecated: failed redemptions are no longer indexed, so this is 0 for newly built indexes.
 	"""
 	rejectionCount: UInt64!
 }
@@ -2035,11 +2039,11 @@ type Safe {
 	"""
 	chainKey: String! @deprecated(reason: "Use owners instead. chainKey is legacy Safe metadata and may not reflect the current owner set.")
 	"""
-	Current signer threshold reconstructed from indexed Safe events
+	Current signer threshold, read from the Safe contract and kept current by live Safe events
 	"""
-	threshold: String
+	threshold: String @deprecated(reason: "Read the threshold from the Safe contract. The field is kept for backward compatibility.")
 	"""
-	Current Safe owner addresses reconstructed from indexed Safe events
+	Current Safe owner addresses, read from the Safe contract and kept current by live Safe events
 	"""
 	owners: [String!]!
 	"""

@@ -4,20 +4,14 @@ use blokli_api::{
 };
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{
-    BlokliDbGeneralModelOperations,
-    db::BlokliDb,
-    node_safe_registrations::BlokliDbNodeSafeRegistrationOperations,
-    safe_contracts::BlokliDbSafeContractOperations,
-    safe_history::{BlokliDbSafeHistoryOperations, SafeActivityKind},
+    BlokliDbGeneralModelOperations, db::BlokliDb, node_safe_registrations::BlokliDbNodeSafeRegistrationOperations,
+    safe_contracts::BlokliDbSafeContractOperations, safe_history::BlokliDbSafeHistoryOperations,
     safe_redeemed_stats::BlokliDbSafeRedeemedStatsOperations,
 };
 use blokli_db_entity::hopr_safe_contract::{Column as SafeColumn, Entity as SafeEntity};
-use hopr_types::{
-    crypto::types::Hash,
-    primitive::{
-        prelude::{Address, Balance, WxHOPR},
-        traits::ToHex,
-    },
+use hopr_types::primitive::{
+    prelude::{Address, Balance, WxHOPR},
+    traits::ToHex,
 };
 use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 
@@ -90,33 +84,10 @@ async fn test_safe_query() -> anyhow::Result<()> {
         .await?;
     db.upsert_safe_owner_state(None, safe_address_1, chain_key_1, true, 100, 0, 1)
         .await?;
-    db.record_safe_setup(
-        None,
-        safe_address_0,
-        Hash::default(),
-        vec![chain_key_0, chain_key_1, owner_address_2],
-        "2".to_string(),
-        Some(chain_key_0),
-        100,
-        0,
-        0,
-    )
-    .await?;
-    db.record_safe_activity(
-        None,
-        safe_address_0,
-        SafeActivityKind::ChangedThreshold,
-        Hash::default(),
-        None,
-        None,
-        Some("3".to_string()),
-        None,
-        None,
-        105,
-        0,
-        0,
-    )
-    .await?;
+    db.upsert_safe_threshold_state(None, safe_address_0, "2".to_string(), 100, 0, 0)
+        .await?;
+    db.upsert_safe_threshold_state(None, safe_address_0, "3".to_string(), 105, 0, 0)
+        .await?;
     db.record_safe_ticket_redeemed(
         None,
         safe_address_0,
@@ -209,21 +180,8 @@ async fn test_safe_by_chain_key_query() -> anyhow::Result<()> {
         .await?;
     db.upsert_safe_owner_state(None, safe_address, owner_address, true, 101, 0, 0)
         .await?;
-    db.record_safe_activity(
-        None,
-        safe_address,
-        SafeActivityKind::ChangedThreshold,
-        Hash::default(),
-        None,
-        None,
-        Some("2".to_string()),
-        None,
-        None,
-        105,
-        0,
-        0,
-    )
-    .await?;
+    db.upsert_safe_threshold_state(None, safe_address, "2".to_string(), 105, 0, 0)
+        .await?;
 
     let schema = build_test_schema(&db);
 
@@ -341,18 +299,8 @@ async fn test_safes_list_query() -> anyhow::Result<()> {
 
     db.create_safe_contract(None, safe_address, module_address, chain_key, 100, 0, 0)
         .await?;
-    db.record_safe_setup(
-        None,
-        safe_address,
-        Hash::default(),
-        vec![],
-        "4".to_string(),
-        Some(chain_key),
-        100,
-        0,
-        0,
-    )
-    .await?;
+    db.upsert_safe_threshold_state(None, safe_address, "4".to_string(), 100, 0, 0)
+        .await?;
 
     let schema = build_test_schema(&db);
 

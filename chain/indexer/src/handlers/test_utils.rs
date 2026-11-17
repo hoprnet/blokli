@@ -20,7 +20,7 @@ pub(super) mod test_helpers {
     };
 
     use super::super::ContractEventHandlers;
-    use crate::{IndexerState, SafeTxPrefetchConfig, state::IndexerEvent};
+    use crate::{IndexerState, state::IndexerEvent};
 
     lazy_static::lazy_static! {
         pub static ref SELF_PRIV_KEY: OffchainKeypair = OffchainKeypair::from_secret(&hex!("492057cf93e99b31d2a85bc5e98a9c3aa0021feec52c227cc8170e8f7d047775")).expect("lazy static keypair should be constructible");
@@ -65,6 +65,7 @@ pub(super) mod test_helpers {
                 to_block: u64,
             ) -> blokli_chain_rpc::errors::Result<Vec<blokli_chain_rpc::Log>>;
 
+            async fn get_safe_owners_and_threshold(&self, safe_address: Address, block: u64) -> blokli_chain_rpc::errors::Result<blokli_chain_rpc::SafeOwnersSnapshot>;
             async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance>;
             async fn get_hopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
             async fn get_xhopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XHoprBalance>;
@@ -128,6 +129,14 @@ pub(super) mod test_helpers {
             self.inner
                 .get_logs_for_address(address, topics, from_block, to_block)
                 .await
+        }
+
+        async fn get_safe_owners_and_threshold(
+            &self,
+            safe_address: Address,
+            block: u64,
+        ) -> blokli_chain_rpc::errors::Result<blokli_chain_rpc::SafeOwnersSnapshot> {
+            self.inner.get_safe_owners_and_threshold(safe_address, block).await
         }
 
         async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance> {
@@ -202,24 +211,10 @@ pub(super) mod test_helpers {
             db,
             rpc_operations,
             indexer_state.clone(),
-            true,
             false,
-            SafeTxPrefetchConfig::default(),
         );
 
         (handlers, indexer_state, event_receiver)
-    }
-
-    /// Test helper to create handlers with a specific Safe transaction pre-fetch configuration
-    pub fn init_handlers_with_prefetch_config<
-        T: HoprIndexerRpcOperations + Clone + Send + Sync + 'static,
-        Db: BlokliDbAllOperations + Clone,
-    >(
-        rpc_operations: T,
-        db: Db,
-        safe_tx_prefetch: SafeTxPrefetchConfig,
-    ) -> ContractEventHandlers<T, Db> {
-        init_handlers(rpc_operations, db).with_safe_tx_prefetch(safe_tx_prefetch)
     }
 
     /// Test helper to create handlers without event capture (for tests that don't need it)

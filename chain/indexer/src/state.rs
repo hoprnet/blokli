@@ -7,9 +7,12 @@
 //! The synchronization ensures no race conditions when capturing the watermark
 //! for subscriptions, guaranteeing no duplicates or data loss.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use async_broadcast::{InactiveReceiver, Receiver, Sender, TrySendError, broadcast};
@@ -167,6 +170,29 @@ pub struct IndexerState {
 
     /// Monotonic counter used to trigger Safe filter refreshes.
     safe_filter_epoch: Arc<AtomicU64>,
+
+    /// Coordination between block processing and the Safe owner refresh task.
+    safe_owner_sync: Arc<SafeOwnerSync>,
+}
+
+/// Shared bookkeeping between block processing and the background Safe owner refresh.
+///
+/// Block processing reports Safes that need an owner snapshot (a read at discovery failed, a stored
+/// snapshot was dropped) and the owner events it processed. The refresh task reads the reported
+/// Safes over RPC, and the indexing loop uses the event record to drop snapshot reads that were
+/// pinned before an event that has been processed since.
+#[derive(Default)]
+struct SafeOwnerSync {
+    /// Safes reported since the refresh task last looked.
+    pending: Mutex<HashSet<Address>>,
+    /// Every Safe not yet synced: reported and not yet stored (queued, being read, being stored, in backoff).
+    unsynced: Mutex<HashSet<Address>>,
+    /// Highest block of an owner or threshold event processed per Safe. An entry is removed when a stored
+    /// snapshot covers it, so the map is bounded by the number of Safes that currently await a snapshot.
+    event_blocks: Mutex<HashMap<Address, u64>>,
+    /// Safes discovered live whose `SafeDeployed` announcement waits for their first stored owner snapshot.
+    awaiting_announcement: Mutex<HashSet<Address>>,
+    wakeup: tokio::sync::Notify,
 }
 
 impl std::fmt::Debug for IndexerState {
@@ -178,6 +204,7 @@ impl std::fmt::Debug for IndexerState {
             .field("_event_bus_rx", &"Arc<InactiveReceiver<Arc<IndexerEvent>>>")
             .field("_shutdown_rx", &"Arc<Receiver<()>>")
             .field("safe_filter_epoch", &"Arc<AtomicU64>")
+            .field("safe_owner_sync", &"Arc<SafeOwnerSync>")
             .finish()
     }
 }
@@ -209,6 +236,7 @@ impl IndexerState {
             _event_bus_rx: Arc::new(event_bus_rx.deactivate()),
             _shutdown_rx: Arc::new(shutdown_rx),
             safe_filter_epoch: Arc::new(AtomicU64::new(0)),
+            safe_owner_sync: Arc::new(SafeOwnerSync::default()),
         }
     }
 
@@ -297,6 +325,108 @@ impl IndexerState {
     }
 
     /// Returns the current Safe filter epoch.
+    /// Reports a Safe that needs an owner snapshot and wakes the refresh task.
+    pub fn mark_safe_owner_snapshot_pending(&self, safe_address: Address) {
+        if let Ok(mut pending) = self.safe_owner_sync.pending.lock() {
+            pending.insert(safe_address);
+        }
+        if let Ok(mut unsynced) = self.safe_owner_sync.unsynced.lock() {
+            unsynced.insert(safe_address);
+        }
+        self.safe_owner_sync.wakeup.notify_one();
+    }
+
+    /// Remembers that the `SafeDeployed` announcement of the Safe is held back until its owner snapshot is stored.
+    pub fn mark_safe_awaiting_deployment_announcement(&self, safe_address: Address) {
+        if let Ok(mut awaiting) = self.safe_owner_sync.awaiting_announcement.lock() {
+            awaiting.insert(safe_address);
+        }
+    }
+
+    /// Publishes `SafeDeployed` for the Safe if its announcement was held back, and clears the flag.
+    ///
+    /// Returns whether an announcement was made. Called once the owner snapshot of the Safe is stored, so
+    /// subscribers read the owners and threshold from the database.
+    pub fn announce_safe_deployed_if_awaiting(&self, safe_address: Address) -> bool {
+        let was_awaiting = self
+            .safe_owner_sync
+            .awaiting_announcement
+            .lock()
+            .map(|mut awaiting| awaiting.remove(&safe_address))
+            .unwrap_or(false);
+        if was_awaiting {
+            self.publish_event(IndexerEvent::SafeDeployed(safe_address));
+        }
+        was_awaiting
+    }
+
+    /// Records that a snapshot of the Safe has been stored.
+    pub fn mark_safe_owner_snapshot_synced(&self, safe_address: Address) {
+        if let Ok(mut unsynced) = self.safe_owner_sync.unsynced.lock() {
+            unsynced.remove(&safe_address);
+        }
+    }
+
+    /// Whether the Safe has an owner snapshot that was requested and is not stored yet.
+    pub fn is_safe_owner_snapshot_unsynced(&self, safe_address: Address) -> bool {
+        self.safe_owner_sync
+            .unsynced
+            .lock()
+            .map(|unsynced| unsynced.contains(&safe_address))
+            .unwrap_or(false)
+    }
+
+    /// Number of Safes whose owner snapshot has been requested and not stored yet.
+    pub fn unsynced_safe_owner_snapshots(&self) -> usize {
+        self.safe_owner_sync
+            .unsynced
+            .lock()
+            .map(|unsynced| unsynced.len())
+            .unwrap_or(0)
+    }
+
+    /// Takes the Safes reported since the last call.
+    pub fn take_pending_safe_owner_snapshots(&self) -> Vec<Address> {
+        self.safe_owner_sync
+            .pending
+            .lock()
+            .map(|mut pending| pending.drain().collect())
+            .unwrap_or_default()
+    }
+
+    /// Resolves when a Safe has been reported (a report made before the call is not lost).
+    pub async fn safe_owner_snapshot_reported(&self) {
+        self.safe_owner_sync.wakeup.notified().await;
+    }
+
+    /// Records that an owner or threshold event of the Safe was processed at `block`.
+    pub fn record_safe_owner_event(&self, safe_address: Address, block: u64) {
+        if let Ok(mut blocks) = self.safe_owner_sync.event_blocks.lock() {
+            let entry = blocks.entry(safe_address).or_insert(block);
+            *entry = (*entry).max(block);
+        }
+    }
+
+    /// Highest block of an owner or threshold event processed for the Safe since the last snapshot read
+    /// that covered it.
+    pub fn safe_owner_event_block(&self, safe_address: Address) -> Option<u64> {
+        self.safe_owner_sync
+            .event_blocks
+            .lock()
+            .ok()
+            .and_then(|blocks| blocks.get(&safe_address).copied())
+    }
+
+    /// Forgets the recorded events of the Safe up to and including `block` (they are covered by a stored
+    /// snapshot pinned at `block`).
+    pub fn clear_safe_owner_events_up_to(&self, safe_address: Address, block: u64) {
+        if let Ok(mut blocks) = self.safe_owner_sync.event_blocks.lock() {
+            if blocks.get(&safe_address).is_some_and(|recorded| *recorded <= block) {
+                blocks.remove(&safe_address);
+            }
+        }
+    }
+
     pub fn safe_filter_epoch(&self) -> u64 {
         self.safe_filter_epoch.load(Ordering::Relaxed)
     }

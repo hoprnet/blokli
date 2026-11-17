@@ -131,21 +131,13 @@ enable_logs_snapshot = false
 # The archive is rejected before extraction if its digest differs.
 # logs_snapshot_sha256 = "<64 hex characters>"
 
-# Enable indexing of Safe contract events after a Safe has been discovered
-# Safe discovery via registry/stake-factory events remains enabled regardless
-enable_safe_indexing = false
-
 # Enable note/nullifier indexing from the configured Curvy Aggregator.
 # Requires curvy_aggregator and its resolved Vault to be non-zero. A zero
 # PortalFactory is allowed, but Portal-specific GraphQL queries are unavailable.
 enable_curvy_indexing = false
 
-# Concurrent pre-fetch of the transactions needed to decode Safe execution
-# failures. These lookups run before a block's database transaction is opened,
-# so they trade requests in flight against how long a slow RPC endpoint can
-# stall indexing. The transaction lookups happen only when enable_safe_indexing
-# is true; the request budget below also covers the pre-fetch of Safe discovery-block
-# logs, which runs regardless of that flag.
+# Deprecated: the indexer no longer pre-fetches transactions, so the keys in this
+# section are accepted and ignored. They are kept so existing configs still start.
 [indexer.safe_tx_prefetch]
 # Transaction hashes packed into a single batched JSON-RPC request (default: 16)
 # Lower it if the RPC provider rejects or truncates large batch requests.
