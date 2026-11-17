@@ -1899,7 +1899,7 @@ mod tests {
 
         assert_eq!(filters.token.len(), 1);
         assert!(
-            !filters
+            filters
                 .no_token
                 .iter()
                 .any(|filter| filter.matches_address(AlloyAddress::from_hopr_address(safe_address)))

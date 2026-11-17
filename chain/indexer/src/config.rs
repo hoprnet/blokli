@@ -176,7 +176,6 @@ impl IndexerConfig {
     ///     true,
     ///     true,
     ///     false,
-    ///     false,
     ///     Some("https://example.com/snapshot.tar.xz".to_string()),
     ///     Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()),
     ///     "/tmp/hopr_data".to_string(),
