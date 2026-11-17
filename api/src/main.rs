@@ -2,7 +2,12 @@
 
 use std::{path::PathBuf, sync::Arc};
 
-use blokli_api::{config::HealthConfig, logging, readiness::ReadinessChecker, schema::export_schema_sdl};
+use blokli_api::{
+    config::{ApiConfig, HealthConfig},
+    logging,
+    readiness::ReadinessChecker,
+    schema::export_schema_sdl,
+};
 use blokli_chain_api::{
     rpc_adapter::RpcAdapter,
     transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
@@ -16,6 +21,7 @@ use blokli_chain_rpc::{
     transport::ReqwestClient,
 };
 use blokli_chain_types::ContractAddresses;
+use blokli_db::db::{BlokliDbConfig, build_connect_options};
 use clap::{Parser, Subcommand};
 use hopr_bindings::exports::alloy::{
     rpc::client::ClientBuilder,
@@ -61,7 +67,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         match command {
             Command::ExportSchema { database_url, output } => {
                 // Connect to database
-                let db = Database::connect(&database_url).await?;
+                let db_config = BlokliDbConfig {
+                    max_connections: ApiConfig::default().max_connections,
+                    ..BlokliDbConfig::default()
+                };
+                let db = Database::connect(build_connect_options(&database_url, &db_config)).await?;
 
                 // Create a default IndexerState for schema export
                 // This is only used for schema generation, not for actual indexing

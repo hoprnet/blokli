@@ -62,6 +62,11 @@ block_range_reprobe_interval = 100
 #   - BLOKLI_DATABASE_TYPE=postgresql
 #   - BLOKLI_DATABASE_URL=postgresql://user:password@host:port/database
 #   - BLOKLI_DATABASE_MAX_CONNECTIONS=10 (optional, defaults to 10)
+#
+# max_connections sizes the connection pool the indexer writes through. On PostgreSQL the API
+# server reads through a second pool, sized by api.database_max_connections, so one bloklid
+# process holds up to max_connections + api.database_max_connections connections. Keep that sum
+# below the connection limit of the PostgreSQL server.
 
 [database]
 # PostgreSQL configuration (recommended for production)
@@ -195,6 +200,26 @@ max_query_depth = 8
 # The default of 500 comfortably fits any real query while capping RPC fan-out
 # (e.g. aliased nativeBalance calls) to ~10 per request.
 max_query_complexity = 500
+
+# Size of the API server's own PostgreSQL connection pool (default: 10). Queries and
+# subscriptions cannot take connections from the indexer, whose pool is sized by
+# database.max_connections. Transaction submission and monitoring still look up Safes and
+# channels through the indexer's pool. 0 is rejected.
+# SQLite and in-memory databases share the indexer's connections and ignore this setting.
+database_max_connections = 10
+
+# Maximum number of subscription snapshots loaded from the database at the same time
+# (default: 8). A subscription starts with a snapshot of the current state; when many clients
+# subscribe together, for example after a restart, the loads beyond this limit wait their turn.
+# 0 is rejected. Keep it below database_max_connections so that snapshot loads leave a
+# connection free for queries.
+max_concurrent_snapshots = 8
+
+# How long a subscription waits for its turn to load a snapshot (default: "10s"). A
+# subscription that waited this long ends: one that loads its snapshot before its stream starts
+# returns a TIMEOUT error, while subscriptions that load it inside their stream end it without an
+# error. The timeout is logged and counted, and the client reconnects.
+snapshot_queue_timeout = "10s"
 
 # Transaction submission and optional Safe revert-reason tracing controls.
 [api.transactions]

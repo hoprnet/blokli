@@ -60,6 +60,9 @@ data:
     min_priority_fee_per_gas = {{ .Values.config.api.minPriorityFeePerGas | int }}
     max_query_depth = {{ .Values.config.api.maxQueryDepth | int }}
     max_query_complexity = {{ .Values.config.api.maxQueryComplexity | int }}
+    database_max_connections = {{ .Values.config.api.databaseMaxConnections | int }}
+    max_concurrent_snapshots = {{ .Values.config.api.maxConcurrentSnapshots | int }}
+    snapshot_queue_timeout = "{{ .Values.config.api.snapshotQueueTimeout }}"
 
     # Transaction submission and revert-reason tracing
     [api.transactions]

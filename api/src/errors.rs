@@ -5,6 +5,8 @@
 //! - GraphQL error codes and message templates for API responses
 //! - Builder functions for creating GraphQL error types with consistent formatting
 
+use std::time::Duration;
+
 use async_graphql::ErrorExtensions;
 use blokli_api_types::{
     ContractNotAllowedError, FunctionNotAllowedError, HoprActionRejectedError, HoprActionThrottledError,
@@ -167,6 +169,8 @@ pub mod codes {
 ///
 /// These functions provide consistent error message formatting across the API.
 pub mod messages {
+    use std::time::Duration;
+
     /// Context retrieval error message
     pub fn context_error(context_type: &str, error: impl std::fmt::Display) -> String {
         format!("Failed to get {} from context: {}", context_type, error)
@@ -312,6 +316,18 @@ pub mod messages {
     /// Network status unavailable message
     pub fn network_status_unavailable() -> String {
         "Network status is not yet available".to_string()
+    }
+
+    /// Message for a read that held the indexer's watermark lock for too long
+    pub fn synchronized_read_timed_out(operation: &str, timeout: Duration) -> String {
+        format!("{operation} did not complete within {timeout:?} while synchronized with the indexer; retry later")
+    }
+
+    /// Message for a subscription that waited too long for its turn to load a snapshot
+    pub fn snapshot_queue_timed_out(timeout: Duration) -> String {
+        format!(
+            "Too many subscriptions are loading their initial state; none became free within {timeout:?}, retry later"
+        )
     }
 }
 
@@ -594,6 +610,22 @@ pub fn timeout_error(message: impl Into<String>) -> TimeoutError {
     }
 }
 
+/// Creates a QueryFailedError for a read that held the indexer's watermark lock for too long
+pub fn synchronized_read_timed_out(operation: &str, timeout: Duration) -> QueryFailedError {
+    QueryFailedError {
+        code: codes::TIMEOUT.to_string(),
+        message: messages::synchronized_read_timed_out(operation, timeout),
+    }
+}
+
+/// Creates a QueryFailedError for a subscription that waited too long to load its snapshot
+pub fn snapshot_queue_timed_out(timeout: Duration) -> QueryFailedError {
+    QueryFailedError {
+        code: codes::TIMEOUT.to_string(),
+        message: messages::snapshot_queue_timed_out(timeout),
+    }
+}
+
 /// Creates an RpcError for validation failures
 pub fn rpc_validation_failed(error: impl std::fmt::Display) -> RpcError {
     RpcError {
@@ -755,5 +787,27 @@ mod tests {
             assert_eq!(error.code, code, "{message}");
             assert_eq!(error.message, message);
         }
+    }
+
+    #[test]
+    fn synchronized_read_timeout_is_reported_as_a_timeout() {
+        let error = synchronized_read_timed_out("chain_info query", Duration::from_secs(2));
+
+        assert_eq!(error.code, codes::TIMEOUT);
+        assert_eq!(
+            error.message,
+            "chain_info query did not complete within 2s while synchronized with the indexer; retry later"
+        );
+    }
+
+    #[test]
+    fn snapshot_queue_timeout_is_reported_as_a_timeout() {
+        let error = snapshot_queue_timed_out(Duration::from_secs(10));
+
+        assert_eq!(error.code, codes::TIMEOUT);
+        assert_eq!(
+            error.message,
+            "Too many subscriptions are loading their initial state; none became free within 10s, retry later"
+        );
     }
 }

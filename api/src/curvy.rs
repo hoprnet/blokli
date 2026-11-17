@@ -2,6 +2,7 @@ use blokli_api_types::{
     CurvyCommittedNote, CurvyCommittedNullifier, CurvyEventCursor, CurvyEventPosition, CurvyPendingNote,
     CurvyShardRoot, CurvySyncCheckpoint, CurvySyncNote, Hex32, UInt64, UInt256,
 };
+use blokli_chain_indexer::IndexerState;
 use blokli_db_entity::{
     curvy_committed_note::{self, Model as DbCurvyCommittedNote},
     curvy_committed_nullifier,
@@ -16,7 +17,7 @@ use hopr_types::{
 };
 use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 
-use crate::{errors, validation::validate_eth_address};
+use crate::{SYNCHRONIZED_READ_TIMEOUT, errors, validation::validate_eth_address};
 
 type CurvyResult<T> = std::result::Result<T, blokli_api_types::QueryFailedError>;
 
@@ -353,6 +354,21 @@ pub async fn load_checkpoint(
         .await
         .map_err(|error| errors::query_failed("fetch Curvy sync checkpoint", error))?
         .ok_or_else(|| errors::not_found("Curvy sync checkpoint", identifier))
+}
+
+/// Loads a checkpoint while no block is being committed, so that it is consistent with the
+/// state the indexer has published.
+///
+/// The read is bounded because the indexer cannot process a block while it runs.
+pub async fn load_checkpoint_synchronized(
+    indexer_state: &IndexerState,
+    db: &DatabaseConnection,
+    block_hash: Option<&Hex32>,
+) -> CurvyResult<DbCurvySyncCheckpoint> {
+    indexer_state
+        .read_synchronized(SYNCHRONIZED_READ_TIMEOUT, load_checkpoint(db, block_hash))
+        .await
+        .map_err(|_| errors::synchronized_read_timed_out("fetch Curvy sync checkpoint", SYNCHRONIZED_READ_TIMEOUT))?
 }
 
 pub fn pending_precedes_commit(pending: &DbCurvyPendingNote, committed: &DbCurvyCommittedNote) -> bool {
