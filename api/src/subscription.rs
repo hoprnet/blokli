@@ -56,7 +56,8 @@ use crate::{
         service_entry_from_aggregate, service_registry_config_from_model, service_type_from_aggregate,
         transaction_from_record,
     },
-    curvy, errors,
+    curvy::{self, CurvyEventTable},
+    errors,
     query::owners_for_safe,
     readiness::{ReadinessChecker, ReadinessState},
     snapshot::{SnapshotLimiter, SnapshotPoint, SubscriptionSnapshots},
@@ -73,9 +74,10 @@ fn synchronized_read_timed_out(operation: &str) -> async_graphql::Error {
 
 /// Runs the database load of a snapshot once the limiter admits it
 ///
-/// Every multi-row load a subscription starts with goes through here, as does every Curvy history
-/// scan, so that subscriptions arriving together queue for the database instead of each taking a
-/// connection at once.
+/// Every multi-row load a subscription starts with goes through here, so that subscriptions
+/// arriving together queue for the database instead of each taking a connection at once. A Curvy
+/// history reads one page at a time under the same limiter and releases it before yielding the
+/// rows.
 async fn load_snapshot<T>(limiter: &SnapshotLimiter, load: impl Future<Output = Result<T>>) -> Result<T> {
     let _permit = limiter.acquire().await.map_err(errors::graphql_error)?;
     load.await
@@ -758,10 +760,26 @@ impl CurvyPositioned for CurvyCommittedNullifier {
     }
 }
 
+/// Number of Curvy history rows loaded while holding one snapshot permit.
+const CURVY_HISTORY_PAGE_SIZE: usize = 500;
+
+/// Columns and row accessor that locate a Curvy history row in chain order
+struct CurvyHistoryPosition<E: EntityTrait> {
+    columns: [E::Column; 4],
+    of: fn(&E::Model) -> [i64; 4],
+}
+
+/// Reads a Curvy history page by page, ordered by chain position
+///
+/// Each page acquires a snapshot permit, loads at most `page_size` rows into memory and releases
+/// the permit and the connection before its rows are yielded. The next page starts strictly after
+/// the last row of the previous one, and a page shorter than `page_size` ends the history.
 fn curvy_history_stream<E, T, F>(
     limiter: SnapshotLimiter,
     db: DatabaseConnection,
     query: Select<E>,
+    position: CurvyHistoryPosition<E>,
+    page_size: usize,
     operation: &'static str,
     convert: F,
 ) -> impl Stream<Item = Result<T>>
@@ -772,14 +790,49 @@ where
     F: Fn(E::Model) -> std::result::Result<T, blokli_api_types::QueryFailedError> + Send + Sync + 'static,
 {
     try_stream! {
-        let _permit = limiter.acquire().await.map_err(errors::graphql_error)?;
-        let mut rows = query
-            .stream(&db)
-            .await
-            .map_err(|error| errors::graphql_error(errors::query_failed(operation, error)))?;
-        while let Some(row) = rows.next().await {
-            let model = row.map_err(|error| errors::graphql_error(errors::query_failed(operation, error)))?;
-            yield convert(model).map_err(errors::graphql_error)?;
+        let CurvyHistoryPosition { columns, of } = position;
+        let [block, transaction_index, log_index, event_item_index] = columns;
+        let mut after: Option<[i64; 4]> = None;
+        loop {
+            let mut page_query = query.clone();
+            if let Some([block_position, tx_position, log_position, item_position]) = after {
+                page_query = page_query.filter(curvy::event_cursor_condition(
+                    block,
+                    transaction_index,
+                    log_index,
+                    event_item_index,
+                    curvy::DatabaseEventCursor {
+                        block: block_position,
+                        transaction_index: tx_position,
+                        log_index: log_position,
+                        event_item_index: item_position,
+                        block_hash: None,
+                    },
+                ));
+            }
+
+            let page = {
+                let _permit = limiter.acquire().await.map_err(errors::graphql_error)?;
+                page_query
+                    .limit(u64::try_from(page_size).unwrap_or(u64::MAX))
+                    .all(&db)
+                    .await
+                    .map_err(|error| errors::graphql_error(errors::query_failed(operation, error)))?
+            };
+            let page_len = page.len();
+            let next_after = page.last().map(of);
+
+            for model in page {
+                yield convert(model).map_err(errors::graphql_error)?;
+            }
+
+            if page_len < page_size {
+                break;
+            }
+            match next_after {
+                Some(next_after) => after = Some(next_after),
+                None => break,
+            }
         }
     }
 }
@@ -912,6 +965,18 @@ impl SubscriptionRoot {
                 .order_by_asc(curvy_pending_note::Column::PublishedTxIndex)
                 .order_by_asc(curvy_pending_note::Column::PublishedLogIndex)
                 .order_by_asc(curvy_pending_note::Column::EventItemIndex),
+            CurvyHistoryPosition {
+                columns: curvy_pending_note::Entity::POSITION,
+                of: |row| {
+                    [
+                        row.published_block,
+                        row.published_tx_index,
+                        row.published_log_index,
+                        row.event_item_index,
+                    ]
+                },
+            },
+            CURVY_HISTORY_PAGE_SIZE,
             "fetch Curvy pending-note history",
             curvy::pending_note,
         );
@@ -957,6 +1022,18 @@ impl SubscriptionRoot {
                 .order_by_asc(curvy_committed_note::Column::PublishedTxIndex)
                 .order_by_asc(curvy_committed_note::Column::PublishedLogIndex)
                 .order_by_asc(curvy_committed_note::Column::EventItemIndex),
+            CurvyHistoryPosition {
+                columns: curvy_committed_note::Entity::POSITION,
+                of: |row| {
+                    [
+                        row.published_block,
+                        row.published_tx_index,
+                        row.published_log_index,
+                        row.event_item_index,
+                    ]
+                },
+            },
+            CURVY_HISTORY_PAGE_SIZE,
             "fetch Curvy committed-note history",
             curvy::committed_note,
         );
@@ -1002,6 +1079,18 @@ impl SubscriptionRoot {
                 .order_by_asc(curvy_committed_nullifier::Column::PublishedTxIndex)
                 .order_by_asc(curvy_committed_nullifier::Column::PublishedLogIndex)
                 .order_by_asc(curvy_committed_nullifier::Column::EventItemIndex),
+            CurvyHistoryPosition {
+                columns: curvy_committed_nullifier::Entity::POSITION,
+                of: |row| {
+                    [
+                        row.published_block,
+                        row.published_tx_index,
+                        row.published_log_index,
+                        row.event_item_index,
+                    ]
+                },
+            },
+            CURVY_HISTORY_PAGE_SIZE,
             "fetch Curvy committed-nullifier history",
             curvy::committed_nullifier,
         );
@@ -1440,26 +1529,36 @@ impl SubscriptionRoot {
 
             // Emit initial matching accounts
             let is_unfiltered = keyid.is_none() && packet_key.is_none() && chain_key.is_none();
-            let initial_accounts = if is_unfiltered {
-                Self::load_all_accounts_shared(&snapshots, &indexer_state, &db).await
-            } else {
-                load_snapshot(
-                    &snapshots.limiter,
-                    Self::fetch_filtered_accounts(&db, keyid, packet_key.clone(), chain_key.clone()),
-                )
-                .await
-                .map(Arc::new)
-            };
+            let initial_accounts = load_phase1(
+                async {
+                    if is_unfiltered {
+                        Self::load_all_accounts_shared(&snapshots, &indexer_state, &db).await
+                    } else {
+                        load_snapshot(
+                            &snapshots.limiter,
+                            Self::fetch_filtered_accounts(&db, keyid, packet_key.clone(), chain_key.clone()),
+                        )
+                        .await
+                        .map(Arc::new)
+                    }
+                },
+                &mut shutdown_receiver,
+            )
+            .await;
             match initial_accounts {
-                Ok(accounts) => {
+                Some(Ok(accounts)) => {
                     for row in shuffled_order(accounts.len()) {
+                        if phase1_shutdown_requested(&mut shutdown_receiver) {
+                            return;
+                        }
                         yield accounts[row].clone();
                     }
                 }
-                Err(e) => {
+                Some(Err(e)) => {
                     error!(error = ?e, "failed to fetch initial accounts");
                     return; // Terminate subscription on error
                 }
+                None => return,
             }
 
             // Stream updates from event bus
@@ -2613,7 +2712,7 @@ mod tests {
 
     use async_broadcast::broadcast;
     use async_graphql::{EmptyMutation, Object, Schema};
-    use blokli_api_types::{CurvyCommittedNote, CurvyEventPosition, Hex32, RedemptionResult, UInt64};
+    use blokli_api_types::{CurvyCommittedNote, CurvyEventPosition, Hex32, QueryFailedError, RedemptionResult, UInt64};
     use blokli_chain_indexer::state::{IndexerEvent, RedeemTicketDetailsInfo};
     use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb};
     use blokli_db_entity::{hopr_safe_contract, hopr_safe_contract_state, service_registry_config};
@@ -4285,8 +4384,15 @@ mod tests {
         Ok(())
     }
 
-    /// Inserts one Curvy pending note published at `block`
-    async fn create_curvy_pending_note(conn: &DatabaseConnection, index: u8, block: i64) -> anyhow::Result<()> {
+    /// Inserts one Curvy pending note at a chain position
+    async fn create_curvy_pending_note_at(
+        conn: &DatabaseConnection,
+        index: u8,
+        block: i64,
+        tx_index: i64,
+        log_index: i64,
+        event_item_index: i64,
+    ) -> anyhow::Result<()> {
         curvy_pending_note::ActiveModel {
             note_id: Set(vec![index; 32]),
             ephemeral_key_x: Set(vec![index; 32]),
@@ -4295,17 +4401,22 @@ mod tests {
             token_id: Set(vec![index; 32]),
             amount: Set(vec![index; 32]),
             is_plaintext: Set(false),
-            event_item_index: Set(0),
+            event_item_index: Set(event_item_index),
             chain_tx_hash: Set(vec![index; 32]),
             block_hash: Set(vec![index; 32]),
             published_block: Set(block),
-            published_tx_index: Set(0),
-            published_log_index: Set(i64::from(index)),
+            published_tx_index: Set(tx_index),
+            published_log_index: Set(log_index),
             ..Default::default()
         }
         .insert(conn)
         .await?;
         Ok(())
+    }
+
+    /// Inserts one Curvy pending note published at `block`
+    async fn create_curvy_pending_note(conn: &DatabaseConnection, index: u8, block: i64) -> anyhow::Result<()> {
+        create_curvy_pending_note_at(conn, index, block, 0, i64::from(index), 0).await
     }
 
     const GRAPH_SNAPSHOT_QUERY: &str = "subscription { openedChannelGraphUpdated { channel { concreteChannelId } } }";
@@ -4447,6 +4558,72 @@ mod tests {
         assert_eq!(first.len(), 3);
         assert_eq!(same_block.len(), 3);
         assert_eq!(next_block.len(), 4);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_account_updated_snapshot_ends_when_a_reorg_is_signaled_while_the_load_waits() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let conn = db.conn(blokli_db::TargetDb::Index);
+        init_chain_info(conn, 100, 0, 0).await?;
+        for index in 0..3u8 {
+            create_test_account(conn, vec![index + 1; 20], &format!("peer{index}")).await?;
+        }
+        let indexer_state = IndexerState::new(10, 100);
+        let snapshots = SubscriptionSnapshots::new(1, Duration::from_secs(5));
+        let schema = snapshot_test_schema(conn, &indexer_state, &snapshots);
+        let slot = snapshots
+            .limiter
+            .acquire()
+            .await
+            .map_err(|e| anyhow::anyhow!(e.message))?;
+
+        let subscription = tokio::spawn({
+            let schema = schema.clone();
+            async move {
+                let mut stream = schema.execute_stream(ACCOUNT_SNAPSHOT_QUERY).boxed();
+                let mut items = Vec::new();
+                while let Some(item) = stream.next().await {
+                    items.push(item);
+                }
+                items
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        indexer_state.signal_shutdown();
+        drop(slot);
+
+        let items = tokio::time::timeout(Duration::from_secs(2), subscription).await??;
+        assert!(
+            items.is_empty(),
+            "a reorg during the account load must end the stream before any account"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_account_updated_snapshot_ends_when_a_reorg_is_signaled_during_emission() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let conn = db.conn(blokli_db::TargetDb::Index);
+        init_chain_info(conn, 100, 0, 0).await?;
+        for index in 0..3u8 {
+            create_test_account(conn, vec![index + 1; 20], &format!("peer{index}")).await?;
+        }
+        let indexer_state = IndexerState::new(10, 100);
+        let schema = snapshot_test_schema(conn, &indexer_state, &SubscriptionSnapshots::default());
+        let mut stream = schema.execute_stream(ACCOUNT_SNAPSHOT_QUERY).boxed();
+
+        let first = tokio::time::timeout(Duration::from_secs(2), stream.next())
+            .await
+            .expect("timeout waiting for the first account snapshot row")
+            .expect("stream ended before the first account snapshot row");
+        first.into_result().expect("first account snapshot row failed");
+
+        indexer_state.signal_shutdown();
+        let next = tokio::time::timeout(Duration::from_secs(2), stream.next())
+            .await
+            .expect("a reorg during account emission must end the stream");
+        assert!(next.is_none(), "no account may follow a reorg signal");
         Ok(())
     }
 
@@ -4720,7 +4897,67 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_curvy_history_holds_its_snapshot_permit_until_it_ends() -> anyhow::Result<()> {
+    async fn test_curvy_history_pages_without_repeating_or_skipping_rows() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let conn = db.conn(blokli_db::TargetDb::Index);
+        init_chain_info(conn, 100, 0, 0).await?;
+        let expected = [
+            (1u8, 50i64, 0i64, 0i64, 0i64),
+            (2, 50, 0, 0, 1),
+            (3, 50, 0, 1, 0),
+            (4, 50, 1, 0, 0),
+            (5, 51, 0, 0, 0),
+        ];
+        for &(index, block, tx_index, log_index, event_item_index) in &expected {
+            create_curvy_pending_note_at(conn, index, block, tx_index, log_index, event_item_index).await?;
+        }
+        let snapshots = SubscriptionSnapshots::default();
+        let history = curvy_history_stream(
+            snapshots.limiter.clone(),
+            conn.clone(),
+            curvy_pending_note::Entity::find()
+                .order_by_asc(curvy_pending_note::Column::PublishedBlock)
+                .order_by_asc(curvy_pending_note::Column::PublishedTxIndex)
+                .order_by_asc(curvy_pending_note::Column::PublishedLogIndex)
+                .order_by_asc(curvy_pending_note::Column::EventItemIndex),
+            CurvyHistoryPosition {
+                columns: curvy_pending_note::Entity::POSITION,
+                of: |row| {
+                    [
+                        row.published_block,
+                        row.published_tx_index,
+                        row.published_log_index,
+                        row.event_item_index,
+                    ]
+                },
+            },
+            2,
+            "fetch Curvy pending-note history",
+            |row| Ok::<_, QueryFailedError>(row),
+        );
+        pin_mut!(history);
+
+        let mut positions = Vec::new();
+        while let Some(row) = history.next().await {
+            let row = row.map_err(|error| anyhow::anyhow!(error.message))?;
+            positions.push((
+                row.published_block,
+                row.published_tx_index,
+                row.published_log_index,
+                row.event_item_index,
+            ));
+        }
+
+        let expected = expected
+            .into_iter()
+            .map(|(_, block, tx_index, log_index, event_item_index)| (block, tx_index, log_index, event_item_index))
+            .collect::<Vec<_>>();
+        assert_eq!(positions, expected);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_curvy_history_releases_its_snapshot_permit_before_yielding() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let conn = db.conn(blokli_db::TargetDb::Index);
         init_chain_info(conn, 100, 0, 0).await?;
@@ -4739,15 +4976,11 @@ mod tests {
             .expect("Curvy history ended before its first row");
         first.into_result().expect("first Curvy history row failed");
 
-        assert!(
-            snapshots.limiter.acquire().await.is_err(),
-            "a running Curvy history must hold its snapshot permit"
-        );
-        drop(stream);
-        assert!(
-            snapshots.limiter.acquire().await.is_ok(),
-            "dropping a Curvy history must release its snapshot permit"
-        );
+        let permit = tokio::time::timeout(Duration::from_millis(200), snapshots.limiter.acquire())
+            .await
+            .expect("a yielded Curvy history row must not keep its snapshot permit")
+            .expect("the snapshot permit must be free while the client reads");
+        drop(permit);
         Ok(())
     }
 }

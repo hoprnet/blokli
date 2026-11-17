@@ -646,9 +646,10 @@ results. Reconnecting clients will receive entries in a different order each tim
 
 **Snapshot Admission**: Loading a snapshot is the most expensive part of a subscription, and clients tend to subscribe together, for example
 all at once after a restart. The number of snapshots loaded from the database at the same time is therefore limited by a configurable bound.
-The bound is not checked against the size of the API pool: the default is below it, and the operator keeps it below so that queries always
-find a free connection. Further loads wait their turn. History scans of Curvy subscriptions count against the same limit for as long as they
-run. A subscription that waits too long ends: one that loads its snapshot before the stream starts returns a timeout error, while
+The bound is not enforced against the size of the API pool: the default is below it, the operator keeps it below so that queries always find
+a free connection, and a setting at or above the pool size is warned about at startup. Further loads wait their turn. A Curvy history is
+read in pages, and each page counts against the same limit only while it is loaded; its rows are handed to the client after the page load
+has finished. A subscription that waits too long ends: one that loads its snapshot before the stream starts returns a timeout error, while
 `channelUpdated`, `openedChannelGraphUpdated` and `accountUpdated` end their stream without an error payload. The timeout is logged and
 counted in `blokli_errors_total`, and clients are expected to reconnect with jittered backoff.
 
