@@ -903,7 +903,7 @@ async fn test_opened_channel_graph_subscription_ends_when_event_bus_overflows() 
 /// the watermark, so block-level granularity can't miss anything. This test exercises that boundary directly: two
 /// channels both get a new state in the same block as the watermark, one at a transaction index below the
 /// watermark's recorded `tx_index` and one above it. If the snapshot silently dropped the one above it, it would
-/// be hit by the exact "fell between snapshot and live feed" gap `blokli-issue.md` raised as a hypothesis.
+/// be hit by the exact "fell between snapshot and live feed" gap raised as a hypothesis in #690.
 #[tokio::test]
 async fn test_opened_channel_graph_snapshot_includes_every_state_in_the_watermark_block() {
     let db = BlokliDb::new_in_memory().await.unwrap();
@@ -971,7 +971,10 @@ async fn test_opened_channel_graph_snapshot_includes_every_state_in_the_watermar
         assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
         let data = result.data.into_json().unwrap();
         let entry = &data["openedChannelGraphUpdated"]["channel"];
-        let pair = (entry["source"].as_i64().unwrap(), entry["destination"].as_i64().unwrap());
+        let pair = (
+            entry["source"].as_i64().unwrap(),
+            entry["destination"].as_i64().unwrap(),
+        );
         balances_by_pair.insert(pair, entry["balance"].as_str().unwrap().to_string());
     }
 
