@@ -117,6 +117,14 @@ mod tests {
             Err(RpcError::Other("unused".into()))
         }
 
+        async fn get_safe_owners_and_threshold(
+            &self,
+            _safe_address: Address,
+            _block: u64,
+        ) -> blokli_chain_rpc::errors::Result<blokli_chain_rpc::SafeOwnersSnapshot> {
+            Err(RpcError::Other("unused".into()))
+        }
+
         async fn get_xdai_balance(&self, _address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance> {
             Err(RpcError::Other("unused".into()))
         }

@@ -17,7 +17,7 @@ use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
 use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{
     BlokliDbGeneralModelOperations, TargetDb, api::logs::BlokliDbLogOperations, info::BlokliDbInfoOperations,
-    safe_contracts::BlokliDbSafeContractOperations,
+    safe_contracts::BlokliDbSafeContractOperations, safe_history::BlokliDbSafeHistoryOperations,
 };
 use blokli_db_entity::{channel_state, prelude::ChannelState};
 use futures::{
@@ -47,8 +47,13 @@ use crate::{
     IndexerConfig, IndexerState,
     errors::{CoreEthereumIndexerError, Result},
     numeric::{u64_to_i64, u64_to_u32},
+    safe_owner_refresh::{
+        RefreshTimings, SAFE_SNAPSHOT_CONCURRENCY, SafeSnapshotRead, store_safe_owner_snapshot,
+        supervise_safe_owner_refresh,
+    },
     snapshot::{SnapshotInfo, SnapshotManager},
     traits::{ChainLogHandler, PrefetchedLogData},
+    utils::AbortOnDrop,
 };
 
 /// Number of not-yet-committed blocks whose chain data the indexer fetches ahead of time.
@@ -92,10 +97,37 @@ where
     }
 }
 
+/// Attempts made to list the Safes pending an owner snapshot when the continuous phase starts.
+const PENDING_SAFES_LOOKUP_ATTEMPTS: u32 = 5;
+
+/// Wait before the first retry of the pending Safes lookup; it doubles after every failure.
+const PENDING_SAFES_LOOKUP_INITIAL_BACKOFF: Duration = Duration::from_millis(500);
+
+/// Lists the Safes still missing an owner snapshot (retrying the lookup) and reports each to the refresh task.
+///
+/// Returns the number of Safes queued, or the last error once the attempts are used up.
+async fn queue_pending_safe_owner_snapshots<E, F, Fut>(
+    lookup: F,
+    state: &IndexerState,
+    attempts: u32,
+    initial_backoff: Duration,
+) -> StdResult<usize, E>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = StdResult<Vec<Address>, E>>,
+    E: FmtDisplay,
+{
+    let pending = retry_with_backoff(attempts, initial_backoff, lookup).await?;
+    let queued = pending.len();
+    for safe_address in pending {
+        state.mark_safe_owner_snapshot_pending(safe_address);
+    }
+    Ok(queued)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Display)]
 enum LogFilterPhase {
     HistoricalDiscovery,
-    HistoricalSafeBackfill,
     Continuous,
 }
 
@@ -194,6 +226,7 @@ where
         + BlokliDbInfoOperations
         + BlokliDbLogOperations
         + BlokliDbSafeContractOperations
+        + BlokliDbSafeHistoryOperations
         + Clone
         + Send
         + Sync
@@ -217,6 +250,7 @@ where
         + BlokliDbInfoOperations
         + BlokliDbLogOperations
         + BlokliDbSafeContractOperations
+        + BlokliDbSafeHistoryOperations
         + Clone
         + Send
         + Sync
@@ -247,6 +281,7 @@ where
             + BlokliDbInfoOperations
             + BlokliDbLogOperations
             + BlokliDbSafeContractOperations
+            + BlokliDbSafeHistoryOperations
             + Clone
             + Send
             + Sync
@@ -454,7 +489,6 @@ where
                 }
                 if let Some(metric) = METRIC_INDEXER_SYNC_PROGRESS.as_ref() {
                     metric.set(&[&LogFilterPhase::HistoricalDiscovery.to_string()], 0.0);
-                    metric.set(&[&LogFilterPhase::HistoricalSafeBackfill.to_string()], 0.0);
                     metric.set(&[&LogFilterPhase::Continuous.to_string()], 0.0);
                 }
             }
@@ -477,7 +511,7 @@ where
                 info!(
                     start_block = stream_start_block,
                     end_block = historical_sync_head,
-                    "Starting historical discovery phase without Safe log filters"
+                    "Starting historical discovery phase (Safe discovery only, no Safe log filters)"
                 );
                 if let Err(error) = Self::run_historical_phase(
                     &rpc,
@@ -488,7 +522,6 @@ where
                     historical_sync_head,
                     LogFilterPhase::HistoricalDiscovery,
                     "discover-safes",
-                    self.cfg.enable_safe_indexing,
                 )
                 .await
                 {
@@ -496,27 +529,6 @@ where
                     return;
                 }
 
-                info!(
-                    start_block = stream_start_block,
-                    end_block = historical_sync_head,
-                    "Starting historical Safe backfill phase for discovered Safes"
-                );
-                if let Err(error) = Self::run_historical_phase(
-                    &rpc,
-                    &db,
-                    &logs_handler,
-                    &indexer_state,
-                    stream_start_block,
-                    historical_sync_head,
-                    LogFilterPhase::HistoricalSafeBackfill,
-                    "backfill-safe-logs",
-                    self.cfg.enable_safe_indexing,
-                )
-                .await
-                {
-                    error!(%error, "historical Safe backfill phase failed");
-                    return;
-                }
                 let checksum = match db.update_logs_checksums().await {
                     Ok(checksum) => checksum,
                     Err(error) => {
@@ -548,17 +560,54 @@ where
             }
             let mut safe_filter_epoch = indexer_state.safe_filter_epoch();
 
+            // Owners and threshold come from the chain. The refresh runs as its own task and only performs
+            // RPC reads; this loop lists the pending Safes, stores the results between blocks and reports
+            // Safes that need another read (see `safe_owner_refresh`). The task lives as long as this one.
+            let refresh_goal_block = stream_start_block.saturating_sub(1);
+            let latest_processed_block = Arc::new(AtomicU64::new(refresh_goal_block));
+            let (snapshot_tx, mut snapshot_rx) = channel::<SafeSnapshotRead>(SAFE_SNAPSHOT_CONCURRENCY * 2);
+            let rpc = Arc::new(rpc);
+            // The lookup of the Safes to refresh is retried; if it keeps failing the phase fails below, because
+            // nothing rescans later and Safes whose owners changed during downtime would stay stale.
+            let mut startup_failure: Option<String> = None;
+            let _owner_refresh_guard = {
+                match queue_pending_safe_owner_snapshots(
+                    || db.get_safes_pending_owner_snapshot(None, refresh_goal_block),
+                    &indexer_state,
+                    PENDING_SAFES_LOOKUP_ATTEMPTS,
+                    PENDING_SAFES_LOOKUP_INITIAL_BACKOFF,
+                )
+                .await
+                {
+                    Ok(queued) => {
+                        info!(
+                            safes = queued,
+                            snapshot_block = refresh_goal_block,
+                            "Safes pending an owner snapshot"
+                        );
+                        Some(AbortOnDrop(tokio::spawn(supervise_safe_owner_refresh(
+                            rpc.clone(),
+                            indexer_state.clone(),
+                            latest_processed_block.clone(),
+                            snapshot_tx,
+                            RefreshTimings::default(),
+                        ))))
+                    }
+                    Err(error) => {
+                        startup_failure = Some(format!("failed to list Safes pending an owner snapshot: {error}"));
+                        None
+                    }
+                }
+            };
+
             // Reason why the continuous phase stopped, if it stopped because of a failure.
             // A failure here must not leave the process running without an indexer, so it is
             // funnelled into the same termination handling as an exhausted event stream.
             let termination_reason: Option<String> = 'stream_refresh: loop {
-                let log_filters = match Self::generate_log_filters(
-                    &db,
-                    &logs_handler,
-                    LogFilterPhase::Continuous,
-                    self.cfg.enable_safe_indexing,
-                )
-                .await
+                if let Some(reason) = startup_failure.take() {
+                    break 'stream_refresh Some(reason);
+                }
+                let log_filters = match Self::generate_log_filters(&db, &logs_handler, LogFilterPhase::Continuous).await
                 {
                     Ok(log_filters) => log_filters,
                     Err(error) => {
@@ -573,7 +622,26 @@ where
                 };
                 let mut event_stream = Box::pin(Self::prefetch_block_data(&logs_handler, block_stream, true));
 
-                while let Some((block, prefetched)) = event_stream.next().await {
+                loop {
+                    let (block, prefetched) = tokio::select! {
+                        item = event_stream.next() => match item {
+                            Some(item) => item,
+                            None => break,
+                        },
+                        read = snapshot_rx.next() => {
+                            match read {
+                                Some(read) => store_safe_owner_snapshot(&db, &indexer_state, read).await,
+                                // The supervisor only ends when it gave up restarting the task. Without the
+                                // refresh, Safes would silently keep missing owners: fail like any other
+                                // unrecoverable indexer failure.
+                                None => {
+                                    error!("Safe owner refresh task has stopped");
+                                    break 'stream_refresh Some("the Safe owner refresh task has stopped".into());
+                                }
+                            }
+                            continue;
+                        }
+                    };
                     let store_started = Instant::now();
                     if let Err(error) = Self::store_block_logs(&db, &logs_handler, &block).await {
                         break 'stream_refresh Some(format!(
@@ -598,6 +666,7 @@ where
                     record_block_step("process", process_started);
 
                     stream_start_block = block.block_id.saturating_add(1);
+                    latest_processed_block.store(block.block_id, Ordering::Relaxed);
 
                     let latest_safe_filter_epoch = indexer_state.safe_filter_epoch();
                     if latest_safe_filter_epoch != safe_filter_epoch {
@@ -711,12 +780,7 @@ where
     /// * `all` contains every active filter.
     /// * `token` contains owner-filtered token Approval filters.
     /// * `no_token` contains non-token filters for historical discovery.
-    async fn generate_log_filters(
-        db: &Db,
-        logs_handler: &U,
-        phase: LogFilterPhase,
-        enable_safe_indexing: bool,
-    ) -> Result<FilterSet> {
+    async fn generate_log_filters(db: &Db, logs_handler: &U, phase: LogFilterPhase) -> Result<FilterSet> {
         let static_addresses = logs_handler.contract_addresses();
         let addresses_no_token = static_addresses
             .iter()
@@ -739,7 +803,7 @@ where
             .address(filter_base_addresses)
             .event_signature(filter_base_topics);
         let safe_addresses = db.get_safe_contract_addresses(None).await?;
-        let safe_filter = (enable_safe_indexing && !safe_addresses.is_empty()).then(|| {
+        let safe_filter = (!safe_addresses.is_empty()).then(|| {
             Filter::new()
                 .address(
                     safe_addresses
@@ -771,11 +835,6 @@ where
                 all: vec![filter_base.clone()],
                 token: vec![],
                 no_token: vec![filter_base],
-            }),
-            LogFilterPhase::HistoricalSafeBackfill => Ok(FilterSet {
-                all: safe_filter.clone().into_iter().collect(),
-                token: vec![],
-                no_token: safe_filter.into_iter().collect(),
             }),
             LogFilterPhase::Continuous => {
                 let mut all_filters = vec![filter_base.clone()];
@@ -920,7 +979,6 @@ where
         end_block: u64,
         filter_phase: LogFilterPhase,
         phase_name: &str,
-        enable_safe_indexing: bool,
     ) -> Result<()>
     where
         T: HoprIndexerRpcOperations + 'static,
@@ -931,7 +989,7 @@ where
             return Ok(());
         }
 
-        let log_filters = Self::generate_log_filters(db, logs_handler, filter_phase, enable_safe_indexing).await?;
+        let log_filters = Self::generate_log_filters(db, logs_handler, filter_phase).await?;
         if log_filters.no_token.is_empty() {
             info!(
                 phase = phase_name,
@@ -1611,11 +1669,11 @@ mod tests {
     };
 
     use async_trait::async_trait;
-    use blokli_chain_rpc::{BlockWithLogs, Log as RpcLog, errors::Result as RpcResult};
+    use blokli_chain_rpc::{BlockWithLogs, SafeOwnersSnapshot, errors::RpcError};
     use blokli_chain_types::{ContractAddresses, chain_events::ChainEventType};
     use blokli_db::{
         TargetDb, accounts::BlokliDbAccountOperations, db::BlokliDb, errors::DbSqlError,
-        safe_contracts::BlokliDbSafeContractOperations,
+        safe_contracts::BlokliDbSafeContractOperations, safe_history::BlokliDbSafeHistoryOperations,
     };
     use blokli_db_entity::{
         account, channel,
@@ -1627,9 +1685,7 @@ mod tests {
         exports::alloy::{
             dyn_abi::DynSolValue,
             primitives::{Address as AlloyAddress, B256},
-            sol_types::private::IntoLogData,
         },
-        hopr_node_safe_registry::HoprNodeSafeRegistry::RegisteredNodeSafe,
         hopr_token::HoprToken::{Approval, Transfer},
     };
     use hopr_types::{
@@ -1645,9 +1701,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        SafeTxPrefetchConfig,
-        custom_abis::safe_contract_events::SafeContract::ExecutionFromModuleFailure,
-        handlers::ContractEventHandlers,
+        safe_owner_refresh::SAFE_SNAPSHOT_BATCH_SIZE,
         traits::{ChainLogHandler, MockChainLogHandler, PrefetchedTransactions},
     };
 
@@ -1733,6 +1787,8 @@ mod tests {
                 to_block: u64,
             ) -> blokli_chain_rpc::errors::Result<Vec<blokli_chain_rpc::Log>>;
 
+            async fn get_safe_owners_and_threshold(&self, safe_address: Address, block: u64) -> blokli_chain_rpc::errors::Result<blokli_chain_rpc::SafeOwnersSnapshot>;
+            async fn get_safe_owners_and_thresholds(&self, safe_addresses: Vec<Address>, block: u64) -> blokli_chain_rpc::errors::Result<Vec<blokli_chain_rpc::errors::Result<blokli_chain_rpc::SafeOwnersSnapshot>>>;
             async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance>;
             async fn get_hopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
             async fn get_xhopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XHoprBalance>;
@@ -1741,157 +1797,6 @@ mod tests {
             async fn get_channel_closure_notice_period(&self) -> blokli_chain_rpc::errors::Result<std::time::Duration>;
             async fn get_hopr_module_from_safe(&self, safe_address: Address) -> blokli_chain_rpc::errors::Result<Option<Address>>;
         }
-    }
-
-    /// Shares one [`MockHoprIndexerOps`] between clones, since the contract handlers require a
-    /// `Clone` RPC client. Every call is forwarded, so the mock's expectations see each request.
-    #[derive(Clone)]
-    struct SharedIndexerOps(Arc<MockHoprIndexerOps>);
-
-    #[async_trait]
-    impl HoprIndexerRpcOperations for SharedIndexerOps {
-        async fn block_number(&self) -> RpcResult<u64> {
-            self.0.block_number().await
-        }
-
-        async fn get_transaction_sender(&self, tx_hash: Hash) -> RpcResult<Address> {
-            self.0.get_transaction_sender(tx_hash).await
-        }
-
-        async fn get_transaction_bytes(&self, tx_hash: Hash) -> RpcResult<Vec<u8>> {
-            self.0.get_transaction_bytes(tx_hash).await
-        }
-
-        async fn get_transaction_bytes_batch(&self, tx_hashes: &[Hash]) -> Vec<RpcResult<Vec<u8>>> {
-            self.0.get_transaction_bytes_batch(tx_hashes).await
-        }
-
-        fn try_stream_logs<'a>(
-            &'a self,
-            start_block_number: u64,
-            filters: FilterSet,
-            is_synced: bool,
-        ) -> RpcResult<Pin<Box<dyn Stream<Item = BlockWithLogs> + Send + 'a>>> {
-            self.0.try_stream_logs(start_block_number, filters, is_synced)
-        }
-
-        async fn get_logs_for_address(
-            &self,
-            address: Address,
-            topics: Vec<B256>,
-            from_block: u64,
-            to_block: u64,
-        ) -> RpcResult<Vec<RpcLog>> {
-            self.0.get_logs_for_address(address, topics, from_block, to_block).await
-        }
-
-        async fn get_xdai_balance(&self, address: Address) -> RpcResult<XDaiBalance> {
-            self.0.get_xdai_balance(address).await
-        }
-
-        async fn get_hopr_balance(&self, address: Address) -> RpcResult<HoprBalance> {
-            self.0.get_hopr_balance(address).await
-        }
-
-        async fn get_xhopr_balance(&self, address: Address) -> RpcResult<XHoprBalance> {
-            self.0.get_xhopr_balance(address).await
-        }
-
-        async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> RpcResult<HoprBalance> {
-            self.0.get_hopr_allowance(owner, spender).await
-        }
-
-        async fn get_transaction_count(&self, address: Address) -> RpcResult<u64> {
-            self.0.get_transaction_count(address).await
-        }
-
-        async fn get_channel_closure_notice_period(&self) -> RpcResult<Duration> {
-            self.0.get_channel_closure_notice_period().await
-        }
-
-        async fn get_hopr_module_from_safe(&self, safe_address: Address) -> RpcResult<Option<Address>> {
-            self.0.get_hopr_module_from_safe(safe_address).await
-        }
-    }
-
-    const SAFE_BLOCK: u64 = 120;
-
-    fn safe_block_registry() -> Address {
-        Address::new(b"block test registry!")
-    }
-
-    /// Real contract handlers with Safe indexing enabled, backed by the given RPC mock.
-    fn safe_block_handlers(
-        rpc: MockHoprIndexerOps,
-        db: &BlokliDb,
-    ) -> ContractEventHandlers<SharedIndexerOps, BlokliDb> {
-        ContractEventHandlers::new(
-            ContractAddresses {
-                node_safe_registry: safe_block_registry(),
-                ..Default::default()
-            },
-            db.clone(),
-            SharedIndexerOps(Arc::new(rpc)),
-            IndexerState::default(),
-            true,
-            false,
-            SafeTxPrefetchConfig::default(),
-        )
-    }
-
-    /// Encodes `event` as a log of `address` in [`SAFE_BLOCK`], in a transaction of its own.
-    fn safe_block_log<E: IntoLogData>(event: E, address: Address, log_index: u64) -> SerializableLog {
-        let log_data = event.to_log_data();
-        SerializableLog {
-            address,
-            topics: log_data.topics().iter().map(|topic| topic.0).collect(),
-            data: log_data.data.to_vec(),
-            tx_hash: Hash::create(&[format!("safe block tx {log_index}").as_bytes()]).into(),
-            block_hash: Hash::create(&[b"safe block hash"]).into(),
-            tx_index: log_index,
-            block_number: SAFE_BLOCK,
-            log_index,
-            ..Default::default()
-        }
-    }
-
-    /// Stores the logs, then runs them as one synced block through the indexer's pre-fetch
-    /// pipeline and `process_block`, as the live indexing loop does.
-    async fn prefetch_and_process_safe_block(
-        db: &BlokliDb,
-        handlers: &ContractEventHandlers<SharedIndexerOps, BlokliDb>,
-        logs: Vec<SerializableLog>,
-    ) -> anyhow::Result<Option<()>> {
-        db.store_logs(logs.clone()).await?;
-
-        let block = BlockWithLogs {
-            block_id: SAFE_BLOCK,
-            logs: logs.into_iter().collect(),
-        };
-        let mut prefetched_blocks = Box::pin(Indexer::<
-            MockHoprIndexerOps,
-            ContractEventHandlers<SharedIndexerOps, BlokliDb>,
-            BlokliDb,
-        >::prefetch_block_data(
-            handlers, futures::stream::iter([block]), true
-        ));
-        let Some((block, prefetched)) = prefetched_blocks.next().await else {
-            anyhow::bail!("the pre-fetch pipeline yielded no block");
-        };
-
-        Ok(
-            Indexer::<MockHoprIndexerOps, ContractEventHandlers<SharedIndexerOps, BlokliDb>, BlokliDb>::process_block(
-                db,
-                handlers,
-                block,
-                false,
-                true,
-                &IndexerState::default(),
-                false,
-                prefetched,
-            )
-            .await,
-        )
     }
 
     #[derive(Clone)]
@@ -1989,13 +1894,12 @@ mod tests {
             &db,
             &handler,
             LogFilterPhase::Continuous,
-            false,
         )
         .await?;
 
         assert_eq!(filters.token.len(), 1);
         assert!(
-            !filters
+            filters
                 .no_token
                 .iter()
                 .any(|filter| filter.matches_address(AlloyAddress::from_hopr_address(safe_address)))
@@ -2024,6 +1928,560 @@ mod tests {
                 .filter(|filter| filter.matches_address(AlloyAddress::from_hopr_address(token_address)))
                 .count(),
             1
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn historical_filters_never_request_safe_owner_events() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe_address = Address::from([0x33; 20]);
+        let contract_addresses = Arc::new(ContractAddresses {
+            announcements: Address::from([0x11; 20]),
+            token: Address::from([0x22; 20]),
+            ..ContractAddresses::default()
+        });
+        let handler = ApprovalFilterHandler {
+            contract_addresses,
+            primary_topic: B256::repeat_byte(0x55),
+        };
+
+        db.create_safe_contract(None, safe_address, Address::default(), safe_address, 1, 0, 0)
+            .await?;
+
+        let filters = Indexer::<MockHoprIndexerOps, ApprovalFilterHandler, BlokliDb>::generate_log_filters(
+            &db,
+            &handler,
+            LogFilterPhase::HistoricalDiscovery,
+        )
+        .await?;
+
+        let safe_topics = crate::constants::topics::safe_contract();
+        for filter in filters.all.iter().chain(filters.no_token.iter()) {
+            assert!(!filter.matches_address(AlloyAddress::from_hopr_address(safe_address)));
+            for topic in &safe_topics {
+                assert!(!filter.matches_topics(&[*topic]));
+            }
+        }
+
+        // The continuous phase does request them for the tracked Safe.
+        let live = Indexer::<MockHoprIndexerOps, ApprovalFilterHandler, BlokliDb>::generate_log_filters(
+            &db,
+            &handler,
+            LogFilterPhase::Continuous,
+        )
+        .await?;
+        assert!(
+            live.all
+                .iter()
+                .any(|filter| filter.matches_address(AlloyAddress::from_hopr_address(safe_address)))
+        );
+
+        Ok(())
+    }
+
+    fn snapshot_of(owner: Address, threshold: u64) -> SafeOwnersSnapshot {
+        SafeOwnersSnapshot {
+            owners: vec![owner],
+            threshold,
+        }
+    }
+
+    fn fast_timings() -> RefreshTimings {
+        RefreshTimings {
+            retry_min: Duration::from_millis(5),
+            retry_max: Duration::from_millis(20),
+            long_tail_after: 100,
+            long_tail: Duration::from_secs(60),
+        }
+    }
+
+    /// A running refresh task with the channel to the (test-driven) indexing loop.
+    struct RefreshHarness {
+        state: IndexerState,
+        latest: Arc<AtomicU64>,
+        results: futures::channel::mpsc::Receiver<SafeSnapshotRead>,
+        _task: AbortOnDrop,
+    }
+
+    fn start_refresh(rpc: MockHoprIndexerOps, latest_block: u64, timings: RefreshTimings) -> RefreshHarness {
+        let state = IndexerState::default();
+        let latest = Arc::new(AtomicU64::new(latest_block));
+        let (tx, results) = channel::<SafeSnapshotRead>(SAFE_SNAPSHOT_CONCURRENCY * 2);
+        let task = tokio::spawn(supervise_safe_owner_refresh(
+            Arc::new(rpc),
+            state.clone(),
+            latest.clone(),
+            tx,
+            timings,
+        ));
+        RefreshHarness {
+            state,
+            latest,
+            results,
+            _task: AbortOnDrop(task),
+        }
+    }
+
+    impl RefreshHarness {
+        /// Stores `count` results like the indexing loop does.
+        async fn store(&mut self, db: &BlokliDb, count: usize) {
+            for _ in 0..count {
+                let read = tokio::time::timeout(Duration::from_secs(10), self.results.next())
+                    .await
+                    .expect("refresh result in time")
+                    .expect("refresh task alive");
+                store_safe_owner_snapshot(db, &self.state, read).await;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn safe_owner_refresh_stores_the_chain_state_for_reported_safes() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let (safe_one, safe_two) = (Address::from([0x31; 20]), Address::from([0x32; 20]));
+        let (stale_owner, current_owner) = (Address::from([0x41; 20]), Address::from([0x42; 20]));
+        for safe in [safe_one, safe_two] {
+            db.create_safe_contract(None, safe, Address::default(), safe, 1, 0, 0)
+                .await?;
+        }
+        // State left over from a previous run: the owner was replaced while the indexer was down.
+        db.apply_safe_owner_snapshot(None, safe_one, vec![stale_owner], "1".into(), 100)
+            .await?;
+
+        let mut rpc = MockHoprIndexerOps::new();
+        rpc.expect_get_safe_owners_and_thresholds()
+            .withf(|safes, block| safes.len() == 2 && *block == 200)
+            .times(1)
+            .returning(move |safes, _| Ok(safes.iter().map(|_| Ok(snapshot_of(current_owner, 2))).collect()));
+        let mut refresh = start_refresh(rpc, 200, fast_timings());
+
+        // The indexing loop lists the pending Safes (only those below the block) and reports them.
+        for safe in db.get_safes_pending_owner_snapshot(None, 200).await? {
+            refresh.state.mark_safe_owner_snapshot_pending(safe);
+        }
+        refresh.store(&db, 2).await;
+
+        for safe in [safe_one, safe_two] {
+            assert_eq!(db.get_safe_owners(None, safe).await?, vec![current_owner]);
+            assert_eq!(db.get_safe_threshold(None, safe).await?.as_deref(), Some("2"));
+            assert_eq!(db.get_safe_owners_synced_block(None, safe).await?, Some(200));
+        }
+        // Resumable: nothing is pending at that block any more, so a restart reads nothing.
+        assert!(db.get_safes_pending_owner_snapshot(None, 200).await?.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn safe_owner_refresh_splits_safes_into_bounded_batches() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let total = SAFE_SNAPSHOT_BATCH_SIZE * 2 + 5;
+        for i in 0..total {
+            let mut bytes = [0x50_u8; 20];
+            bytes[..8].copy_from_slice(&(i as u64).to_be_bytes());
+            db.create_safe_contract(
+                None,
+                Address::from(bytes),
+                Address::default(),
+                Address::from(bytes),
+                1,
+                0,
+                0,
+            )
+            .await?;
+        }
+
+        let sizes = Arc::new(StdMutex::new(Vec::new()));
+        let recorded = sizes.clone();
+        let mut rpc = MockHoprIndexerOps::new();
+        rpc.expect_get_safe_owners_and_thresholds().returning(move |safes, _| {
+            recorded.lock().expect("lock").push(safes.len());
+            Ok(safes
+                .iter()
+                .map(|_| Ok(snapshot_of(Address::from([0x42; 20]), 1)))
+                .collect())
+        });
+        let mut refresh = start_refresh(rpc, 200, fast_timings());
+
+        for safe in db.get_safes_pending_owner_snapshot(None, 200).await? {
+            refresh.state.mark_safe_owner_snapshot_pending(safe);
+        }
+        refresh.store(&db, total).await;
+
+        let mut sizes = sizes.lock().expect("lock").clone();
+        sizes.sort_unstable();
+        assert_eq!(sizes, vec![5, SAFE_SNAPSHOT_BATCH_SIZE, SAFE_SNAPSHOT_BATCH_SIZE]);
+        assert!(db.get_safes_pending_owner_snapshot(None, 200).await?.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn safe_owner_refresh_retries_only_the_failed_safes() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let (flaky, healthy) = (Address::from([0x33; 20]), Address::from([0x34; 20]));
+        let owner = Address::from([0x43; 20]);
+        for safe in [flaky, healthy] {
+            db.create_safe_contract(None, safe, Address::default(), safe, 1, 0, 0)
+                .await?;
+        }
+
+        let healthy_reads = Arc::new(StdAtomicUsize::new(0));
+        let flaky_reads = Arc::new(StdAtomicUsize::new(0));
+        let (healthy_counter, flaky_counter) = (healthy_reads.clone(), flaky_reads.clone());
+        let mut rpc = MockHoprIndexerOps::new();
+        rpc.expect_get_safe_owners_and_thresholds().returning(move |safes, _| {
+            Ok(safes
+                .iter()
+                .map(|safe| {
+                    if *safe == flaky && flaky_counter.fetch_add(1, StdOrdering::SeqCst) < 2 {
+                        Err(RpcError::MulticallFailure(0, "reverted".into()))
+                    } else {
+                        if *safe != flaky {
+                            healthy_counter.fetch_add(1, StdOrdering::SeqCst);
+                        }
+                        Ok(snapshot_of(owner, 1))
+                    }
+                })
+                .collect())
+        });
+        let mut refresh = start_refresh(rpc, 200, fast_timings());
+
+        refresh.state.mark_safe_owner_snapshot_pending(flaky);
+        refresh.state.mark_safe_owner_snapshot_pending(healthy);
+        refresh.store(&db, 2).await;
+
+        assert_eq!(flaky_reads.load(StdOrdering::SeqCst), 3, "two failures, then success");
+        assert_eq!(
+            healthy_reads.load(StdOrdering::SeqCst),
+            1,
+            "a stored Safe is not read again"
+        );
+        for safe in [flaky, healthy] {
+            assert_eq!(db.get_safe_owners(None, safe).await?, vec![owner]);
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn safe_owner_refresh_isolates_safes_that_failed_in_a_batch() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safes = [
+            Address::from([0x61; 20]),
+            Address::from([0x62; 20]),
+            Address::from([0x63; 20]),
+        ];
+        for safe in safes {
+            db.create_safe_contract(None, safe, Address::default(), safe, 1, 0, 0)
+                .await?;
+        }
+        let poisoned = safes[0];
+        let owner = Address::from([0x64; 20]);
+
+        let batch_sizes = Arc::new(StdMutex::new(Vec::new()));
+        let recorded = batch_sizes.clone();
+        let mut rpc = MockHoprIndexerOps::new();
+        rpc.expect_get_safe_owners_and_thresholds().returning(move |batch, _| {
+            recorded.lock().expect("lock").push(batch.len());
+            // A contract that burns the gas of the shared call makes its batch-mates fail; alone it only
+            // fails itself.
+            let shared = batch.len() > 1 && batch.contains(&poisoned);
+            Ok(batch
+                .iter()
+                .map(|safe| {
+                    if shared || *safe == poisoned {
+                        Err(RpcError::MulticallFailure(0, "out of gas".into()))
+                    } else {
+                        Ok(snapshot_of(owner, 1))
+                    }
+                })
+                .collect())
+        });
+        let mut refresh = start_refresh(rpc, 200, fast_timings());
+
+        for safe in safes {
+            refresh.state.mark_safe_owner_snapshot_pending(safe);
+        }
+        // The two healthy Safes are stored once they are retried on their own.
+        refresh.store(&db, 2).await;
+
+        for safe in &safes[1..] {
+            assert_eq!(db.get_safe_owners(None, *safe).await?, vec![owner]);
+        }
+        assert_eq!(db.get_safe_owners_synced_block(None, poisoned).await?, None);
+        let sizes = batch_sizes.lock().expect("lock").clone();
+        assert_eq!(sizes[0], 3, "the first read is one batch");
+        assert!(
+            sizes[1..].iter().all(|size| *size == 1),
+            "retries are batches of one: {sizes:?}"
+        );
+        assert_eq!(
+            refresh.state.unsynced_safe_owner_snapshots(),
+            1,
+            "only the failing Safe is unsynced"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn safe_owner_refresh_closes_its_channel_when_the_task_keeps_failing() {
+        let mut rpc = MockHoprIndexerOps::new();
+        rpc.expect_get_safe_owners_and_thresholds()
+            .returning(|_, _| panic!("simulated task failure"));
+        let mut refresh = start_refresh(rpc, 200, fast_timings());
+
+        refresh
+            .state
+            .mark_safe_owner_snapshot_pending(Address::from([0x67; 20]));
+
+        // Every attempt of the task panics (the mock stays poisoned after its first panic). The supervisor
+        // restarts it a bounded number of times and then gives up; the closed channel is how the indexing
+        // loop learns that the refresh is gone.
+        let closed = tokio::time::timeout(Duration::from_secs(10), refresh.results.next())
+            .await
+            .expect("the channel closes");
+        assert!(closed.is_none());
+    }
+
+    #[tokio::test]
+    async fn safe_owner_refresh_worker_stops_when_the_supervisor_is_aborted() {
+        let calls = Arc::new(StdAtomicUsize::new(0));
+        let mut rpc = MockHoprIndexerOps::new();
+        let counter = calls.clone();
+        rpc.expect_get_safe_owners_and_thresholds().returning(move |_, _| {
+            counter.fetch_add(1, StdOrdering::SeqCst);
+            Err(RpcError::Other("node unavailable".into()))
+        });
+
+        let state = IndexerState::default();
+        let (tx, results) = channel::<SafeSnapshotRead>(SAFE_SNAPSHOT_CONCURRENCY * 2);
+        let supervisor = tokio::spawn(supervise_safe_owner_refresh(
+            Arc::new(rpc),
+            state.clone(),
+            Arc::new(AtomicU64::new(200)),
+            tx,
+            fast_timings(),
+        ));
+        state.mark_safe_owner_snapshot_pending(Address::from([0x68; 20]));
+
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while calls.load(StdOrdering::SeqCst) < 2 {
+                sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the worker keeps retrying the failing reads");
+
+        supervisor.abort();
+        assert!(supervisor.await.is_err_and(|error| error.is_cancelled()));
+        drop(results);
+
+        // Let an in-flight call finish, then the count must stay put although every read keeps failing.
+        sleep(Duration::from_millis(100)).await;
+        let after_abort = calls.load(StdOrdering::SeqCst);
+        sleep(Duration::from_millis(300)).await;
+        assert_eq!(
+            calls.load(StdOrdering::SeqCst),
+            after_abort,
+            "the worker was left running"
+        );
+    }
+
+    /// The refresh storing a snapshot end to end on a real PostgreSQL.
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL, run with `just test-postgres-schema`"]
+    async fn postgres_safe_owner_refresh_stores_the_snapshot() -> anyhow::Result<()> {
+        let scratch = crate::test_postgres::ScratchPostgres::create().await?;
+        let db = scratch.db.clone();
+        let (safe_one, safe_two) = (Address::from([0x71; 20]), Address::from([0x72; 20]));
+        let (stale_owner, current_owner) = (Address::from([0x73; 20]), Address::from([0x74; 20]));
+        for safe in [safe_one, safe_two] {
+            db.create_safe_contract(None, safe, Address::default(), safe, 1, 0, 0)
+                .await?;
+        }
+        db.apply_safe_owner_snapshot(None, safe_one, vec![stale_owner], "1".into(), 100)
+            .await?;
+
+        let mut rpc = MockHoprIndexerOps::new();
+        rpc.expect_get_safe_owners_and_thresholds()
+            .returning(move |safes, _| Ok(safes.iter().map(|_| Ok(snapshot_of(current_owner, 2))).collect()));
+        let mut refresh = start_refresh(rpc, 200, fast_timings());
+
+        // A fresh database may hold preseeded Safes; only the two created here are refreshed.
+        for safe in [safe_one, safe_two] {
+            refresh.state.mark_safe_owner_snapshot_pending(safe);
+        }
+        refresh.store(&db, 2).await;
+
+        for safe in [safe_one, safe_two] {
+            assert_eq!(db.get_safe_owners(None, safe).await?, vec![current_owner]);
+            assert_eq!(db.get_safe_threshold(None, safe).await?.as_deref(), Some("2"));
+            assert_eq!(db.get_safe_owners_synced_block(None, safe).await?, Some(200));
+        }
+        assert!(
+            !db.get_safes_pending_owner_snapshot(None, 200)
+                .await?
+                .contains(&safe_one)
+        );
+        assert!(
+            !db.get_safes_pending_owner_snapshot(None, 200)
+                .await?
+                .contains(&safe_two)
+        );
+        assert_eq!(refresh.state.unsynced_safe_owner_snapshots(), 0);
+
+        drop(refresh);
+        scratch.drop_database().await
+    }
+
+    #[tokio::test]
+    async fn safe_owner_refresh_wakes_for_a_safe_reported_after_it_went_idle() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe = Address::from([0x39; 20]);
+        let owner = Address::from([0x47; 20]);
+        db.create_safe_contract(None, safe, Address::default(), safe, 1, 0, 0)
+            .await?;
+
+        let reads = Arc::new(StdAtomicUsize::new(0));
+        let counter = reads.clone();
+        let mut rpc = MockHoprIndexerOps::new();
+        rpc.expect_get_safe_owners_and_thresholds().returning(move |safes, _| {
+            let first = counter.fetch_add(1, StdOrdering::SeqCst) == 0;
+            Ok(safes
+                .iter()
+                .map(|_| {
+                    if first {
+                        Err(RpcError::Other("rpc down".into()))
+                    } else {
+                        Ok(snapshot_of(owner, 1))
+                    }
+                })
+                .collect())
+        });
+        let mut refresh = start_refresh(rpc, 200, fast_timings());
+
+        // Nothing is pending at start: the task idles. A Safe discovered live whose read failed is
+        // reported later and still gets its owners.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        refresh.state.mark_safe_owner_snapshot_pending(safe);
+        refresh.store(&db, 1).await;
+
+        assert_eq!(db.get_safe_owners(None, safe).await?, vec![owner]);
+        assert_eq!(reads.load(StdOrdering::SeqCst), 2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn safe_owner_refresh_repins_a_batch_after_a_pruned_state_error() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe = Address::from([0x38; 20]);
+        db.create_safe_contract(None, safe, Address::default(), safe, 1, 0, 0)
+            .await?;
+
+        let pinned_blocks = Arc::new(StdMutex::new(Vec::new()));
+        let latest_cell = Arc::new(StdMutex::new(None::<Arc<AtomicU64>>));
+        let (recorded, latest_for_mock) = (pinned_blocks.clone(), latest_cell.clone());
+        let mut rpc = MockHoprIndexerOps::new();
+        rpc.expect_get_safe_owners_and_thresholds()
+            .returning(move |safes, block| {
+                recorded.lock().expect("lock").push(block);
+                if block == 200 {
+                    // The chain moved on while the read was in flight and the node dropped the old state.
+                    if let Some(latest) = latest_for_mock.lock().expect("lock").as_ref() {
+                        latest.store(230, StdOrdering::SeqCst);
+                    }
+                    Err(RpcError::Other("missing trie node 0xabc (path )".into()))
+                } else {
+                    Ok(safes
+                        .iter()
+                        .map(|_| Ok(snapshot_of(Address::from([0x44; 20]), 1)))
+                        .collect())
+                }
+            });
+        let mut refresh = start_refresh(rpc, 200, fast_timings());
+        *latest_cell.lock().expect("lock") = Some(refresh.latest.clone());
+
+        refresh.state.mark_safe_owner_snapshot_pending(safe);
+        refresh.store(&db, 1).await;
+
+        assert_eq!(*pinned_blocks.lock().expect("lock"), vec![200, 230]);
+        assert_eq!(db.get_safe_owners_synced_block(None, safe).await?, Some(230));
+
+        Ok(())
+    }
+
+    #[test]
+    fn safe_owner_refresh_backs_off_and_settles_on_a_long_tail_interval() {
+        let timings = RefreshTimings {
+            retry_min: Duration::from_secs(1),
+            retry_max: Duration::from_secs(60),
+            long_tail_after: 10,
+            long_tail: Duration::from_secs(900),
+        };
+        let delays = [1, 2, 3, 6, 9, 10].map(|failures| timings.delay_after(failures));
+        assert_eq!(
+            delays,
+            [
+                Duration::from_secs(1),
+                Duration::from_secs(2),
+                Duration::from_secs(4),
+                Duration::from_secs(32),
+                Duration::from_secs(60),
+                Duration::from_secs(900),
+            ]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn block_writes_succeed_on_a_file_database_while_a_refresh_read_is_in_flight() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let url = |name: &str| format!("sqlite://{}?mode=rwc", dir.path().join(name).display());
+        let db = BlokliDb::new(&url("index.db"), Some(&url("logs.db")), Default::default()).await?;
+        db.ensure_singletons().await?;
+
+        let safe = Address::from([0x3a; 20]);
+        db.create_safe_contract(None, safe, Address::default(), safe, 1, 0, 0)
+            .await?;
+
+        let read_started = Arc::new(StdAtomicBool::new(false));
+        let read_finished = Arc::new(StdAtomicBool::new(false));
+        let (started, finished) = (read_started.clone(), read_finished.clone());
+        let mut rpc = MockHoprIndexerOps::new();
+        rpc.expect_get_safe_owners_and_thresholds().returning(move |safes, _| {
+            started.store(true, StdOrdering::SeqCst);
+            // A slow RPC read; the multi-thread runtime keeps the test body running meanwhile.
+            std::thread::sleep(Duration::from_millis(1000));
+            finished.store(true, StdOrdering::SeqCst);
+            Ok(safes
+                .iter()
+                .map(|_| Ok(snapshot_of(Address::from([0x48; 20]), 1)))
+                .collect())
+        });
+        let mut refresh = start_refresh(rpc, 200, fast_timings());
+        refresh.state.mark_safe_owner_snapshot_pending(safe);
+
+        while !read_started.load(StdOrdering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        // Block processing writes (and commits) while the refresh read is in flight.
+        db.upsert_safe_owner_state(None, safe, Address::from([0x49; 20]), true, 201, 0, 0)
+            .await?;
+        assert!(
+            !read_finished.load(StdOrdering::SeqCst),
+            "the write must complete while the refresh read is still in flight"
+        );
+
+        refresh.store(&db, 1).await;
+        // The event above the read block (201 > 200) is kept on top of the snapshot.
+        assert!(
+            db.get_safe_owners(None, safe)
+                .await?
+                .contains(&Address::from([0x49; 20]))
         );
 
         Ok(())
@@ -2627,136 +3085,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_process_block_fetches_safe_transactions_in_one_batched_call() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory().await?;
-        let safe = Address::new(b"block test safe addr");
-        let module = Address::new(b"block test module ad");
-        db.create_safe_contract(None, safe, module, Address::new(b"block test node addr"), 1, 0, 0)
-            .await?;
-
-        let logs = (0..3)
-            .map(|log_index| {
-                safe_block_log(
-                    ExecutionFromModuleFailure {
-                        module: AlloyAddress::from_hopr_address(module),
-                    },
-                    safe,
-                    log_index,
-                )
-            })
-            .collect::<Vec<_>>();
-        let expected_hashes = logs.iter().map(|log| Hash::from(log.tx_hash)).collect::<HashSet<_>>();
-
-        // The block's three Safe failures need three transactions: one batched request for all of
-        // them, issued by the pre-fetch, and no per-hash lookup at all.
-        let mut rpc = MockHoprIndexerOps::new();
-        rpc.expect_get_transaction_bytes_batch()
-            .times(1)
-            .withf(move |tx_hashes| {
-                tx_hashes.len() == expected_hashes.len() && tx_hashes.iter().all(|hash| expected_hashes.contains(hash))
-            })
-            .returning(|tx_hashes| tx_hashes.iter().map(|_| Ok(Vec::new())).collect());
-        rpc.expect_get_transaction_bytes().never();
-        let handlers = safe_block_handlers(rpc, &db);
-
-        assert!(
-            prefetch_and_process_safe_block(&db, &handlers, logs.clone())
-                .await?
-                .is_some()
-        );
-
-        for log in &logs {
-            assert_eq!(
-                db.get_log(log.block_number, log.tx_index, log.log_index)
-                    .await?
-                    .processed,
-                Some(true)
-            );
-        }
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_process_block_fallback_reuses_the_block_prefetch() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory().await?;
-        let known_safe = Address::new(b"block test safe addr");
-        let new_safe = Address::new(b"block test new safe!");
-        let node = Address::new(b"block test node addr");
-        let module = Address::new(b"block test module ad");
-        db.create_safe_contract(None, known_safe, module, node, 1, 0, 0).await?;
-
-        // Every lookup below happens once, in the block pre-fetch. Replaying the logs one by one
-        // after the batch rolled back must reuse that data instead of going to the chain again.
-        let mut rpc = MockHoprIndexerOps::new();
-        rpc.expect_get_transaction_bytes_batch()
-            .times(1)
-            .withf(|tx_hashes| tx_hashes.len() == 2)
-            .returning(|tx_hashes| tx_hashes.iter().map(|_| Ok(Vec::new())).collect());
-        rpc.expect_get_transaction_bytes().never();
-        rpc.expect_get_logs_for_address()
-            .times(1)
-            .returning(|_, _, _, _| Ok(Vec::new()));
-        // Read inside the transaction by the registration handler, not pre-fetched.
-        rpc.expect_get_hopr_module_from_safe().returning(|_| Ok(None));
-        let handlers = safe_block_handlers(rpc, &db);
-
-        let failure = || ExecutionFromModuleFailure {
-            module: AlloyAddress::from_hopr_address(module),
-        };
-        let first_failure = safe_block_log(failure(), known_safe, 0);
-        let second_failure = safe_block_log(failure(), known_safe, 1);
-        let registration = safe_block_log(
-            RegisteredNodeSafe {
-                safeAddress: AlloyAddress::from_hopr_address(new_safe),
-                nodeAddress: AlloyAddress::from_hopr_address(node),
-            },
-            safe_block_registry(),
-            2,
-        );
-        // More than four topics cannot form a log, so this one fails the batch with a
-        // `ProcessError` after the others were applied, forcing the per-log replay.
-        let undecodable = SerializableLog {
-            topics: vec![[7_u8; 32]; 5],
-            ..safe_block_log(failure(), known_safe, 3)
-        };
-        let logs = vec![
-            first_failure.clone(),
-            second_failure.clone(),
-            registration.clone(),
-            undecodable.clone(),
-        ];
-
-        assert!(prefetch_and_process_safe_block(&db, &handlers, logs).await?.is_some());
-
-        for log in [&first_failure, &second_failure, &registration] {
-            assert_eq!(
-                db.get_log(log.block_number, log.tx_index, log.log_index)
-                    .await?
-                    .processed,
-                Some(true)
-            );
-        }
-        assert_ne!(
-            db.get_log(undecodable.block_number, undecodable.tx_index, undecodable.log_index)
-                .await?
-                .processed,
-            Some(true)
-        );
-        assert!(db.get_safe_contract_by_address(None, new_safe).await?.is_some());
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_indexer_refreshes_safe_filters_after_safe_discovery() -> anyhow::Result<()> {
         let mut rpc = MockHoprIndexerOps::new();
         let db = BlokliDb::new_in_memory().await?;
         let indexer_state = IndexerState::default();
-        let cfg = IndexerConfig {
-            enable_safe_indexing: true,
-            ..Default::default()
-        };
+        let cfg = IndexerConfig::default();
 
         let primary_address = Address::new(b"my address 123456789");
         let primary_topic = B256::from_slice(Hash::create(&[b"my topic"]).as_ref());
@@ -3103,7 +3436,6 @@ mod tests {
                 true,
                 false,
                 false,
-                false,
                 None,
                 None,
                 "/tmp/test_data".to_string(),
@@ -3205,7 +3537,6 @@ mod tests {
                 true,
                 false,
                 false,
-                false,
                 None,
                 None,
                 "/tmp/test_data".to_string(),
@@ -3242,7 +3573,6 @@ mod tests {
                 0,
                 true,
                 true,
-                false,
                 false,
                 Some("file:///definitely/missing/snapshot.tar.xz".to_string()),
                 Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()),
@@ -3416,7 +3746,6 @@ mod tests {
 
         let indexer_cfg = IndexerConfig::new(
             0,
-            false,
             false,
             false,
             false,
@@ -4562,6 +4891,57 @@ mod tests {
         assert_eq!(found_state.published_log_index, 0, "Should use synthetic log_index 0");
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_pending_safes_lookup_that_recovers_queues_the_safes() {
+        let state = IndexerState::default();
+        let calls = StdAtomicUsize::new(0);
+        let safes = vec![Address::from([0x51; 20]), Address::from([0x52; 20])];
+
+        let queued = queue_pending_safe_owner_snapshots(
+            || {
+                let call = calls.fetch_add(1, StdOrdering::SeqCst) + 1;
+                let safes = safes.clone();
+                async move {
+                    if call < 2 {
+                        Err("db stall".to_string())
+                    } else {
+                        Ok(safes)
+                    }
+                }
+            },
+            &state,
+            3,
+            Duration::from_millis(1),
+        )
+        .await;
+
+        assert_eq!(queued, Ok(2));
+        assert_eq!(calls.load(StdOrdering::SeqCst), 2);
+        let mut pending = state.take_pending_safe_owner_snapshots();
+        pending.sort();
+        assert_eq!(pending, safes);
+    }
+
+    #[tokio::test]
+    async fn test_pending_safes_lookup_that_keeps_failing_returns_the_error() {
+        let state = IndexerState::default();
+        let calls = StdAtomicUsize::new(0);
+
+        let queued = queue_pending_safe_owner_snapshots(
+            || {
+                let call = calls.fetch_add(1, StdOrdering::SeqCst) + 1;
+                async move { Err::<Vec<Address>, _>(format!("db stall {call}")) }
+            },
+            &state,
+            3,
+            Duration::from_millis(1),
+        )
+        .await;
+
+        assert_eq!(queued, Err("db stall 3".to_string()));
+        assert!(state.take_pending_safe_owner_snapshots().is_empty());
     }
 
     #[tokio::test]

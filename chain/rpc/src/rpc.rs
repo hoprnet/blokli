@@ -4,7 +4,7 @@
 //! [RpcOperations] type, which is the main API exposed by this crate.
 use std::{
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
@@ -73,7 +73,26 @@ sol!(
         function isModuleEnabled(address module) public view returns (bool);
         function nonce() public view returns (uint256);
         function getThreshold() public view returns (uint256);
+        function getOwners() public view returns (address[] memory);
         function getModulesPaginated(address start, uint256 pageSize) public view returns (address[] memory array, address next);
+    }
+);
+
+// Multicall3 (canonical deployment, see `MULTICALL3_ADDRESS`), only the call used to batch Safe reads
+sol!(
+    #![sol(abi)]
+    #![sol(rpc)]
+    contract Multicall3 {
+        struct Call3 {
+            address target;
+            bool allowFailure;
+            bytes callData;
+        }
+        struct Call3Result {
+            bool success;
+            bytes returnData;
+        }
+        function aggregate3(Call3[] calldata calls) external payable returns (Call3Result[] memory returnData);
     }
 );
 
@@ -489,6 +508,8 @@ pub struct RpcOperations<R: HttpRequestor + 'static + Clone> {
     pub(crate) cfg: RpcOperationsConfig,
     contract_instances: Arc<ContractInstances<HoprProvider<R>>>,
     log_block_range_limit: Arc<Mutex<LogBlockRangeLimit>>,
+    /// Result of the last Multicall3 detection and when it was made (see the indexer operations).
+    pub(crate) multicall_support: Arc<Mutex<Option<(bool, Instant)>>>,
 }
 
 #[cfg_attr(test, mockall::automock)]
@@ -534,6 +555,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
                 use_dummy_nr.unwrap_or(cfg!(test)),
             )),
             log_block_range_limit: Arc::new(Mutex::new(log_block_range_limit)),
+            multicall_support: Arc::new(Mutex::new(None)),
             cfg,
             provider: Arc::new(provider),
         })

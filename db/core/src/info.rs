@@ -1,10 +1,11 @@
 use async_trait::async_trait;
 use blokli_db_entity::{
-    chain_info,
+    chain_info, hopr_safe_contract_state,
     prelude::{
         Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, CurvyCommittedNote,
         CurvyCommittedNullifier, CurvyPendingNote, CurvyShardRoot, CurvySyncCheckpoint,
-        HoprBalance as HoprBalanceEntity, HoprSafeContract, NativeBalance,
+        HoprBalance as HoprBalanceEntity, HoprSafeContract, HoprSafeContractState, HoprSafeOwnerState,
+        HoprSafeThresholdState, NativeBalance,
     },
 };
 use futures::TryFutureExt;
@@ -13,7 +14,7 @@ use hopr_types::{
     internal::prelude::WinningProbability,
     primitive::prelude::{HoprBalance, IntoEndian},
 };
-use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, Set};
+use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, Set, sea_query::Expr};
 use tracing::trace;
 
 use crate::{
@@ -169,6 +170,18 @@ impl BlokliDbInfoOperations for BlokliDb {
                     CurvyCommittedNote::delete_many().exec(tx.as_ref()).await?;
                     CurvyCommittedNullifier::delete_many().exec(tx.as_ref()).await?;
                     ChainInfo::delete_many().exec(tx.as_ref()).await?;
+
+                    // Owner state is derived from an RPC snapshot. Wipe it together with the
+                    // snapshot marker so that the next switch to continuous mode reads it again.
+                    HoprSafeOwnerState::delete_many().exec(tx.as_ref()).await?;
+                    HoprSafeThresholdState::delete_many().exec(tx.as_ref()).await?;
+                    HoprSafeContractState::update_many()
+                        .col_expr(
+                            hopr_safe_contract_state::Column::OwnersSyncedBlock,
+                            Expr::value(Option::<i64>::None),
+                        )
+                        .exec(tx.as_ref())
+                        .await?;
 
                     // Initial row is needed in the ChainInfo table
                     // See the m005_seed_initial_data.rs migration
@@ -423,7 +436,10 @@ mod tests {
     use hex_literal::hex;
     use hopr_types::primitive::{balance::HoprBalance, prelude::Address};
 
-    use crate::{db::BlokliDb, info::BlokliDbInfoOperations};
+    use crate::{
+        db::BlokliDb, info::BlokliDbInfoOperations, safe_contracts::BlokliDbSafeContractOperations,
+        safe_history::BlokliDbSafeHistoryOperations,
+    };
 
     lazy_static::lazy_static! {
         static ref ADDR_1: Address = Address::from(hex!("86fa27add61fafc955e2da17329bba9f31692fe7"));
@@ -478,6 +494,29 @@ mod tests {
 
         let data = db.get_indexer_data(None).await?;
         assert_eq!(data.key_binding_fee, Some(fee));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_clear_index_db_clears_safe_owner_state() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        db.create_safe_contract(None, *ADDR_1, *ADDR_2, *ADDR_2, 100, 0, 0)
+            .await?;
+        db.apply_safe_owner_snapshot(None, *ADDR_1, vec![*ADDR_2], "1".into(), 150)
+            .await?;
+        assert_eq!(db.get_safe_owners(None, *ADDR_1).await?, vec![*ADDR_2]);
+
+        db.clear_index_db(None).await?;
+
+        assert!(db.get_safe_owners(None, *ADDR_1).await?.is_empty());
+        assert_eq!(db.get_safe_threshold(None, *ADDR_1).await?, None);
+        assert_eq!(
+            db.get_safe_owners_synced_block(None, *ADDR_1).await?,
+            None,
+            "the snapshot marker is reset together with the owner state"
+        );
 
         Ok(())
     }

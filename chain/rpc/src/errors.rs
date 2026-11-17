@@ -52,6 +52,24 @@ pub enum RpcError {
     Other(String),
 }
 
+impl RpcError {
+    /// Whether the node rejected a read because it no longer has the state of the requested block
+    /// (pruned or non-archive node). Re-reading at a newer block can succeed.
+    pub fn is_state_pruned(&self) -> bool {
+        let message = self.to_string().to_lowercase();
+        [
+            "missing trie node",
+            "state already discarded",
+            "historical state",
+            "old data not available",
+            "state is not available",
+            "pruned",
+        ]
+        .iter()
+        .any(|needle| message.contains(needle))
+    }
+}
+
 pub type Result<T> = std::result::Result<T, RpcError>;
 
 /// Error abstraction for `HttpRequestor`.

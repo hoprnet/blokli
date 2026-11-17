@@ -479,9 +479,6 @@ config:
     ## @param config.indexer.enableLogsSnapshot Enable logs snapshot feature
     ##
     enableLogsSnapshot: false
-    ## @param config.indexer.enableSafeIndexing Enable Safe contract event indexing for discovered Safes
-    ##
-    enableSafeIndexing: false
     ## @param config.indexer.enableCurvyIndexing Enable Curvy event indexing using config.curvyAggregator
     ##
     enableCurvyIndexing: false

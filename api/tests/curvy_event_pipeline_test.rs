@@ -264,15 +264,7 @@ async fn test_curvy_events_are_indexed_and_streamed() -> anyhow::Result<()> {
         .data(indexer_state.clone())
         .data(GasMultiplier(1.0))
         .finish();
-    let handlers = ContractEventHandlers::new(
-        contract_addresses,
-        db.clone(),
-        rpc_operations,
-        indexer_state,
-        true,
-        true,
-        Default::default(),
-    );
+    let handlers = ContractEventHandlers::new(contract_addresses, db.clone(), rpc_operations, indexer_state, true);
 
     let pending_logs = logs_with_signature(&chain_logs, PendingNotes::SIGNATURE_HASH);
     anyhow::ensure!(

@@ -1,8 +1,9 @@
 use blokli_db_entity::prelude::{
     Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, CurvyCommittedNote, CurvyCommittedNullifier,
     CurvyPendingNote, CurvyShardRoot, CurvySyncCheckpoint, HoprBalance, HoprNodeSafeRegistration, HoprSafeContract,
-    HoprSafeContractState, HoprSafeRedeemedStats, Log, LogStatus, LogTopicInfo, NativeBalance, ServiceEntry,
-    ServiceEntryState, ServiceRegistryConfig, ServiceType as ServiceTypeEntity, ServiceTypeState,
+    HoprSafeContractState, HoprSafeOwnerState, HoprSafeRedeemedStats, HoprSafeThresholdState, Log, LogStatus,
+    LogTopicInfo, NativeBalance, ServiceEntry, ServiceEntryState, ServiceRegistryConfig,
+    ServiceType as ServiceTypeEntity, ServiceTypeState,
 };
 use migration::{Migrator, MigratorChainLogs, MigratorIndex, MigratorTrait};
 use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait, Statement};
@@ -261,6 +262,8 @@ async fn clear_index_data(db: &DatabaseConnection) -> Result<()> {
     HoprBalance::delete_many().exec(db).await?;
     NativeBalance::delete_many().exec(db).await?;
 
+    HoprSafeOwnerState::delete_many().exec(db).await?;
+    HoprSafeThresholdState::delete_many().exec(db).await?;
     HoprSafeContractState::delete_many().exec(db).await?;
     HoprSafeRedeemedStats::delete_many().exec(db).await?;
     HoprSafeContract::delete_many().exec(db).await?;
