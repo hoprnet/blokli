@@ -14,7 +14,9 @@ network = "jura-dev"
 # If not specified, uses the network's default RPC endpoint (default: http://localhost:8545)
 rpc_url = "http://localhost:8545"
 
-# Maximum number of RPC requests per second (0 for unlimited)
+# Hard cap on RPC requests per second, enforced by a token bucket on the shared RPC client
+# (indexer, transaction executor, transaction monitor and API all share this budget).
+# Retried requests count towards the cap. A burst of up to a tenth of the rate (at least 1 request) is allowed.
 # If omitted, defaults to 100 req/sec. Set to 0 for unlimited, or a positive value to override the default.
 max_rpc_requests_per_sec = 0
 
@@ -126,8 +128,13 @@ fast_sync = true
 # Enable downloading a `hopr_logs.sql` snapshot archive for faster initial sync
 enable_logs_snapshot = false
 
-# URL to download logs snapshot from (optional)
-logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz"
+# URL to download logs snapshot from (required when enable_logs_snapshot = true)
+# logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz"
+
+# Expected SHA-256 digest of the snapshot archive, 64 hex characters
+# (required when enable_logs_snapshot = true or logs_snapshot_url is set)
+# The archive is rejected before extraction if its digest differs.
+# logs_snapshot_sha256 = "<64 hex characters>"
 
 # Enable indexing of Safe contract events after a Safe has been discovered
 # Safe discovery via registry/stake-factory events remains enabled regardless
@@ -137,6 +144,22 @@ enable_safe_indexing = false
 # Requires curvy_aggregator and its resolved Vault to be non-zero. A zero
 # PortalFactory is allowed, but Portal-specific GraphQL queries are unavailable.
 enable_curvy_indexing = false
+
+# Concurrent pre-fetch of the transactions needed to decode Safe execution
+# failures. These lookups run before a block's database transaction is opened,
+# so they trade requests in flight against how long a slow RPC endpoint can
+# stall indexing. The transaction lookups happen only when enable_safe_indexing
+# is true; the request budget below also covers the pre-fetch of Safe discovery-block
+# logs, which runs regardless of that flag.
+[indexer.safe_tx_prefetch]
+# Transaction hashes packed into a single batched JSON-RPC request (default: 16)
+# Lower it if the RPC provider rejects or truncates large batch requests.
+batch_size = 16
+
+# Batched requests in flight at once (default: 8)
+# The limit is global: the indexer pre-fetches several blocks concurrently and
+# they all draw from this budget.
+concurrency = 8
 
 # GraphQL subscription behavior configuration
 [indexer.subscription]
@@ -219,6 +242,20 @@ terminal_transaction_ttl  = "24h"
 # Set either to 0 for unbounded. Defaults: queue 128 jobs and run 2 concurrently.
 max_concurrent_trace_jobs = 2
 max_queued_trace_jobs     = 128
+
+# Limits for the background receipt monitor. Durations accept humantime strings ("30s", "1m").
+# request_timeout:         maximum time for one transaction receipt RPC request (default: "30s")
+# safe_inspection_timeout: maximum time to determine the inner outcome of a confirmed Safe
+#                          transaction; on timeout the transaction stays submitted and is retried
+#                          (default: "30s")
+# revert_reason_timeout:   maximum time for one optional Safe revert-reason trace (default: "30s")
+# max_concurrent_checks:   maximum number of receipt checks running at the same time (default: 16)
+# The three durations and max_concurrent_checks must be greater than zero; bloklid refuses to
+# start otherwise.
+max_concurrent_checks   = 16
+request_timeout         = "30s"
+revert_reason_timeout   = "30s"
+safe_inspection_timeout = "30s"
 
 # Set false for RPC providers that do not expose debug_traceTransaction.
 # Safe success/failure status remains available from the transaction receipt.

@@ -92,6 +92,14 @@ impl Args {
             ("BLOKLI_RPC_URL", "rpc_url"),
             ("BLOKLI_MAX_RPC_REQUESTS_PER_SEC", "max_rpc_requests_per_sec"),
             ("BLOKLI_MAX_BLOCK_RANGE", "max_block_range"),
+            (
+                "BLOKLI_INDEXER_SAFE_TX_PREFETCH_BATCH_SIZE",
+                "indexer.safe_tx_prefetch.batch_size",
+            ),
+            (
+                "BLOKLI_INDEXER_SAFE_TX_PREFETCH_CONCURRENCY",
+                "indexer.safe_tx_prefetch.concurrency",
+            ),
             ("BLOKLI_BLOCK_RANGE_REPROBE_INTERVAL", "block_range_reprobe_interval"),
             ("BLOKLI_CURVY_AGGREGATOR", "curvy_aggregator"),
             ("DATABASE_URL", "database.url"),
@@ -120,6 +128,7 @@ impl Args {
             ("BLOKLI_INDEXER_ENABLE_SAFE_INDEXING", "indexer.enable_safe_indexing"),
             ("BLOKLI_INDEXER_ENABLE_CURVY_INDEXING", "indexer.enable_curvy_indexing"),
             ("BLOKLI_INDEXER_LOGS_SNAPSHOT_URL", "indexer.logs_snapshot_url"),
+            ("BLOKLI_INDEXER_LOGS_SNAPSHOT_SHA256", "indexer.logs_snapshot_sha256"),
             (
                 "BLOKLI_INDEXER_SUBSCRIPTION_EVENT_BUS_CAPACITY",
                 "indexer.subscription.event_bus_capacity",
@@ -239,9 +248,14 @@ impl Args {
             "api.sse_keepalive.enabled",
         ];
 
+        // Values that must stay strings even when they look numeric (e.g. an all-digit SHA-256 digest).
+        let string_keys = ["indexer.logs_snapshot_url", "indexer.logs_snapshot_sha256"];
+
         for (env_var, config_key) in env_mappings {
             if let Ok(val) = std::env::var(env_var) {
-                let override_val: config_rs::Value = if boolean_keys.contains(&config_key) {
+                let override_val: config_rs::Value = if string_keys.contains(&config_key) {
+                    val.into()
+                } else if boolean_keys.contains(&config_key) {
                     if let Ok(flag) = val.parse::<bool>() {
                         flag.into()
                     } else if let Ok(num) = val.parse::<u64>() {
@@ -366,6 +380,17 @@ impl Args {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Mutex, MutexGuard};
+
+    /// Serialises the tests that read or mutate the process environment.
+    ///
+    /// `load_config` layers environment variables over the config file, so a `temp_env` mutation
+    /// in a concurrently running test would otherwise be observed here and change the result.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn env_guard() -> MutexGuard<'static, ()> {
+        ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
     use std::{io::Write, os::unix::ffi::OsStringExt, time::Duration};
 
     use super::*;
@@ -432,6 +457,7 @@ mod tests {
 
     #[test]
     fn test_env_var_override() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -465,7 +491,50 @@ mod tests {
     }
 
     #[test]
+    fn test_env_var_override_safe_tx_prefetch() {
+        // These two mappings target a nested section, so a typo in the dotted key would leave the
+        // override silently inert. Assert both actually reach the config.
+        let _env = env_guard();
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "jura-dev"
+            rpc_url = "http://localhost:8545"
+            [indexer.safe_tx_prefetch]
+            batch_size = 16
+            concurrency = 8
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        temp_env::with_vars(
+            [
+                ("BLOKLI_INDEXER_SAFE_TX_PREFETCH_BATCH_SIZE", Some("64")),
+                ("BLOKLI_INDEXER_SAFE_TX_PREFETCH_CONCURRENCY", Some("2")),
+            ],
+            || {
+                let args = Args {
+                    verbose: 0,
+                    config: Some(path),
+                    command: None,
+                };
+
+                let config = args.load_config(false).expect("Failed to load config");
+
+                assert_eq!(config.indexer.safe_tx_prefetch.batch_size, 64);
+                assert_eq!(config.indexer.safe_tx_prefetch.concurrency, 2);
+            },
+        );
+    }
+
+    #[test]
     fn test_curvy_aggregator_is_resolved_without_full_contract_override() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -493,6 +562,7 @@ mod tests {
 
     #[test]
     fn test_explicit_zero_curvy_aggregator_is_rejected() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -521,6 +591,7 @@ mod tests {
 
     #[test]
     fn test_canonical_env_var_override() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -555,6 +626,7 @@ mod tests {
 
     #[test]
     fn test_env_only_database_config() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -595,6 +667,7 @@ mod tests {
 
     #[test]
     fn test_missing_database_config_fails() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -626,6 +699,7 @@ mod tests {
 
     #[test]
     fn test_env_var_string_values_are_parsed_by_config_rs() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -658,6 +732,7 @@ mod tests {
 
     #[test]
     fn test_database_config_defaults_max_connections_to_10() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -692,6 +767,7 @@ mod tests {
 
     #[test]
     fn test_database_config_max_connections_from_config_file() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -730,6 +806,7 @@ mod tests {
 
     #[test]
     fn test_sqlite_database_config_max_connections_defaults() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -765,6 +842,7 @@ mod tests {
 
     #[test]
     fn test_env_var_blokli_database_max_connections_integer_casting() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -802,6 +880,7 @@ mod tests {
 
     #[test]
     fn test_env_var_blokli_database_max_connections_for_sqlite() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -840,6 +919,7 @@ mod tests {
 
     #[test]
     fn test_boolean_env_var_with_true_string() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -873,6 +953,7 @@ mod tests {
 
     #[test]
     fn test_boolean_env_var_with_digit_one() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -906,6 +987,7 @@ mod tests {
 
     #[test]
     fn test_boolean_env_var_with_digit_zero() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -939,6 +1021,7 @@ mod tests {
 
     #[test]
     fn test_boolean_env_var_false_string() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -972,6 +1055,7 @@ mod tests {
 
     #[test]
     fn test_enable_safe_indexing_env_var_true_string() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -1005,6 +1089,7 @@ mod tests {
 
     #[test]
     fn test_numeric_env_var_still_parsed_as_integer() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -1038,6 +1123,7 @@ mod tests {
 
     #[test]
     fn test_float_env_var_parsed_as_f64() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -1071,6 +1157,7 @@ mod tests {
 
     #[test]
     fn test_invalid_gas_multiplier_rejected() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -1150,6 +1237,7 @@ mod tests {
 
     #[test]
     fn test_max_block_range_default() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -1185,6 +1273,7 @@ mod tests {
 
     #[test]
     fn test_max_block_range_from_config_file() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -1217,6 +1306,7 @@ mod tests {
 
     #[test]
     fn test_max_block_range_env_override() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -1282,6 +1372,7 @@ mod tests {
 
     #[test]
     fn test_max_block_range_zero_enables_auto_mode() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -1311,6 +1402,7 @@ mod tests {
 
     #[test]
     fn test_max_rpc_requests_per_sec_zero_from_config() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -1344,6 +1436,7 @@ mod tests {
 
     #[test]
     fn test_max_rpc_requests_per_sec_env_override_zero() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -1377,6 +1470,7 @@ mod tests {
 
     #[test]
     fn test_telemetry_env_overrides() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -1414,6 +1508,7 @@ mod tests {
 
     #[test]
     fn test_blokli_config_path_env_var_used_when_no_config_flag() {
+        let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -1447,6 +1542,7 @@ mod tests {
 
     #[test]
     fn test_blokli_config_path_takes_precedence_over_config_flag() {
+        let _env = env_guard();
         let mut flag_file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             flag_file,
@@ -1495,6 +1591,7 @@ mod tests {
 
     #[test]
     fn test_blokli_config_path_empty_string_is_treated_as_unset() {
+        let _env = env_guard();
         temp_env::with_var("BLOKLI_CONFIG_PATH", Some(""), || {
             let args = Args {
                 verbose: 0,
@@ -1570,6 +1667,103 @@ mod tests {
                 assert_eq!(config.api.transactions.max_queued_trace_jobs, 50);
                 assert_eq!(config.api.transactions.max_concurrent_trace_jobs, 4);
                 assert!(config.api.transactions.enable_revert_reason_tracing);
+            },
+        );
+    }
+
+    fn snapshot_config_file(indexer: &str) -> tempfile::NamedTempFile {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "jura-dev"
+            rpc_url = "http://localhost:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+            [indexer]
+            {indexer}
+        "#
+        )
+        .unwrap();
+        file
+    }
+
+    fn assert_snapshot_sha256_rejected(file: &tempfile::NamedTempFile) {
+        let path = file.path().to_path_buf();
+        temp_env::with_vars(
+            [
+                ("BLOKLI_INDEXER_ENABLE_LOGS_SNAPSHOT", None::<&str>),
+                ("BLOKLI_INDEXER_LOGS_SNAPSHOT_URL", None),
+                ("BLOKLI_INDEXER_LOGS_SNAPSHOT_SHA256", None),
+            ],
+            || {
+                let args = Args {
+                    verbose: 0,
+                    config: Some(path),
+                    command: None,
+                };
+
+                let result = args.load_config(false);
+                assert!(
+                    matches!(
+                        &result,
+                        Err(BloklidError::Config(ConfigError::Validation(errors)))
+                            if errors.to_string().contains("indexer.logs_snapshot_sha256")
+                    ),
+                    "expected a logs_snapshot_sha256 error, got {result:?}"
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn test_enabled_logs_snapshot_without_sha256_is_rejected() {
+        let file = snapshot_config_file(
+            r#"enable_logs_snapshot = true
+            logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz""#,
+        );
+        assert_snapshot_sha256_rejected(&file);
+    }
+
+    #[test]
+    fn test_logs_snapshot_url_without_sha256_is_rejected() {
+        let file = snapshot_config_file(r#"logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz""#);
+        assert_snapshot_sha256_rejected(&file);
+    }
+
+    #[test]
+    fn test_malformed_logs_snapshot_sha256_is_rejected() {
+        let file = snapshot_config_file(
+            r#"logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz"
+            logs_snapshot_sha256 = "abc""#,
+        );
+        assert_snapshot_sha256_rejected(&file);
+    }
+
+    #[test]
+    fn test_all_digit_logs_snapshot_sha256_env_override_stays_a_string() {
+        let digest = "0123456789".repeat(6) + "0123";
+        let file = snapshot_config_file("enable_logs_snapshot = true");
+        let path = file.path().to_path_buf();
+
+        temp_env::with_vars(
+            [
+                (
+                    "BLOKLI_INDEXER_LOGS_SNAPSHOT_URL",
+                    Some("https://example.com/logs-snapshot.tar.xz"),
+                ),
+                ("BLOKLI_INDEXER_LOGS_SNAPSHOT_SHA256", Some(digest.as_str())),
+            ],
+            || {
+                let args = Args {
+                    verbose: 0,
+                    config: Some(path),
+                    command: None,
+                };
+
+                let config = args.load_config(false).expect("all-digit digest should load");
+                assert_eq!(config.indexer.logs_snapshot_sha256.as_deref(), Some(digest.as_str()));
             },
         );
     }

@@ -206,9 +206,14 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 enable_safe_indexing: cfg.indexer.enable_safe_indexing,
                 enable_curvy_indexing: cfg.indexer.enable_curvy_indexing,
                 logs_snapshot_url: cfg.indexer.logs_snapshot_url.clone(),
+                logs_snapshot_sha256: cfg.indexer.logs_snapshot_sha256.clone(),
                 data_directory: cfg.data_directory.clone(),
                 event_bus_capacity: cfg.indexer.subscription.event_bus_capacity,
                 shutdown_signal_capacity: cfg.indexer.subscription.shutdown_signal_capacity,
+                safe_tx_prefetch: blokli_chain_indexer::SafeTxPrefetchConfig {
+                    batch_size: cfg.indexer.safe_tx_prefetch.batch_size,
+                    concurrency: cfg.indexer.safe_tx_prefetch.concurrency,
+                },
             };
 
             (
@@ -312,6 +317,10 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
             max_queued_trace_jobs: api_config.transactions.max_queued_trace_jobs,
             max_concurrent_trace_jobs: api_config.transactions.max_concurrent_trace_jobs,
             enable_revert_reason_tracing: api_config.transactions.enable_revert_reason_tracing,
+            request_timeout: api_config.transactions.request_timeout,
+            safe_inspection_timeout: api_config.transactions.safe_inspection_timeout,
+            revert_reason_timeout: api_config.transactions.revert_reason_timeout,
+            max_concurrent_checks: api_config.transactions.max_concurrent_checks,
             ..Default::default()
         };
         let blokli_chain = BlokliChain::new(

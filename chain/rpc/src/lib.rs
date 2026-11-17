@@ -35,6 +35,7 @@ use crate::{RetryAction::NoRetry, errors::Result};
 pub mod client;
 pub mod errors;
 pub mod indexer;
+pub mod rate_limit;
 pub mod rpc;
 pub mod transport;
 
@@ -231,8 +232,9 @@ pub struct HttpPostRequestorConfig {
     pub max_redirects: u8,
 
     /// Maximum number of requests per second.
-    /// If set to Some(0) or `None`, there will be no limit.
     ///
+    /// Not read by the shared RPC client: its request rate is enforced by
+    /// [`rate_limit::RateLimitLayer`], built from `ChainConfig::max_requests_per_sec`.
     /// Defaults to 10
     #[default(Some(10))]
     pub max_requests_per_sec: Option<u32>,
@@ -455,6 +457,47 @@ pub trait HoprIndexerRpcOperations {
     /// This is used by indexer-side Safe failure handling to decode the original
     /// outer module transaction and determine which inner HOPR action rejected.
     async fn get_transaction_bytes(&self, tx_hash: Hash) -> Result<Vec<u8>>;
+
+    /// Retrieves the encoded signed transaction bytes for several transaction hashes at once.
+    ///
+    /// Returns exactly one result per input hash, in the same order, so a single missing or
+    /// malformed transaction does not discard the successfully retrieved ones.
+    ///
+    /// The default implementation simply issues one [`Self::get_transaction_bytes`] request per
+    /// hash. Implementations backed by a JSON-RPC provider should override it to send the lookups
+    /// as one batched request, which saves a round-trip per hash on high-latency endpoints.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx_hashes` - The transaction hashes to look up. An empty slice yields an empty result.
+    ///
+    /// # Returns
+    ///
+    /// One [`Result`] per input hash, in input order. A hash that is not found yields
+    /// `Err(RpcError::TransactionNotFound)` without affecting the others.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # async fn example(rpc: &impl HoprIndexerRpcOperations, hashes: &[Hash]) {
+    /// for (hash, result) in hashes.iter().zip(rpc.get_transaction_bytes_batch(hashes).await) {
+    ///     match result {
+    ///         Ok(bytes) => println!("{hash}: {} bytes", bytes.len()),
+    ///         Err(error) => eprintln!("{hash}: {error}"),
+    ///     }
+    /// }
+    /// # }
+    /// ```
+    async fn get_transaction_bytes_batch(&self, tx_hashes: &[Hash]) -> Vec<Result<Vec<u8>>>
+    where
+        Self: Sync,
+    {
+        let mut results = Vec::with_capacity(tx_hashes.len());
+        for tx_hash in tx_hashes {
+            results.push(self.get_transaction_bytes(*tx_hash).await);
+        }
+        results
+    }
 
     /// Streams blockchain logs using selective filtering based on synchronization state.
     ///

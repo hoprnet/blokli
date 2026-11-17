@@ -1,6 +1,6 @@
 //! GraphQL schema builder for blokli API
 
-use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc};
+use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use async_graphql::{ObjectType, Schema, SubscriptionType};
 use blokli_chain_api::{
@@ -14,6 +14,7 @@ use futures::Stream;
 use sea_orm::DatabaseConnection;
 
 use crate::{
+    cache::{ChannelStatsCache, FeeEstimateCache},
     loader::{accounts_by_chain_key_loader, channels_by_safe_loader},
     mutation::MutationRoot,
     query::QueryRoot,
@@ -207,6 +208,8 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
         .data(Finality(finality))
         .data(GasMultiplier(gas_multiplier))
         .data(gas_fee_floors)
+        .data(FeeEstimateCache::new(Duration::from_secs(expected_block_time)))
+        .data(ChannelStatsCache::default())
         .data(indexer_state)
         .data(transaction_executor)
         .data(transaction_store)

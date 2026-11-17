@@ -43,6 +43,11 @@ pub enum SnapshotError {
     #[error("Insufficient disk space: required {required} MB, available {available} MB.")]
     InsufficientSpace { required: u64, available: u64 },
 
+    /// The downloaded archive does not match the configured SHA-256 digest.
+    /// The archive is discarded before extraction.
+    #[error("Snapshot digest mismatch: expected SHA-256 {expected}, got {actual}.")]
+    DigestMismatch { expected: String, actual: String },
+
     #[error("Snapshot too large: {size} bytes exceeds maximum {max_size} bytes.")]
     TooLarge { size: u64, max_size: u64 },
 
