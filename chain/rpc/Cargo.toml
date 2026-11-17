@@ -17,6 +17,7 @@ runtime-tokio = ["dep:reqwest"]
 telemetry     = ["hopr-types/telemetry"]
 
 [dependencies]
+alloy                      = { workspace = true }
 async-stream               = { workspace = true }
 async-trait                = { workspace = true }
 futures                    = { workspace = true }
@@ -58,4 +59,4 @@ mockito     = { workspace = true }
 reqwest     = { workspace = true }
 tempfile    = { workspace = true }
 test-log    = { workspace = true }
-tokio       = { workspace = true }
+tokio       = { workspace = true, features = ["test-util"] }

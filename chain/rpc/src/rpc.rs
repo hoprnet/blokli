@@ -52,6 +52,7 @@ use crate::{
     CurvyAggregatorFees, CurvyAggregatorState, CurvyGasFees, CurvyVaultToken, FeeHistorySnapshot, HoprRpcOperations,
     client::GasOracleFiller,
     errors::{Result, RpcError},
+    head::{HeadSourceConfig, HeadSubscriber, WsHeadSubscriber},
     tip::{ChainTipTracker, ConfirmationConfig, ConfirmationMode, RpcTipSource},
     transport::HttpRequestor,
 };
@@ -202,6 +203,16 @@ pub struct RpcOperationsConfig {
     /// Defaults to 1 second.
     #[default(Duration::from_secs(1))]
     pub head_poll_interval: Duration,
+    /// WebSocket URL used for `newHeads` notifications.
+    ///
+    /// Defaults to `None`, which keeps the HTTP polling head source.
+    #[default(None)]
+    pub head_ws_url: Option<Url>,
+    /// Whether [`RpcOperationsConfig::head_ws_url`] was derived from the HTTP RPC URL.
+    ///
+    /// This only changes the hint in the fallback log message.
+    #[default(false)]
+    pub head_ws_url_derived: bool,
     /// URL to the gas price oracle.
     ///
     /// Defaults to `None`, in which case [`RpcOperations::new`] falls back to
@@ -576,15 +587,25 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
             LogBlockRangeLimit::new(cfg.max_block_range_fetch_size, cfg.log_block_range_reprobe_interval);
         set_log_block_range_metric(log_block_range_limit.current());
 
-        let tip_tracker = Arc::new(ChainTipTracker::new(
+        let subscriber = cfg
+            .head_ws_url
+            .clone()
+            .map(|url| Arc::new(WsHeadSubscriber::new(url)) as Arc<dyn HeadSubscriber>);
+        let tip_tracker = Arc::new(ChainTipTracker::with_head_source(
             Arc::new(RpcTipSource::new(provider.clone())),
             ConfirmationConfig {
                 mode: cfg.confirmation_mode,
                 depth: cfg.finality as u64,
                 max_safe_gap: cfg.max_safe_gap,
             },
-            cfg.head_poll_interval,
-            cfg.expected_block_time,
+            HeadSourceConfig {
+                chain_id: cfg.chain_id,
+                poll_interval: cfg.head_poll_interval,
+                expected_block_time: cfg.expected_block_time,
+                ws_url: cfg.head_ws_url.clone(),
+                ws_url_derived: cfg.head_ws_url_derived,
+            },
+            subscriber,
         ));
 
         Ok(Self {

@@ -6,6 +6,7 @@ use blokli_chain_types::{ChainConfig, ContractAddresses};
 use blokli_db::utils::redact_database_url;
 use hopr_types::primitive::primitives::Address;
 use tracing::warn;
+use url::Url;
 
 use crate::network::Network;
 
@@ -321,6 +322,13 @@ pub struct Config {
     #[serde(default = "default_rpc_url")]
     pub rpc_url: String,
 
+    /// Optional WebSocket URL used for `newHeads` notifications.
+    ///
+    /// Defaults to the HTTP RPC URL with `http(s)` replaced by `ws(s)`.
+    #[serde(default)]
+    #[validate(custom(function = "validate_rpc_ws_url"))]
+    pub rpc_ws_url: Option<String>,
+
     /// Hard cap on RPC requests per second (`None` = 100, `Some(0)` = unlimited).
     #[serde(default)]
     pub max_rpc_requests_per_sec: Option<u32>,
@@ -388,6 +396,23 @@ fn validate_api(api: &ApiConfig) -> Result<(), validator::ValidationError> {
     Ok(())
 }
 
+fn validate_rpc_ws_url(value: &str) -> Result<(), validator::ValidationError> {
+    let raw = value.trim();
+    if raw.is_empty() {
+        return Ok(());
+    }
+
+    let url = Url::parse(raw)
+        .map_err(|error| validator::ValidationError::new("rpc_ws_url").with_message(error.to_string().into()))?;
+
+    if !matches!(url.scheme(), "ws" | "wss") {
+        return Err(validator::ValidationError::new("rpc_ws_url")
+            .with_message("rpc_ws_url must use the ws or wss scheme".into()));
+    }
+
+    Ok(())
+}
+
 impl Config {
     /// Display the configuration with sensitive data redacted
     pub fn display_redacted(&self) -> String {
@@ -395,6 +420,9 @@ impl Config {
         output.push_str("Configuration:\n");
         output.push_str(&format!("  network: {}\n", self.network));
         output.push_str(&format!("  rpc_url: {}\n", redact_url(&self.rpc_url)));
+        if let Some(rpc_ws_url) = &self.rpc_ws_url {
+            output.push_str(&format!("  rpc_ws_url: {}\n", redact_url(rpc_ws_url)));
+        }
         output.push_str(&format!("  data_directory: {}\n", self.data_directory));
         output.push_str(&format!(
             "  max_rpc_requests_per_sec: {:?}\n",
@@ -598,6 +626,14 @@ pub struct TelemetryConfig {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
 #[serde(deny_unknown_fields)]
 pub struct HeadTrackingConfig {
+    /// Whether to use WebSocket `newHeads` notifications.
+    ///
+    /// Falls back to polling when the RPC endpoint cannot serve subscriptions. Set to `false`
+    /// to force polling.
+    #[default(true)]
+    #[serde(default = "default_true")]
+    pub head_subscription: bool,
+
     /// Interval at which the chain tip is polled.
     #[default(_code = "default_head_poll_interval()")]
     #[serde(default = "default_head_poll_interval", with = "humantime_serde")]
@@ -1411,6 +1447,7 @@ mod tests {
         assert!(config.indexer.fast_sync);
         assert!(!config.indexer.enable_curvy_indexing);
         assert_eq!(config.indexer.subscription.event_bus_capacity, 1000);
+        assert!(config.indexer.head_tracking.head_subscription);
         assert_eq!(config.indexer.head_tracking.head_poll_interval, Duration::from_secs(1));
         assert_eq!(config.indexer.confirmation.mode, None);
         assert_eq!(config.indexer.confirmation.depth, None);
@@ -1528,6 +1565,7 @@ mod tests {
         assert!(!cfg.indexer.enable_logs_snapshot); // Default
         assert!(!cfg.indexer.enable_curvy_indexing); // Default
         assert_eq!(cfg.indexer.subscription.event_bus_capacity, 1000); // Default
+        assert!(cfg.indexer.head_tracking.head_subscription); // Default
         assert_eq!(cfg.indexer.head_tracking.head_poll_interval, Duration::from_secs(1)); // Default
         assert_eq!(cfg.indexer.confirmation.mode, None); // Network-specific default
         assert_eq!(cfg.indexer.confirmation.depth, None); // Network-specific default
@@ -1538,6 +1576,7 @@ mod tests {
     fn test_indexer_head_tracking_and_confirmation_config() {
         let config = r#"
          [indexer.head_tracking]
+         head_subscription = false
          head_poll_interval = "2s"
          [indexer.confirmation]
          mode = "safe_or_depth"
@@ -1550,11 +1589,39 @@ mod tests {
      "#;
 
         let cfg: Config = toml::from_str(config).expect("head tracking and confirmation should parse");
+        assert!(!cfg.indexer.head_tracking.head_subscription);
         assert_eq!(cfg.indexer.head_tracking.head_poll_interval, Duration::from_secs(2));
         assert_eq!(cfg.indexer.confirmation.mode, Some(ConfirmationMode::SafeOrDepth));
         assert_eq!(cfg.indexer.confirmation.depth, Some(5));
         assert_eq!(cfg.indexer.confirmation.max_safe_gap, 20);
         assert!(cfg.indexer.validate().is_ok());
+    }
+
+    #[test]
+    fn test_rpc_ws_url_validation_and_redaction() {
+        let mut cfg: Config = toml::from_str(
+            r#"
+            rpc_url = "https://rpc.example.com"
+            rpc_ws_url = "wss://user:pass@rpc.example.com:8443/secret?token=abc"
+        "#,
+        )
+        .expect("config with rpc_ws_url should parse");
+        cfg.validate().expect("ws and wss URLs should validate");
+
+        let redacted = cfg.display_redacted();
+        assert!(redacted.contains("rpc_url: https://rpc.example.com"));
+        assert!(redacted.contains("rpc_ws_url: wss://rpc.example.com:8443/REDACTED"));
+
+        cfg.rpc_ws_url = Some("http://rpc.example.com".to_string());
+        assert!(cfg.validate().is_err(), "http must not be accepted as a WebSocket URL");
+    }
+
+    #[test]
+    fn test_rpc_ws_url_is_optional() {
+        let cfg: Config =
+            toml::from_str(r#"rpc_url = "https://rpc.example.com""#).expect("config without rpc_ws_url should parse");
+        assert!(cfg.rpc_ws_url.is_none());
+        cfg.validate().expect("an absent rpc_ws_url should validate");
     }
 
     #[test]

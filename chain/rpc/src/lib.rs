@@ -34,6 +34,7 @@ use crate::{RetryAction::NoRetry, errors::Result};
 
 pub mod client;
 pub mod errors;
+pub mod head;
 pub mod indexer;
 pub mod rate_limit;
 pub mod rpc;

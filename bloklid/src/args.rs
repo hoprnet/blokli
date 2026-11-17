@@ -91,6 +91,7 @@ impl Args {
             ("BLOKLI_DATA_DIRECTORY", "data_directory"),
             ("BLOKLI_NETWORK", "network"),
             ("BLOKLI_RPC_URL", "rpc_url"),
+            ("BLOKLI_RPC_WS_URL", "rpc_ws_url"),
             ("BLOKLI_MAX_RPC_REQUESTS_PER_SEC", "max_rpc_requests_per_sec"),
             ("BLOKLI_MAX_BLOCK_RANGE", "max_block_range"),
             (
@@ -129,6 +130,10 @@ impl Args {
             ("BLOKLI_INDEXER_ENABLE_CURVY_INDEXING", "indexer.enable_curvy_indexing"),
             ("BLOKLI_INDEXER_LOGS_SNAPSHOT_URL", "indexer.logs_snapshot_url"),
             ("BLOKLI_INDEXER_LOGS_SNAPSHOT_SHA256", "indexer.logs_snapshot_sha256"),
+            (
+                "BLOKLI_INDEXER_HEAD_TRACKING_HEAD_SUBSCRIPTION",
+                "indexer.head_tracking.head_subscription",
+            ),
             (
                 "BLOKLI_INDEXER_HEAD_TRACKING_HEAD_POLL_INTERVAL",
                 "indexer.head_tracking.head_poll_interval",
@@ -257,6 +262,7 @@ impl Args {
             "indexer.fast_sync",
             "indexer.enable_logs_snapshot",
             "indexer.enable_curvy_indexing",
+            "indexer.head_tracking.head_subscription",
             "api.enabled",
             "api.playground_enabled",
             "api.transactions.enable_revert_reason_tracing",

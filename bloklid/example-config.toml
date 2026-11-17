@@ -14,6 +14,10 @@ network = "jura-dev"
 # If not specified, uses the network's default RPC endpoint (default: http://localhost:8545)
 rpc_url = "http://localhost:8545"
 
+# Optional. WebSocket URL for newHeads. Defaults to rpc_url with http(s) replaced by ws(s).
+# Set it when the provider serves WebSocket on a different path or port.
+# rpc_ws_url = "wss://rpc.gnosischain.com/wss"
+
 # Hard cap on RPC requests per second, enforced by a token bucket on the shared RPC client
 # (indexer, transaction executor, transaction monitor and API all share this budget).
 # Retried requests count towards the cap. A burst of up to a tenth of the rate (at least 1 request) is allowed.
@@ -141,9 +145,11 @@ enable_logs_snapshot = false
 # PortalFactory is allowed, but Portal-specific GraphQL queries are unavailable.
 enable_curvy_indexing = false
 
-# Chain tip polling used by the HTTP head source.
+# Chain head tracking. newHeads over WebSocket is used when the RPC endpoint supports it.
 [indexer.head_tracking]
-# Polling interval of the chain tip (default: 1s).
+# Use newHeads (default). Falls back to polling when the RPC cannot serve it. false forces polling.
+head_subscription = true
+# Polling interval for the fallback (default: 1s).
 head_poll_interval = "1s"
 
 # Rule used to derive the confirmed block from the observed chain tip.

@@ -10,14 +10,17 @@ use std::{
     fmt::{self, Formatter},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
 use hopr_bindings::exports::alloy::{
-    eips::BlockNumberOrTag, primitives::U64, providers::Provider, rpc::client::BatchRequest,
+    eips::BlockNumberOrTag,
+    primitives::{B256, U64},
+    providers::Provider,
+    rpc::client::BatchRequest,
 };
 #[cfg(all(feature = "telemetry", not(test)))]
 use hopr_types::telemetry::{MultiGauge, SimpleCounter, SimpleGauge};
@@ -26,7 +29,6 @@ use strum::{Display, EnumString};
 use tokio::{
     sync::{Mutex as AsyncMutex, watch},
     task::JoinHandle,
-    time::MissedTickBehavior,
 };
 #[cfg(all(feature = "telemetry", not(test)))]
 use tracing::error;
@@ -34,6 +36,7 @@ use tracing::{debug, info, warn};
 
 use crate::{
     errors::{Result, RpcError},
+    head::{HeadSourceConfig, HeadSubscriber, record_ws_reconnect_metric, run_head_driver},
     rpc::HoprProvider,
     transport::HttpRequestor,
 };
@@ -277,12 +280,24 @@ pub fn next_tip(
 pub trait TipSource: Send + Sync {
     /// Reads the current chain tip from the underlying endpoint.
     async fn observe(&self) -> Result<TipObservation>;
+
+    /// Reads the block hash for the given block number from the underlying endpoint.
+    ///
+    /// The default implementation reports that the lookup is unavailable, so sources that only
+    /// implement [`TipSource::observe`] keep working outside the WebSocket startup probe.
+    async fn block_hash(&self, _block: u64) -> Result<B256> {
+        Err(RpcError::Other("block hash lookup is not supported".to_string()))
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
 struct RpcBlockHeader {
     number: U64,
     timestamp: U64,
+    /// Block hash. Only required for the block hash lookup, so observations keep working with
+    /// endpoints or fixtures that omit it.
+    #[serde(default)]
+    hash: Option<B256>,
 }
 
 /// Production [`TipSource`] that reads latest, safe and finalized headers through one batched RPC
@@ -334,19 +349,37 @@ impl<R: HttpRequestor + 'static + Clone> TipSource for RpcTipSource<R> {
             finalized,
         })
     }
+
+    async fn block_hash(&self, block: u64) -> Result<B256> {
+        let mut batch = BatchRequest::new(self.provider.client());
+
+        let waiter = batch
+            .add_call::<_, Option<RpcBlockHeader>>("eth_getBlockByNumber", &(BlockNumberOrTag::Number(block), false))
+            .map_err(RpcError::from)?;
+
+        batch.send().await.map_err(RpcError::from)?;
+
+        waiter
+            .await
+            .map_err(RpcError::from)?
+            .and_then(|header| header.hash)
+            .ok_or_else(|| RpcError::Other(format!("block {block} is not available")))
+    }
 }
 
-struct TrackerRuntime {
+pub(crate) struct TrackerRuntime {
     source: Arc<dyn TipSource>,
     confirmation: ConfirmationConfig,
-    head_poll_interval: Duration,
-    expected_block_time: Duration,
+    head: HeadSourceConfig,
+    subscriber: Option<Arc<dyn HeadSubscriber>>,
     tip_tx: watch::Sender<Option<ChainTip>>,
     last_success: Mutex<Option<Instant>>,
     header_timestamps: Mutex<HeaderTimestamps>,
     refresh_lock: AsyncMutex<()>,
     failure_streak: Mutex<u32>,
     invalid_streak: Mutex<u32>,
+    active_source: Mutex<HeadSource>,
+    ws_reconnects: AtomicU64,
 }
 
 fn record_failure_streak(streak: &Mutex<u32>) -> bool {
@@ -375,13 +408,31 @@ impl fmt::Debug for TrackerRuntime {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("TrackerRuntime")
             .field("confirmation", &self.confirmation)
-            .field("head_poll_interval", &self.head_poll_interval)
-            .field("expected_block_time", &self.expected_block_time)
+            .field("head_poll_interval", &self.head.poll_interval)
+            .field("expected_block_time", &self.head.expected_block_time)
+            .field("head_ws_url", &self.head.ws_url)
             .finish()
     }
 }
 
 impl TrackerRuntime {
+    pub(crate) fn tip_source(&self) -> Arc<dyn TipSource> {
+        self.source.clone()
+    }
+
+    pub(crate) fn active_source(&self) -> HeadSource {
+        self.active_source
+            .lock()
+            .map(|source| *source)
+            .unwrap_or(HeadSource::Polling)
+    }
+
+    pub(crate) fn set_active_source(&self, source: HeadSource) {
+        if let Ok(mut active_source) = self.active_source.lock() {
+            *active_source = source;
+        }
+    }
+
     fn current(&self) -> Option<ChainTip> {
         *self.tip_tx.borrow()
     }
@@ -418,7 +469,7 @@ impl TrackerRuntime {
         }
     }
 
-    async fn refresh(&self) -> Result<ChainTip> {
+    pub(crate) async fn refresh_from(&self, source: HeadSource) -> Result<ChainTip> {
         let _refresh_guard = self.refresh_lock.lock().await;
 
         let observation = match self.source.observe().await {
@@ -436,7 +487,7 @@ impl TrackerRuntime {
         }
 
         let previous = self.current();
-        let update = match next_tip(previous.as_ref(), &observation, &self.confirmation, HeadSource::Polling) {
+        let update = match next_tip(previous.as_ref(), &observation, &self.confirmation, source) {
             Ok(update) => update,
             Err(error) => {
                 self.record_invalid_observation(&error);
@@ -453,6 +504,11 @@ impl TrackerRuntime {
 
         self.tip_tx.send_replace(Some(update.tip));
         Ok(update.tip)
+    }
+
+    pub(crate) fn record_ws_reconnect(&self) {
+        self.ws_reconnects.fetch_add(1, Ordering::SeqCst);
+        record_ws_reconnect_metric();
     }
 
     fn record_update(&self, update: &TipUpdate, previous: Option<&ChainTip>) {
@@ -504,7 +560,7 @@ impl fmt::Debug for ChainTipTracker {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("ChainTipTracker")
             .field("confirmation", &self.runtime.confirmation)
-            .field("head_poll_interval", &self.runtime.head_poll_interval)
+            .field("head_poll_interval", &self.runtime.head.poll_interval)
             .field("current", &self.current())
             .finish()
     }
@@ -518,20 +574,43 @@ impl ChainTipTracker {
         head_poll_interval: Duration,
         expected_block_time: Duration,
     ) -> Self {
+        Self::with_head_source(
+            source,
+            confirmation,
+            HeadSourceConfig {
+                chain_id: 0,
+                poll_interval: head_poll_interval,
+                expected_block_time,
+                ws_url: None,
+                ws_url_derived: false,
+            },
+            None,
+        )
+    }
+
+    /// Creates a tracker around the given tip source and optional WebSocket head subscriber.
+    pub fn with_head_source(
+        source: Arc<dyn TipSource>,
+        confirmation: ConfirmationConfig,
+        head: HeadSourceConfig,
+        subscriber: Option<Arc<dyn HeadSubscriber>>,
+    ) -> Self {
         let (tip_tx, _) = watch::channel(None);
 
         Self {
             runtime: Arc::new(TrackerRuntime {
                 source,
                 confirmation,
-                head_poll_interval,
-                expected_block_time,
+                head,
+                subscriber,
                 tip_tx,
                 last_success: Mutex::new(None),
                 header_timestamps: Mutex::new(HeaderTimestamps::default()),
                 refresh_lock: AsyncMutex::new(()),
                 failure_streak: Mutex::new(0),
                 invalid_streak: Mutex::new(0),
+                active_source: Mutex::new(HeadSource::Polling),
+                ws_reconnects: AtomicU64::new(0),
             }),
             task: Mutex::new(None),
             started: AtomicBool::new(false),
@@ -553,9 +632,15 @@ impl ChainTipTracker {
         self.runtime.header_timestamp(block)
     }
 
-    /// Reads the chain tip once and publishes the resulting confirmed tip.
+    /// Returns the number of successful WebSocket reconnects since the tracker was created.
+    pub fn ws_reconnect_count(&self) -> u64 {
+        self.runtime.ws_reconnects.load(Ordering::SeqCst)
+    }
+
+    /// Reads the chain tip once from the active head source and publishes the resulting confirmed tip.
     pub async fn refresh(&self) -> Result<ChainTip> {
-        self.runtime.refresh().await
+        let source = self.runtime.active_source();
+        self.runtime.refresh_from(source).await
     }
 
     /// Starts the background refresh task if it is not running yet.
@@ -568,23 +653,9 @@ impl ChainTipTracker {
         }
 
         let runtime = Arc::downgrade(&self.runtime);
-        let poll_interval = self.runtime.head_poll_interval;
-        let handle = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(poll_interval);
-            interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
-
-            loop {
-                interval.tick().await;
-
-                let Some(runtime) = runtime.upgrade() else {
-                    break;
-                };
-
-                if let Err(error) = runtime.refresh().await {
-                    debug!(%error, "background chain tip refresh failed");
-                }
-            }
-        });
+        let head = self.runtime.head.clone();
+        let subscriber = self.runtime.subscriber.clone();
+        let handle = tokio::spawn(run_head_driver(runtime, head, subscriber));
 
         if let Ok(mut task) = self.task.lock() {
             *task = Some(handle);
@@ -600,8 +671,9 @@ impl ChainTipTracker {
         if self.started.load(Ordering::SeqCst) {
             let max_age = self
                 .runtime
+                .head
                 .expected_block_time
-                .max(self.runtime.head_poll_interval)
+                .max(self.runtime.head.poll_interval)
                 .saturating_mul(3);
             let is_fresh = self
                 .runtime

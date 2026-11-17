@@ -27,10 +27,11 @@ use blokli_db::{
 use clap::Parser;
 use futures::TryStreamExt;
 use tokio::net::TcpListener;
+use url::Url;
 
 use crate::{
     config::{Config, DatabaseConfig, PoolRole, pool_application_name},
-    errors::BloklidError,
+    errors::{BloklidError, ConfigError},
 };
 
 #[tokio::main]
@@ -199,6 +200,15 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
 
             let database = require_database(&cfg)?;
 
+            let rpc_ws_url = cfg
+                .rpc_ws_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|url| !url.is_empty())
+                .map(Url::parse)
+                .transpose()
+                .map_err(|error| BloklidError::Config(ConfigError::Parse(format!("invalid rpc_ws_url: {error}"))))?;
+
             let indexer_config = blokli_chain_indexer::IndexerConfig {
                 start_block_number: chain_network.channel_contract_deploy_block as u64,
                 fast_sync: cfg.indexer.fast_sync,
@@ -216,6 +226,8 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                     .unwrap_or_else(|| cfg.network.default_confirmation_mode()),
                 max_safe_gap: cfg.indexer.confirmation.max_safe_gap,
                 head_poll_interval: cfg.indexer.head_tracking.head_poll_interval,
+                head_subscription: cfg.indexer.head_tracking.head_subscription,
+                head_ws_url: rpc_ws_url,
                 safe_tx_prefetch: blokli_chain_indexer::SafeTxPrefetchConfig {
                     batch_size: cfg.indexer.safe_tx_prefetch.batch_size,
                     concurrency: cfg.indexer.safe_tx_prefetch.concurrency,

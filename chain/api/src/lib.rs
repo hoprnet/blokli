@@ -20,6 +20,7 @@ use blokli_chain_indexer::{IndexerConfig, IndexerState, block::Indexer, handlers
 use blokli_chain_rpc::{
     HoprIndexerRpcOperations, HoprRpcOperations,
     client::{DefaultRetryPolicy, InstrumentedRetryBackoffLayer, MetricsLayer},
+    head::resolve_head_ws_url,
     rate_limit::{RateLimitLayer, resolve_max_requests_per_sec},
     rpc::{RpcOperations, RpcOperationsConfig},
     transport::ReqwestClient,
@@ -42,7 +43,8 @@ use hopr_types::primitive::{
     prelude::{Address, Balance, Currency, HoprBalance, U256, WxHOPR, XDai, XHOPR},
     traits::IntoEndian,
 };
-use tracing::info;
+use tracing::{info, warn};
+use url::Url;
 
 use crate::{
     errors::{BlokliChainError, Result},
@@ -60,7 +62,7 @@ pub type DefaultHttpRequestor = blokli_chain_rpc::transport::ReqwestClient;
 
 fn build_transport_client(url: &str) -> Result<Http<ReqwestClient>> {
     let parsed_url =
-        url::Url::parse(url).map_err(|e| BlokliChainError::Configuration(format!("failed to parse RPC URL: {e}")))?;
+        Url::parse(url).map_err(|e| BlokliChainError::Configuration(format!("failed to parse RPC URL: {e}")))?;
     Ok(ReqwestTransport::new(parsed_url))
 }
 
@@ -116,6 +118,21 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         let max_requests_per_sec = resolve_max_requests_per_sec(chain_config.max_requests_per_sec);
         let retry_compute_units_per_sec: u64 = max_requests_per_sec.map_or(u64::MAX, |rate| u64::from(rate.get()));
 
+        let parsed_rpc_url = Url::parse(&rpc_url)
+            .map_err(|e| BlokliChainError::Configuration(format!("failed to parse RPC URL: {e}")))?;
+        let (head_ws_url, head_ws_url_derived) = match resolve_head_ws_url(
+            &parsed_rpc_url,
+            indexer_cfg.head_ws_url.as_ref(),
+            indexer_cfg.head_subscription,
+        ) {
+            Ok(Some((url, derived))) => (Some(url), derived),
+            Ok(None) => (None, false),
+            Err(error) => {
+                warn!(%error, "cannot derive a WebSocket head source URL, using polling");
+                (None, false)
+            }
+        };
+
         let rpc_cfg = RpcOperationsConfig {
             chain_id: chain_config.chain_id,
             contract_addrs: contract_addresses,
@@ -125,6 +142,8 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
             confirmation_mode: indexer_cfg.confirmation_mode,
             max_safe_gap: indexer_cfg.max_safe_gap,
             head_poll_interval: indexer_cfg.head_poll_interval,
+            head_ws_url,
+            head_ws_url_derived,
             max_block_range_fetch_size: chain_config.max_block_range as u64,
             log_block_range_reprobe_interval: chain_config.block_range_reprobe_interval as u64,
             ..Default::default()

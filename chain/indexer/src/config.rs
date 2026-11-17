@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use blokli_chain_rpc::tip::ConfirmationMode;
+use url::Url;
 
 use crate::snapshot::download::normalize_sha256_hex;
 
@@ -124,6 +125,22 @@ pub struct IndexerConfig {
     #[default(_code = "Duration::from_secs(1)")]
     pub head_poll_interval: Duration,
 
+    /// Whether the indexer may use a WebSocket `newHeads` head source.
+    ///
+    /// The indexer falls back to polling when the endpoint cannot serve subscriptions.
+    ///
+    /// Default is `true`.
+    #[default(true)]
+    pub head_subscription: bool,
+
+    /// WebSocket URL used for `newHeads` notifications.
+    ///
+    /// When unset and subscriptions are enabled, the URL is derived from the HTTP RPC URL.
+    ///
+    /// Default is `None`.
+    #[default(None)]
+    pub head_ws_url: Option<Url>,
+
     /// Tuning for the concurrent pre-fetch of Safe transactions.
     #[default(_code = "SafeTxPrefetchConfig::default()")]
     pub safe_tx_prefetch: SafeTxPrefetchConfig,
@@ -172,6 +189,8 @@ impl IndexerConfig {
             confirmation_mode: ConfirmationMode::default(),
             max_safe_gap: 32,
             head_poll_interval: Duration::from_secs(1),
+            head_subscription: true,
+            head_ws_url: None,
             safe_tx_prefetch: SafeTxPrefetchConfig::default(),
         }
     }
