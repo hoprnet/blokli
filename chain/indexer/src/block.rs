@@ -76,6 +76,25 @@ const MARK_PROCESSED_ATTEMPTS: u32 = 5;
 /// Wait before the first retry of marking logs as processed; it doubles after every failure.
 const MARK_PROCESSED_INITIAL_BACKOFF: Duration = Duration::from_millis(200);
 
+/// Attempts made to update the indexed block after a block's writes have completed.
+///
+/// The writes have already committed when the marker is updated, so a failure leaves the watermark
+/// behind them and lets a snapshot cached before the block be reused after it. Updating the marker is
+/// idempotent, so it is retried before the failure is counted. The retries run while block
+/// processing holds the processing lock that synchronized API reads wait for, so these attempts and
+/// their backoff bound how long such a read can stall: five attempts with 200 ms, 400 ms, 800 ms and
+/// 1.6 s waits between them (3 s in total), plus whatever each attempt spends waiting for a pooled
+/// connection.
+const MARK_INDEXED_BLOCK_ATTEMPTS: u32 = 5;
+
+/// Wait before the first retry of the indexed-block update; it doubles after every failure.
+#[cfg(not(test))]
+const MARK_INDEXED_BLOCK_INITIAL_BACKOFF: Duration = Duration::from_millis(200);
+
+/// Test builds use a short wait so retry-exhaustion tests finish immediately.
+#[cfg(test)]
+const MARK_INDEXED_BLOCK_INITIAL_BACKOFF: Duration = Duration::from_millis(1);
+
 /// Runs `operation` until it succeeds, at most `attempts` times, waiting `initial_backoff` after
 /// the first failure and twice as long after each further one.
 async fn retry_with_backoff<T, E, F, Fut>(attempts: u32, initial_backoff: Duration, mut operation: F) -> StdResult<T, E>
@@ -1393,7 +1412,12 @@ where
                         }
                     }
                 }
-                match db.set_indexer_state_info(None, block_id_u32).await {
+                let marked =
+                    retry_with_backoff(MARK_INDEXED_BLOCK_ATTEMPTS, MARK_INDEXED_BLOCK_INITIAL_BACKOFF, || {
+                        db.set_indexer_state_info(None, block_id_u32)
+                    })
+                    .await;
+                match marked {
                     Ok(_) => {
                         #[cfg(all(feature = "telemetry", not(test)))]
                         if let Some(metric) = METRIC_INDEXER_CURRENT_BLOCK.as_ref() {
@@ -1401,7 +1425,10 @@ where
                         }
                         trace!(block_id, "updated indexer state info");
                     }
-                    Err(error) => error!(block_id, %error, "failed to update indexer state info"),
+                    Err(error) => {
+                        indexer_state.mark_indexed_block_update_failed();
+                        error!(block_id, %error, "failed to update indexer state info");
+                    }
                 }
             }
             Err(error) => {
@@ -1765,7 +1792,7 @@ mod tests {
         safe_contracts::BlokliDbSafeContractOperations, safe_history::BlokliDbSafeHistoryOperations,
     };
     use blokli_db_entity::{
-        account, channel,
+        account, chain_info, channel,
         prelude::{Account, Channel},
     };
     use futures::{FutureExt, Stream, channel::mpsc::unbounded, join};
@@ -3081,6 +3108,46 @@ mod tests {
         assert!(result.is_err(), "an unrecoverable processed-log read must panic");
         assert!(!handler.collect_called.load(StdOrdering::SeqCst));
         assert_eq!(pre_write_read_attempts(log.block_number), PRE_WRITE_READ_ATTEMPTS);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_block_counts_a_failed_indexed_block_update() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let handler = DispatchTrackingLogHandler::default();
+        let log = SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: vec![Hash::create(&[b"my topic"]).into()],
+            data: vec![1, 2, 3],
+            tx_hash: Hash::create(&[b"my tx hash"]).into(),
+            block_hash: Hash::create(&[b"my block hash"]).into(),
+            tx_index: 1,
+            block_number: 700_003,
+            log_index: 2,
+            ..Default::default()
+        };
+        db.store_log(log.clone()).await?;
+        // Without the marker row the indexed-block update fails on every attempt.
+        chain_info::Entity::delete_many().exec(db.conn(TargetDb::Index)).await?;
+        let indexer_state = IndexerState::default();
+
+        let result = Indexer::<MockHoprIndexerOps, DispatchTrackingLogHandler, BlokliDb>::process_block(
+            &db,
+            &handler,
+            BlockWithLogs {
+                block_id: log.block_number,
+                logs: BTreeSet::from([log.clone()]),
+            },
+            false,
+            false,
+            &indexer_state,
+            true,
+            PrefetchedLogData::default(),
+        )
+        .await;
+
+        assert!(result.is_some());
+        assert_eq!(indexer_state.failed_indexed_block_updates(), 1);
         Ok(())
     }
 

@@ -323,6 +323,7 @@ async fn capture_snapshot_point_synchronized(
                 block: watermark.block,
                 tx_index: watermark.tx_index,
                 log_index: watermark.log_index,
+                failed_indexed_block_updates: indexer_state.failed_indexed_block_updates(),
             };
 
             // Lock is automatically released when the synchronized read returns
@@ -4444,6 +4445,7 @@ mod tests {
                 block: 100,
                 tx_index: 3,
                 log_index: 7,
+                failed_indexed_block_updates: 0,
             }
         );
         assert_eq!(
@@ -4453,6 +4455,45 @@ mod tests {
                 block: 100,
                 tx_index: 3,
                 log_index: 7,
+                failed_indexed_block_updates: 0,
+            }
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_capture_snapshot_point_changes_after_a_failed_indexed_block_update() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let conn = db.conn(blokli_db::TargetDb::Index);
+        init_chain_info(conn, 100, 3, 7).await?;
+        let indexer_state = IndexerState::new(10, 100);
+
+        let (_, before_failed_update, ..) = capture_snapshot_point_synchronized(&indexer_state, conn)
+            .await
+            .map_err(|e| anyhow::anyhow!(e.message))?;
+        indexer_state.mark_indexed_block_update_failed();
+        let (_, after_failed_update, ..) = capture_snapshot_point_synchronized(&indexer_state, conn)
+            .await
+            .map_err(|e| anyhow::anyhow!(e.message))?;
+
+        assert_eq!(
+            before_failed_update,
+            SnapshotPoint {
+                reorg_epoch: 0,
+                block: 100,
+                tx_index: 3,
+                log_index: 7,
+                failed_indexed_block_updates: 0,
+            }
+        );
+        assert_eq!(
+            after_failed_update,
+            SnapshotPoint {
+                reorg_epoch: 0,
+                block: 100,
+                tx_index: 3,
+                log_index: 7,
+                failed_indexed_block_updates: 1,
             }
         );
         Ok(())

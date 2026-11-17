@@ -80,10 +80,12 @@ impl Default for SnapshotLimiter {
 /// Two subscriptions that start at the same point see the same state, which is what makes their
 /// snapshot shareable. The whole watermark identifies a point: the block alone does not, because
 /// after a reorganization the indexer reaches the same block number again with different content,
-/// and within one block a snapshot can be taken after any transaction or log.
+/// and within one block a snapshot can be taken after any transaction or log. A block whose writes
+/// completed before its indexed-block update failed leaves the watermark behind, so the number of
+/// such failures also identifies the point.
 ///
-/// Points are ordered by epoch, then block, transaction index and log index, so a point after a
-/// reorganization is always newer.
+/// Points are ordered by epoch, then block, transaction index, log index and the number of failed
+/// indexed-block updates, so a point after a reorganization is always newer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SnapshotPoint {
     /// Number of reorganizations the indexer had handled
@@ -94,6 +96,8 @@ pub struct SnapshotPoint {
     pub tx_index: i64,
     /// Last indexed log index within the transaction
     pub log_index: i64,
+    /// Number of blocks whose writes completed but whose indexed-block update failed
+    pub failed_indexed_block_updates: u64,
 }
 
 /// A snapshot load that any number of callers can wait for
@@ -234,6 +238,7 @@ mod tests {
         block: 100,
         tx_index: 0,
         log_index: 0,
+        failed_indexed_block_updates: 0,
     };
 
     /// A load that counts how often it ran and returns `rows`
@@ -359,6 +364,25 @@ mod tests {
         let first = cache.get_or_load(POINT, counted_load(&loads, vec![1])).await;
         let second = cache
             .get_or_load(later_transaction, counted_load(&loads, vec![2]))
+            .await;
+
+        assert_eq!(first.ok().as_deref(), Some(&vec![1]));
+        assert_eq!(second.ok().as_deref(), Some(&vec![2]));
+        assert_eq!(loads.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn cache_does_not_share_a_load_across_failed_indexed_block_updates() {
+        let cache = SnapshotCache::<u32>::default();
+        let loads = Arc::new(AtomicUsize::new(0));
+        let after_failed_update = SnapshotPoint {
+            failed_indexed_block_updates: POINT.failed_indexed_block_updates + 1,
+            ..POINT
+        };
+
+        let first = cache.get_or_load(POINT, counted_load(&loads, vec![1])).await;
+        let second = cache
+            .get_or_load(after_failed_update, counted_load(&loads, vec![2]))
             .await;
 
         assert_eq!(first.ok().as_deref(), Some(&vec![1]));

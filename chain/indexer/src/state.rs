@@ -176,6 +176,9 @@ pub struct IndexerState {
     /// Number of reorganizations signaled to subscriptions.
     reorg_epoch: Arc<AtomicU64>,
 
+    /// Number of blocks whose writes completed but whose indexed-block update failed.
+    failed_indexed_block_updates: Arc<AtomicU64>,
+
     /// Coordination between block processing and the Safe owner refresh task.
     safe_owner_sync: Arc<SafeOwnerSync>,
 }
@@ -210,6 +213,7 @@ impl std::fmt::Debug for IndexerState {
             .field("_shutdown_rx", &"Arc<Receiver<()>>")
             .field("safe_filter_epoch", &"Arc<AtomicU64>")
             .field("reorg_epoch", &"Arc<AtomicU64>")
+            .field("failed_indexed_block_updates", &"Arc<AtomicU64>")
             .field("safe_owner_sync", &"Arc<SafeOwnerSync>")
             .finish()
     }
@@ -243,6 +247,7 @@ impl IndexerState {
             _shutdown_rx: Arc::new(shutdown_rx),
             safe_filter_epoch: Arc::new(AtomicU64::new(0)),
             reorg_epoch: Arc::new(AtomicU64::new(0)),
+            failed_indexed_block_updates: Arc::new(AtomicU64::new(0)),
             safe_owner_sync: Arc::new(SafeOwnerSync::default()),
         }
     }
@@ -346,6 +351,21 @@ impl IndexerState {
     /// Read it while holding the watermark lock to pair it with a watermark.
     pub fn reorg_epoch(&self) -> u64 {
         self.reorg_epoch.load(Ordering::Relaxed)
+    }
+
+    /// Records that a block's writes completed but updating the indexed block failed.
+    ///
+    /// The watermark stays behind the writes of such a block until a later block moves it, so a
+    /// snapshot taken from it must not be reused as if the block had been marked.
+    pub fn mark_indexed_block_update_failed(&self) {
+        self.failed_indexed_block_updates.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Returns how many blocks completed their writes but failed to update the indexed block.
+    ///
+    /// Read it while holding the watermark lock to pair it with a watermark.
+    pub fn failed_indexed_block_updates(&self) -> u64 {
+        self.failed_indexed_block_updates.load(Ordering::Relaxed)
     }
 
     /// Subscribes to shutdown signals
@@ -584,6 +604,18 @@ mod tests {
         state.signal_shutdown();
 
         assert_eq!(clone.reorg_epoch(), 1);
+    }
+
+    #[test]
+    fn test_failed_indexed_block_updates_start_at_zero_and_increment() {
+        let state = IndexerState::default();
+        assert_eq!(state.failed_indexed_block_updates(), 0);
+
+        state.mark_indexed_block_update_failed();
+        assert_eq!(state.failed_indexed_block_updates(), 1);
+
+        state.mark_indexed_block_update_failed();
+        assert_eq!(state.failed_indexed_block_updates(), 2);
     }
 
     #[tokio::test]
