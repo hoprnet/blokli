@@ -191,7 +191,6 @@ The command removes all the Kubernetes components associated with the chart and 
 | `config.curvyAggregator`                             | Curvy Aggregator proxy address (required when Curvy indexing is enabled)                                      | `""`                |
 | `config.indexer.fastSync`                            | Enable fast sync mode                                                                                         | `true`              |
 | `config.indexer.enableLogsSnapshot`                  | Enable logs snapshot feature                                                                                  | `false`             |
-| `config.indexer.enableSafeIndexing`                  | Enable Safe contract event indexing for discovered Safes                                                      | `false`             |
 | `config.indexer.enableCurvyIndexing`                 | Enable Curvy event indexing using config.curvyAggregator                                                      | `false`             |
 | `config.indexer.logsSnapshotUrl`                     | URL for logs snapshot download (required when enableLogsSnapshot is true)                                     | `""`                |
 | `config.indexer.logsSnapshotSha256`                  | Expected SHA-256 hex digest of the logs snapshot archive (required when enableLogsSnapshot is true or logsSnapshotUrl is set) | `""`                |

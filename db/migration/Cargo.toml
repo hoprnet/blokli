@@ -27,4 +27,5 @@ tokio             = { workspace = true }
 hopr-types = { workspace = true, features = ["internal"] }
 
 [dev-dependencies]
-sea-orm = { workspace = true }
+sea-orm  = { workspace = true }
+tempfile = { workspace = true }

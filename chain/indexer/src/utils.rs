@@ -1,6 +1,16 @@
 //! Utility functions for the indexer module.
 
+use tokio::task::JoinHandle;
 use url::Url;
+
+/// Aborts the wrapped task when dropped, so background tasks end together with their owner.
+pub(crate) struct AbortOnDrop(pub(crate) JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
 
 /// Redacts username, password, and path/query parameters from URLs while keeping protocol, host, and port visible
 ///

@@ -789,23 +789,17 @@ Historical catch-up uses a phased strategy instead of a single monolithic filter
 - Safe-address filters are intentionally excluded during this pass.
 - New Safes found during historical sync are recorded in the database, but do not trigger live filter refreshes yet.
 
-**Phase 2: Safe Backfill**
+**Phase 2: Continuous Mode**
 
-- After the discovery pass reaches the current historical head, the indexer runs a second historical pass using only address-scoped Safe
-  filters for the Safes already known in the database.
-- This phase reconstructs Safe-specific history such as setup, owner changes, threshold changes, and execution activity without broad
-  topic-only Safe scans.
-- Historical phase finalization updates log checksums and advances the persisted indexer position only after the phase completes.
-
-**Phase 3: Continuous Mode**
-
-- Once both historical phases complete, the indexer switches to continuous streaming mode.
+- Historical phase finalization updates log checksums and advances the persisted indexer position, then the indexer switches to continuous
+  streaming mode.
 - Continuous mode combines the static HOPR contract filters with the current Safe-address filters.
-- When a new Safe is discovered in continuous mode, the indexer performs a targeted backfill for that Safe on the discovery block, then
-  refreshes the active Safe filter set from the next block onward.
+- At the switch, owners and threshold of all known Safes are read from the chain (pinned at the last processed block) while the stream
+  already runs.
+- When a new Safe is discovered in continuous mode, its owners and threshold are read pinned at the discovery block, then the active Safe
+  filter set is refreshed from the next block onward.
 
-This split reduces the cost of historical syncing on Safe-heavy chains by avoiding repeated filter refreshes and repeated Safe backfills
-while the indexer is still catching up.
+Historical sync therefore only discovers Safes and never scans Safe logs.
 
 ### Transaction Submission Flow
 
@@ -908,7 +902,8 @@ Database operations:
         * Chain key (owner)
         * Event position (block, tx_index, log_index)
     ↓
-Publish SafeDeployed event to IndexerState event bus
+Publish SafeDeployed event to IndexerState event bus (for a Safe discovered while synced, only once its first
+owner snapshot is stored, so subscribers see the owners and threshold)
     ↓
 GraphQL safeDeployed subscription receives event:
     - Queries database for full Safe details
@@ -926,8 +921,9 @@ Clients can query Safe contracts through three methods:
    failed redemption amounts and counts for the selected Safe and/or node
 
 Successful ticket redemptions update a dedicated aggregate table keyed by `(safe_address, node_address)` during `ChannelBalanceDecreased`
-processing. Failed Safe module ticket redemptions update the same aggregate table only by incrementing aggregate counters and amounts when
-the indexer observes `ExecutionFromModuleFailure` and decodes the rejected outer transaction as a `redeemTicket` call. Query behavior is:
+processing. The rejection counters and amounts (`rejectionCount`, `rejectedAmount`) are deprecated: the indexer no longer subscribes to
+`ExecutionFromModuleFailure` (it required one `eth_getTransactionByHash` call per event), so they stay at 0 for newly built indexes. Values
+written by earlier versions remain in existing databases. Query behavior is:
 
 - safe-only filter aggregates all rows for that safe
 - node-only filter aggregates all rows for that node
@@ -940,22 +936,35 @@ The unique constraint on `(deployed_block, deployed_tx_index, deployed_log_index
 
 **Safe Contract Event Indexing**:
 
-In addition to HOPR contract events, the indexer subscribes to the Safe event topics `SafeSetup`, `AddedOwner`, `RemovedOwner`,
-`ChangedThreshold`, `ExecutionSuccess`, `ExecutionFailure`, and `ExecutionFromModuleFailure` through address-scoped filters built from the
-current set of indexed Safe contracts. Unknown Safe addresses are not streamed globally.
+Safe owners and threshold are not rebuilt from Safe logs. Historical sync only discovers Safes (stake factory, node-safe registry, v3 CSV
+preseed) and requests no Safe event topics.
 
-When a Safe becomes known during block processing, the indexer refreshes its Safe-address filter set and performs a targeted RPC backfill
-for the discovery block so setup and owner-management events emitted earlier in that same block are still indexed. Historical Safe backfill
-for already-known Safes is also run as a dedicated sync phase using the current indexed Safe address set.
+- At every switch to continuous mode (including each restart) the indexer lists the Safes without a snapshot at the last processed block and
+  hands them to a background refresh task. The task only performs RPC reads (batched through Multicall3 where deployed, otherwise bounded
+  concurrent calls; bounded batch size and concurrency; pinned at the latest processed block and re-pinned on pruned-state errors) and sends
+  the results to the indexing loop, which stores them between blocks. The task never touches the database.
+- Block processing never calls the RPC node while its database transaction is open. A Safe discovered live, and an owner or threshold event
+  of a Safe without a snapshot, only report the Safe and the block to the refresh task; the event is skipped, and the task reads the Safe
+  pinned at or above that block.
+- A Safe that cannot be read (or whose result cannot be stored) is retried with backoff for the life of the indexer, on its own so a
+  gas-burning contract cannot fail the Safes it was batched with, with a long-tail interval for Safes that keep failing. The refresh task is
+  restarted (bounded) if it panics, and the indexer fails like for any other unrecoverable background failure if it cannot be kept alive.
+  The gauge `blokli_indexer_safe_owner_snapshots_pending` counts the Safes whose snapshot has been requested and not stored yet.
+- A read pinned before an owner or threshold event that has been processed since is dropped and re-read at a newer block, and a stored
+  snapshot is never replaced by an older one.
+- In continuous mode the indexer subscribes to `SafeSetup`, `AddedOwner`, `RemovedOwner` and `ChangedThreshold` through address-scoped
+  filters built from the indexed Safe contracts. Unknown Safe addresses are not streamed globally.
+- When a Safe becomes known while live, owners and threshold are read pinned at the discovery block and the Safe filter set is refreshed.
+- `hopr_safe_contract_state.owners_synced_block` is the block the snapshot is pinned at. Live owner and threshold events at or below it are
+  ignored; events above it are applied.
 
-Decoded Safe events are persisted into dedicated index tables:
+Current state tables:
 
-- `hopr_safe_owner_state` stores temporal owner membership changes
-- `safe_owner_current` exposes the current owner set
-- `hopr_safe_event` stores the shared event header and ordering metadata for all indexed Safe events
-- `hopr_safe_setup_event`, `hopr_safe_setup_owner`, `hopr_safe_owner_change_event`, `hopr_safe_threshold_change_event`, and
-  `hopr_safe_execution_event` store typed Safe event payloads without sparse nullable columns
-- `hopr_safe_threshold_state` stores temporal threshold state, and `safe_threshold_current` exposes the latest threshold per Safe
+- `hopr_safe_owner_state` holds one row per `(safe, owner)` with a position guard (older events are ignored). Removed owners stay as
+  `is_current_owner = false` so a replayed `AddedOwner` cannot revive them. `safe_owner_current` exposes the current owner set.
+- `hopr_safe_threshold_state` holds one row per Safe with the same guard, and `safe_threshold_current` exposes it.
+
+Reorgs do not revert owner and threshold rows written from orphaned blocks. The next snapshot refresh (next start) corrects them.
 
 ### Subscription Event Bus
 

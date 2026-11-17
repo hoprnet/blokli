@@ -74,7 +74,8 @@ test-postgres-schema:
         pg_ctl -D "$pg_dir/data" -l "$pg_dir/postgres.log" -o "-k $pg_dir -c listen_addresses='' -p 5433" -w start >/dev/null
         export BLOKLI_TEST_POSTGRES_URL="postgres://postgres@localhost:5433/postgres?host=$pg_dir"
     fi
-    {{ cargo_native }} test -p blokli-db --test postgres_schema_test -- --ignored
+    {{ cargo_native }} test -p blokli-db --test postgres_schema_test --test postgres_safe_owner_test -- --ignored
+    {{ cargo_native }} test -p blokli-chain-indexer --all-features --lib -- --ignored postgres
 
 # Run tests in single thread mode with output (useful for debugging)
 test-debug:

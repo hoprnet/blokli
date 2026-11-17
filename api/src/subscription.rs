@@ -3247,6 +3247,7 @@ mod tests {
             published_block: Set(100),
             published_tx_index: Set(0),
             published_log_index: Set(0),
+            owners_synced_block: Default::default(),
         };
         safe_state.insert(db.conn(blokli_db::TargetDb::Index)).await.unwrap();
 
@@ -3396,6 +3397,7 @@ mod tests {
             published_block: Set(100),
             published_tx_index: Set(0),
             published_log_index: Set(0),
+            owners_synced_block: Default::default(),
         };
         safe_state_1.insert(db.conn(blokli_db::TargetDb::Index)).await.unwrap();
 
@@ -3422,6 +3424,7 @@ mod tests {
             published_block: Set(101),
             published_tx_index: Set(0),
             published_log_index: Set(0),
+            owners_synced_block: Default::default(),
         };
         safe_state_2.insert(db.conn(blokli_db::TargetDb::Index)).await.unwrap();
 
