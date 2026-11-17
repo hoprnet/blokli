@@ -203,7 +203,6 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 start_block_number: chain_network.channel_contract_deploy_block as u64,
                 fast_sync: cfg.indexer.fast_sync,
                 enable_logs_snapshot: cfg.indexer.enable_logs_snapshot,
-                enable_safe_indexing: cfg.indexer.enable_safe_indexing,
                 enable_curvy_indexing: cfg.indexer.enable_curvy_indexing,
                 logs_snapshot_url: cfg.indexer.logs_snapshot_url.clone(),
                 logs_snapshot_sha256: cfg.indexer.logs_snapshot_sha256.clone(),
@@ -297,7 +296,6 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
         };
 
         // Create BlokliChain instance
-        let enable_safe_indexing = indexer_config.enable_safe_indexing;
         let transaction_executor_config = RawTransactionExecutorConfig {
             max_submitted_transactions: api_config.transactions.max_submitted_transactions,
             max_submitted_transactions_per_identity: api_config.transactions.max_submitted_transactions_per_identity,
@@ -344,9 +342,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
             );
         }
 
-        if enable_safe_indexing {
-            startup::refresh_preseeded_safe_modules(blokli_chain.db(), blokli_chain.rpc()).await?;
-        }
+        startup::refresh_preseeded_safe_modules(blokli_chain.db(), blokli_chain.rpc()).await?;
 
         // Get IndexerState for API subscriptions
         let indexer_state = blokli_chain.indexer_state();

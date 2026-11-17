@@ -1,24 +1,13 @@
 use blokli_chain_rpc::Log;
-use blokli_chain_types::{AlloyAddressExt, ContractAddresses as BlokliContractAddresses};
-use blokli_db::{BlokliDbAllOperations, OpenTransaction, safe_history::SafeActivityKind};
-use hopr_bindings::exports::alloy::{
-    primitives::{Address as AlloyAddress, B256, Log as AlloyLog},
-    sol_types::SolEventInterface,
-};
-use hopr_types::{
-    chain::{ContractAddresses as HoprContractAddresses, ParsedHoprChainAction},
-    crypto::types::Hash,
-    primitive::prelude::{Address, SerializableLog},
-};
-use tracing::{debug, info, warn};
+use blokli_chain_types::AlloyAddressExt;
+use blokli_db::{BlokliDbAllOperations, OpenTransaction};
+use hopr_types::primitive::prelude::Address;
+use tracing::{debug, info};
 
 #[cfg(all(feature = "telemetry", not(test)))]
 use super::increment_indexer_contract_log_count;
-use super::{ContractEventHandlers, LogBatchContext, u64_to_u32, u256_to_u32, u256_to_u64};
-use crate::{
-    custom_abis::safe_contract_events::SafeContract::SafeContractEvents, errors::Result, state::IndexerEvent,
-    traits::PrefetchedTransactions,
-};
+use super::{ContractEventHandlers, u256_to_u64};
+use crate::{custom_abis::safe_contract_events::SafeContract::SafeContractEvents, errors::Result, state::IndexerEvent};
 
 #[cfg(all(feature = "telemetry", not(test)))]
 fn safe_contract_event_metric_label(event: &SafeContractEvents) -> &'static str {
@@ -34,232 +23,87 @@ fn safe_contract_event_metric_label(event: &SafeContractEvents) -> &'static str 
     }
 }
 
-fn to_hopr_contract_addresses(addresses: &BlokliContractAddresses) -> HoprContractAddresses {
-    HoprContractAddresses {
-        token: AlloyAddress::from_hopr_address(addresses.token),
-        channels: AlloyAddress::from_hopr_address(addresses.channels),
-        announcements: AlloyAddress::from_hopr_address(addresses.announcements),
-        module_implementation: AlloyAddress::from_hopr_address(addresses.module_implementation),
-        node_safe_migration: AlloyAddress::from_hopr_address(addresses.node_safe_migration),
-        node_safe_registry: AlloyAddress::from_hopr_address(addresses.node_safe_registry),
-        ticket_price_oracle: AlloyAddress::from_hopr_address(addresses.ticket_price_oracle),
-        winning_probability_oracle: AlloyAddress::from_hopr_address(addresses.winning_probability_oracle),
-        node_stake_factory: AlloyAddress::from_hopr_address(addresses.node_stake_factory),
-        xhopr_token: AlloyAddress::from_hopr_address(addresses.xhopr_token),
-        service_registry: AlloyAddress::from_hopr_address(addresses.service_registry),
-    }
-}
-
 impl<T, Db> ContractEventHandlers<T, Db>
 where
     T: blokli_chain_rpc::HoprIndexerRpcOperations + Clone + Send + 'static,
     Db: BlokliDbAllOperations + Clone,
 {
-    async fn maybe_record_rejected_ticket_redemption(
-        &self,
-        tx: &OpenTransaction,
-        safe_address: Address,
-        module_address: Address,
-        log: &Log,
-        prefetched: &PrefetchedTransactions,
-    ) -> Result<()> {
-        let Some(_) = self.db.get_safe_contract_by_address(Some(tx), safe_address).await? else {
-            warn!(safe_address = %safe_address, "Safe execution failure observed for unknown safe");
-            return Ok(());
-        };
-
-        let tx_hash = Hash::from(log.tx_hash);
-        // The bytes are normally pre-fetched concurrently before the block's database transaction
-        // is opened; falling back to a direct lookup covers a pre-fetch miss or failure.
-        let tx_bytes = match prefetched.get(&tx_hash) {
-            Some(bytes) => bytes.clone(),
-            None => self
-                ._rpc_operations
-                .get_transaction_bytes(tx_hash)
-                .await
-                .map_err(|error| {
-                    warn!(
-                        safe_address = %safe_address,
-                        tx_hash = %tx_hash,
-                        error = %error,
-                        "Failed to fetch Safe transaction bytes for rejection detection"
-                    );
-                    error
-                })?,
-        };
-
-        let contract_addresses = to_hopr_contract_addresses(self.addresses.as_ref());
-
-        match ParsedHoprChainAction::parse_from_eip2718(&tx_bytes, &module_address, &contract_addresses) {
-            Ok((ParsedHoprChainAction::RedeemTicket { ticket_amount, .. }, signer)) => {
-                self.db
-                    .record_safe_ticket_rejected(
-                        Some(tx),
-                        safe_address,
-                        signer,
-                        ticket_amount,
-                        u64_to_u32(log.block_number, "block_number")?,
-                        u64_to_u32(log.tx_index, "tx_index")?,
-                        u256_to_u32(log.log_index, "log_index")?,
-                    )
-                    .await?;
-
-                debug!(
-                    safe_address = %safe_address,
-                    node_address = %signer,
-                    module_address = %module_address,
-                    amount = %ticket_amount,
-                    tx_hash = %tx_hash,
-                    "Counted failed ticket redemption attempt in Safe rejection aggregates"
-                );
-            }
-            Ok((action, signer)) => {
-                debug!(
-                    safe_address = %safe_address,
-                    signer = %signer,
-                    ?action,
-                    tx_hash = %tx_hash,
-                    "Safe execution failure did not correspond to a ticket redemption attempt"
-                );
-            }
-            Err(error) => {
-                warn!(
-                    safe_address = %safe_address,
-                    tx_hash = %tx_hash,
-                    error = %error,
-                    "Failed to decode Safe execution failure"
-                );
-            }
-        }
-
-        Ok(())
+    /// Requests an owner snapshot of the Safe that covers `block`, without any RPC call.
+    ///
+    /// Block processing must not wait for the RPC node while its database transaction is open, so the read
+    /// is left to the background refresh task: the Safe is reported to it together with `block`, and the
+    /// task reads it pinned at a block at or above `block` (reads pinned below are dropped). Until the
+    /// snapshot is stored, live owner and threshold events of the Safe are skipped, because applying them
+    /// alone would produce an owner set that looks complete but is not.
+    ///
+    /// The report is made while the block is still being processed. Should the block's transaction roll
+    /// back, the Safe is read anyway (a harmless extra read) and the recorded block only delays the read
+    /// until the chain position has reached it.
+    pub(super) fn request_safe_owner_snapshot(&self, safe_address: Address, block: u64) {
+        self.indexer_state.record_safe_owner_event(safe_address, block);
+        self.indexer_state.mark_safe_owner_snapshot_pending(safe_address);
     }
 
-    /// Processes the Safe's own logs from the block in which the Safe was discovered.
+    /// Whether a live owner or threshold event in `block` must not be applied.
     ///
-    /// The logs are normally read by [`super::ContractEventHandlers::prefetch_chain_data`] before
-    /// the surrounding transaction is opened; a pre-fetch miss or failure falls back to a direct
-    /// read here, which keeps the outcome identical and only gives up the latency win.
-    ///
-    /// Storing the logs and marking them processed is deferred to
-    /// [`super::ContractEventHandlers::persist_backfilled_logs`], which runs once the surrounding
-    /// transaction has committed: these logs-database writes are not covered by that transaction,
-    /// so performing them here would leave them behind on a rollback.
-    pub(super) async fn backfill_safe_logs_in_discovery_block(
-        &self,
-        tx: &OpenTransaction,
-        safe_address: Address,
-        block: u64,
-        batch: &LogBatchContext,
-    ) -> Result<()> {
-        let safe_logs = match batch.safe_discovery_logs(safe_address, block) {
-            Some(prefetched) => prefetched.to_vec(),
-            None => self
-                ._rpc_operations
-                .get_logs_for_address(safe_address, crate::constants::topics::safe_contract(), block, block)
-                .await?
-                .into_iter()
-                .map(SerializableLog::from)
-                .collect(),
-        };
-
-        if safe_logs.is_empty() {
-            return Ok(());
+    /// * Safe with a snapshot at or above `block`: the snapshot already includes the event, skip it.
+    /// * Safe with an older snapshot: apply the event on top of it.
+    /// * Safe without a snapshot: skip the event and request a snapshot covering `block` (see
+    ///   [`Self::request_safe_owner_snapshot`]).
+    async fn skip_owner_event(&self, tx: &OpenTransaction, safe_address: Address, block: u64) -> Result<bool> {
+        match self.db.get_safe_owners_synced_block(Some(tx), safe_address).await? {
+            Some(synced_block) => Ok(block <= synced_block),
+            None => {
+                self.request_safe_owner_snapshot(safe_address, block);
+                Ok(true)
+            }
         }
-
-        for slog in safe_logs {
-            let log = Log::from(slog.clone());
-            let primitive_log = AlloyLog::new(
-                AlloyAddress::from_hopr_address(log.address),
-                log.topics.iter().map(|hash| B256::from_slice(hash.as_ref())).collect(),
-                log.data.clone().into(),
-            )
-            .ok_or_else(|| {
-                crate::errors::CoreEthereumIndexerError::ProcessError(format!(
-                    "failed to convert fetched Safe log to primitive log: {slog:?}"
-                ))
-            })?;
-
-            let event = SafeContractEvents::decode_log(&primitive_log)?;
-            debug!(
-                safe_address = %safe_address,
-                block = log.block_number,
-                tx_index = log.tx_index,
-                log_index = %log.log_index,
-                "Backfilling Safe discovery-block log"
-            );
-            self.on_safe_contract_event_with_prefetch(tx, safe_address, &log, event.data, false, batch.transactions())
-                .await?;
-            batch.record_backfilled_log(slog);
-        }
-
-        Ok(())
     }
 
-    /// Test-facing convenience wrapper that processes a Safe log without any pre-fetched data.
-    #[cfg(test)]
     pub(super) async fn on_safe_contract_event(
         &self,
         tx: &OpenTransaction,
-        safe_address: hopr_types::primitive::prelude::Address,
-        log: &Log,
-        event: SafeContractEvents,
-        is_synced: bool,
-    ) -> Result<Vec<IndexerEvent>> {
-        self.on_safe_contract_event_with_prefetch(
-            tx,
-            safe_address,
-            log,
-            event,
-            is_synced,
-            &PrefetchedTransactions::new(),
-        )
-        .await
-    }
-
-    pub(super) async fn on_safe_contract_event_with_prefetch(
-        &self,
-        tx: &OpenTransaction,
-        safe_address: hopr_types::primitive::prelude::Address,
+        safe_address: Address,
         log: &Log,
         event: SafeContractEvents,
         _is_synced: bool,
-        prefetched: &PrefetchedTransactions,
     ) -> Result<Vec<IndexerEvent>> {
         #[cfg(all(feature = "telemetry", not(test)))]
         increment_indexer_contract_log_count(safe_contract_event_metric_label(&event));
 
-        let chain_tx_hash = Hash::from(log.tx_hash);
         let log_index = u256_to_u64(log.log_index, "log_index")?;
+
+        // Owner and threshold events are only applied above the snapshot block of the Safe.
+        let owner_events = matches!(
+            event,
+            SafeContractEvents::SafeSetup(_)
+                | SafeContractEvents::AddedOwner(_)
+                | SafeContractEvents::RemovedOwner(_)
+                | SafeContractEvents::ChangedThreshold(_)
+        );
+        if owner_events {
+            // A refresh read pinned before this block does not contain the event.
+            self.indexer_state
+                .record_safe_owner_event(safe_address, log.block_number);
+        }
+        if owner_events && self.skip_owner_event(tx, safe_address, log.block_number).await? {
+            debug!(
+                safe_address = %safe_address,
+                block = log.block_number,
+                "Skipping Safe event covered by, or replaced with, an owner snapshot"
+            );
+            return Ok(Vec::new());
+        }
 
         match event {
             SafeContractEvents::SafeSetup(safe_setup) => {
                 let owner_count = safe_setup.owners.len();
-                let owners = safe_setup
-                    .owners
-                    .iter()
-                    .map(|owner| owner.to_hopr_address())
-                    .collect::<Vec<_>>();
-                self.db
-                    .record_safe_setup(
-                        Some(tx),
-                        safe_address,
-                        chain_tx_hash,
-                        owners.clone(),
-                        safe_setup.threshold.to_string(),
-                        Some(safe_setup.initiator.to_hopr_address()),
-                        log.block_number,
-                        log.tx_index,
-                        log_index,
-                    )
-                    .await?;
-
-                for owner in owners {
+                for owner in &safe_setup.owners {
                     self.db
                         .upsert_safe_owner_state(
                             Some(tx),
                             safe_address,
-                            owner,
+                            owner.to_hopr_address(),
                             true,
                             log.block_number,
                             log.tx_index,
@@ -267,6 +111,16 @@ where
                         )
                         .await?;
                 }
+                self.db
+                    .upsert_safe_threshold_state(
+                        Some(tx),
+                        safe_address,
+                        safe_setup.threshold.to_string(),
+                        log.block_number,
+                        log.tx_index,
+                        log_index,
+                    )
+                    .await?;
 
                 info!(
                     safe_address = %safe_address,
@@ -280,22 +134,6 @@ where
             }
             SafeContractEvents::AddedOwner(added_owner) => {
                 let owner = added_owner.owner.to_hopr_address();
-                self.db
-                    .record_safe_activity(
-                        Some(tx),
-                        safe_address,
-                        SafeActivityKind::AddedOwner,
-                        chain_tx_hash,
-                        None,
-                        Some(owner),
-                        None,
-                        None,
-                        None,
-                        log.block_number,
-                        log.tx_index,
-                        log_index,
-                    )
-                    .await?;
                 self.db
                     .upsert_safe_owner_state(
                         Some(tx),
@@ -319,22 +157,6 @@ where
             SafeContractEvents::RemovedOwner(removed_owner) => {
                 let owner = removed_owner.owner.to_hopr_address();
                 self.db
-                    .record_safe_activity(
-                        Some(tx),
-                        safe_address,
-                        SafeActivityKind::RemovedOwner,
-                        chain_tx_hash,
-                        None,
-                        Some(owner),
-                        None,
-                        None,
-                        None,
-                        log.block_number,
-                        log.tx_index,
-                        log_index,
-                    )
-                    .await?;
-                self.db
                     .upsert_safe_owner_state(
                         Some(tx),
                         safe_address,
@@ -356,16 +178,10 @@ where
             }
             SafeContractEvents::ChangedThreshold(changed_threshold) => {
                 self.db
-                    .record_safe_activity(
+                    .upsert_safe_threshold_state(
                         Some(tx),
                         safe_address,
-                        SafeActivityKind::ChangedThreshold,
-                        chain_tx_hash,
-                        None,
-                        None,
-                        Some(changed_threshold.threshold.to_string()),
-                        None,
-                        None,
+                        changed_threshold.threshold.to_string(),
                         log.block_number,
                         log.tx_index,
                         log_index,
@@ -380,71 +196,11 @@ where
                     "Persisted Safe ChangedThreshold event"
                 );
             }
-            SafeContractEvents::ExecutionSuccess(execution) => {
-                self.db
-                    .record_safe_activity(
-                        Some(tx),
-                        safe_address,
-                        SafeActivityKind::ExecutionSuccess,
-                        chain_tx_hash,
-                        Some(Hash::from(execution.txHash.0)),
-                        None,
-                        None,
-                        Some(execution.payment.to_string()),
-                        None,
-                        log.block_number,
-                        log.tx_index,
-                        log_index,
-                    )
-                    .await?;
-                info!(
-                    safe_address = %safe_address,
-                    safe_tx_hash = %Hash::from(execution.txHash.0),
-                    payment = %execution.payment.to_string(),
-                    block = log.block_number,
-                    tx_index = log.tx_index,
-                    log_index = %log.log_index,
-                    "Persisted Safe ExecutionSuccess event"
-                );
-            }
-            SafeContractEvents::ExecutionFailure(execution) => {
-                self.db
-                    .record_safe_activity(
-                        Some(tx),
-                        safe_address,
-                        SafeActivityKind::ExecutionFailure,
-                        chain_tx_hash,
-                        Some(Hash::from(execution.txHash.0)),
-                        None,
-                        None,
-                        Some(execution.payment.to_string()),
-                        None,
-                        log.block_number,
-                        log.tx_index,
-                        log_index,
-                    )
-                    .await?;
-                warn!(
-                    safe_address = %safe_address,
-                    safe_tx_hash = %Hash::from(execution.txHash.0),
-                    payment = %execution.payment.to_string(),
-                    block = log.block_number,
-                    tx_index = log.tx_index,
-                    log_index = %log.log_index,
-                    "Persisted Safe ExecutionFailure event"
-                );
-            }
-            SafeContractEvents::ExecutionFromModuleSuccess(_execution) => {}
-            SafeContractEvents::ExecutionFromModuleFailure(execution) => {
-                self.maybe_record_rejected_ticket_redemption(
-                    tx,
-                    safe_address,
-                    execution.module.to_hopr_address(),
-                    log,
-                    prefetched,
-                )
-                .await?;
-            }
+            // Not indexed: the Safe execution history has no reader and the topics are not requested.
+            SafeContractEvents::ExecutionSuccess(_)
+            | SafeContractEvents::ExecutionFailure(_)
+            | SafeContractEvents::ExecutionFromModuleSuccess(_)
+            | SafeContractEvents::ExecutionFromModuleFailure(_) => {}
         }
 
         Ok(Vec::new())
@@ -453,37 +209,27 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
+    use std::{iter::from_fn, sync::Arc};
 
-    use blokli_chain_rpc::{Log, errors::RpcError};
+    use blokli_chain_rpc::{HoprIndexerRpcOperations, Log, SafeOwnersSnapshot, errors::RpcError};
     use blokli_db::{
         BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations,
-        safe_history::BlokliDbSafeHistoryOperations, safe_redeemed_stats::BlokliDbSafeRedeemedStatsOperations,
+        safe_history::BlokliDbSafeHistoryOperations,
     };
     use blokli_db_entity::hopr_safe_contract::{Column as SafeContractColumn, Entity as SafeContractEntity};
-    use hopr_bindings::exports::alloy::primitives::U256 as AlloyU256;
-    use hopr_types::{
-        chain::prelude::{PayloadGenerator, SafePayloadGenerator, SignableTransaction},
-        crypto::{
-            keypairs::{ChainKeypair, Keypair},
-            types::{HalfKey, Response},
-        },
-        internal::tickets::TicketBuilder,
-        primitive::prelude::HoprBalance,
-    };
+    use hopr_bindings::exports::alloy::primitives::{Address as AlloyAddress, B256, U256 as AlloyU256};
+    use hopr_types::crypto::types::Hash;
     use primitive_types::U256 as PrimitiveU256;
     use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 
     use super::*;
     use crate::{
-        SafeTxPrefetchConfig,
         custom_abis::safe_contract_events::SafeContract,
         handlers::test_utils::test_helpers::{
-            ANNOUNCEMENTS_ADDR, CHANNELS_ADDR, ClonableMockOperations, MockIndexerRpcOperations,
-            NODE_SAFE_REGISTRY_ADDR, SELF_CHAIN_KEYPAIR, SERVICE_REGISTRY_ADDR, TICKET_PRICE_ORACLE_ADDR, TOKEN_ADDR,
-            WIN_PROB_ORACLE_ADDR, event_to_log_at_block, init_handlers, init_handlers_with_prefetch_config,
+            ClonableMockOperations, MockIndexerRpcOperations, init_handlers, init_handlers_with_events, try_recv_event,
         },
-        traits::{ChainLogHandler, PrefetchedLogData},
+        safe_owner_refresh::{SafeSnapshotRead, store_safe_owner_snapshot},
+        state::{IndexerEvent, IndexerState},
     };
 
     fn address_with_byte(byte: u8) -> Address {
@@ -492,55 +238,6 @@ mod tests {
 
     fn hash_with_byte(byte: u8) -> Hash {
         Hash::from([byte; 32])
-    }
-
-    fn alloy_address_with_byte(byte: u8) -> AlloyAddress {
-        AlloyAddress::from_hopr_address(address_with_byte(byte))
-    }
-
-    fn test_contract_addresses() -> HoprContractAddresses {
-        HoprContractAddresses {
-            channels: AlloyAddress::from_hopr_address(*CHANNELS_ADDR),
-            token: AlloyAddress::from_hopr_address(*TOKEN_ADDR),
-            node_safe_registry: AlloyAddress::from_hopr_address(*NODE_SAFE_REGISTRY_ADDR),
-            announcements: AlloyAddress::from_hopr_address(*ANNOUNCEMENTS_ADDR),
-            module_implementation: alloy_address_with_byte(0),
-            node_safe_migration: alloy_address_with_byte(0),
-            ticket_price_oracle: AlloyAddress::from_hopr_address(*TICKET_PRICE_ORACLE_ADDR),
-            winning_probability_oracle: AlloyAddress::from_hopr_address(*WIN_PROB_ORACLE_ADDR),
-            node_stake_factory: alloy_address_with_byte(0),
-            xhopr_token: alloy_address_with_byte(0),
-            service_registry: AlloyAddress::from_hopr_address(*SERVICE_REGISTRY_ADDR),
-        }
-    }
-
-    async fn build_redeem_ticket_tx_bytes(
-        issuer: &ChainKeypair,
-        redeemer: &ChainKeypair,
-        module_address: Address,
-        contract_addresses: HoprContractAddresses,
-        amount: u32,
-        ticket_index: u64,
-    ) -> anyhow::Result<Vec<u8>> {
-        let issuer_half_key = HalfKey::try_from(issuer.secret().as_ref())?;
-        let redeemer_half_key = HalfKey::try_from(redeemer.secret().as_ref())?;
-        let response = Response::from_half_keys(&issuer_half_key, &redeemer_half_key)?;
-
-        let ticket = TicketBuilder::default()
-            .counterparty(redeemer.public().to_address())
-            .amount(amount)
-            .index(ticket_index)
-            .challenge(response.to_challenge()?)
-            .build_signed(issuer, &Hash::default())?
-            .into_acknowledged(response)
-            .into_redeemable(redeemer, &Hash::default())?;
-
-        let payload = SafePayloadGenerator::new(redeemer, contract_addresses, module_address).redeem_ticket(ticket)?;
-
-        Ok(payload
-            .sign_and_encode_to_eip2718(1, 1, None, redeemer)
-            .await?
-            .into_vec())
     }
 
     fn test_rpc_log(safe_address: Address, block_number: u64, tx_index: u64, log_index: u64) -> Log {
@@ -557,38 +254,32 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_on_safe_contract_event_safe_setup_persists_owners_and_threshold() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory().await?;
-        let handlers = init_handlers(
-            ClonableMockOperations {
-                inner: Arc::new(MockIndexerRpcOperations::new()),
-            },
-            db.clone(),
-        );
-
-        let safe_address = address_with_byte(1);
-        let module_address = address_with_byte(2);
-        let chain_key = address_with_byte(3);
-        let initiator = address_with_byte(4);
-        let owner_one = address_with_byte(5);
-        let owner_two = address_with_byte(6);
-
-        db.create_safe_contract(None, safe_address, module_address, chain_key, 100, 0, 0)
+    async fn setup_safe(db: &BlokliDb, safe_address: Address) -> anyhow::Result<()> {
+        db.create_safe_contract(
+            None,
+            safe_address,
+            address_with_byte(2),
+            address_with_byte(3),
+            100,
+            0,
+            0,
+        )
+        .await?;
+        // Live events only apply on top of a snapshot.
+        db.apply_safe_owner_snapshot(None, safe_address, vec![], "1".into(), 100)
             .await?;
+        Ok(())
+    }
 
-        let event = SafeContractEvents::SafeSetup(SafeContract::SafeSetup {
-            initiator: AlloyAddress::from_hopr_address(initiator),
-            owners: vec![
-                AlloyAddress::from_hopr_address(owner_one),
-                AlloyAddress::from_hopr_address(owner_two),
-            ],
-            threshold: AlloyU256::from(2_u64),
-            initializer: AlloyAddress::ZERO,
-            fallbackHandler: AlloyAddress::ZERO,
-        });
-        let log = test_rpc_log(safe_address, 101, 4, 7);
-
+    async fn apply(
+        handlers: ContractEventHandlers<ClonableMockOperations, BlokliDb>,
+        db: &BlokliDb,
+        safe_address: Address,
+        block: u64,
+        tx_index: u64,
+        event: SafeContractEvents,
+    ) -> anyhow::Result<()> {
+        let log = test_rpc_log(safe_address, block, tx_index, 0);
         db.begin_transaction()
             .await?
             .perform(|tx| {
@@ -599,107 +290,145 @@ mod tests {
                 })
             })
             .await?;
+        Ok(())
+    }
 
-        let mut owners = db.get_safe_owners(None, safe_address).await?;
-        owners.sort_unstable();
-        let mut expected = vec![owner_one, owner_two];
-        expected.sort_unstable();
-        assert_eq!(owners, expected);
+    fn added(owner: Address) -> SafeContractEvents {
+        SafeContractEvents::AddedOwner(SafeContract::AddedOwner {
+            owner: AlloyAddress::from_hopr_address(owner),
+        })
+    }
 
-        let activity = db.get_safe_activity(None, safe_address).await?;
-        assert_eq!(activity.len(), 1);
-        assert_eq!(activity[0].event_kind, "SAFE_SETUP");
-        assert_eq!(activity[0].threshold.as_deref(), Some("2"));
-        assert_eq!(activity[0].initiator_address, Some(initiator.as_ref().to_vec()));
+    fn removed(owner: Address) -> SafeContractEvents {
+        SafeContractEvents::RemovedOwner(SafeContract::RemovedOwner {
+            owner: AlloyAddress::from_hopr_address(owner),
+        })
+    }
+
+    fn handlers_for(db: &BlokliDb) -> ContractEventHandlers<ClonableMockOperations, BlokliDb> {
+        init_handlers(
+            ClonableMockOperations {
+                inner: Arc::new(MockIndexerRpcOperations::new()),
+            },
+            db.clone(),
+        )
+    }
+
+    #[tokio::test]
+    async fn test_safe_setup_persists_owners_and_threshold() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe_address = address_with_byte(1);
+        setup_safe(&db, safe_address).await?;
+        let (owner_one, owner_two) = (address_with_byte(5), address_with_byte(6));
+
+        let event = SafeContractEvents::SafeSetup(SafeContract::SafeSetup {
+            initiator: AlloyAddress::from_hopr_address(address_with_byte(4)),
+            owners: vec![
+                AlloyAddress::from_hopr_address(owner_one),
+                AlloyAddress::from_hopr_address(owner_two),
+            ],
+            threshold: AlloyU256::from(2_u64),
+            initializer: AlloyAddress::ZERO,
+            fallbackHandler: AlloyAddress::ZERO,
+        });
+        apply(handlers_for(&db), &db, safe_address, 101, 4, event).await?;
+
+        assert_eq!(
+            db.get_safe_owners(None, safe_address).await?,
+            vec![owner_one, owner_two]
+        );
+        assert_eq!(db.get_safe_threshold(None, safe_address).await?.as_deref(), Some("2"));
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_on_safe_contract_event_tracks_owner_updates_threshold_and_execution() -> anyhow::Result<()> {
+    async fn test_live_events_apply_above_the_snapshot_block_only() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
-        let handlers = init_handlers(
-            ClonableMockOperations {
-                inner: Arc::new(MockIndexerRpcOperations::new()),
-            },
-            db.clone(),
-        );
-
         let safe_address = address_with_byte(11);
-        let module_address = address_with_byte(12);
-        let chain_key = address_with_byte(13);
-        let owner = address_with_byte(14);
-        let safe_tx_hash = hash_with_byte(15);
+        setup_safe(&db, safe_address).await?;
+        let (kept, ignored, applied) = (address_with_byte(14), address_with_byte(15), address_with_byte(16));
 
-        db.create_safe_contract(None, safe_address, module_address, chain_key, 100, 0, 0)
+        db.apply_safe_owner_snapshot(None, safe_address, vec![kept], "1".into(), 200)
             .await?;
 
-        db.begin_transaction()
-            .await?
-            .perform(|tx| {
-                Box::pin(async move {
-                    handlers
-                        .on_safe_contract_event(
-                            tx,
-                            safe_address,
-                            &test_rpc_log(safe_address, 101, 0, 0),
-                            SafeContractEvents::AddedOwner(SafeContract::AddedOwner {
-                                owner: AlloyAddress::from_hopr_address(owner),
-                            }),
-                            true,
-                        )
-                        .await?;
-                    handlers
-                        .on_safe_contract_event(
-                            tx,
-                            safe_address,
-                            &test_rpc_log(safe_address, 102, 0, 0),
-                            SafeContractEvents::ChangedThreshold(SafeContract::ChangedThreshold {
-                                threshold: AlloyU256::from(3_u64),
-                            }),
-                            true,
-                        )
-                        .await?;
-                    handlers
-                        .on_safe_contract_event(
-                            tx,
-                            safe_address,
-                            &test_rpc_log(safe_address, 103, 0, 0),
-                            SafeContractEvents::ExecutionSuccess(SafeContract::ExecutionSuccess {
-                                txHash: B256::from_slice(safe_tx_hash.as_ref()),
-                                payment: AlloyU256::from(12_u64),
-                            }),
-                            true,
-                        )
-                        .await?;
-                    handlers
-                        .on_safe_contract_event(
-                            tx,
-                            safe_address,
-                            &test_rpc_log(safe_address, 104, 0, 0),
-                            SafeContractEvents::RemovedOwner(SafeContract::RemovedOwner {
-                                owner: AlloyAddress::from_hopr_address(owner),
-                            }),
-                            true,
-                        )
-                        .await
-                })
-            })
-            .await?;
+        // At and below the snapshot block: ignored.
+        apply(handlers_for(&db), &db, safe_address, 200, 3, added(ignored)).await?;
+        apply(handlers_for(&db), &db, safe_address, 150, 0, removed(kept)).await?;
+        apply(
+            handlers_for(&db),
+            &db,
+            safe_address,
+            200,
+            4,
+            SafeContractEvents::ChangedThreshold(SafeContract::ChangedThreshold {
+                threshold: AlloyU256::from(9_u64),
+            }),
+        )
+        .await?;
+        assert_eq!(db.get_safe_owners(None, safe_address).await?, vec![kept]);
+        assert_eq!(db.get_safe_threshold(None, safe_address).await?.as_deref(), Some("1"));
 
-        let owners = db.get_safe_owners(None, safe_address).await?;
-        assert!(owners.is_empty(), "removed owner should no longer be current");
+        // Above it: applied.
+        apply(handlers_for(&db), &db, safe_address, 201, 0, added(applied)).await?;
+        apply(
+            handlers_for(&db),
+            &db,
+            safe_address,
+            202,
+            0,
+            SafeContractEvents::ChangedThreshold(SafeContract::ChangedThreshold {
+                threshold: AlloyU256::from(2_u64),
+            }),
+        )
+        .await?;
+        let mut expected = vec![kept, applied];
+        expected.sort();
+        assert_eq!(db.get_safe_owners(None, safe_address).await?, expected);
+        assert_eq!(db.get_safe_threshold(None, safe_address).await?.as_deref(), Some("2"));
 
-        let activity = db.get_safe_activity(None, safe_address).await?;
-        assert_eq!(activity.len(), 4);
-        assert_eq!(activity[0].event_kind, "ADDED_OWNER");
-        assert_eq!(activity[0].owner_address, Some(owner.as_ref().to_vec()));
-        assert_eq!(activity[1].event_kind, "CHANGED_THRESHOLD");
-        assert_eq!(activity[1].threshold.as_deref(), Some("3"));
-        assert_eq!(activity[2].event_kind, "EXECUTION_SUCCESS");
-        assert_eq!(activity[2].safe_tx_hash, Some(safe_tx_hash.as_ref().to_vec()));
-        assert_eq!(activity[2].payment.as_deref(), Some("12"));
-        assert_eq!(activity[3].event_kind, "REMOVED_OWNER");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_replayed_added_owner_after_removal_does_not_restore_the_owner() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe_address = address_with_byte(21);
+        setup_safe(&db, safe_address).await?;
+        let owner = address_with_byte(22);
+
+        apply(handlers_for(&db), &db, safe_address, 101, 0, added(owner)).await?;
+        apply(handlers_for(&db), &db, safe_address, 104, 0, removed(owner)).await?;
+        assert!(db.get_safe_owners(None, safe_address).await?.is_empty());
+
+        // The same AddedOwner is delivered again after the removal.
+        apply(handlers_for(&db), &db, safe_address, 101, 0, added(owner)).await?;
+        assert!(db.get_safe_owners(None, safe_address).await?.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_execution_events_are_not_persisted() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe_address = address_with_byte(31);
+        setup_safe(&db, safe_address).await?;
+
+        apply(
+            handlers_for(&db),
+            &db,
+            safe_address,
+            101,
+            0,
+            SafeContractEvents::ExecutionSuccess(SafeContract::ExecutionSuccess {
+                txHash: B256::from_slice(hash_with_byte(15).as_ref()),
+                payment: AlloyU256::from(12_u64),
+            }),
+        )
+        .await?;
+
+        assert!(db.get_safe_owners(None, safe_address).await?.is_empty());
+        assert_eq!(db.get_safe_threshold(None, safe_address).await?.as_deref(), Some("1"));
 
         let safe_count = SafeContractEntity::find()
             .filter(SafeContractColumn::Address.eq(safe_address.as_ref().to_vec()))
@@ -711,368 +440,260 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_on_safe_contract_event_records_rejected_ticket_redemption_from_module_failure() -> anyhow::Result<()>
-    {
-        let db = BlokliDb::new_in_memory().await?;
-        let safe_address = address_with_byte(31);
-        let stored_module_address = address_with_byte(32);
-        let event_module_address = address_with_byte(33);
-        let issuer = ChainKeypair::from_secret(&[41_u8; 32])?;
-        let redeemer = SELF_CHAIN_KEYPAIR.clone();
-        let contract_addresses = test_contract_addresses();
-        let tx_bytes =
-            build_redeem_ticket_tx_bytes(&issuer, &redeemer, event_module_address, contract_addresses, 7, 3).await?;
-
+    async fn test_default_batch_read_reports_failures_per_safe_in_input_order() -> anyhow::Result<()> {
+        let (ok_safe, bad_safe) = (address_with_byte(61), address_with_byte(62));
+        let owner = address_with_byte(63);
         let mut rpc = MockIndexerRpcOperations::new();
-        rpc.expect_get_transaction_bytes()
-            .once()
-            .return_once(move |_| Ok(tx_bytes));
-
-        let handlers = init_handlers(ClonableMockOperations { inner: Arc::new(rpc) }, db.clone());
-
-        db.create_safe_contract(
-            None,
-            safe_address,
-            stored_module_address,
-            redeemer.public().to_address(),
-            100,
-            0,
-            0,
-        )
-        .await?;
-
-        let log = test_rpc_log(safe_address, 105, 2, 9);
-        db.begin_transaction()
-            .await?
-            .perform(|tx| {
-                Box::pin(async move {
-                    handlers
-                        .on_safe_contract_event(
-                            tx,
-                            safe_address,
-                            &log,
-                            SafeContractEvents::ExecutionFromModuleFailure(SafeContract::ExecutionFromModuleFailure {
-                                module: AlloyAddress::from_hopr_address(event_module_address),
-                            }),
-                            true,
-                        )
-                        .await
+        rpc.expect_get_safe_owners_and_threshold().returning(move |safe, _| {
+            if safe == bad_safe {
+                Err(RpcError::Other("execution reverted".into()))
+            } else {
+                Ok(SafeOwnersSnapshot {
+                    owners: vec![owner],
+                    threshold: 1,
                 })
-            })
-            .await?;
-
-        let stats = db
-            .get_aggregated_redeemed_stats(Some(safe_address), Some(redeemer.public().to_address()))
-            .await?;
-        assert_eq!(stats.redemption_count, 0);
-        assert_eq!(stats.redeemed_amount, HoprBalance::zero());
-        assert_eq!(stats.rejection_count, 1);
-        assert_eq!(stats.rejected_amount, HoprBalance::from(7_u64));
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_collect_log_events_prefetches_each_transaction_only_once() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory().await?;
-        let safe_address = address_with_byte(35);
-        let module_address = address_with_byte(36);
-        let issuer = ChainKeypair::from_secret(&[43_u8; 32])?;
-        let redeemer = SELF_CHAIN_KEYPAIR.clone();
-        let tx_hash = hash_with_byte(92);
-        let tx_bytes =
-            build_redeem_ticket_tx_bytes(&issuer, &redeemer, module_address, test_contract_addresses(), 7, 3).await?;
-
-        // Both failure logs share a transaction hash, so the pre-fetch must de-duplicate them into
-        // a single batched RPC round-trip performed before the database transaction is opened.
-        let mut rpc = MockIndexerRpcOperations::new();
-        rpc.expect_get_transaction_bytes_batch()
-            .times(1)
-            .withf(move |tx_hashes| tx_hashes == [tx_hash])
-            .returning(move |_| vec![Ok(tx_bytes.clone())]);
-        rpc.expect_get_transaction_bytes().never();
-
-        let handlers = init_handlers(ClonableMockOperations { inner: Arc::new(rpc) }, db.clone());
-
-        db.create_safe_contract(
-            None,
-            safe_address,
-            module_address,
-            redeemer.public().to_address(),
-            100,
-            0,
-            0,
-        )
-        .await?;
-
-        let logs = [0_u64, 1]
-            .into_iter()
-            .map(|log_index| {
-                let mut slog = event_to_log_at_block(
-                    SafeContract::ExecutionFromModuleFailure {
-                        module: AlloyAddress::from_hopr_address(module_address),
-                    },
-                    safe_address,
-                    105,
-                    0,
-                    log_index,
-                );
-                slog.tx_hash = tx_hash.into();
-                slog
-            })
-            .collect::<Vec<_>>();
-
-        handlers
-            .collect_log_events(logs, true, PrefetchedLogData::default())
-            .await?;
-
-        let stats = db
-            .get_aggregated_redeemed_stats(Some(safe_address), Some(redeemer.public().to_address()))
-            .await?;
-        assert_eq!(stats.rejection_count, 2);
-        assert_eq!(stats.rejected_amount, HoprBalance::from(14_u64));
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_prefetch_requests_draw_from_a_shared_concurrency_budget() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory().await?;
-        let safe_address = address_with_byte(41);
-        let module_address = address_with_byte(42);
-
-        let mut rpc = MockIndexerRpcOperations::new();
-        rpc.expect_get_transaction_bytes_batch()
-            .returning(|tx_hashes| tx_hashes.iter().map(|_| Ok(Vec::new())).collect());
-
-        let handlers = init_handlers_with_prefetch_config(
-            ClonableMockOperations { inner: Arc::new(rpc) },
-            db.clone(),
-            SafeTxPrefetchConfig {
-                batch_size: 1,
-                concurrency: 1,
-            },
-        );
-
-        let mut slog = event_to_log_at_block(
-            SafeContract::ExecutionFromModuleFailure {
-                module: AlloyAddress::from_hopr_address(module_address),
-            },
-            safe_address,
-            120,
-            0,
-            0,
-        );
-        slog.tx_hash = hash_with_byte(41).into();
-
-        // The budget belongs to the handlers, not to one pre-fetch call: holding its only permit
-        // stalls a pre-fetch that another block would otherwise run right away. Without a shared
-        // pool, every concurrently pre-fetched block would get a full budget of its own.
-        let permit = handlers.prefetch_limiter.acquire_arc().await;
-
-        let mut prefetch = tokio::spawn({
-            let handlers = handlers.clone();
-            let slog = slog.clone();
-            async move { handlers.prefetch_log_data(&[slog], true).await }
+            }
         });
-        assert!(
-            tokio::time::timeout(Duration::from_millis(200), &mut prefetch)
-                .await
-                .is_err(),
-            "the pre-fetch should wait for a permit from the shared budget"
-        );
+        let rpc = ClonableMockOperations { inner: Arc::new(rpc) };
 
-        drop(permit);
-        let prefetched = tokio::time::timeout(Duration::from_secs(5), prefetch).await??;
-        assert_eq!(prefetched.transactions.len(), 1);
+        let results = rpc.get_safe_owners_and_thresholds(vec![bad_safe, ok_safe], 10).await?;
+
+        assert_eq!(results.len(), 2);
+        assert!(results[0].is_err());
+        assert_eq!(results[1].as_ref().expect("ok").owners, vec![owner]);
+
+        Ok(())
+    }
+    async fn pending_safe(db: &BlokliDb, byte: u8) -> anyhow::Result<Address> {
+        let safe_address = address_with_byte(byte);
+        db.create_safe_contract(
+            None,
+            safe_address,
+            address_with_byte(2),
+            address_with_byte(3),
+            100,
+            0,
+            0,
+        )
+        .await?;
+        Ok(safe_address)
+    }
+
+    #[tokio::test]
+    async fn test_stale_refresh_read_is_dropped_after_a_skipped_owner_event() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe_address = pending_safe(&db, 74).await?;
+        let (removed_owner, kept_owner) = (address_with_byte(75), address_with_byte(76));
+
+        // No RPC expectation: the handler must not call the node while its transaction is open.
+        let rpc = MockIndexerRpcOperations::new();
+        let (handlers, state, _events) =
+            init_handlers_with_events(ClonableMockOperations { inner: Arc::new(rpc) }, db.clone());
+
+        apply(handlers, &db, safe_address, 201, 0, removed(removed_owner)).await?;
+        // The event was skipped (the Safe has no snapshot) and the Safe reported to the refresh task.
+        assert_eq!(state.take_pending_safe_owner_snapshots(), vec![safe_address]);
+
+        let stale_read = SafeSnapshotRead {
+            safe_address,
+            block: 200,
+            snapshot: SafeOwnersSnapshot {
+                owners: vec![removed_owner, kept_owner],
+                threshold: 1,
+            },
+        };
+        store_safe_owner_snapshot(&db, &state, stale_read).await;
+
+        // The block-200 result does not contain the removal at 201: it is not stored and the Safe is
+        // reported again to be read at a newer block.
+        assert!(db.get_safe_owners(None, safe_address).await?.is_empty());
+        assert_eq!(db.get_safe_owners_synced_block(None, safe_address).await?, None);
+        assert_eq!(state.take_pending_safe_owner_snapshots(), vec![safe_address]);
+
+        // A read pinned at or above the event block is stored.
+        let fresh_read = SafeSnapshotRead {
+            safe_address,
+            block: 202,
+            snapshot: SafeOwnersSnapshot {
+                owners: vec![kept_owner],
+                threshold: 1,
+            },
+        };
+        store_safe_owner_snapshot(&db, &state, fresh_read).await;
+        assert_eq!(db.get_safe_owners(None, safe_address).await?, vec![kept_owner]);
+        assert_eq!(state.safe_owner_event_block(safe_address), None);
+
+        Ok(())
+    }
+
+    fn read_at(safe_address: Address, block: u64) -> SafeSnapshotRead {
+        SafeSnapshotRead {
+            safe_address,
+            block,
+            snapshot: SafeOwnersSnapshot {
+                owners: vec![address_with_byte(95)],
+                threshold: 1,
+            },
+        }
+    }
+
+    fn deployed_announcements(events: &mut async_broadcast::Receiver<Arc<IndexerEvent>>) -> Vec<Address> {
+        from_fn(|| try_recv_event(events))
+            .filter_map(|event| match event {
+                IndexerEvent::SafeDeployed(address) => Some(address),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_deployment_is_not_announced_for_a_dropped_read() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe_address = pending_safe(&db, 80).await?;
+        let state = IndexerState::default();
+        let mut events = state.subscribe_to_events();
+
+        state.mark_safe_awaiting_deployment_announcement(safe_address);
+        state.record_safe_owner_event(safe_address, 201);
+
+        // The read predates a processed owner event: it is dropped and nothing is announced.
+        store_safe_owner_snapshot(&db, &state, read_at(safe_address, 200)).await;
+        assert!(deployed_announcements(&mut events).is_empty());
+
+        // The flag stays until a snapshot is stored.
+        store_safe_owner_snapshot(&db, &state, read_at(safe_address, 202)).await;
+        assert_eq!(deployed_announcements(&mut events), vec![safe_address]);
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_collect_log_events_honours_configured_prefetch_batch_size() -> anyhow::Result<()> {
+    async fn test_deployment_is_not_announced_for_a_failed_store() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
-        let safe_address = address_with_byte(39);
-        let module_address = address_with_byte(40);
-        let issuer = ChainKeypair::from_secret(&[45_u8; 32])?;
-        let redeemer = SELF_CHAIN_KEYPAIR.clone();
-        let tx_bytes =
-            build_redeem_ticket_tx_bytes(&issuer, &redeemer, module_address, test_contract_addresses(), 1, 6).await?;
+        // The Safe is not in the database yet, so storing its snapshot fails.
+        let safe_address = address_with_byte(81);
+        let state = IndexerState::default();
+        let mut events = state.subscribe_to_events();
 
-        // A batch size of one must split three distinct hashes across three requests.
-        let mut rpc = MockIndexerRpcOperations::new();
-        rpc.expect_get_transaction_bytes_batch()
-            .times(3)
-            .withf(|tx_hashes| tx_hashes.len() == 1)
-            .returning(move |_| vec![Ok(tx_bytes.clone())]);
+        state.mark_safe_awaiting_deployment_announcement(safe_address);
+        store_safe_owner_snapshot(&db, &state, read_at(safe_address, 200)).await;
+        assert!(deployed_announcements(&mut events).is_empty());
 
-        let handlers = init_handlers_with_prefetch_config(
-            ClonableMockOperations { inner: Arc::new(rpc) },
+        db.create_safe_contract(
+            None,
+            safe_address,
+            address_with_byte(2),
+            address_with_byte(3),
+            100,
+            0,
+            0,
+        )
+        .await?;
+        store_safe_owner_snapshot(&db, &state, read_at(safe_address, 201)).await;
+        assert_eq!(deployed_announcements(&mut events), vec![safe_address]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_deployment_is_not_announced_for_an_unflagged_safe() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe_address = pending_safe(&db, 82).await?;
+        let state = IndexerState::default();
+        let mut events = state.subscribe_to_events();
+
+        store_safe_owner_snapshot(&db, &state, read_at(safe_address, 200)).await;
+        assert!(deployed_announcements(&mut events).is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_discovery_requests_a_snapshot_without_calling_rpc() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe_address = pending_safe(&db, 77).await?;
+
+        // A mock without expectations panics on any RPC call.
+        let (handlers, state, _events) = init_handlers_with_events(
+            ClonableMockOperations {
+                inner: Arc::new(MockIndexerRpcOperations::new()),
+            },
             db.clone(),
-            SafeTxPrefetchConfig {
-                batch_size: 1,
-                concurrency: 2,
-            },
         );
 
-        db.create_safe_contract(
-            None,
-            safe_address,
-            module_address,
-            redeemer.public().to_address(),
-            100,
-            0,
-            0,
-        )
-        .await?;
+        handlers.request_safe_owner_snapshot(safe_address, 120);
 
-        let logs = [0_u64, 1, 2]
-            .into_iter()
-            .map(|index| {
-                let mut slog = event_to_log_at_block(
-                    SafeContract::ExecutionFromModuleFailure {
-                        module: AlloyAddress::from_hopr_address(module_address),
-                    },
-                    safe_address,
-                    107,
-                    index,
-                    index,
-                );
-                slog.tx_hash = hash_with_byte(100 + index as u8).into();
-                slog
-            })
-            .collect::<Vec<_>>();
-
-        handlers
-            .collect_log_events(logs, true, PrefetchedLogData::default())
-            .await?;
-
-        let stats = db
-            .get_aggregated_redeemed_stats(Some(safe_address), Some(redeemer.public().to_address()))
-            .await?;
-        assert_eq!(stats.rejection_count, 3);
+        assert_eq!(state.take_pending_safe_owner_snapshots(), vec![safe_address]);
+        assert_eq!(state.safe_owner_event_block(safe_address), Some(120));
+        assert_eq!(state.unsynced_safe_owner_snapshots(), 1);
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_collect_log_events_reuses_pipeline_prefetched_transactions() -> anyhow::Result<()> {
+    async fn test_event_for_a_safe_without_snapshot_is_skipped_without_rpc() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
-        let safe_address = address_with_byte(37);
-        let module_address = address_with_byte(38);
-        let issuer = ChainKeypair::from_secret(&[44_u8; 32])?;
-        let redeemer = SELF_CHAIN_KEYPAIR.clone();
-        let tx_hash = hash_with_byte(93);
-        let tx_bytes =
-            build_redeem_ticket_tx_bytes(&issuer, &redeemer, module_address, test_contract_addresses(), 5, 4).await?;
-
-        // The block pipeline already fetched this transaction, so processing must not go to the
-        // chain again.
-        let mut rpc = MockIndexerRpcOperations::new();
-        rpc.expect_get_transaction_bytes_batch().never();
-        rpc.expect_get_transaction_bytes().never();
-
-        let handlers = init_handlers(ClonableMockOperations { inner: Arc::new(rpc) }, db.clone());
-
-        db.create_safe_contract(
-            None,
-            safe_address,
-            module_address,
-            redeemer.public().to_address(),
-            100,
-            0,
-            0,
-        )
-        .await?;
-
-        let mut slog = event_to_log_at_block(
-            SafeContract::ExecutionFromModuleFailure {
-                module: AlloyAddress::from_hopr_address(module_address),
+        let safe_address = pending_safe(&db, 78).await?;
+        let (handlers, state, _events) = init_handlers_with_events(
+            ClonableMockOperations {
+                inner: Arc::new(MockIndexerRpcOperations::new()),
             },
-            safe_address,
-            106,
-            0,
-            0,
+            db.clone(),
         );
-        slog.tx_hash = tx_hash.into();
 
-        handlers
-            .collect_log_events(
-                vec![slog],
-                true,
-                PrefetchedTransactions::from([(tx_hash, tx_bytes)]).into(),
-            )
-            .await?;
+        apply(handlers, &db, safe_address, 130, 0, added(address_with_byte(79))).await?;
 
-        let stats = db
-            .get_aggregated_redeemed_stats(Some(safe_address), Some(redeemer.public().to_address()))
-            .await?;
-        assert_eq!(stats.rejection_count, 1);
-        assert_eq!(stats.rejected_amount, HoprBalance::from(5_u64));
+        assert!(
+            db.get_safe_owners(None, safe_address).await?.is_empty(),
+            "no partial owner set"
+        );
+        assert_eq!(db.get_safe_owners_synced_block(None, safe_address).await?, None);
+        assert_eq!(state.take_pending_safe_owner_snapshots(), vec![safe_address]);
+        assert_eq!(state.safe_owner_event_block(safe_address), Some(130));
+
+        // The record is only forgotten once a snapshot covering the event is stored, not by the handler.
+        let covering_read = SafeSnapshotRead {
+            safe_address,
+            block: 131,
+            snapshot: SafeOwnersSnapshot {
+                owners: vec![address_with_byte(79)],
+                threshold: 1,
+            },
+        };
+        store_safe_owner_snapshot(&db, &state, covering_read).await;
+        assert_eq!(
+            db.get_safe_owners(None, safe_address).await?,
+            vec![address_with_byte(79)]
+        );
+        assert_eq!(state.safe_owner_event_block(safe_address), None);
+        assert_eq!(state.unsynced_safe_owner_snapshots(), 0);
 
         Ok(())
     }
-
+    /// The live owner-event guard and the position-guarded writes on a real PostgreSQL.
     #[tokio::test]
-    async fn test_on_safe_contract_event_returns_error_on_rejected_ticket_redemption_rpc_miss() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory().await?;
-        let safe_address = address_with_byte(33);
-        let module_address = address_with_byte(34);
-        let redeemer = SELF_CHAIN_KEYPAIR.clone();
-        let tx_hash = Hash::from([91_u8; 32]);
+    #[ignore = "needs PostgreSQL, run with `just test-postgres-schema`"]
+    async fn test_postgres_live_events_apply_above_the_snapshot_block_only() -> anyhow::Result<()> {
+        let scratch = crate::test_postgres::ScratchPostgres::create().await?;
+        let db = scratch.db.clone();
+        let safe_address = address_with_byte(91);
+        setup_safe(&db, safe_address).await?;
+        let (kept, ignored, applied) = (address_with_byte(92), address_with_byte(93), address_with_byte(94));
 
-        let mut rpc = MockIndexerRpcOperations::new();
-        rpc.expect_get_transaction_bytes()
-            .once()
-            .with(mockall::predicate::eq(tx_hash))
-            .return_once(move |_| Err(RpcError::TransactionNotFound(tx_hash)));
-
-        let handlers = init_handlers(ClonableMockOperations { inner: Arc::new(rpc) }, db.clone());
-
-        db.create_safe_contract(
-            None,
-            safe_address,
-            module_address,
-            redeemer.public().to_address(),
-            100,
-            0,
-            0,
-        )
-        .await?;
-
-        let mut log = test_rpc_log(safe_address, 105, 2, 9);
-        log.tx_hash = tx_hash.into();
-
-        let result = db
-            .begin_transaction()
-            .await?
-            .perform(|tx| {
-                Box::pin(async move {
-                    handlers
-                        .on_safe_contract_event(
-                            tx,
-                            safe_address,
-                            &log,
-                            SafeContractEvents::ExecutionFromModuleFailure(SafeContract::ExecutionFromModuleFailure {
-                                module: AlloyAddress::from_hopr_address(module_address),
-                            }),
-                            true,
-                        )
-                        .await
-                })
-            })
-            .await;
-
-        assert!(result.is_err(), "RPC failures must leave the log unprocessed for retry");
-
-        let stats = db
-            .get_aggregated_redeemed_stats(Some(safe_address), Some(redeemer.public().to_address()))
+        db.apply_safe_owner_snapshot(None, safe_address, vec![kept], "1".into(), 200)
             .await?;
-        assert_eq!(stats.redemption_count, 0);
-        assert_eq!(stats.redeemed_amount, HoprBalance::zero());
-        assert_eq!(stats.rejection_count, 0);
-        assert_eq!(stats.rejected_amount, HoprBalance::zero());
 
-        Ok(())
+        // At and below the snapshot block: ignored.
+        apply(handlers_for(&db), &db, safe_address, 200, 3, added(ignored)).await?;
+        apply(handlers_for(&db), &db, safe_address, 150, 0, removed(kept)).await?;
+        assert_eq!(db.get_safe_owners(None, safe_address).await?, vec![kept]);
+
+        // Above it: applied, and a replay of an older event afterwards does not undo it.
+        apply(handlers_for(&db), &db, safe_address, 201, 0, added(applied)).await?;
+        apply(handlers_for(&db), &db, safe_address, 202, 0, removed(applied)).await?;
+        apply(handlers_for(&db), &db, safe_address, 201, 0, added(applied)).await?;
+        assert_eq!(db.get_safe_owners(None, safe_address).await?, vec![kept]);
+
+        scratch.drop_database().await
     }
 }

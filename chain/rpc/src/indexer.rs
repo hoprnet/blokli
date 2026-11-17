@@ -7,20 +7,26 @@
 //! historical blockchain data.
 //!
 //! For details on the Indexer see the `chain-indexer` crate.
-use std::{cmp::Ordering, future::Future, pin::Pin, time::Duration};
+use std::{
+    cmp::Ordering,
+    future::Future,
+    pin::Pin,
+    time::{Duration, Instant},
+};
 
 use async_stream::stream;
 use async_trait::async_trait;
 use blokli_chain_types::AlloyAddressExt;
 use futures::{Stream, StreamExt, stream::BoxStream};
 use hopr_bindings::exports::alloy::{
-    eips::eip2718::Encodable2718,
-    primitives::{Address as AlloyAddress, B256, U256},
+    eips::{BlockId, eip2718::Encodable2718},
+    primitives::{Address as AlloyAddress, B256, Bytes, U256, address},
     providers::Provider,
     rpc::{
         client::BatchRequest,
         types::{Filter, Log as AlloyLog, Transaction as AlloyTransaction},
     },
+    sol_types::SolCall,
 };
 #[cfg(all(feature = "telemetry", not(test)))]
 use hopr_types::telemetry::SimpleGauge;
@@ -29,11 +35,36 @@ use rust_stream_ext_concurrent::then_concurrent::StreamThenConcurrentExt;
 use tracing::{debug, error, trace, warn};
 
 use crate::{
-    BlockWithLogs, FilterSet, HoprIndexerRpcOperations, Log,
+    BlockWithLogs, FilterSet, HoprIndexerRpcOperations, Log, SafeOwnersSnapshot,
     errors::{Result, RpcError, RpcError::FilterIsEmpty},
-    rpc::{HoprModule, RpcOperations, SafeSingleton, is_log_block_range_limit_error},
+    rpc::{
+        HoprModule, Multicall3, RpcOperations, SafeSingleton,
+        SafeSingleton::{getOwnersCall, getThresholdCall},
+        is_log_block_range_limit_error,
+    },
     transport::HttpRequestor,
 };
+
+/// Canonical Multicall3 deployment (the same address on Gnosis Chain and most EVM chains).
+const MULTICALL3_ADDRESS: AlloyAddress = address!("cA11bde05977b3631167028862bE2a173976CA11");
+
+/// How long a Multicall3 detection result is reused before the code at the address is checked again.
+const MULTICALL3_DETECTION_TTL: Duration = Duration::from_secs(600);
+
+/// Maximum number of concurrent reads when Multicall3 is not available.
+const SAFE_READ_CONCURRENCY: usize = 8;
+
+fn snapshot_from_returns(owners_return: &[u8], threshold_return: &[u8]) -> Result<SafeOwnersSnapshot> {
+    let owners = getOwnersCall::abi_decode_returns(owners_return)
+        .map_err(|e| RpcError::Other(format!("cannot decode getOwners: {e}")))?;
+    let threshold = getThresholdCall::abi_decode_returns(threshold_return)
+        .map_err(|e| RpcError::Other(format!("cannot decode getThreshold: {e}")))?;
+    Ok(SafeOwnersSnapshot {
+        owners: owners.into_iter().map(|owner| owner.to_hopr_address()).collect(),
+        threshold: u64::try_from(threshold)
+            .map_err(|_| RpcError::Other(format!("Safe threshold {threshold} exceeds maximum u64 value")))?,
+    })
+}
 
 #[cfg(all(feature = "telemetry", not(test)))]
 lazy_static::lazy_static! {
@@ -210,6 +241,28 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
             }
         }
         .boxed()
+    }
+}
+
+impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
+    /// Whether Multicall3 is deployed at its canonical address, detected by the code at that address.
+    ///
+    /// The result is reused for [`MULTICALL3_DETECTION_TTL`], so a refresh of many batches checks once and
+    /// a later refresh checks again. A failed check is an error for the caller (the batch is retried
+    /// later) and is not cached; a chain without Multicall3 (e.g. a fresh Anvil) reads with individual calls.
+    async fn multicall_deployed(&self) -> Result<bool> {
+        if let Ok(cached) = self.multicall_support.lock() {
+            if let Some((deployed, detected_at)) = *cached {
+                if detected_at.elapsed() < MULTICALL3_DETECTION_TTL {
+                    return Ok(deployed);
+                }
+            }
+        }
+        let deployed = !self.provider.get_code_at(MULTICALL3_ADDRESS).await?.is_empty();
+        if let Ok(mut cached) = self.multicall_support.lock() {
+            *cached = Some((deployed, Instant::now()));
+        }
+        Ok(deployed)
     }
 }
 
@@ -503,6 +556,91 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
         Ok(logs)
     }
 
+    async fn get_safe_owners_and_threshold(&self, safe_address: Address, block: u64) -> Result<SafeOwnersSnapshot> {
+        let safe_contract = SafeSingleton::new(AlloyAddress::from_hopr_address(safe_address), self.provider.clone());
+        let block_id = BlockId::number(block);
+
+        let owners_call = safe_contract.getOwners().block(block_id);
+        let threshold_call = safe_contract.getThreshold().block(block_id);
+        let (owners, threshold) = futures::try_join!(async { owners_call.call().await }, async {
+            threshold_call.call().await
+        })?;
+
+        Ok(SafeOwnersSnapshot {
+            owners: owners.into_iter().map(|owner| owner.to_hopr_address()).collect(),
+            threshold: u64::try_from(threshold)
+                .map_err(|_| RpcError::Other(format!("Safe threshold {threshold} exceeds maximum u64 value")))?,
+        })
+    }
+
+    async fn get_safe_owners_and_thresholds(
+        &self,
+        safe_addresses: Vec<Address>,
+        block: u64,
+    ) -> Result<Vec<Result<SafeOwnersSnapshot>>> {
+        if safe_addresses.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        if !self.multicall_deployed().await? {
+            debug!("Multicall3 not deployed, reading Safe owners with individual calls");
+            let mut snapshots = futures::stream::iter(safe_addresses.into_iter().enumerate())
+                .map(|(index, safe_address)| async move {
+                    (index, self.get_safe_owners_and_threshold(safe_address, block).await)
+                })
+                .buffer_unordered(SAFE_READ_CONCURRENCY)
+                .collect::<Vec<_>>()
+                .await;
+            snapshots.sort_by_key(|(index, _)| *index);
+            return Ok(snapshots.into_iter().map(|(_, snapshot)| snapshot).collect());
+        }
+
+        let owners_call: Bytes = getOwnersCall {}.abi_encode().into();
+        let threshold_call: Bytes = getThresholdCall {}.abi_encode().into();
+        let calls = safe_addresses
+            .iter()
+            .flat_map(|safe_address| {
+                let target = AlloyAddress::from_hopr_address(*safe_address);
+                [owners_call.clone(), threshold_call.clone()].map(|call_data| Multicall3::Call3 {
+                    target,
+                    allowFailure: true,
+                    callData: call_data,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let results = Multicall3::new(MULTICALL3_ADDRESS, self.provider.clone())
+            .aggregate3(calls)
+            .block(BlockId::number(block))
+            .call()
+            .await?;
+        if results.len() != safe_addresses.len() * 2 {
+            return Err(RpcError::Other(format!(
+                "Multicall3 returned {} results for {} calls",
+                results.len(),
+                safe_addresses.len() * 2
+            )));
+        }
+
+        // Two results per Safe, in call order: getOwners then getThreshold.
+        let mut results = results.into_iter();
+        let mut snapshots = Vec::with_capacity(safe_addresses.len());
+        for index in 0..safe_addresses.len() {
+            let (Some(owners), Some(threshold)) = (results.next(), results.next()) else {
+                break;
+            };
+            snapshots.push(if owners.success && threshold.success {
+                snapshot_from_returns(&owners.returnData, &threshold.returnData)
+            } else {
+                Err(RpcError::MulticallFailure(
+                    index,
+                    "getOwners or getThreshold reverted".to_string(),
+                ))
+            });
+        }
+        Ok(snapshots)
+    }
+
     async fn get_xdai_balance(&self, address: Address) -> Result<XDaiBalance> {
         self.get_xdai_balance(address).await
     }
@@ -624,10 +762,10 @@ mod tests {
 
     use anyhow::Context;
     use async_trait::async_trait;
-    use blokli_chain_types::ContractAddresses;
+    use blokli_chain_types::{AlloyAddressExt as _, ContractAddresses};
     use futures::StreamExt;
     use hopr_bindings::exports::alloy::{
-        primitives::{Address as AlloyAddress, B256, Log as AlloyPrimitiveLog, LogData},
+        primitives::{Address as AlloyAddress, B256, Log as AlloyPrimitiveLog, LogData, U256 as TestU256},
         rpc::{
             client::ClientBuilder,
             types::{Filter, Log as AlloyLog},
@@ -639,6 +777,10 @@ mod tests {
     use tokio::time::sleep;
     use url::Url;
 
+    use super::{
+        SafeSingleton::{getOwnersCall, getThresholdCall},
+        SolCall, snapshot_from_returns,
+    };
     use crate::{
         FilterSet, HoprIndexerRpcOperations,
         errors::{HttpRequestError, RpcError},
@@ -1312,5 +1454,25 @@ mod tests {
         assert_eq!(block_ids_with_log_counts, vec![(0, 0), (6, 1)]);
 
         Ok(())
+    }
+    #[test]
+    fn test_snapshot_from_multicall_returns() {
+        let owner = AlloyAddress::from([0x11; 20]);
+        let owners_return = getOwnersCall::abi_encode_returns(&vec![owner]);
+        let threshold_return = getThresholdCall::abi_encode_returns(&TestU256::from(2_u64));
+
+        let snapshot = snapshot_from_returns(&owners_return, &threshold_return).expect("decodes");
+        assert_eq!(snapshot.owners, vec![owner.to_hopr_address()]);
+        assert_eq!(snapshot.threshold, 2);
+
+        // The empty return data of a reverted or non-Safe target does not decode.
+        assert!(snapshot_from_returns(&[], &threshold_return).is_err());
+    }
+
+    #[test]
+    fn test_pruned_state_errors_are_detected() {
+        assert!(RpcError::Other("missing trie node abc (path )".into()).is_state_pruned());
+        assert!(RpcError::Other("State already discarded for block 5".into()).is_state_pruned());
+        assert!(!RpcError::Other("execution reverted".into()).is_state_pruned());
     }
 }

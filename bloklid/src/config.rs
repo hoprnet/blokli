@@ -388,10 +388,6 @@ impl Config {
             self.indexer.enable_logs_snapshot
         ));
         output.push_str(&format!(
-            "  indexer.enable_safe_indexing: {}\n",
-            self.indexer.enable_safe_indexing
-        ));
-        output.push_str(&format!(
             "  indexer.enable_curvy_indexing: {}\n",
             self.indexer.enable_curvy_indexing
         ));
@@ -547,10 +543,6 @@ pub struct IndexerConfig {
     #[default(false)]
     #[serde(default = "default_false")]
     pub enable_logs_snapshot: bool,
-
-    #[default(false)]
-    #[serde(default = "default_false")]
-    pub enable_safe_indexing: bool,
 
     #[default(false)]
     #[serde(default = "default_false")]
@@ -1271,7 +1263,6 @@ mod tests {
 
         // Check indexer config
         assert!(config.indexer.fast_sync);
-        assert!(!config.indexer.enable_safe_indexing);
         assert!(!config.indexer.enable_curvy_indexing);
         assert_eq!(config.indexer.subscription.event_bus_capacity, 1000);
 
@@ -1379,7 +1370,6 @@ mod tests {
         let cfg = res.unwrap();
         assert!(!cfg.indexer.fast_sync);
         assert!(!cfg.indexer.enable_logs_snapshot); // Default
-        assert!(!cfg.indexer.enable_safe_indexing); // Default
         assert!(!cfg.indexer.enable_curvy_indexing); // Default
         assert_eq!(cfg.indexer.subscription.event_bus_capacity, 1000); // Default
     }

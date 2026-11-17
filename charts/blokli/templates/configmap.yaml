@@ -36,9 +36,6 @@ data:
     [indexer]
     fast_sync = {{ .Values.config.indexer.fastSync }}
     enable_logs_snapshot = {{ .Values.config.indexer.enableLogsSnapshot }}
-    {{- if .Values.config.indexer.enableSafeIndexing }}
-    enable_safe_indexing = {{ .Values.config.indexer.enableSafeIndexing }}
-    {{- end }}
     {{- if .Values.config.indexer.enableCurvyIndexing }}
     enable_curvy_indexing = {{ .Values.config.indexer.enableCurvyIndexing }}
     {{- end }}

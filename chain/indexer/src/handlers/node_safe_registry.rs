@@ -9,7 +9,7 @@ use tracing::{debug, info, warn};
 
 #[cfg(all(feature = "telemetry", not(test)))]
 use super::increment_indexer_contract_log_count;
-use super::{ContractEventHandlers, LogBatchContext, helpers::construct_account_update, u256_to_u64};
+use super::{ContractEventHandlers, helpers::construct_account_update, u256_to_u64};
 use crate::{
     errors::{CoreEthereumIndexerError, Result},
     state::IndexerEvent,
@@ -43,8 +43,7 @@ where
     /// # let tx = todo!();
     /// # let log = todo!();
     /// # let event = todo!();
-    /// # let batch_context = todo!();
-    /// handlers.on_node_safe_registry_event(&tx, &log, event, true, &batch_context).await?;
+    /// handlers.on_node_safe_registry_event(&tx, &log, event, true).await?;
     /// # Ok(())
     /// # }
     /// ```
@@ -105,7 +104,6 @@ where
         log: &blokli_chain_rpc::Log,
         event: HoprNodeSafeRegistryEvents,
         is_synced: bool,
-        batch: &LogBatchContext,
     ) -> Result<Vec<IndexerEvent>> {
         #[cfg(all(feature = "telemetry", not(test)))]
         increment_indexer_contract_log_count("node_safe_registry");
@@ -188,13 +186,12 @@ where
                     .await?;
 
                 if !safe_previously_known && is_synced {
-                    self.backfill_safe_logs_in_discovery_block(tx, safe_addr, block, batch)
-                        .await?;
+                    self.request_safe_owner_snapshot(safe_addr, block);
                     let epoch = self.indexer_state.mark_safe_filters_dirty();
                     info!(
                         safe_address = %safe_addr.to_hex(),
                         epoch,
-                        "Backfilled discovery-block Safe logs and marked Safe filters for refresh after new Safe registration"
+                        "Requested a Safe owner snapshot at the discovery block and marked Safe filters for refresh after new Safe registration"
                     );
                 }
 
@@ -335,9 +332,6 @@ mod tests {
         rpc_operations
             .expect_get_hopr_module_from_safe()
             .returning(move |_| Ok(Some(module_address)));
-        rpc_operations
-            .expect_get_logs_for_address()
-            .returning(|_, _, _, _| Ok(vec![]));
 
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),
@@ -406,9 +400,6 @@ mod tests {
         rpc_operations
             .expect_get_hopr_module_from_safe()
             .returning(move |_| Ok(Some(module_address)));
-        rpc_operations
-            .expect_get_logs_for_address()
-            .returning(|_, _, _, _| Ok(vec![]));
 
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),
@@ -601,9 +592,6 @@ mod tests {
         rpc_operations
             .expect_get_hopr_module_from_safe()
             .returning(|_| Ok(None));
-        rpc_operations
-            .expect_get_logs_for_address()
-            .returning(|_, _, _, _| Ok(vec![]));
 
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),
@@ -660,10 +648,6 @@ mod tests {
         rpc_operations
             .expect_get_hopr_module_from_safe()
             .returning(move |_| Ok(Some(module_address)));
-        rpc_operations
-            .expect_get_logs_for_address()
-            .times(1)
-            .returning(|_, _, _, _| Ok(vec![]));
 
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),
@@ -822,10 +806,6 @@ mod tests {
         rpc_operations
             .expect_get_hopr_module_from_safe()
             .returning(|_| Ok(None));
-        rpc_operations
-            .expect_get_logs_for_address()
-            .times(2)
-            .returning(|_, _, _, _| Ok(vec![]));
 
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),
