@@ -4,6 +4,7 @@ use blokli_chain_indexer::{snapshot::download::normalize_sha256_hex, utils::reda
 use blokli_chain_types::{ChainConfig, ContractAddresses};
 use blokli_db::utils::redact_database_url;
 use hopr_types::primitive::primitives::Address;
+use tracing::warn;
 
 use crate::network::Network;
 
@@ -328,6 +329,7 @@ pub struct Config {
     pub indexer: IndexerConfig,
 
     #[serde(default)]
+    #[validate(custom(function = "validate_api"))]
     pub api: ApiConfig,
 
     #[serde(default)]
@@ -356,6 +358,25 @@ fn validate_indexer(indexer: &IndexerConfig) -> Result<(), validator::Validation
     indexer
         .validate()
         .map_err(|message| validator::ValidationError::new("indexer").with_message(message.into()))
+}
+
+fn validate_api(api: &ApiConfig) -> Result<(), validator::ValidationError> {
+    if api.database_max_connections == 0 {
+        return Err(validator::ValidationError::new("api.database_max_connections")
+            .with_message("api.database_max_connections must be greater than 0".into()));
+    }
+    if api.max_concurrent_snapshots == 0 {
+        return Err(validator::ValidationError::new("api.max_concurrent_snapshots")
+            .with_message("api.max_concurrent_snapshots must be greater than 0".into()));
+    }
+    if u64::try_from(api.max_concurrent_snapshots).unwrap_or(u64::MAX) >= u64::from(api.database_max_connections) {
+        warn!(
+            database_max_connections = api.database_max_connections,
+            max_concurrent_snapshots = api.max_concurrent_snapshots,
+            "snapshot loads can take every connection of the API pool"
+        );
+    }
+    Ok(())
 }
 
 impl Config {
@@ -668,14 +689,17 @@ pub struct ApiConfig {
     pub max_query_complexity: usize,
 
     /// Size of the API server's own PostgreSQL connection pool. The indexer keeps the pool sized
-    /// by `database.max_connections`, so API load cannot take connections away from indexing.
+    /// by `database.max_connections`, so API queries and subscriptions cannot take connections
+    /// away from indexing. Transaction submission and monitoring still look up Safes and channels
+    /// through the indexer's pool. Must be greater than 0.
     /// SQLite and in-memory databases share the indexer's connections and ignore this setting.
     #[default(10)]
     #[serde(default = "default_api_database_max_connections")]
     pub database_max_connections: u32,
 
     /// Maximum number of subscription snapshots loaded from the database at the same time.
-    /// Keep it below `database_max_connections` so that queries always find a free connection.
+    /// Must be greater than 0. Keep it below `database_max_connections` so that queries always
+    /// find a free connection.
     #[default(8)]
     #[serde(default = "default_max_concurrent_snapshots")]
     pub max_concurrent_snapshots: usize,
@@ -949,6 +973,7 @@ mod tests {
     use std::{fs, path::PathBuf};
 
     use hopr_types::primitive::primitives::Address;
+    use validator::Validate;
 
     use super::*;
 
@@ -1545,6 +1570,40 @@ mod tests {
         assert_eq!(cfg.api.database_max_connections, 20);
         assert_eq!(cfg.api.max_concurrent_snapshots, 4);
         assert_eq!(cfg.api.snapshot_queue_timeout, Duration::from_secs(3));
+    }
+
+    #[test]
+    fn test_api_database_and_snapshot_limits_reject_zero() {
+        let database_zero = Config {
+            api: ApiConfig {
+                database_max_connections: 0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let error = database_zero
+            .validate()
+            .expect_err("api.database_max_connections = 0 must be rejected");
+        assert!(error.to_string().contains("database_max_connections"), "{error}");
+
+        let snapshots_zero = Config {
+            api: ApiConfig {
+                max_concurrent_snapshots: 0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let error = snapshots_zero
+            .validate()
+            .expect_err("api.max_concurrent_snapshots = 0 must be rejected");
+        assert!(error.to_string().contains("max_concurrent_snapshots"), "{error}");
+    }
+
+    #[test]
+    fn test_api_database_and_snapshot_limits_accept_defaults() {
+        Config::default()
+            .validate()
+            .expect("the default API pool and snapshot limits must be accepted");
     }
 
     #[test]

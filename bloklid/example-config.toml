@@ -204,14 +204,15 @@ max_query_complexity = 500
 # Size of the API server's own PostgreSQL connection pool (default: 10). Queries and
 # subscriptions cannot take connections from the indexer, whose pool is sized by
 # database.max_connections. Transaction submission and monitoring still look up Safes and
-# channels through the indexer's pool.
+# channels through the indexer's pool. 0 is rejected.
 # SQLite and in-memory databases share the indexer's connections and ignore this setting.
 database_max_connections = 10
 
 # Maximum number of subscription snapshots loaded from the database at the same time
 # (default: 8). A subscription starts with a snapshot of the current state; when many clients
 # subscribe together, for example after a restart, the loads beyond this limit wait their turn.
-# Keep it below database_max_connections so that queries always find a free connection.
+# 0 is rejected. Keep it below database_max_connections so that snapshot loads leave a
+# connection free for queries.
 max_concurrent_snapshots = 8
 
 # How long a subscription waits for its turn to load a snapshot (default: "10s"). A
