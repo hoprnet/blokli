@@ -68,15 +68,27 @@ impl FeeEstimateCache {
         F: Future<Output = Result<FeeHistorySnapshot, E>>,
         E: Display,
     {
-        let timeout = self.timeout;
-        let outcome = async move {
-            Ok::<_, String>(match tokio::time::timeout(timeout, fetch).await {
+        cached_result(&self.fee_history, self.timeout, fetch).await
+    }
+}
+
+/// Like [`get_or_fetch`], but the failure is stored as the entry value too.
+///
+/// A single timeout bounds `fetch`; elapsing it becomes a cached error instead of an uncached cancellation.
+async fn cached_result<V, F, E>(cache: &Cache<(), Result<V, String>>, timeout: Duration, fetch: F) -> Result<V, String>
+where
+    V: Clone + Send + Sync + 'static,
+    F: Future<Output = Result<V, E>>,
+    E: Display,
+{
+    cache
+        .get_with((), async {
+            match tokio::time::timeout(timeout, fetch).await {
                 Ok(result) => result.map_err(|e| e.to_string()),
                 Err(_) => Err(format!("timed out after {timeout:?}")),
-            })
-        };
-        get_or_fetch(&self.fee_history, timeout, outcome).await?
-    }
+            }
+        })
+        .await
 }
 
 async fn get_or_fetch<V, F, E>(cache: &Cache<(), V>, timeout: Duration, fetch: F) -> Result<V, String>
@@ -297,6 +309,30 @@ mod tests {
             cache.fee_history(async { Ok::<_, String>(snapshot(4)) }).await,
             Ok(snapshot(4))
         );
+    }
+
+    #[tokio::test]
+    async fn fee_history_timeout_is_cached_as_a_failure() {
+        let cache = FeeEstimateCache::with_timeout(LONG_TTL, Duration::from_millis(30));
+
+        let hung = cache
+            .fee_history(async {
+                pending::<()>().await;
+                Ok::<FeeHistorySnapshot, String>(snapshot(1))
+            })
+            .await;
+        assert!(hung.as_ref().is_err_and(|e| e.contains("timed out")), "got {hung:?}");
+
+        // Served from the cached failure: the second fetch is never polled
+        let polled = AtomicUsize::new(0);
+        let again = cache
+            .fee_history(async {
+                polled.fetch_add(1, Ordering::SeqCst);
+                Ok::<_, String>(snapshot(2))
+            })
+            .await;
+        assert_eq!(again, hung);
+        assert_eq!(polled.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
