@@ -113,10 +113,14 @@ enum UnminedDiagnosis {
     /// The node holds the transaction, every earlier nonce is mined or pending and the
     /// transaction was signed below the recommended fee.
     Underpriced,
-    /// The node holds the transaction, every earlier nonce is mined or pending and the
-    /// transaction was signed at or above the recommended fee: it waits behind earlier
+    /// The node holds the transaction, an earlier nonce of the signer is still pending and
+    /// the transaction was signed at or above the recommended fee: it waits behind earlier
     /// pending transactions.
     Queued,
+    /// The node holds the transaction and every earlier nonce is mined, so nothing waits
+    /// ahead of it, yet it is unmined. Its fees decide whether it is `Underpriced`; otherwise
+    /// no cause can be named.
+    Pending,
     /// The transaction was mined after the receipt lookup; the next poll confirms it.
     MinedSinceCheck,
     /// The diagnosis could not be established.
@@ -131,6 +135,7 @@ impl UnminedDiagnosis {
             UnminedDiagnosis::NonceGap { .. } => "nonce_gap",
             UnminedDiagnosis::Underpriced => "underpriced",
             UnminedDiagnosis::Queued => "queued",
+            UnminedDiagnosis::Pending => "pending",
             UnminedDiagnosis::MinedSinceCheck => "mined_since_check",
             UnminedDiagnosis::Unknown => "unknown",
         }
@@ -143,7 +148,9 @@ impl UnminedDiagnosis {
             UnminedDiagnosis::NonceGap { .. } => UnminedReason::NonceGap,
             UnminedDiagnosis::Underpriced => UnminedReason::Underpriced,
             UnminedDiagnosis::Queued => UnminedReason::Queued,
-            UnminedDiagnosis::MinedSinceCheck | UnminedDiagnosis::Unknown => UnminedReason::Unknown,
+            UnminedDiagnosis::Pending | UnminedDiagnosis::MinedSinceCheck | UnminedDiagnosis::Unknown => {
+                UnminedReason::Unknown
+            }
         }
     }
 
@@ -165,7 +172,7 @@ impl UnminedDiagnosis {
             UnminedDiagnosis::Queued => "Transaction timed out waiting for confirmation: the RPC node holds it and it \
                                          waits behind earlier pending transactions (queued)"
                 .to_string(),
-            UnminedDiagnosis::MinedSinceCheck | UnminedDiagnosis::Unknown => {
+            UnminedDiagnosis::Pending | UnminedDiagnosis::MinedSinceCheck | UnminedDiagnosis::Unknown => {
                 "Transaction timed out waiting for confirmation".to_string()
             }
         }
@@ -175,8 +182,9 @@ impl UnminedDiagnosis {
 /// Classify an unmined transaction from whether the node still knows it and how its nonce
 /// compares to the signer's mined and pending next nonces.
 ///
-/// A transaction the node holds with no nonce problem is reported as `Queued`; the caller
-/// refines it to `Underpriced` by comparing fees.
+/// A transaction the node holds with no nonce problem is reported as `Queued` only when an
+/// earlier nonce of the signer is still pending, and as `Pending` when it is first in line;
+/// the caller refines either to `Underpriced` by comparing fees.
 ///
 /// A nonce ahead of the mined one is only a gap when the pending run does not reach it:
 /// with nonce 5 mined and 5, 6, 7 pending, nonce 7 is merely queued behind 5 and 6.
@@ -188,7 +196,9 @@ fn classify_unmined(known: bool, nonce: u64, mined_nonce: u64, pending_nonce: u6
         (true, false) if nonce > mined_nonce && nonce >= missing_nonce => {
             UnminedDiagnosis::NonceGap { nonce, missing_nonce }
         }
-        (true, false) => UnminedDiagnosis::Queued,
+        // Every nonce from the mined one up to this one is pending, so something waits ahead.
+        (true, false) if nonce > mined_nonce => UnminedDiagnosis::Queued,
+        (true, false) => UnminedDiagnosis::Pending,
         (false, true) => UnminedDiagnosis::Replaced,
         (false, false) => UnminedDiagnosis::Dropped,
     }
@@ -803,7 +813,7 @@ impl<R: ReceiptProvider + 'static, S: SafeAddressChecker> TransactionMonitor<R, 
             }
         };
 
-        let underpriced = diagnosis == UnminedDiagnosis::Queued
+        let underpriced = matches!(diagnosis, UnminedDiagnosis::Queued | UnminedDiagnosis::Pending)
             && signed_fee_pair(&record.raw_transaction)
                 .zip(recommended)
                 .is_some_and(|(signed, recommended)| {
@@ -1707,11 +1717,14 @@ mod tests {
         assert_eq!(classify_unmined(false, 4, 5, 5), UnminedDiagnosis::Replaced);
         assert_eq!(classify_unmined(false, 5, 5, 5), UnminedDiagnosis::Dropped);
         assert_eq!(classify_unmined(false, 7, 5, 5), UnminedDiagnosis::Dropped);
-        assert_eq!(classify_unmined(true, 5, 5, 6), UnminedDiagnosis::Queued);
+        // Nonce 5 is the next one to mine: nothing waits ahead of it.
+        assert_eq!(classify_unmined(true, 5, 5, 6), UnminedDiagnosis::Pending);
+        // Nonce 6 waits behind the pending nonce 5.
+        assert_eq!(classify_unmined(true, 6, 5, 7), UnminedDiagnosis::Queued);
         // Nonces 5, 6 and 7 are all pending: 7 is queued, not gapped.
         assert_eq!(classify_unmined(true, 7, 5, 8), UnminedDiagnosis::Queued);
         // Node not reporting mempool nonces: pending equals mined.
-        assert_eq!(classify_unmined(true, 5, 5, 5), UnminedDiagnosis::Queued);
+        assert_eq!(classify_unmined(true, 5, 5, 5), UnminedDiagnosis::Pending);
         assert_eq!(
             classify_unmined(true, 7, 5, 5),
             UnminedDiagnosis::NonceGap {
@@ -1791,10 +1804,14 @@ mod tests {
         let store = Arc::new(TransactionStore::new());
         let provider = MockReceiptProvider::new();
 
-        // Signed with a 1 gwei gas price, which covers the recommendation.
+        // Signed with a 1 gwei gas price, which covers the recommendation, behind pending nonce 0.
+        let raw_tx = create_raw_tx_with_nonce(&[0x11; 20], 1).await;
+        let (signer, _) = decode_transaction_signer_and_nonce(&raw_tx).unwrap();
         provider.set_known(test_tx_hash());
         provider.set_recommended_fees(900_000_000, 100_000_000);
-        insert_expired_record(&store, create_raw_tx_to(&[0x11; 20]).await);
+        provider.set_mined_nonce(signer, 0);
+        provider.set_pending_nonce(signer, 2);
+        insert_expired_record(&store, raw_tx);
 
         let monitor = create_monitor(store.clone(), provider);
         monitor.poll_once().await.unwrap();
@@ -1850,8 +1867,12 @@ mod tests {
         let store = Arc::new(TransactionStore::new());
         let provider = MockReceiptProvider::new();
 
+        let raw_tx = create_raw_tx_with_nonce(&[0x11; 20], 1).await;
+        let (signer, _) = decode_transaction_signer_and_nonce(&raw_tx).unwrap();
         provider.set_known(test_tx_hash());
-        insert_expired_record(&store, create_raw_tx_to(&[0x11; 20]).await);
+        provider.set_mined_nonce(signer, 0);
+        provider.set_pending_nonce(signer, 2);
+        insert_expired_record(&store, raw_tx);
 
         let monitor = create_monitor(store.clone(), provider);
         monitor.poll_once().await.unwrap();
@@ -1948,6 +1969,51 @@ mod tests {
         assert_eq!(
             min_replacement_fees(fees(u128::MAX - 1, u128::MAX), fees(0, 0)),
             fees(u128::MAX, u128::MAX)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_monitor_timeout_first_in_line_with_adequate_fees_is_not_reported_as_queued() {
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        // Nonces 0 to 4 are mined and nonce 5 is pending: nothing waits ahead of it.
+        let raw_tx = create_raw_tx_with_nonce(&[0x11; 20], 5).await;
+        let (signer, _) = decode_transaction_signer_and_nonce(&raw_tx).unwrap();
+        provider.set_known(test_tx_hash());
+        provider.set_recommended_fees(900_000_000, 100_000_000);
+        provider.set_mined_nonce(signer, 5);
+        provider.set_pending_nonce(signer, 6);
+        insert_expired_record(&store, raw_tx);
+
+        let monitor = create_monitor(store.clone(), provider);
+        monitor.poll_once().await.unwrap();
+
+        let updated = store.get(TEST_UUID).unwrap();
+        assert_eq!(updated.status, TransactionStatus::Timeout);
+        assert_eq!(updated.error_message, Some(UnminedDiagnosis::Pending.message()));
+        assert_eq!(updated.diagnosis.unwrap().reason, UnminedReason::Unknown);
+    }
+
+    #[tokio::test]
+    async fn test_monitor_timeout_first_in_line_below_the_recommended_fee_is_underpriced() {
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        let raw_tx = create_raw_tx_with_nonce(&[0x11; 20], 5).await;
+        let (signer, _) = decode_transaction_signer_and_nonce(&raw_tx).unwrap();
+        provider.set_known(test_tx_hash());
+        provider.set_recommended_fees(2_000_000_000, 100_000_000);
+        provider.set_mined_nonce(signer, 5);
+        provider.set_pending_nonce(signer, 6);
+        insert_expired_record(&store, raw_tx);
+
+        let monitor = create_monitor(store.clone(), provider);
+        monitor.poll_once().await.unwrap();
+
+        assert_eq!(
+            store.get(TEST_UUID).unwrap().diagnosis.unwrap().reason,
+            UnminedReason::Underpriced
         );
     }
 
