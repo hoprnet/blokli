@@ -16,16 +16,19 @@ use tracing::{error, warn};
 use uuid::Uuid;
 
 use crate::{
+    broadcast_error::{BroadcastRejection, classify_broadcast_error},
     hopr_policy::{AdmittedAction, HoprPolicy, HoprPolicyConfig, PolicyDecision, SubmissionMode, ValidationReason},
     metrics::{
         STATUS_CONFIRMED, STATUS_REVERTED, STATUS_SUBMISSION_FAILED, STATUS_TIMEOUT, STATUS_VALIDATION_FAILED,
         record_transaction_status,
     },
-    safe_execution::decode_transaction_summary,
-    transaction_monitor::{ReceiptProvider, SafeAddressChecker, enrich_safe_execution},
+    safe_execution::{decode_transaction_signer_and_nonce, decode_transaction_summary},
+    transaction_monitor::{
+        ReceiptProvider, SafeAddressChecker, enrich_safe_execution, min_replacement_fees, signed_fee_pair,
+    },
     transaction_store::{
-        SubmissionLimit, SubmissionReservation, TrackOutcome, TransactionDiagnosis, TransactionRecord,
-        TransactionStatus, TransactionStore, TransactionStoreError,
+        FeePair, ReplacementRefused, ReplacementTarget, SubmissionLimit, SubmissionReservation, TrackOutcome,
+        TransactionDiagnosis, TransactionRecord, TransactionStatus, TransactionStore, TransactionStoreError,
     },
     transaction_validator::{TransactionValidator, ValidationError},
 };
@@ -83,6 +86,27 @@ pub enum TransactionExecutorError {
         /// Boxed to keep this error small.
         diagnosis: Option<Box<TransactionDiagnosis>>,
     },
+    /// A transaction replacing a pending one of the same signer and nonce pays less than the
+    /// minimum, so the node would refuse it. Nothing was broadcast, or the node refused it.
+    #[error(
+        "replacement transaction underpriced: it needs at least maxFeePerGas {} and maxPriorityFeePerGas {}",
+        minimum.max_fee_per_gas, minimum.max_priority_fee_per_gas
+    )]
+    ReplacementUnderpriced {
+        /// Lowest fees, in wei, at which the replacement is accepted.
+        minimum: FeePair,
+    },
+    /// The pending transaction of this signer and nonce was already replaced the maximum number
+    /// of times.
+    #[error("the transaction at this nonce was already replaced {max} times, the maximum")]
+    ReplacementLimitReached {
+        /// Configured maximum number of replacements per signer and nonce.
+        max: usize,
+    },
+    /// The pending transaction of this signer and nonce changed or is being replaced by another
+    /// submission right now. Nothing was broadcast and the replacement may be retried.
+    #[error("another replacement of the transaction at this nonce is in progress; retry")]
+    ReplacementConflict,
     /// The signer is on cooldown after repeated deterministically invalid submissions.
     #[error("HOPR {operation} suppressed for {}s: {reason}", retry_after.as_secs())]
     HoprActionThrottled {
@@ -93,6 +117,34 @@ pub enum TransactionExecutorError {
         /// How long until this signer may submit this operation again.
         retry_after: Duration,
     },
+}
+
+/// How long a replacement waits for the fee estimate before falling back to the 12.5% bump.
+const REPLACEMENT_FEE_LOOKUP_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Recommended fees when none are available: the bump alone decides the minimum.
+const NO_RECOMMENDED_FEES: FeePair = FeePair {
+    max_fee_per_gas: 0,
+    max_priority_fee_per_gas: 0,
+};
+
+/// Reject an answer from the node that names another transaction than the one submitted.
+///
+/// A transaction that decodes locally has a hash we can compute: an answer naming another
+/// transaction must not bind this action to, or resume, the record that hash belongs to.
+fn check_node_hash(raw_tx: &[u8], node_hash: Hash) -> Result<(), TransactionExecutorError> {
+    match decode_transaction_summary(raw_tx)
+        .map(|summary| summary.transaction_hash)
+        .filter(|local_hash| *local_hash != node_hash)
+    {
+        Some(local_hash) => {
+            record_transaction_status(STATUS_SUBMISSION_FAILED);
+            Err(TransactionExecutorError::RpcError(format!(
+                "node returned a different hash ({node_hash}) than the submitted transaction ({local_hash})"
+            )))
+        }
+        None => Ok(()),
+    }
 }
 
 /// Terminal outcome of waiting for a submitted transaction's confirmation.
@@ -178,6 +230,9 @@ pub struct RawTransactionExecutorConfig {
     /// cannot consume the global capacity by spreading submissions across
     /// contract targets.
     pub max_submitted_transactions_per_identity: usize,
+    /// Maximum fee-bumped replacements accepted per signer and nonce, the original not counted.
+    /// `0` refuses every replacement.
+    pub max_replacements_per_nonce: usize,
     /// Enable optional Safe revert-reason tracing in synchronous transaction execution.
     pub enable_revert_reason_tracing: bool,
     /// HOPR-aware policy applied to supported HOPR node-management transactions.
@@ -194,6 +249,7 @@ impl Default for RawTransactionExecutorConfig {
             confirmation_timeout: Duration::from_secs(60),
             max_submitted_transactions: 1_024,
             max_submitted_transactions_per_identity: 64,
+            max_replacements_per_nonce: 3,
             enable_revert_reason_tracing: true,
             hopr_policy: HoprPolicyConfig::default(),
         }
@@ -407,6 +463,12 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             return Err(e.into());
         }
 
+        // A transaction that replaces a tracked pending one of the same signer and nonce is
+        // accepted on its own path; the same bytes again keep the resubmission path below.
+        if let Some((signer, nonce, target)) = self.pending_replacement_target(&raw_tx) {
+            return self.send_replacement(raw_tx, signer, nonce, target).await;
+        }
+
         // The HOPR-aware policy runs before admission control: a deterministically invalid or
         // duplicated action should never consume monitoring capacity in the first place.
         let admitted = self.apply_hopr_policy(&raw_tx, SubmissionMode::Tracked).await?;
@@ -438,17 +500,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         let tx_hash = outcome.hash();
         let verified_known = matches!(outcome, BroadcastOutcome::AlreadyKnown(_));
 
-        // A transaction that decodes locally has a hash we can compute: an answer naming another
-        // transaction must not bind this action to, or resume, the record that hash belongs to.
-        if let Some(local_hash) = decode_transaction_summary(&raw_tx)
-            .map(|summary| summary.transaction_hash)
-            .filter(|local_hash| *local_hash != tx_hash)
-        {
-            record_transaction_status(STATUS_SUBMISSION_FAILED);
-            return Err(TransactionExecutorError::RpcError(format!(
-                "node returned a different hash ({tx_hash}) than the submitted transaction ({local_hash})"
-            )));
-        }
+        check_node_hash(&raw_tx, tx_hash)?;
 
         let reservation = match reservation {
             Some(reservation) => reservation,
@@ -513,6 +565,136 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             }
             Err(e) => {
                 error!(id = %id, tx_hash = %tx_hash, error = %e, "Failed to store submitted transaction");
+                Err(e.into())
+            }
+        }
+    }
+
+    /// The tracked `Submitted` transaction that `raw_tx` would replace, with the signer and nonce
+    /// they share.
+    ///
+    /// `None` when the signer cannot be recovered, when nothing is pending at that nonce, or when
+    /// the pending transaction is `raw_tx` itself (an identical resubmission).
+    fn pending_replacement_target(&self, raw_tx: &[u8]) -> Option<([u8; 20], u64, ReplacementTarget)> {
+        let hash = decode_transaction_summary(raw_tx)?.transaction_hash;
+        if self.transaction_store.has_in_flight_hash(hash) {
+            return None;
+        }
+        let (signer, nonce) = decode_transaction_signer_and_nonce(raw_tx)?;
+        self.transaction_store
+            .replacement_target(signer, nonce)
+            .filter(|target| target.transaction_hash != hash)
+            .map(|target| (signer, nonce, target))
+    }
+
+    /// Lowest fees at which a replacement of `pending` is accepted: 12.5% above what it was
+    /// signed with, or the recommended fees when those are higher. Without a fee source or
+    /// when the estimate cannot be fetched, only the 12.5% applies.
+    async fn minimum_replacement_fees(&self, pending: &[u8]) -> Option<FeePair> {
+        let signed = signed_fee_pair(pending)?;
+        let recommended = match self.receipt_provider.as_ref() {
+            Some(provider) => {
+                match tokio::time::timeout(REPLACEMENT_FEE_LOOKUP_TIMEOUT, provider.get_recommended_fees()).await {
+                    Ok(Ok(fees)) => FeePair {
+                        max_fee_per_gas: fees.max_fee_per_gas,
+                        max_priority_fee_per_gas: fees.max_priority_fee_per_gas,
+                    },
+                    failure => {
+                        warn!(
+                            ?failure,
+                            "Could not fetch the recommended fee for a replacement; using the 12.5% bump"
+                        );
+                        NO_RECOMMENDED_FEES
+                    }
+                }
+            }
+            None => NO_RECOMMENDED_FEES,
+        };
+        Some(min_replacement_fees(signed, recommended))
+    }
+
+    /// Async mode for a fee-bumped replacement of the pending transaction `target`.
+    ///
+    /// Same steps as an ordinary async submission, in this order: the minimum fee, the exclusive
+    /// right to replace (which also enforces the cap), the HOPR policy with the duplicate check
+    /// lifted for `target`'s action, capacity, broadcast, the node-hash check, and tracking. The
+    /// replaced transaction is left as it is, tracked and monitored. Every early return drops the
+    /// right, the capacity and the policy claim, so a refused or failed replacement leaves nothing
+    /// behind.
+    async fn send_replacement(
+        &self,
+        raw_tx: Vec<u8>,
+        signer: [u8; 20],
+        nonce: u64,
+        target: ReplacementTarget,
+    ) -> Result<Uuid, TransactionExecutorError> {
+        let minimum = self
+            .minimum_replacement_fees(&target.raw_transaction)
+            .await
+            .ok_or(TransactionExecutorError::ReplacementConflict)?;
+        if let Some(signed) = signed_fee_pair(&raw_tx) {
+            if signed.max_fee_per_gas < minimum.max_fee_per_gas
+                || signed.max_priority_fee_per_gas < minimum.max_priority_fee_per_gas
+            {
+                return Err(TransactionExecutorError::ReplacementUnderpriced { minimum });
+            }
+        }
+
+        let ticket = self
+            .transaction_store
+            .begin_replacement(signer, nonce, target.id, self.config.max_replacements_per_nonce)
+            .map_err(|refused| match refused {
+                ReplacementRefused::LimitReached { max } => TransactionExecutorError::ReplacementLimitReached { max },
+                ReplacementRefused::TargetMoved | ReplacementRefused::InProgress => {
+                    TransactionExecutorError::ReplacementConflict
+                }
+            })?;
+
+        let admitted = self
+            .apply_hopr_policy(&raw_tx, SubmissionMode::Replacement { replaces: target.id })
+            .await?;
+        let reservation = self.reserve_submission(&raw_tx)?;
+
+        let outcome = match self.rpc_client.broadcast_raw_transaction(raw_tx.clone()).await {
+            Ok(outcome) => outcome,
+            Err(e) => {
+                record_transaction_status(STATUS_SUBMISSION_FAILED);
+                // The node's own refusal to replace is the same condition as our minimum.
+                return Err(match classify_broadcast_error(&e) {
+                    Some(BroadcastRejection::ReplacementUnderpriced) => {
+                        TransactionExecutorError::ReplacementUnderpriced { minimum }
+                    }
+                    _ => TransactionExecutorError::RpcError(e),
+                });
+            }
+        };
+        let tx_hash = outcome.hash();
+        check_node_hash(&raw_tx, tx_hash)?;
+
+        let id = Uuid::new_v4();
+        let record = TransactionRecord {
+            id,
+            raw_transaction: raw_tx,
+            transaction_hash: tx_hash,
+            status: TransactionStatus::Submitted,
+            submitted_at: Utc::now(),
+            confirmed_at: None,
+            error_message: None,
+            safe_execution: None,
+            diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
+        };
+        match self.transaction_store.commit_replacement(ticket, record, reservation) {
+            Ok(()) => {
+                // Bind the action to the replacement only once it is tracked.
+                if let Some(action) = admitted {
+                    action.register(id);
+                }
+                Ok(id)
+            }
+            Err(e) => {
+                error!(id = %id, tx_hash = %tx_hash, error = %e, "Failed to store replacement transaction");
                 Err(e.into())
             }
         }
@@ -624,6 +806,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        fee_recommendation::RecommendedFees,
         hopr_action::HoprContracts,
         hopr_policy::{ChannelState, HoprChainState},
         transaction_store::UnminedReason,
@@ -948,6 +1131,10 @@ mod tests {
 
     /// A signed announcement through the node-management module, at the given nonce.
     async fn signed_announcement(signer: &PrivateKeySigner, nonce: u64) -> Vec<u8> {
+        signed_announcement_priced(signer, nonce, 1_000_000_000).await
+    }
+
+    async fn signed_announcement_priced(signer: &PrivateKeySigner, nonce: u64, gas_price: u128) -> Vec<u8> {
         let announce = HoprToken::sendCall {
             recipient: AlloyAddress::from_slice(&[0x33; 20]),
             amount: U256::from(1_000u64),
@@ -964,7 +1151,7 @@ mod tests {
         let tx = TxLegacy {
             chain_id: Some(1),
             nonce,
-            gas_price: 1_000_000_000,
+            gas_price,
             gas_limit: 200_000,
             to: TxKind::Call(AlloyAddress::from_slice(&[0xAA; 20])),
             value: U256::ZERO,
@@ -1426,5 +1613,572 @@ mod tests {
         // Verify can retrieve by UUID
         let retrieved = executor.transaction_store().get(uuid).unwrap();
         assert_eq!(retrieved.id, uuid);
+    }
+
+    /// A transfer at `nonce` priced at `gas_price`; `salt` makes same-priced ones distinct.
+    async fn signed_priced_transfer(signer: &PrivateKeySigner, nonce: u64, gas_price: u128, salt: u64) -> Vec<u8> {
+        let tx = TxLegacy {
+            chain_id: Some(1),
+            nonce,
+            gas_price,
+            gas_limit: 21_000,
+            to: TxKind::Call(AlloyAddress::from_slice(&[0x22; 20])),
+            value: U256::from(salt),
+            input: Bytes::new(),
+        };
+        let signature = signer.sign_hash(&tx.signature_hash()).await.unwrap();
+        let mut encoded = Vec::new();
+        tx.into_signed(signature).encode_2718(&mut encoded);
+        encoded
+    }
+
+    /// The base price all replacement tests start from, and its minimum replacement price.
+    const BASE_PRICE: u128 = 1_000_000_000;
+    const BUMPED_PRICE: u128 = 1_125_000_000;
+
+    /// Broadcast client that can fail one broadcast with a scripted message, answers after an
+    /// optional delay, and counts the broadcasts it received.
+    struct ScriptedRpcClient {
+        broadcasts: Arc<Mutex<usize>>,
+        fail_next: Mutex<Option<String>>,
+        delay: Duration,
+    }
+
+    impl ScriptedRpcClient {
+        fn new() -> Self {
+            Self {
+                broadcasts: Arc::new(Mutex::new(0)),
+                fail_next: Mutex::new(None),
+                delay: Duration::ZERO,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl RpcClient for ScriptedRpcClient {
+        async fn send_raw_transaction(&self, raw_tx: Vec<u8>) -> Result<Hash, String> {
+            Ok(self.broadcast_raw_transaction(raw_tx).await?.hash())
+        }
+
+        async fn broadcast_raw_transaction(&self, raw_tx: Vec<u8>) -> Result<BroadcastOutcome, String> {
+            *self.broadcasts.lock().unwrap() += 1;
+            tokio::time::sleep(self.delay).await;
+            if let Some(message) = self.fail_next.lock().unwrap().take() {
+                return Err(message);
+            }
+            Ok(BroadcastOutcome::Accepted(mock_tx_hash(&raw_tx)))
+        }
+
+        async fn send_raw_transaction_with_confirm(
+            &self,
+            raw_tx: Vec<u8>,
+            _confirmations: u64,
+            _timeout: Option<Duration>,
+        ) -> Result<Hash, ConfirmationError> {
+            Ok(mock_tx_hash(&raw_tx))
+        }
+    }
+
+    /// Fee source answering a fixed recommendation, or failing.
+    struct FixedFees(Option<RecommendedFees>);
+
+    #[async_trait]
+    impl ReceiptProvider for FixedFees {
+        async fn get_transaction_receipt(
+            &self,
+            _tx_hash: Hash,
+        ) -> Result<Option<crate::transaction_monitor::TransactionReceipt>, String> {
+            Ok(None)
+        }
+
+        async fn get_transaction_receipt_logs(
+            &self,
+            _tx_hash: Hash,
+        ) -> Result<Option<Vec<crate::transaction_monitor::ReceiptLog>>, String> {
+            Ok(None)
+        }
+
+        async fn get_revert_reason(&self, _tx_hash: Hash) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+
+        async fn is_transaction_known(&self, _tx_hash: Hash) -> Result<bool, String> {
+            Ok(true)
+        }
+
+        async fn get_mined_nonce(&self, _address: [u8; 20]) -> Result<u64, String> {
+            Ok(0)
+        }
+
+        async fn get_pending_nonce(&self, _address: [u8; 20]) -> Result<u64, String> {
+            Ok(0)
+        }
+
+        async fn get_recommended_fees(&self) -> Result<RecommendedFees, String> {
+            self.0.ok_or_else(|| "no estimate".to_string())
+        }
+    }
+
+    fn replacement_executor(
+        client: ScriptedRpcClient,
+        config: RawTransactionExecutorConfig,
+    ) -> RawTransactionExecutor<ScriptedRpcClient> {
+        RawTransactionExecutor::new(client, TransactionStore::new(), TransactionValidator::new(), config)
+    }
+
+    fn broadcasts(executor: &RawTransactionExecutor<ScriptedRpcClient>) -> usize {
+        *executor.rpc_client.broadcasts.lock().unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_replacement_at_the_minimum_fee_is_accepted_and_tracked_next_to_the_original() {
+        let signer = PrivateKeySigner::random();
+        let executor = replacement_executor(ScriptedRpcClient::new(), RawTransactionExecutorConfig::default());
+        let original = executor
+            .send_raw_transaction_async(signed_priced_transfer(&signer, 0, BASE_PRICE, 0).await)
+            .await
+            .unwrap();
+
+        let replacement_raw = signed_priced_transfer(&signer, 0, BUMPED_PRICE, 0).await;
+        let replacement = executor
+            .send_raw_transaction_async(replacement_raw.clone())
+            .await
+            .unwrap();
+
+        assert_ne!(replacement, original);
+        let store = executor.transaction_store();
+        assert_eq!(store.count(), 2);
+        assert_eq!(store.submitted_count(), 2);
+        assert_eq!(store.get(original).unwrap().status, TransactionStatus::Submitted);
+        let record = store.get(replacement).unwrap();
+        assert_eq!(record.status, TransactionStatus::Submitted);
+        assert_eq!(record.transaction_hash, mock_tx_hash(&replacement_raw));
+        assert_eq!(broadcasts(&executor), 2);
+    }
+
+    #[tokio::test]
+    async fn test_the_same_raw_transaction_resubmitted_is_still_already_tracked() {
+        let signer = PrivateKeySigner::random();
+        let executor = replacement_executor(ScriptedRpcClient::new(), RawTransactionExecutorConfig::default());
+        let raw = signed_priced_transfer(&signer, 0, BASE_PRICE, 0).await;
+        let original = executor.send_raw_transaction_async(raw.clone()).await.unwrap();
+
+        let again = executor.send_raw_transaction_async(raw).await;
+        assert!(matches!(
+            again,
+            Err(TransactionExecutorError::AlreadyTracked { existing, .. }) if existing == original
+        ));
+        assert_eq!(executor.transaction_store().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_replacement_below_the_minimum_is_rejected_with_the_minimum_and_not_broadcast() {
+        let signer = PrivateKeySigner::random();
+        let executor = replacement_executor(ScriptedRpcClient::new(), RawTransactionExecutorConfig::default());
+        executor
+            .send_raw_transaction_async(signed_priced_transfer(&signer, 0, BASE_PRICE, 0).await)
+            .await
+            .unwrap();
+
+        let result = executor
+            .send_raw_transaction_async(signed_priced_transfer(&signer, 0, BUMPED_PRICE - 1, 0).await)
+            .await;
+
+        let Err(TransactionExecutorError::ReplacementUnderpriced { minimum }) = &result else {
+            panic!("unexpected result: {result:?}");
+        };
+        assert_eq!(minimum.max_fee_per_gas, BUMPED_PRICE);
+        assert_eq!(minimum.max_priority_fee_per_gas, BUMPED_PRICE);
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("maxFeePerGas 1125000000"), "{message}");
+        assert!(message.contains("maxPriorityFeePerGas 1125000000"), "{message}");
+        assert_eq!(broadcasts(&executor), 1, "nothing was broadcast");
+        assert_eq!(executor.transaction_store().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_replacement_must_also_meet_the_recommended_fees() {
+        let signer = PrivateKeySigner::random();
+        let executor = replacement_executor(ScriptedRpcClient::new(), RawTransactionExecutorConfig::default())
+            .with_safe_enrichment(
+                Arc::new(FixedFees(Some(RecommendedFees {
+                    max_fee_per_gas: 3_000_000_000,
+                    max_priority_fee_per_gas: 1_200_000_000,
+                }))),
+                Arc::new(crate::transaction_monitor::NoSafeEnrichment),
+            );
+        executor
+            .send_raw_transaction_async(signed_priced_transfer(&signer, 0, BASE_PRICE, 0).await)
+            .await
+            .unwrap();
+
+        // The legacy price counts as both fees: 12.5% above the original is not enough.
+        let result = executor
+            .send_raw_transaction_async(signed_priced_transfer(&signer, 0, 2_000_000_000, 0).await)
+            .await;
+        assert!(matches!(
+            result,
+            Err(TransactionExecutorError::ReplacementUnderpriced { minimum })
+                if minimum.max_fee_per_gas == 3_000_000_000 && minimum.max_priority_fee_per_gas == 1_200_000_000
+        ));
+
+        // Meeting the larger of the two on both fields is accepted.
+        executor
+            .send_raw_transaction_async(signed_priced_transfer(&signer, 0, 3_000_000_000, 0).await)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_replacement_falls_back_to_the_bump_when_the_estimate_fails() {
+        let signer = PrivateKeySigner::random();
+        let executor = replacement_executor(ScriptedRpcClient::new(), RawTransactionExecutorConfig::default())
+            .with_safe_enrichment(
+                Arc::new(FixedFees(None)),
+                Arc::new(crate::transaction_monitor::NoSafeEnrichment),
+            );
+        executor
+            .send_raw_transaction_async(signed_priced_transfer(&signer, 0, BASE_PRICE, 0).await)
+            .await
+            .unwrap();
+        executor
+            .send_raw_transaction_async(signed_priced_transfer(&signer, 0, BUMPED_PRICE, 0).await)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_node_refusal_to_replace_is_the_same_underpriced_error() {
+        let signer = PrivateKeySigner::random();
+        let executor = replacement_executor(ScriptedRpcClient::new(), RawTransactionExecutorConfig::default());
+        executor
+            .send_raw_transaction_async(signed_priced_transfer(&signer, 0, BASE_PRICE, 0).await)
+            .await
+            .unwrap();
+
+        *executor.rpc_client.fail_next.lock().unwrap() = Some("replacement transaction underpriced".to_string());
+        let result = executor
+            .send_raw_transaction_async(signed_priced_transfer(&signer, 0, BUMPED_PRICE, 0).await)
+            .await;
+        assert!(matches!(
+            result,
+            Err(TransactionExecutorError::ReplacementUnderpriced { minimum })
+                if minimum.max_fee_per_gas == BUMPED_PRICE
+        ));
+        assert_eq!(executor.transaction_store().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_replacements_are_capped_per_nonce_without_counting_the_original() {
+        let signer = PrivateKeySigner::random();
+        let executor = replacement_executor(
+            ScriptedRpcClient::new(),
+            RawTransactionExecutorConfig {
+                max_replacements_per_nonce: 2,
+                ..Default::default()
+            },
+        );
+        let mut price = BASE_PRICE;
+        executor
+            .send_raw_transaction_async(signed_priced_transfer(&signer, 0, price, 0).await)
+            .await
+            .unwrap();
+        for _ in 0..2 {
+            price = price + price.div_ceil(8);
+            executor
+                .send_raw_transaction_async(signed_priced_transfer(&signer, 0, price, 0).await)
+                .await
+                .unwrap();
+        }
+
+        price = price + price.div_ceil(8);
+        let result = executor
+            .send_raw_transaction_async(signed_priced_transfer(&signer, 0, price, 0).await)
+            .await;
+        assert!(
+            matches!(
+                result,
+                Err(TransactionExecutorError::ReplacementLimitReached { max: 2 })
+            ),
+            "unexpected result: {result:?}"
+        );
+        assert_eq!(broadcasts(&executor), 3, "the refused replacement was not broadcast");
+        assert_eq!(executor.transaction_store().count(), 3);
+
+        // Another nonce of the same signer has its own count.
+        executor
+            .send_raw_transaction_async(signed_priced_transfer(&signer, 1, BASE_PRICE, 0).await)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_a_cap_of_zero_refuses_every_replacement() {
+        let signer = PrivateKeySigner::random();
+        let executor = replacement_executor(
+            ScriptedRpcClient::new(),
+            RawTransactionExecutorConfig {
+                max_replacements_per_nonce: 0,
+                ..Default::default()
+            },
+        );
+        executor
+            .send_raw_transaction_async(signed_priced_transfer(&signer, 0, BASE_PRICE, 0).await)
+            .await
+            .unwrap();
+        let result = executor
+            .send_raw_transaction_async(signed_priced_transfer(&signer, 0, BUMPED_PRICE, 0).await)
+            .await;
+        assert!(matches!(
+            result,
+            Err(TransactionExecutorError::ReplacementLimitReached { max: 0 })
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_a_failed_replacement_broadcast_releases_its_capacity_and_the_right_to_replace() {
+        let signer = PrivateKeySigner::random();
+        let executor = replacement_executor(
+            ScriptedRpcClient::new(),
+            RawTransactionExecutorConfig {
+                max_submitted_transactions: 2,
+                max_replacements_per_nonce: 1,
+                ..Default::default()
+            },
+        );
+        executor
+            .send_raw_transaction_async(signed_priced_transfer(&signer, 0, BASE_PRICE, 0).await)
+            .await
+            .unwrap();
+
+        *executor.rpc_client.fail_next.lock().unwrap() = Some("connection refused".to_string());
+        let failed = executor
+            .send_raw_transaction_async(signed_priced_transfer(&signer, 0, BUMPED_PRICE, 0).await)
+            .await;
+        assert!(matches!(failed, Err(TransactionExecutorError::RpcError(_))));
+
+        // Neither the capacity slot (limit 2) nor the one allowed replacement was consumed.
+        executor
+            .send_raw_transaction_async(signed_priced_transfer(&signer, 0, BUMPED_PRICE, 0).await)
+            .await
+            .unwrap();
+        assert_eq!(executor.transaction_store().submitted_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_replacement_is_refused_for_capacity_before_it_is_broadcast() {
+        let signer = PrivateKeySigner::random();
+        let executor = replacement_executor(
+            ScriptedRpcClient::new(),
+            RawTransactionExecutorConfig {
+                max_submitted_transactions: 1,
+                ..Default::default()
+            },
+        );
+        executor
+            .send_raw_transaction_async(signed_priced_transfer(&signer, 0, BASE_PRICE, 0).await)
+            .await
+            .unwrap();
+        let result = executor
+            .send_raw_transaction_async(signed_priced_transfer(&signer, 0, BUMPED_PRICE, 0).await)
+            .await;
+        assert!(matches!(result, Err(TransactionExecutorError::OverloadedError)));
+        assert_eq!(broadcasts(&executor), 1);
+    }
+
+    #[tokio::test]
+    async fn test_replacement_answered_with_another_hash_is_rejected_and_not_tracked() {
+        let signer = PrivateKeySigner::random();
+        let original_raw = signed_priced_transfer(&signer, 0, BASE_PRICE, 0).await;
+        let original_hash = decode_transaction_summary(&original_raw).unwrap().transaction_hash;
+        let store = TransactionStore::new();
+        let original = Uuid::new_v4();
+        let reservation = store.try_reserve_submission(&original_raw, 0, 0).unwrap();
+        store
+            .insert_or_resume(
+                TransactionRecord {
+                    id: original,
+                    raw_transaction: original_raw,
+                    transaction_hash: original_hash,
+                    status: TransactionStatus::Submitted,
+                    submitted_at: Utc::now(),
+                    confirmed_at: None,
+                    error_message: None,
+                    safe_execution: None,
+                    diagnosis: None,
+                    resume_generation: 0,
+                    last_resumed_at: None,
+                },
+                reservation,
+                false,
+            )
+            .unwrap();
+        let executor = RawTransactionExecutor::new(
+            FixedHashRpcClient(original_hash),
+            store,
+            TransactionValidator::new(),
+            RawTransactionExecutorConfig::default(),
+        );
+
+        let result = executor
+            .send_raw_transaction_async(signed_priced_transfer(&signer, 0, BUMPED_PRICE, 0).await)
+            .await;
+        assert!(
+            matches!(&result, Err(TransactionExecutorError::RpcError(message)) if message.contains("different hash")),
+            "unexpected result: {result:?}"
+        );
+        let store = executor.transaction_store();
+        assert_eq!(store.count(), 1);
+        assert_eq!(store.submitted_count(), 1);
+        assert_eq!(store.get(original).unwrap().resume_generation, 0);
+    }
+
+    #[tokio::test]
+    async fn test_a_transaction_without_a_recoverable_signer_is_never_a_replacement() {
+        let executor = replacement_executor(ScriptedRpcClient::new(), RawTransactionExecutorConfig::default());
+        assert!(executor.pending_replacement_target(&[0xff, 0x01]).is_none());
+
+        // Same signer and nonce but a decodable transaction: found once the original is tracked.
+        let signer = PrivateKeySigner::random();
+        let raw = signed_priced_transfer(&signer, 3, BASE_PRICE, 0).await;
+        let other = signed_priced_transfer(&signer, 3, BUMPED_PRICE, 0).await;
+        assert!(executor.pending_replacement_target(&other).is_none());
+        executor.send_raw_transaction_async(raw.clone()).await.unwrap();
+        assert!(executor.pending_replacement_target(&other).is_some());
+        assert!(
+            executor.pending_replacement_target(&raw).is_none(),
+            "the same bytes are not a replacement"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_racing_replacements_of_one_transaction_accept_exactly_one() {
+        let signer = PrivateKeySigner::random();
+        let mut client = ScriptedRpcClient::new();
+        client.delay = Duration::from_millis(30);
+        let executor = Arc::new(replacement_executor(client, RawTransactionExecutorConfig::default()));
+        executor
+            .send_raw_transaction_async(signed_priced_transfer(&signer, 0, BASE_PRICE, 0).await)
+            .await
+            .unwrap();
+
+        let mut tasks = Vec::new();
+        for salt in 0..8u64 {
+            let executor = executor.clone();
+            let raw = signed_priced_transfer(&signer, 0, BUMPED_PRICE, salt).await;
+            tasks.push(tokio::spawn(
+                async move { executor.send_raw_transaction_async(raw).await },
+            ));
+        }
+        let mut accepted = 0;
+        for task in tasks {
+            match task.await.unwrap() {
+                Ok(_) => accepted += 1,
+                Err(
+                    TransactionExecutorError::ReplacementConflict
+                    | TransactionExecutorError::ReplacementUnderpriced { .. },
+                ) => {}
+                Err(other) => panic!("unexpected error: {other:?}"),
+            }
+        }
+
+        assert_eq!(accepted, 1, "exactly one replacement wins");
+        let store = executor.transaction_store();
+        assert_eq!(store.count(), 2);
+        assert_eq!(store.submitted_count(), 2);
+        assert_eq!(broadcasts(&executor), 2, "the losers were never broadcast");
+    }
+
+    fn announcement_executor(store: Arc<TransactionStore>) -> RawTransactionExecutor<ScriptedRpcClient> {
+        let policy = Arc::new(HoprPolicy::new(
+            Arc::new(ModuleChain),
+            store.clone(),
+            HoprPolicyConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            HoprContracts {
+                token: Address::from([0x11; 20]),
+                channels: Address::from([0xCC; 20]),
+                announcements: Address::from([0x33; 20]),
+            },
+        ));
+        RawTransactionExecutor::with_shared_dependencies(
+            Arc::new(ScriptedRpcClient::new()),
+            store,
+            Arc::new(TransactionValidator::new()),
+            RawTransactionExecutorConfig::default(),
+        )
+        .with_hopr_policy(policy)
+    }
+
+    #[tokio::test]
+    async fn test_hopr_replacement_is_admitted_and_its_action_is_bound_to_the_replacement() {
+        let store = Arc::new(TransactionStore::new());
+        let executor = announcement_executor(store.clone());
+        let signer = PrivateKeySigner::random();
+        let original = executor
+            .send_raw_transaction_async(signed_announcement(&signer, 0).await)
+            .await
+            .unwrap();
+
+        // Not a replacement: another nonce, or the same nonce below the minimum fee. The
+        // original still carries the action, so neither is broadcast again.
+        let other_nonce = executor
+            .send_raw_transaction_async(signed_announcement(&signer, 1).await)
+            .await;
+        assert!(matches!(
+            other_nonce,
+            Err(TransactionExecutorError::DuplicateHoprAction { existing, .. }) if existing == original
+        ));
+        let underpriced = executor
+            .send_raw_transaction_async(signed_announcement_priced(&signer, 0, 1_000_000_001).await)
+            .await;
+        assert!(matches!(
+            underpriced,
+            Err(TransactionExecutorError::ReplacementUnderpriced { .. })
+        ));
+        assert_eq!(executor.rpc_client.broadcasts.lock().unwrap().to_owned(), 1);
+
+        // A valid replacement is admitted without a duplicate refusal and carries the action.
+        let replacement = executor
+            .send_raw_transaction_async(signed_announcement_priced(&signer, 0, BUMPED_PRICE).await)
+            .await
+            .expect("a replacement of the tracked action is not a duplicate");
+        assert_ne!(replacement, original);
+        let copy = executor
+            .send_raw_transaction_async(signed_announcement(&signer, 2).await)
+            .await;
+        assert!(matches!(
+            copy,
+            Err(TransactionExecutorError::DuplicateHoprAction { existing, .. }) if existing == replacement
+        ));
+        assert_eq!(store.count(), 2);
+        assert_eq!(executor.rpc_client.broadcasts.lock().unwrap().to_owned(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_hopr_replacement_whose_broadcast_fails_leaves_the_action_with_the_original() {
+        let store = Arc::new(TransactionStore::new());
+        let executor = announcement_executor(store.clone());
+        let signer = PrivateKeySigner::random();
+        let original = executor
+            .send_raw_transaction_async(signed_announcement(&signer, 0).await)
+            .await
+            .unwrap();
+
+        *executor.rpc_client.fail_next.lock().unwrap() = Some("connection refused".to_string());
+        let failed = executor
+            .send_raw_transaction_async(signed_announcement_priced(&signer, 0, BUMPED_PRICE).await)
+            .await;
+        assert!(matches!(failed, Err(TransactionExecutorError::RpcError(_))));
+
+        let copy = executor
+            .send_raw_transaction_async(signed_announcement(&signer, 1).await)
+            .await;
+        assert!(matches!(
+            copy,
+            Err(TransactionExecutorError::DuplicateHoprAction { existing, .. }) if existing == original
+        ));
     }
 }

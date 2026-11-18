@@ -208,7 +208,7 @@ fn classify_unmined(known: bool, nonce: u64, mined_nonce: u64, pending_nonce: u6
 /// also meets the `recommended` fees: the signed fees raised by 12.5% (an eighth), rounded up.
 /// The increase is computed on its own so the result never falls below the signed fee, and
 /// saturates only when the raised fee exceeds `u128::MAX`.
-fn min_replacement_fees(signed: FeePair, recommended: FeePair) -> FeePair {
+pub(crate) fn min_replacement_fees(signed: FeePair, recommended: FeePair) -> FeePair {
     let bump = |value: u128| value.saturating_add(value.div_ceil(8));
     FeePair {
         max_fee_per_gas: bump(signed.max_fee_per_gas).max(recommended.max_fee_per_gas),
@@ -217,7 +217,7 @@ fn min_replacement_fees(signed: FeePair, recommended: FeePair) -> FeePair {
 }
 
 /// Fees a raw transaction was signed with; a legacy gas price counts as both fees.
-fn signed_fee_pair(raw_tx: &[u8]) -> Option<FeePair> {
+pub(crate) fn signed_fee_pair(raw_tx: &[u8]) -> Option<FeePair> {
     decode_transaction_summary(raw_tx).map(|summary| FeePair {
         max_fee_per_gas: summary.max_fee_per_gas,
         max_priority_fee_per_gas: summary.max_priority_fee_per_gas.unwrap_or(summary.max_fee_per_gas),
