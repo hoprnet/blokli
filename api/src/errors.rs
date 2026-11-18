@@ -93,6 +93,10 @@ pub mod codes {
     /// this one does not pay enough more to replace it
     pub const REPLACEMENT_UNDERPRICED: &str = "REPLACEMENT_UNDERPRICED";
 
+    /// The pending transaction of this signer and nonce was already replaced the configured
+    /// maximum number of times (`api.transactions.max_replacements_per_nonce`)
+    pub const REPLACEMENT_LIMIT_REACHED: &str = "REPLACEMENT_LIMIT_REACHED";
+
     /// The RPC node refused the transaction: its nonce was already used
     pub const NONCE_TOO_LOW: &str = "NONCE_TOO_LOW";
 
@@ -660,6 +664,25 @@ pub fn rpc_broadcast_error(message: impl Into<String>) -> RpcError {
     RpcError {
         code: code.to_string(),
         message,
+    }
+}
+
+/// Creates an RpcError for a replacement that pays less than the minimum fees.
+///
+/// `message` carries the minimum `maxFeePerGas` and `maxPriorityFeePerGas`. The code is the one
+/// already used when the node refuses a replacement, so clients handle both alike.
+pub fn replacement_underpriced(message: impl Into<String>) -> RpcError {
+    RpcError {
+        code: codes::REPLACEMENT_UNDERPRICED.to_string(),
+        message: message.into(),
+    }
+}
+
+/// Creates an RpcError for a nonce whose pending transaction was replaced the maximum number of times.
+pub fn replacement_limit_reached(message: impl Into<String>) -> RpcError {
+    RpcError {
+        code: codes::REPLACEMENT_LIMIT_REACHED.to_string(),
+        message: message.into(),
     }
 }
 
