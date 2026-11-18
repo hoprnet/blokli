@@ -215,6 +215,7 @@ async fn setup_chain_info(db: &BlokliDb) -> Result<()> {
         ledger_dst: Set(Some(vec![2u8; 32])),
         safe_registry_dst: Set(Some(vec![3u8; 32])),
         channel_closure_grace_period: Set(Some(300)),
+        last_verified_block: Set(None),
     };
     chain_info.update(db.conn(TargetDb::Index)).await?;
 
@@ -942,6 +943,7 @@ async fn test_chain_info_query_with_null_optional_fields() -> Result<()> {
         ledger_dst: Set(None),                      // NULL
         safe_registry_dst: Set(None),               // NULL
         channel_closure_grace_period: Set(None),    // NULL
+        last_verified_block: Set(None),
     };
     chain_info.update(db.conn(TargetDb::Index)).await?;
 

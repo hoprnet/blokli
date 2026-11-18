@@ -22,7 +22,7 @@ use crate::{
     api::info::{DomainSeparator, IndexerData},
     db::BlokliDb,
     errors::{DbSqlError, DbSqlError::MissingFixedTableEntry, Result},
-    numeric::i64_to_u32,
+    numeric::{i64_to_u32, i64_to_u64, u64_to_i64},
 };
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -102,6 +102,15 @@ pub trait BlokliDbInfoOperations {
 
     /// Updates the indexer state info.
     async fn set_indexer_state_info<'a>(&'a self, tx: OptTx<'a>, block_num: u32) -> Result<()>;
+
+    /// Gets the last block that post-finality verification checked.
+    ///
+    /// Returns `None` when no cursor is stored yet, which is the case on a fresh index and after
+    /// [`BlokliDbInfoOperations::clear_index_db`].
+    async fn get_last_verified_block<'a>(&'a self, tx: OptTx<'a>) -> Result<Option<u64>>;
+
+    /// Stores the last block that post-finality verification checked.
+    async fn set_last_verified_block<'a>(&'a self, tx: OptTx<'a>, block: u64) -> Result<()>;
 }
 
 #[async_trait]
@@ -429,16 +438,59 @@ impl BlokliDbInfoOperations for BlokliDb {
             })
             .await
     }
+
+    async fn get_last_verified_block<'a>(&'a self, tx: OptTx<'a>) -> Result<Option<u64>> {
+        self.nest_transaction(tx)
+            .await?
+            .perform(|tx| {
+                Box::pin(async move {
+                    let model = chain_info::Entity::find_by_id(SINGULAR_TABLE_FIXED_ID)
+                        .one(tx.as_ref())
+                        .await?
+                        .ok_or(MissingFixedTableEntry("chain_info".into()))?;
+
+                    model
+                        .last_verified_block
+                        .map(|block| i64_to_u64(block, "last_verified_block"))
+                        .transpose()
+                })
+            })
+            .await
+    }
+
+    async fn set_last_verified_block<'a>(&'a self, tx: OptTx<'a>, block: u64) -> Result<()> {
+        let block_i64 = u64_to_i64(block, "last_verified_block")?;
+
+        self.nest_transaction(tx)
+            .await?
+            .perform(|tx| {
+                Box::pin(async move {
+                    chain_info::ActiveModel {
+                        id: Set(SINGULAR_TABLE_FIXED_ID),
+                        last_verified_block: Set(Some(block_i64)),
+                        ..Default::default()
+                    }
+                    .update(tx.as_ref())
+                    .await?;
+
+                    Ok::<_, DbSqlError>(())
+                })
+            })
+            .await?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use hex_literal::hex;
     use hopr_types::primitive::{balance::HoprBalance, prelude::Address};
+    use sea_orm::ConnectionTrait;
 
     use crate::{
-        db::BlokliDb, info::BlokliDbInfoOperations, safe_contracts::BlokliDbSafeContractOperations,
-        safe_history::BlokliDbSafeHistoryOperations,
+        BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb, info::BlokliDbInfoOperations,
+        safe_contracts::BlokliDbSafeContractOperations, safe_history::BlokliDbSafeHistoryOperations,
     };
 
     lazy_static::lazy_static! {
@@ -516,6 +568,80 @@ mod tests {
             db.get_safe_owners_synced_block(None, *ADDR_1).await?,
             None,
             "the snapshot marker is reset together with the owner state"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_last_verified_block_is_unset_initially() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        assert_eq!(
+            db.get_last_verified_block(None).await?,
+            None,
+            "a fresh index has not verified anything"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_set_and_get_last_verified_block() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        db.set_last_verified_block(None, 42).await?;
+        assert_eq!(db.get_last_verified_block(None).await?, Some(42));
+
+        db.set_last_verified_block(None, 43).await?;
+        assert_eq!(db.get_last_verified_block(None).await?, Some(43));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_clear_index_db_resets_the_last_verified_block() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        db.set_last_verified_block(None, 42).await?;
+        db.clear_index_db(None).await?;
+
+        assert_eq!(
+            db.get_last_verified_block(None).await?,
+            None,
+            "a re-synchronised index owes its post-finality checks again"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_last_verified_block_survives_a_reopen() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let url = format!("sqlite://{}?mode=rwc", dir.path().join("index.db").display());
+
+        let db = BlokliDb::new(&url, None, Default::default()).await?;
+        db.ensure_singletons().await?;
+        db.set_last_verified_block(None, 7).await?;
+        drop(db);
+
+        let reopened = BlokliDb::new(&url, None, Default::default()).await?;
+
+        assert_eq!(reopened.get_last_verified_block(None).await?, Some(7));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_set_last_verified_block_fails_without_the_singleton_row() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        db.conn(TargetDb::Index)
+            .execute_unprepared("DELETE FROM chain_info")
+            .await?;
+        assert!(
+            db.set_last_verified_block(None, 42).await.is_err(),
+            "writing the cursor must fail when the singleton row is missing"
         );
 
         Ok(())

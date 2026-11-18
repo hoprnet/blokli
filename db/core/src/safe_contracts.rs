@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use async_trait::async_trait;
 use blokli_db_entity::{
@@ -7,12 +7,14 @@ use blokli_db_entity::{
     views::safe_contract_current,
 };
 use hopr_types::primitive::prelude::Address;
-use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, Set};
-use sea_query::OnConflict;
+use sea_orm::{
+    ColumnTrait, ConnectionTrait, EntityTrait, ExprTrait, FromQueryResult, QueryFilter, QueryOrder, QuerySelect, Set,
+};
+use sea_query::{Expr, OnConflict};
 
 use crate::{
     BlokliDb, BlokliDbGeneralModelOperations, DbSqlError, OptTx, Result,
-    numeric::{log_position_to_i64, u64_to_i64},
+    numeric::{i64_to_u64, log_position_to_i64, u64_to_i64},
     safe_history::BlokliDbSafeHistoryOperations,
 };
 
@@ -349,6 +351,12 @@ pub trait BlokliDbSafeContractOperations: BlokliDbGeneralModelOperations {
     /// Returns all known Safe addresses ordered by insertion order.
     async fn get_safe_contract_addresses<'a>(&'a self, tx: OptTx<'a>) -> Result<Vec<Address>>;
 
+    /// Returns the block in which each known Safe first appeared.
+    ///
+    /// The earliest state record of a Safe is its discovery: its logs were not requested before
+    /// that block.
+    async fn get_safe_contract_discovery_blocks<'a>(&'a self, tx: OptTx<'a>) -> Result<BTreeMap<Address, u64>>;
+
     /// Get all safes that have only pre-seeded state.
     ///
     /// Pre-seeded safes are those whose only state record has
@@ -385,6 +393,12 @@ pub trait BlokliDbSafeContractOperations: BlokliDbGeneralModelOperations {
         tx_index: u64,
         log_index: u64,
     ) -> Result<()>;
+}
+
+#[derive(FromQueryResult)]
+struct SafeDiscoveryBlock {
+    address: Vec<u8>,
+    discovery_block: i64,
 }
 
 /// Combine identity and state into a SafeContractEntry.
@@ -647,6 +661,39 @@ impl BlokliDbSafeContractOperations for BlokliDb {
 
         tx.commit().await?;
         Ok(addresses)
+    }
+
+    async fn get_safe_contract_discovery_blocks<'a>(&'a self, tx: OptTx<'a>) -> Result<BTreeMap<Address, u64>> {
+        let tx = self.nest_transaction(tx).await?;
+
+        let rows = HoprSafeContractState::find()
+            .select_only()
+            .column_as(hopr_safe_contract::Column::Address, "address")
+            .column_as(
+                Expr::col((
+                    hopr_safe_contract_state::Entity,
+                    hopr_safe_contract_state::Column::PublishedBlock,
+                ))
+                .min(),
+                "discovery_block",
+            )
+            .inner_join(hopr_safe_contract::Entity)
+            .group_by(hopr_safe_contract::Column::Address)
+            .into_model::<SafeDiscoveryBlock>()
+            .all(tx.as_ref())
+            .await?;
+
+        let discovery_blocks = rows
+            .into_iter()
+            .map(|row| {
+                let address = Address::try_from(row.address.as_slice())
+                    .map_err(|e| DbSqlError::Construction(format!("invalid safe address length: {e}")))?;
+                Ok((address, i64_to_u64(row.discovery_block, "discovery_block")?))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+
+        tx.commit().await?;
+        Ok(discovery_blocks)
     }
 
     async fn load_preseeded_safes<'a>(&'a self, tx: OptTx<'a>, network_name: &str) -> Result<usize> {
@@ -927,6 +974,61 @@ mod tests {
             at_100.module_address,
             module_v1.as_ref().to_vec(),
             "historical module at block 100 should be v1"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_discovery_blocks_are_empty_without_safes() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        assert!(db.get_safe_contract_discovery_blocks(None).await?.is_empty());
+
+        Ok(())
+    }
+
+    /// The earliest state of a Safe is its discovery, the later ones are updates.
+    #[tokio::test]
+    async fn test_discovery_block_is_the_earliest_state_of_each_safe() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let first_safe = random_address();
+        let second_safe = random_address();
+        let module = random_address();
+        let chain_key = random_address();
+
+        db.upsert_safe_contract(None, first_safe, module, chain_key, 120, 0, 1)
+            .await?;
+        db.upsert_safe_contract(None, first_safe, module, chain_key, 150, 0, 0)
+            .await?;
+        db.upsert_safe_contract(None, second_safe, module, chain_key, 200, 0, 0)
+            .await?;
+
+        let discovery_blocks = db.get_safe_contract_discovery_blocks(None).await?;
+
+        assert_eq!(discovery_blocks.get(&first_safe), Some(&120));
+        assert_eq!(discovery_blocks.get(&second_safe), Some(&200));
+        assert_eq!(discovery_blocks.len(), 2);
+
+        Ok(())
+    }
+
+    /// A pre-seeded Safe carries its synthetic marker as the discovery block.
+    #[tokio::test]
+    async fn test_discovery_block_of_a_preseeded_safe_is_its_marker() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let safe = random_address();
+        let module = random_address();
+        let chain_key = random_address();
+
+        db.upsert_safe_contract(None, safe, module, chain_key, PRESEEDED_BLOCK_U64, 0, 0)
+            .await?;
+
+        assert_eq!(
+            db.get_safe_contract_discovery_blocks(None).await?.get(&safe),
+            Some(&PRESEEDED_BLOCK_U64)
         );
 
         Ok(())

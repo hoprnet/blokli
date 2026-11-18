@@ -77,6 +77,7 @@ async fn update_watermark(db: &BlokliDb, block: i64, tx_index: i64, log_index: i
         safe_registry_dst: Set(None),
         channel_closure_grace_period: Set(None),
         key_binding_fee: Set(None),
+        last_verified_block: Set(None),
     };
 
     chain_info::Entity::insert(chain_info_model)
