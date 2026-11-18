@@ -194,13 +194,12 @@ fn classify_unmined(known: bool, nonce: u64, mined_nonce: u64, pending_nonce: u6
     }
 }
 
-/// Factor, in thousandths, by which a replacement must raise both fees for nodes to accept it.
-const REPLACEMENT_FEE_BUMP_PER_MILLE: u128 = 1125;
-
 /// Lowest fees at which a replacement of a transaction signed with `signed` is accepted and
-/// also meets the `recommended` fees: the signed fees raised by 12.5%, rounded up.
+/// also meets the `recommended` fees: the signed fees raised by 12.5% (an eighth), rounded up.
+/// The increase is computed on its own so the result never falls below the signed fee, and
+/// saturates only when the raised fee exceeds `u128::MAX`.
 fn min_replacement_fees(signed: FeePair, recommended: FeePair) -> FeePair {
-    let bump = |value: u128| value.saturating_mul(REPLACEMENT_FEE_BUMP_PER_MILLE).div_ceil(1000);
+    let bump = |value: u128| value.saturating_add(value.div_ceil(8));
     FeePair {
         max_fee_per_gas: bump(signed.max_fee_per_gas).max(recommended.max_fee_per_gas),
         max_priority_fee_per_gas: bump(signed.max_priority_fee_per_gas).max(recommended.max_priority_fee_per_gas),
@@ -1928,6 +1927,28 @@ mod tests {
         assert_eq!(min_replacement_fees(fees(1_000, 8), fees(0, 0)), fees(1_125, 9));
         assert_eq!(min_replacement_fees(fees(1_000, 8), fees(2_000, 100)), fees(2_000, 100));
         assert_eq!(min_replacement_fees(fees(1, 1), fees(0, 0)), fees(2, 2));
+        assert_eq!(min_replacement_fees(fees(0, 0), fees(0, 0)), fees(0, 0));
+    }
+
+    #[test]
+    fn test_min_replacement_fees_never_fall_below_the_signed_fee_at_the_u128_range() {
+        let fees = |max_fee_per_gas, max_priority_fee_per_gas| FeePair {
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
+        };
+        let large = 1u128 << 120;
+        assert_eq!(
+            min_replacement_fees(fees(large, large), fees(0, 0)),
+            fees(large + (large >> 3), large + (large >> 3))
+        );
+        // The raised fee still fits just below the top of the range.
+        let fits = u128::MAX - (u128::MAX >> 3) - 1;
+        assert!(min_replacement_fees(fees(fits, fits), fees(0, 0)).max_fee_per_gas >= fits);
+        assert_eq!(min_replacement_fees(fees(u128::MAX, 1), fees(0, 0)), fees(u128::MAX, 2));
+        assert_eq!(
+            min_replacement_fees(fees(u128::MAX - 1, u128::MAX), fees(0, 0)),
+            fees(u128::MAX, u128::MAX)
+        );
     }
 
     #[tokio::test]
