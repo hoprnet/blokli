@@ -142,7 +142,7 @@ impl MutationRoot {
                 Ok(mut record) => {
                     // Resuming tracking cleared the stored diagnosis; report the one captured
                     // before that, so the caller still sees the fees and retry hint.
-                    record.diagnosis = record.diagnosis.or(diagnosis);
+                    record.diagnosis = record.diagnosis.or(diagnosis.map(|diagnosis| *diagnosis));
                     Ok(SendTransactionAsyncResult::Deduplicated(DeduplicatedTransaction {
                         transaction: transaction_from_record(record),
                         operation: RAW_TRANSACTION_OPERATION.to_string(),

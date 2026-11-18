@@ -79,7 +79,9 @@ pub enum TransactionExecutorError {
         existing: Uuid,
         /// Why that transaction last timed out unmined, when this resubmission resumed its
         /// tracking. Resuming clears the stored diagnosis, so it is carried here instead.
-        diagnosis: Option<TransactionDiagnosis>,
+        ///
+        /// Boxed to keep this error small.
+        diagnosis: Option<Box<TransactionDiagnosis>>,
     },
     /// The signer is on cooldown after repeated deterministically invalid submissions.
     #[error("HOPR {operation} suppressed for {}s: {reason}", retry_after.as_secs())]
@@ -492,7 +494,10 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
                 if let Some(action) = admitted {
                     action.register(existing);
                 }
-                Err(TransactionExecutorError::AlreadyTracked { existing, diagnosis })
+                Err(TransactionExecutorError::AlreadyTracked {
+                    existing,
+                    diagnosis: diagnosis.map(Box::new),
+                })
             }
             Err(e) => {
                 error!(id = %id, tx_hash = %tx_hash, error = %e, "Failed to store submitted transaction");
