@@ -11,7 +11,7 @@ use std::{
 use blokli_chain_api::{
     DefaultHttpRequestor,
     rpc_adapter::RpcAdapter,
-    transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
+    transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig, TransactionExecutorError},
     transaction_monitor::{NoSafeEnrichment, TransactionMonitor, TransactionMonitorConfig},
     transaction_store::{TransactionStatus, TransactionStore},
     transaction_validator::TransactionValidator,
@@ -707,5 +707,196 @@ async fn test_monitor_handles_reorg() -> anyhow::Result<()> {
         "Transaction should remain in valid state"
     );
 
+    Ok(())
+}
+
+// =============================================================================
+// Test Category: Fee-bumped replacements with the mempool held
+// =============================================================================
+
+/// Gas price the original transaction of the replacement tests is signed with.
+const BASE_GAS_PRICE: u128 = 2_000_000_000;
+
+/// Stop Anvil from mining on its own, so submitted transactions stay in its mempool until
+/// [`mine_block`] is called.
+async fn hold_mempool(ctx: &TestContext) -> anyhow::Result<()> {
+    let client = ClientBuilder::default().transport(ReqwestTransport::new(ctx.anvil.endpoint_url()), true);
+    client.request::<_, ()>("evm_setAutomine", (false,)).await?;
+    client.request::<_, ()>("evm_setIntervalMining", (0u64,)).await?;
+    Ok(())
+}
+
+/// Mine one block holding whatever is in Anvil's mempool.
+async fn mine_block(ctx: &TestContext) -> anyhow::Result<()> {
+    let client = ClientBuilder::default().transport(ReqwestTransport::new(ctx.anvil.endpoint_url()), true);
+    client.request::<_, serde_json::Value>("evm_mine", ()).await?;
+    Ok(())
+}
+
+/// A transfer at `nonce` from the chain key, priced at `gas_price` (as both fees).
+async fn create_priced_transfer(ctx: &TestContext, nonce: u64, gas_price: u128) -> anyhow::Result<Vec<u8>> {
+    let tx = TxLegacy {
+        chain_id: Some(ctx.anvil.chain_id()),
+        nonce,
+        gas_price,
+        gas_limit: 21_000,
+        to: TxKind::Call(AlloyAddress::from_hopr_address(random_address())),
+        value: U256::from(1_000u64),
+        input: Default::default(),
+    };
+    let signer = PrivateKeySigner::from_slice(ctx.chain_key.secret().as_ref()).expect("Failed to create signer");
+    let signature = signer.sign_hash(&tx.signature_hash()).await?;
+    let mut encoded = Vec::new();
+    tx.into_signed(signature).encode_2718(&mut encoded);
+    Ok(encoded)
+}
+
+/// `price` plus the 12.5% a replacement must add, rounded up.
+fn bumped(price: u128) -> u128 {
+    price + price.div_ceil(8)
+}
+
+#[tokio::test]
+async fn test_replacement_is_broadcast_tracked_and_mined_while_the_mempool_is_held() -> anyhow::Result<()> {
+    let mut ctx = setup_test_environment(Duration::from_secs(1), 1, RawTransactionExecutorConfig::default()).await?;
+    hold_mempool(&ctx).await?;
+    ctx.monitor_handle = Some(start_monitor(&mut ctx));
+
+    let original = ctx
+        .executor
+        .send_raw_transaction_async(create_priced_transfer(&ctx, 0, BASE_GAS_PRICE).await?)
+        .await?;
+    let replacement = ctx
+        .executor
+        .send_raw_transaction_async(create_priced_transfer(&ctx, 0, bumped(BASE_GAS_PRICE)).await?)
+        .await?;
+    assert_ne!(original, replacement);
+    assert_eq!(ctx.store.count(), 2, "both are tracked as ordinary records");
+    assert_eq!(ctx.store.get(replacement)?.status, TransactionStatus::Submitted);
+
+    mine_block(&ctx).await?;
+    wait_for_condition(Duration::from_secs(10), "the replacement to be confirmed", || {
+        ctx.store
+            .get(replacement)
+            .map(|record| record.status == TransactionStatus::Confirmed)
+            .unwrap_or(false)
+    })
+    .await?;
+    assert_ne!(
+        ctx.store.get(original)?.transaction_hash,
+        ctx.store.get(replacement)?.transaction_hash
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_replacement_below_the_minimum_is_rejected_with_the_minimum_fees() -> anyhow::Result<()> {
+    let ctx = setup_test_environment(Duration::from_secs(1), 1, RawTransactionExecutorConfig::default()).await?;
+    hold_mempool(&ctx).await?;
+
+    ctx.executor
+        .send_raw_transaction_async(create_priced_transfer(&ctx, 0, BASE_GAS_PRICE).await?)
+        .await?;
+    let result = ctx
+        .executor
+        .send_raw_transaction_async(create_priced_transfer(&ctx, 0, bumped(BASE_GAS_PRICE) - 1).await?)
+        .await;
+
+    let Err(TransactionExecutorError::ReplacementUnderpriced { minimum }) = &result else {
+        anyhow::bail!("unexpected result: {result:?}");
+    };
+    assert_eq!(minimum.max_fee_per_gas, bumped(BASE_GAS_PRICE));
+    assert_eq!(minimum.max_priority_fee_per_gas, bumped(BASE_GAS_PRICE));
+    let message = result.unwrap_err().to_string();
+    assert!(message.contains(&bumped(BASE_GAS_PRICE).to_string()), "{message}");
+    assert_eq!(ctx.store.count(), 1, "the rejected replacement is not tracked");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_replacement_after_the_original_was_mined_is_refused_by_the_node() -> anyhow::Result<()> {
+    let mut ctx = setup_test_environment(Duration::from_secs(1), 1, RawTransactionExecutorConfig::default()).await?;
+    hold_mempool(&ctx).await?;
+    ctx.monitor_handle = Some(start_monitor(&mut ctx));
+
+    let original = ctx
+        .executor
+        .send_raw_transaction_async(create_priced_transfer(&ctx, 0, BASE_GAS_PRICE).await?)
+        .await?;
+    mine_block(&ctx).await?;
+    wait_for_condition(Duration::from_secs(10), "the original to be confirmed", || {
+        ctx.store
+            .get(original)
+            .map(|record| record.status == TransactionStatus::Confirmed)
+            .unwrap_or(false)
+    })
+    .await?;
+
+    // The original is the outcome. Nothing is pending at its nonce any more, so this is an
+    // ordinary submission, which the node refuses for the used nonce.
+    let result = ctx
+        .executor
+        .send_raw_transaction_async(create_priced_transfer(&ctx, 0, bumped(BASE_GAS_PRICE)).await?)
+        .await;
+    assert!(
+        matches!(&result, Err(TransactionExecutorError::RpcError(message)) if message.to_lowercase().contains("nonce")),
+        "unexpected result: {result:?}"
+    );
+    assert_eq!(ctx.store.count(), 1);
+    assert_eq!(ctx.store.get(original)?.status, TransactionStatus::Confirmed);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_replacements_beyond_the_cap_are_rejected() -> anyhow::Result<()> {
+    let mut ctx = setup_test_environment(
+        Duration::from_secs(1),
+        1,
+        RawTransactionExecutorConfig {
+            max_replacements_per_nonce: 2,
+            ..Default::default()
+        },
+    )
+    .await?;
+    hold_mempool(&ctx).await?;
+    ctx.monitor_handle = Some(start_monitor(&mut ctx));
+
+    let mut price = BASE_GAS_PRICE;
+    ctx.executor
+        .send_raw_transaction_async(create_priced_transfer(&ctx, 0, price).await?)
+        .await?;
+    let mut last = None;
+    for _ in 0..2 {
+        price = bumped(price);
+        last = Some(
+            ctx.executor
+                .send_raw_transaction_async(create_priced_transfer(&ctx, 0, price).await?)
+                .await?,
+        );
+    }
+
+    let result = ctx
+        .executor
+        .send_raw_transaction_async(create_priced_transfer(&ctx, 0, bumped(price)).await?)
+        .await;
+    assert!(
+        matches!(
+            result,
+            Err(TransactionExecutorError::ReplacementLimitReached { max: 2 })
+        ),
+        "unexpected result: {result:?}"
+    );
+    assert_eq!(ctx.store.count(), 3);
+
+    // The accepted replacements still mine.
+    let last = last.expect("two replacements were accepted");
+    mine_block(&ctx).await?;
+    wait_for_condition(Duration::from_secs(10), "the last replacement to be confirmed", || {
+        ctx.store
+            .get(last)
+            .map(|record| record.status == TransactionStatus::Confirmed)
+            .unwrap_or(false)
+    })
+    .await?;
     Ok(())
 }
