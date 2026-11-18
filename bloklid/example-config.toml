@@ -189,8 +189,11 @@ gas_multiplier = 1.0
 #   maxPriorityFeePerGas = clamp(median tip, min_priority_fee_per_gas, max_priority_fee_per_gas)
 #   maxFeePerGas = clamp(maxPriorityFeePerGas + base_fee_headroom_factor x base fee,
 #                        min_max_fee_per_gas, max_max_fee_per_gas)
-# If fee history is unavailable, the node's EIP-1559 estimate goes through the same
-# bounds instead.
+# If fee history is unavailable, the latest block's base fee and the node's tip
+# estimate (eth_maxPriorityFeePerGas, or eth_gasPrice minus the base fee) replace
+# those inputs, with the same headroom factor and bounds.
+# If max_max_fee_per_gas is below the scaled next-block base fee, the capped max fee
+# could not be included in the next block, so chainInfo returns no EIP-1559 fees.
 # The Gnosis base fee idles at 9-20 wei but can grow about 14x within two minutes
 # (peak seen: 0.23 gwei in 24 hours), so the max fee needs a high floor and
 # headroom. Transactions pay base fee + priority fee, not the max fee. Nodes must

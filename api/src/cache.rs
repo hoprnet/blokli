@@ -15,8 +15,8 @@ pub const FEE_RPC_TIMEOUT: Duration = Duration::from_secs(5);
 /// Caches the raw RPC fee estimates exposed by `chainInfo` for roughly one block.
 ///
 /// Concurrent misses are coalesced into a single RPC call. A failed gas price lookup is retried by the next request,
-/// failed fee snapshots are cached for one TTL. Values are stored as returned by the RPC: gas multiplier and fee floors are applied
-/// by the caller afterwards.
+/// failed fee snapshots are cached for one TTL. Values are stored as returned by the RPC: gas multiplier and fee floors
+/// are applied by the caller afterwards.
 #[derive(Clone)]
 pub struct FeeEstimateCache {
     gas_price: Cache<(), u128>,

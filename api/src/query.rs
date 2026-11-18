@@ -2724,9 +2724,15 @@ impl QueryRoot {
     /// The returned `ChainInfo` contains the last indexed block number, the configured chain ID
     /// and network name, human-readable token values for ticket price and key binding fee,
     /// live gas fee estimates from RPC (`gasPrice`, `maxFeePerGas`, `maxPriorityFeePerGas`) in wei,
-    /// where `maxFeePerGas` is the scaled next-block base fee times `api.base_fee_headroom_factor` plus the
-    /// priority fee (at least `api.min_max_fee_per_gas`), and `maxPriorityFeePerGas` is the scaled recent median
-    /// tip clamped to `api.min_priority_fee_per_gas` and `api.max_priority_fee_per_gas`,
+    /// where `maxPriorityFeePerGas` is the scaled recent median tip from `eth_feeHistory` clamped to
+    /// `api.min_priority_fee_per_gas` and `api.max_priority_fee_per_gas`, and `maxFeePerGas` is that tip plus
+    /// the scaled next-block base fee times `api.base_fee_headroom_factor`, raised to `api.min_max_fee_per_gas`
+    /// and capped at `api.max_max_fee_per_gas`.
+    /// When `eth_feeHistory` is unavailable, the latest block's base fee and the node's tip estimate
+    /// (`eth_maxPriorityFeePerGas`, or `eth_gasPrice` minus the base fee) take its place, with the same formulas
+    /// and bounds.
+    /// When `api.max_max_fee_per_gas` is below the scaled next-block base fee, the capped max fee could not be
+    /// included in the next block, so `maxFeePerGas` and `maxPriorityFeePerGas` are null instead,
     /// minimum incoming ticket winning probability, optional 32-byte domain separator hashes
     /// for channels/ledger/safe registry as `Hex32`, a map of contract addresses, and an optional
     /// channel closure grace period in seconds.

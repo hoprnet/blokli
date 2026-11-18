@@ -515,7 +515,7 @@ config:
     ## @param config.api.minMaxFeePerGas Lower bound, in wei, for the maxFeePerGas exposed by chainInfo. It only caps the price paid; transactions pay base fee plus tip. Must be >= minPriorityFeePerGas
     ##
     minMaxFeePerGas: 500000000
-    ## @param config.api.maxMaxFeePerGas Upper bound, in wei, for the maxFeePerGas exposed by chainInfo, applied after gasMultiplier so it always wins. Bounds the balance reserved upfront (gas limit x maxFeePerGas). Must be >= minMaxFeePerGas and >= maxPriorityFeePerGas
+    ## @param config.api.maxMaxFeePerGas Upper bound, in wei, for the maxFeePerGas exposed by chainInfo, applied after gasMultiplier so it always wins. Bounds the balance reserved upfront (gas limit x maxFeePerGas). Must be >= minMaxFeePerGas and >= maxPriorityFeePerGas. Existing releases with floors above the defaults must lower the floors or set this and maxPriorityFeePerGas. When it is below the next-block base fee, chainInfo returns null EIP-1559 fees
     ##
     maxMaxFeePerGas: 1000000000
     ## @param config.api.minPriorityFeePerGas Lower bound, in wei, for the maxPriorityFeePerGas exposed by chainInfo
@@ -524,7 +524,7 @@ config:
     ## @param config.api.maxPriorityFeePerGas Upper bound, in wei, for the maxPriorityFeePerGas exposed by chainInfo, applied after gasMultiplier so it always wins. Bounds the tip a transaction pays. Must be >= minPriorityFeePerGas
     ##
     maxPriorityFeePerGas: 50000000
-    ## @param config.api.baseFeeHeadroomFactor Multiple of the (gasMultiplier-scaled) next-block base fee included in the maxFeePerGas exposed by chainInfo. Must be >= 1
+    ## @param config.api.baseFeeHeadroomFactor Multiple of the (gasMultiplier-scaled) next-block base fee included in the maxFeePerGas exposed by chainInfo. It applies to the base fee from eth_feeHistory and, when that method is unavailable, to the latest block's base fee. Must be >= 1
     ##
     baseFeeHeadroomFactor: 8
     ## @param config.api.maxQueryDepth Maximum allowed GraphQL query nesting depth; deeper queries are rejected
