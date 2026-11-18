@@ -174,22 +174,41 @@ bind_address = "127.0.0.1:8080"
 # Enable the GraphQL Playground for local development only (default: false)
 playground_enabled = false
 
-# Multiplier applied to EIP-1559 gas estimates exposed by chainInfo
-# A value of 1.0 keeps RPC values unchanged; 1.5 increases maxFeePerGas and
-# maxPriorityFeePerGas by 50% (rounded up to the nearest wei).
+# Multiplier applied to the base fee and tip estimates behind the EIP-1559 fees
+# exposed by chainInfo. A value of 1.0 keeps RPC values unchanged; 1.5 increases
+# them by 50% (rounded up to the nearest wei). It is applied before
+# base_fee_headroom_factor, so the effective base fee headroom is
+# gas_multiplier x base_fee_headroom_factor. The tip cap and the max fee ceiling
+# below are applied after the multiplier and always win.
 # Must be greater than or equal to 1.
 gas_multiplier = 1.0
 
-# Lower bounds, in wei, for the EIP-1559 fees exposed by chainInfo, applied after
-# gas_multiplier. On Gnosis the RPC estimate is often a 1 wei priority fee with a
-# max fee of only twice the (tiny) base fee, which leaves transactions stuck when
-# blocks fill up. Raising the priority fee keeps the estimate's base fee headroom.
-# Nodes must hold gas_limit x maxFeePerGas upfront (10M gas when signed by hoprd),
-# so keep min_max_fee_per_gas low: 0.005 gwei needs 0.00005 xDAI. The max fee
-# floor only caps the price: transactions pay base fee + priority fee.
-# min_max_fee_per_gas must be greater than or equal to min_priority_fee_per_gas.
-min_max_fee_per_gas      = 5000000 # 0.005 gwei
-min_priority_fee_per_gas = 100     # 100 wei
+# EIP-1559 fees exposed by chainInfo, in wei. maxFeePerGas is computed from the
+# next-block base fee (eth_feeHistory) and the priority fee from the recent median
+# tip, both scaled by gas_multiplier:
+#   maxPriorityFeePerGas = clamp(median tip, min_priority_fee_per_gas, max_priority_fee_per_gas)
+#   maxFeePerGas = clamp(maxPriorityFeePerGas + base_fee_headroom_factor x base fee,
+#                        min_max_fee_per_gas, max_max_fee_per_gas)
+# If fee history is unavailable, the latest block's base fee and the node's tip
+# estimate (eth_maxPriorityFeePerGas, or eth_gasPrice minus the base fee) replace
+# those inputs, with the same headroom factor and bounds.
+# If max_max_fee_per_gas is below the scaled next-block base fee, the capped max fee
+# could not be included in the next block, so chainInfo returns no EIP-1559 fees.
+# The Gnosis base fee idles at 9-20 wei but can grow about 14x within two minutes
+# (peak seen: 0.23 gwei in 24 hours), so the max fee needs a high floor and
+# headroom. Transactions pay base fee + priority fee, not the max fee. Nodes must
+# hold gas_limit x maxFeePerGas upfront (10M gas when signed by hoprd); this
+# reserved balance is bounded by max_max_fee_per_gas (1 gwei reserves 0.01 xDAI).
+# Capping the priority fee bounds what a transaction pays.
+# Constraints: min_priority_fee_per_gas <= max_priority_fee_per_gas,
+# min_priority_fee_per_gas <= min_max_fee_per_gas <= max_max_fee_per_gas,
+# max_priority_fee_per_gas <= max_max_fee_per_gas, and base_fee_headroom_factor must
+# be a finite number greater than or equal to 1.
+base_fee_headroom_factor = 8.0
+max_max_fee_per_gas      = 1000000000 # 1 gwei
+max_priority_fee_per_gas = 50000000   # 0.05 gwei
+min_max_fee_per_gas      = 500000000  # 0.5 gwei
+min_priority_fee_per_gas = 10000000   # 0.01 gwei
 
 # Maximum GraphQL query nesting depth. Queries exceeding this are rejected.
 # Real queries reach depth ~4; the default of 8 gives ample headroom.

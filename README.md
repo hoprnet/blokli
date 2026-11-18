@@ -308,6 +308,11 @@ fields. SQLite uses separate index and raw-log databases.
 | `api.bind_address`                    | `127.0.0.1:8080` | `BLOKLI_API_BIND_ADDRESS`                    | API listen address                            |
 | `api.playground_enabled`              | `false`          | `BLOKLI_API_PLAYGROUND_ENABLED`              | Enables GraphQL Playground                    |
 | `api.gas_multiplier`                  | `1.0`            | `BLOKLI_API_GAS_MULTIPLIER`                  | Finite EIP-1559 fee multiplier, minimum `1.0` |
+| `api.min_priority_fee_per_gas`        | `10000000`       | `BLOKLI_API_MIN_PRIORITY_FEE_PER_GAS`        | Minimum priority fee in wei (0.01 gwei)       |
+| `api.max_priority_fee_per_gas`        | `50000000`       | `BLOKLI_API_MAX_PRIORITY_FEE_PER_GAS`        | Maximum priority fee in wei (0.05 gwei)       |
+| `api.min_max_fee_per_gas`             | `500000000`      | `BLOKLI_API_MIN_MAX_FEE_PER_GAS`             | Minimum max fee in wei (0.5 gwei)             |
+| `api.max_max_fee_per_gas`             | `1000000000`     | `BLOKLI_API_MAX_MAX_FEE_PER_GAS`             | Maximum max fee in wei (1 gwei)               |
+| `api.base_fee_headroom_factor`        | `8.0`            | `BLOKLI_API_BASE_FEE_HEADROOM_FACTOR`        | Base fee multiple in max fee, minimum `1.0`   |
 | `api.max_query_depth`                 | `8`              | —                                            | Maximum GraphQL nesting depth                 |
 | `api.max_query_complexity`            | `500`            | —                                            | Maximum GraphQL complexity budget             |
 | `api.database_max_connections`        | `10`             | —                                            | Size of the API's own PostgreSQL pool         |
@@ -321,7 +326,25 @@ fields. SQLite uses separate index and raw-log databases.
 
 GraphQL subscriptions stream over SSE and send periodic keep-alive events to prevent idle connection timeouts. Keep-alive is enabled by
 default with a 15s interval, and can be customized via the `api.sse_keepalive.*` settings. `api.gas_multiplier` (default `1.0`, minimum
-`1.0`) scales `chainInfo.maxFeePerGas` and `chainInfo.maxPriorityFeePerGas` (rounded up to whole wei). `chainInfo.gasPrice` is not scaled.
+`1.0`) scales the base fee and tip estimates behind `chainInfo.maxFeePerGas` and `chainInfo.maxPriorityFeePerGas` (rounded up to whole wei).
+`chainInfo.gasPrice` is not scaled.
+
+`chainInfo.maxPriorityFeePerGas` is the scaled recent median tip from `eth_feeHistory`, clamped to `api.min_priority_fee_per_gas` and
+`api.max_priority_fee_per_gas`. `chainInfo.maxFeePerGas` is that tip plus the scaled next-block base fee times
+`api.base_fee_headroom_factor`, raised to `api.min_max_fee_per_gas` and capped at `api.max_max_fee_per_gas`, so the effective base fee
+headroom is `api.gas_multiplier` times `api.base_fee_headroom_factor`. If `eth_feeHistory` is unavailable, the latest block's base fee and
+the node's tip estimate (`eth_maxPriorityFeePerGas`, or `eth_gasPrice` minus the base fee) are used instead, with the same formulas and
+bounds. The cap and ceiling are applied after the multiplier and always win. If `api.max_max_fee_per_gas` is below the scaled next-block
+base fee, the capped max fee could not be included in the next block, so `chainInfo` returns no `maxFeePerGas` and `maxPriorityFeePerGas`
+(null) until the base fee drops. Nodes pay base fee plus tip, not the max fee; the balance they reserve is gas limit times max fee, which
+`api.max_max_fee_per_gas` bounds.
+
+Upgrading: the tip cap and the max fee ceiling default to `50000000` and `1000000000` wei, and startup fails when a floor is above its
+ceiling. A configuration that sets `api.min_priority_fee_per_gas` above `50000000` (for example `100000000`) or `api.min_max_fee_per_gas`
+above `1000000000` (for example `2000000000`) must either lower the floor, or set `api.max_priority_fee_per_gas` and
+`api.max_max_fee_per_gas` at or above the floors. In TOML set the keys under `[api]`, as environment variables set
+`BLOKLI_API_MAX_PRIORITY_FEE_PER_GAS` and `BLOKLI_API_MAX_MAX_FEE_PER_GAS`, and in Helm set `config.api.maxPriorityFeePerGas` and
+`config.api.maxMaxFeePerGas`.
 
 #### Telemetry Configuration
 

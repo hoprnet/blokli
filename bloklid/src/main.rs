@@ -379,7 +379,10 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 expected_block_time,
                 gas_multiplier: api_config.gas_multiplier,
                 min_priority_fee_per_gas: api_config.min_priority_fee_per_gas,
+                max_priority_fee_per_gas: api_config.max_priority_fee_per_gas,
                 min_max_fee_per_gas: api_config.min_max_fee_per_gas,
+                max_max_fee_per_gas: api_config.max_max_fee_per_gas,
+                base_fee_headroom_factor: api_config.base_fee_headroom_factor,
                 sse_keepalive: blokli_api::config::SseKeepAliveConfig {
                     enabled: api_config.sse_keepalive.enabled,
                     interval: api_config.sse_keepalive.interval,
