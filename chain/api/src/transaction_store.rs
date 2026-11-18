@@ -557,30 +557,34 @@ impl TransactionStore {
     /// extended only while the node still holds the transaction: each timeout re-diagnoses it,
     /// and a dropped or replaced transaction is no longer resumable.
     ///
+    /// Returns the diagnosis the record carried before it was cleared, so the caller can still
+    /// report it for the resubmission that resumed tracking; `None` when nothing was resumed.
+    ///
     /// # Errors
     /// Returns `TransactionStoreError::NotFound` if the transaction doesn't exist
-    pub fn resume_tracking(&self, id: Uuid) -> Result<(), TransactionStoreError> {
+    pub fn resume_tracking(&self, id: Uuid) -> Result<Option<TransactionDiagnosis>, TransactionStoreError> {
         // The submitted index is updated while the record guard is held, so a concurrent
         // status change cannot interleave its own index update with this one.
-        let resumed = {
+        let resumed: Option<Option<TransactionDiagnosis>> = {
             let mut entry = self
                 .transactions
                 .get_mut(&id)
                 .ok_or(TransactionStoreError::NotFound(id))?;
             let record = entry.value_mut();
             if record.status != TransactionStatus::Timeout {
-                return Ok(());
+                return Ok(None);
             }
             record.resume_generation += 1;
             record.last_resumed_at = Some(Utc::now());
             record.status = TransactionStatus::Submitted;
             record.error_message = None;
-            record.diagnosis = None;
+            let previous = record.diagnosis.take();
             let identity = transaction_identity(&record.raw_transaction);
             self.sync_submitted_status(id, TransactionStatus::Submitted, identity);
-            true
+            Some(previous)
         };
-        if resumed {
+        let resumed_diagnosis = resumed.flatten();
+        if resumed.is_some() {
             self.clear_terminal_timestamp(id);
             self.broadcast_status_update(TransactionEvent::StatusUpdated {
                 id,
@@ -589,7 +593,7 @@ impl TransactionStore {
                 confirmed_at: None,
             });
         }
-        Ok(())
+        Ok(resumed_diagnosis)
     }
 
     /// Update an existing transaction record
@@ -1145,7 +1149,8 @@ mod tests {
         );
         assert_eq!(store.submitted_count(), 0);
 
-        store.resume_tracking(TEST_UUID).unwrap();
+        let previous = store.resume_tracking(TEST_UUID).unwrap();
+        assert_eq!(previous, Some(diagnosis_with(UnminedReason::Queued)));
 
         let record = store.get(TEST_UUID).unwrap();
         assert_eq!(record.status, TransactionStatus::Submitted);
@@ -1165,7 +1170,7 @@ mod tests {
             .unwrap();
         let submitted_at = store.get(TEST_UUID).unwrap().submitted_at;
 
-        store.resume_tracking(TEST_UUID).unwrap();
+        assert_eq!(store.resume_tracking(TEST_UUID).unwrap(), None);
 
         let record = store.get(TEST_UUID).unwrap();
         assert_eq!(record.status, TransactionStatus::Submitted);
@@ -1256,7 +1261,9 @@ mod tests {
                 for round in 0..300usize {
                     for id in &ids {
                         match worker {
-                            0 => store.resume_tracking(*id).unwrap(),
+                            0 => {
+                                store.resume_tracking(*id).unwrap();
+                            }
                             1 => {
                                 let status = if round % 2 == 0 {
                                     TransactionStatus::Timeout

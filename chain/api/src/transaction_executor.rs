@@ -24,7 +24,8 @@ use crate::{
     safe_execution::decode_transaction_summary,
     transaction_monitor::{ReceiptProvider, SafeAddressChecker, enrich_safe_execution},
     transaction_store::{
-        SubmissionLimit, TransactionRecord, TransactionStatus, TransactionStore, TransactionStoreError,
+        SubmissionLimit, TransactionDiagnosis, TransactionRecord, TransactionStatus, TransactionStore,
+        TransactionStoreError,
     },
     transaction_validator::{TransactionValidator, ValidationError},
 };
@@ -76,6 +77,9 @@ pub enum TransactionExecutorError {
     AlreadyTracked {
         /// Identity of the transaction already tracking this raw transaction.
         existing: Uuid,
+        /// Why that transaction last timed out unmined, when this resubmission resumed its
+        /// tracking. Resuming clears the stored diagnosis, so it is carried here instead.
+        diagnosis: Option<TransactionDiagnosis>,
     },
     /// The signer is on cooldown after repeated deterministically invalid submissions.
     #[error("HOPR {operation} suppressed for {}s: {reason}", retry_after.as_secs())]
@@ -389,8 +393,8 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         // The node still holds a transaction we already track (an identical resubmission):
         // report that one rather than tracking the same hash twice.
         if let Some(existing) = self.transaction_store.find_held_by_hash(tx_hash) {
-            self.transaction_store.resume_tracking(existing)?;
-            return Err(TransactionExecutorError::AlreadyTracked { existing });
+            let diagnosis = self.transaction_store.resume_tracking(existing)?;
+            return Err(TransactionExecutorError::AlreadyTracked { existing, diagnosis });
         }
 
         // Create transaction record with hash and Submitted status
@@ -516,7 +520,7 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
-    use crate::transaction_store::{TransactionDiagnosis, UnminedReason};
+    use crate::transaction_store::UnminedReason;
 
     /// Hash the mock node reports for `raw_tx`: distinct for distinct transactions.
     fn mock_tx_hash(raw_tx: &[u8]) -> Hash {
@@ -677,7 +681,7 @@ mod tests {
 
         assert!(matches!(
             second,
-            Err(TransactionExecutorError::AlreadyTracked { existing }) if existing == first
+            Err(TransactionExecutorError::AlreadyTracked { existing, .. }) if existing == first
         ));
         assert_eq!(executor.transaction_store().count(), 1);
     }
@@ -704,9 +708,11 @@ mod tests {
             .unwrap();
 
         let second = executor.send_raw_transaction_async(vec![0x01]).await;
+        // The stored diagnosis is cleared on resumption, so the retry carries it instead.
         assert!(matches!(
             second,
-            Err(TransactionExecutorError::AlreadyTracked { existing }) if existing == first
+            Err(TransactionExecutorError::AlreadyTracked { existing, diagnosis: Some(diagnosis) })
+                if existing == first && diagnosis.reason == UnminedReason::Queued
         ));
 
         let resumed = store.get(first).unwrap();
