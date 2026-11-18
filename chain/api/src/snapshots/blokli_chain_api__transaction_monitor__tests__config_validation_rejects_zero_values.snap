@@ -2,6 +2,7 @@
 source: chain/api/src/transaction_monitor.rs
 expression: errors
 ---
+- api.transactions.unmined_timeout must be greater than zero
 - api.transactions.request_timeout must be greater than zero
 - api.transactions.safe_inspection_timeout must be greater than zero
 - api.transactions.revert_reason_timeout must be greater than zero
