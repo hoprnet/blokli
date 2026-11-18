@@ -259,7 +259,8 @@ pub enum CurvyPortalRegisteredResult {
 /// Response for the legacy `compatibility` query.
 #[derive(SimpleObject)]
 pub struct Compatibility {
-    /// Server version (semver).
+    /// Version of the blokli-api crate, i.e. the API/schema version (semver). Not the bloklid version; see the
+    /// `version` query for that.
     pub api_version: String,
     /// Semver range of compatible client versions. Always `"*"` — any client is accepted.
     pub supported_client_versions: String,
@@ -3025,11 +3026,14 @@ impl QueryRoot {
         })
     }
 
-    /// API version information
+    /// Service version
     ///
-    /// Returns the current version of the blokli-api package
-    async fn version(&self) -> &str {
-        env!("CARGO_PKG_VERSION")
+    /// Returns the version of the running bloklid service. This is not the API/schema version, which is
+    /// reported by `compatibility.apiVersion`.
+    async fn version(&self, ctx: &Context<'_>) -> String {
+        ctx.data_opt::<crate::schema::AppVersion>()
+            .map(|v| v.0.clone())
+            .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
     }
 
     /// Retrieve transaction status by ID
@@ -3123,6 +3127,34 @@ mod tests {
         .data(NetworkName("test".to_string()))
         .data(GasMultiplier(1.0))
         .finish()
+    }
+
+    async fn query_version(builder_data: Option<crate::schema::AppVersion>) -> String {
+        let mut builder = Schema::build(
+            QueryRoot,
+            async_graphql::EmptyMutation,
+            async_graphql::EmptySubscription,
+        );
+        if let Some(v) = builder_data {
+            builder = builder.data(v);
+        }
+        let response = builder.finish().execute("{ version }").await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        response.data.into_json().unwrap()["version"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn test_version_query_returns_injected_version() {
+        let version = query_version(Some(crate::schema::AppVersion("9.8.7".to_string()))).await;
+        assert_eq!(version, "9.8.7");
+    }
+
+    #[tokio::test]
+    async fn test_version_query_defaults_to_api_crate_version() {
+        assert_eq!(query_version(None).await, env!("CARGO_PKG_VERSION"));
     }
 
     #[test]

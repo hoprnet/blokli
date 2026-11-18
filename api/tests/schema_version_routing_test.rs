@@ -92,6 +92,7 @@ async fn build_test_app_state() -> AppState {
         db,
         rpc_operations,
         health_config: HealthConfig::default(),
+        app_version: "0.0.0-test".to_string(),
         readiness_checker,
         sse_keepalive: SseKeepAliveConfig::default(),
     }
@@ -278,6 +279,7 @@ async fn build_composed_app_state() -> AppState {
         db,
         rpc_operations,
         health_config: HealthConfig::default(),
+        app_version: "0.0.0-test".to_string(),
         readiness_checker,
         sse_keepalive: SseKeepAliveConfig::default(),
     }

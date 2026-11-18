@@ -93,8 +93,8 @@ async fn test_healthz_returns_version() -> anyhow::Result<()> {
     let (status, json) = make_request(ctx.app, "/healthz").await;
 
     assert_eq!(status, StatusCode::OK);
-    // Version should match the package version
-    assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
+    // Version should be the one injected through the API config, not the blokli-api crate version
+    assert_eq!(json["version"], common::TEST_APP_VERSION);
 
     Ok(())
 }

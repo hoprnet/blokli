@@ -2019,7 +2019,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-api"
-version = "0.24.0"
+version = "0.24.1"
 dependencies = [
  "anyhow",
  "async-broadcast",

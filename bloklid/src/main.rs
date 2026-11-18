@@ -377,6 +377,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
             };
 
             let blokli_api_config = blokli_api::config::ApiConfig {
+                app_version: constants::APP_VERSION_COERCED.to_string(),
                 bind_address: api_config.bind_address,
                 playground_enabled: api_config.playground_enabled,
                 database_url: database_path.clone(),
