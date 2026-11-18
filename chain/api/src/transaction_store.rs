@@ -617,6 +617,32 @@ impl TransactionStore {
         }
     }
 
+    /// Id of the record with this hash that is still `Submitted`, i.e. occupies a monitoring slot.
+    fn in_flight_by_hash(&self, transaction_hash: Hash) -> Option<Uuid> {
+        let id = *self.hash_index.get(&transaction_hash)?;
+        self.transactions
+            .get(&id)
+            .is_some_and(|record| record.status == TransactionStatus::Submitted)
+            .then_some(id)
+    }
+
+    /// Whether a record with this hash is `Submitted` and so already occupies a monitoring slot.
+    ///
+    /// A resubmission of it needs no new capacity; one of a timed-out record does.
+    pub fn has_in_flight_hash(&self, transaction_hash: Hash) -> bool {
+        self.in_flight_by_hash(transaction_hash).is_some()
+    }
+
+    /// Resume the `Submitted` record with this hash, returning its id.
+    ///
+    /// Takes no capacity, because the record already holds its slot. Returns `None` when no
+    /// record with this hash is `Submitted` any more, e.g. it concluded in the meantime.
+    pub fn resume_in_flight_hash(&self, transaction_hash: Hash) -> Option<Uuid> {
+        let id = self.in_flight_by_hash(transaction_hash)?;
+        self.resume_held(id, |record| record.status == TransactionStatus::Submitted)
+            .map(|_| id)
+    }
+
     /// Resume tracking a transaction the node still holds after an identical resubmission.
     ///
     /// A `Timeout` record moves back to `Submitted` with its diagnosis cleared, bumps the

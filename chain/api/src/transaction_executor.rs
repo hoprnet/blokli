@@ -24,8 +24,8 @@ use crate::{
     safe_execution::decode_transaction_summary,
     transaction_monitor::{ReceiptProvider, SafeAddressChecker, enrich_safe_execution},
     transaction_store::{
-        SubmissionLimit, TrackOutcome, TransactionDiagnosis, TransactionRecord, TransactionStatus, TransactionStore,
-        TransactionStoreError,
+        SubmissionLimit, SubmissionReservation, TrackOutcome, TransactionDiagnosis, TransactionRecord,
+        TransactionStatus, TransactionStore, TransactionStoreError,
     },
     transaction_validator::{TransactionValidator, ValidationError},
 };
@@ -328,6 +328,39 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         Ok(tx_hash)
     }
 
+    /// Reserve receipt-monitoring capacity for a raw transaction.
+    ///
+    /// The reservation releases its slot when dropped, so an early return gives it back.
+    fn reserve_submission(&self, raw_tx: &[u8]) -> Result<SubmissionReservation, TransactionExecutorError> {
+        self.transaction_store
+            .try_reserve_submission(
+                raw_tx,
+                self.config.max_submitted_transactions,
+                self.config.max_submitted_transactions_per_identity,
+            )
+            .map_err(|exhausted| {
+                let (limit, max) = match exhausted.limit {
+                    SubmissionLimit::Global(max) => ("global", max),
+                    SubmissionLimit::PerIdentity(max) => ("per_identity", max),
+                };
+                let summary = decode_transaction_summary(raw_tx);
+                warn!(
+                    limit,
+                    max,
+                    submitted = exhausted.submitted_total,
+                    submitted_for_signer = exhausted.submitted_for_identity,
+                    signer = ?exhausted.identity.map(Address::from),
+                    tx_hash = ?summary.map(|tx| tx.transaction_hash),
+                    nonce = ?summary.map(|tx| tx.nonce),
+                    to = ?summary.and_then(|tx| tx.to),
+                    max_fee_per_gas = ?summary.map(|tx| tx.max_fee_per_gas),
+                    max_priority_fee_per_gas = ?summary.and_then(|tx| tx.max_priority_fee_per_gas),
+                    "Rejecting raw transaction because submission capacity is exhausted"
+                );
+                TransactionExecutorError::OverloadedError
+            })
+    }
+
     /// Async mode: Submit transaction, track in store, return UUID
     ///
     /// This mode:
@@ -352,33 +385,16 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         // only ones that occupy receipt-monitoring capacity. The slot is reserved
         // before broadcasting so concurrent submissions cannot overshoot the limits
         // while they wait on the RPC; returning early drops and releases it.
-        let reservation = match self.transaction_store.try_reserve_submission(
-            &raw_tx,
-            self.config.max_submitted_transactions,
-            self.config.max_submitted_transactions_per_identity,
-        ) {
-            Ok(reservation) => reservation,
-            Err(exhausted) => {
-                let (limit, max) = match exhausted.limit {
-                    SubmissionLimit::Global(max) => ("global", max),
-                    SubmissionLimit::PerIdentity(max) => ("per_identity", max),
-                };
-                let summary = decode_transaction_summary(&raw_tx);
-                warn!(
-                    limit,
-                    max,
-                    submitted = exhausted.submitted_total,
-                    submitted_for_signer = exhausted.submitted_for_identity,
-                    signer = ?exhausted.identity.map(Address::from),
-                    tx_hash = ?summary.map(|tx| tx.transaction_hash),
-                    nonce = ?summary.map(|tx| tx.nonce),
-                    to = ?summary.and_then(|tx| tx.to),
-                    max_fee_per_gas = ?summary.map(|tx| tx.max_fee_per_gas),
-                    max_priority_fee_per_gas = ?summary.and_then(|tx| tx.max_priority_fee_per_gas),
-                    "Rejecting raw transaction before broadcast because submission capacity is exhausted"
-                );
-                return Err(TransactionExecutorError::OverloadedError);
-            }
+        //
+        // A transaction that is already being monitored occupies its slot, so a repeat of it
+        // takes no new one and must not be refused for capacity. Its hash is verified by the
+        // node's answer below before it is treated as the same transaction.
+        let reservation = if decode_transaction_summary(&raw_tx)
+            .is_some_and(|summary| self.transaction_store.has_in_flight_hash(summary.transaction_hash))
+        {
+            None
+        } else {
+            Some(self.reserve_submission(&raw_tx)?)
         };
 
         // Submit to RPC first to get transaction hash
@@ -387,6 +403,24 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             Err(e) => {
                 record_transaction_status(STATUS_SUBMISSION_FAILED);
                 return Err(TransactionExecutorError::RpcError(e));
+            }
+        };
+
+        let reservation = match reservation {
+            Some(reservation) => reservation,
+            None => {
+                if let Some(existing) = self.transaction_store.resume_in_flight_hash(tx_hash) {
+                    if let Some(action) = admitted {
+                        action.register(existing);
+                    }
+                    return Err(TransactionExecutorError::AlreadyTracked {
+                        existing,
+                        diagnosis: None,
+                    });
+                }
+                // The transaction concluded since the check, or the node answered with another
+                // hash: this is a new submission like any other and needs capacity.
+                self.reserve_submission(&raw_tx)?
             }
         };
 
@@ -547,6 +581,10 @@ mod tests {
 
     /// Hash the mock node reports for `raw_tx`: distinct for distinct transactions.
     fn mock_tx_hash(raw_tx: &[u8]) -> Hash {
+        // A decodable transaction has its real hash, as the node would report it.
+        if let Some(summary) = decode_transaction_summary(raw_tx) {
+            return summary.transaction_hash;
+        }
         let mut hash = [0xABu8; 32];
         for (i, byte) in raw_tx.iter().enumerate() {
             hash[i % 32] ^= byte;
@@ -925,6 +963,135 @@ mod tests {
 
         let result = executor.send_raw_transaction_async(vec![0x02]).await;
         assert!(matches!(result, Err(TransactionExecutorError::OverloadedError)));
+    }
+
+    /// A signed transfer from `signer` at `nonce`: decodable, so its hash and signer are real.
+    async fn signed_transfer(signer: &PrivateKeySigner, nonce: u64) -> Vec<u8> {
+        let tx = TxLegacy {
+            chain_id: Some(1),
+            nonce,
+            gas_price: 1_000_000_000,
+            gas_limit: 21_000,
+            to: TxKind::Call(AlloyAddress::from_slice(&[0x22; 20])),
+            value: U256::ZERO,
+            input: Bytes::new(),
+        };
+        let signature = signer.sign_hash(&tx.signature_hash()).await.unwrap();
+        let mut encoded = Vec::new();
+        tx.into_signed(signature).encode_2718(&mut encoded);
+        encoded
+    }
+
+    fn timed_out_queued() -> TransactionDiagnosis {
+        TransactionDiagnosis {
+            reason: UnminedReason::Queued,
+            signed_fees: None,
+            recommended_fees: None,
+            min_replacement_fees: None,
+            retry_after: Duration::from_secs(5),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_async_retry_of_an_in_flight_transaction_is_not_refused_at_the_global_limit() {
+        let executor = RawTransactionExecutor::new(
+            MockRpcClient::new(),
+            TransactionStore::new(),
+            TransactionValidator::new(),
+            RawTransactionExecutorConfig {
+                max_submitted_transactions: 1,
+                max_submitted_transactions_per_identity: 0,
+                ..Default::default()
+            },
+        );
+        let signer = PrivateKeySigner::random();
+        let raw_tx = signed_transfer(&signer, 0).await;
+
+        let first = executor.send_raw_transaction_async(raw_tx.clone()).await.unwrap();
+        let retry = executor.send_raw_transaction_async(raw_tx).await;
+
+        assert!(matches!(
+            retry,
+            Err(TransactionExecutorError::AlreadyTracked { existing, .. }) if existing == first
+        ));
+        // Another transaction still finds the single slot taken.
+        let other = signed_transfer(&signer, 1).await;
+        assert!(matches!(
+            executor.send_raw_transaction_async(other).await,
+            Err(TransactionExecutorError::OverloadedError)
+        ));
+        assert_eq!(executor.transaction_store().submitted_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_async_retry_of_an_in_flight_transaction_is_not_refused_at_the_per_signer_limit() {
+        let executor = RawTransactionExecutor::new(
+            MockRpcClient::new(),
+            TransactionStore::new(),
+            TransactionValidator::new(),
+            RawTransactionExecutorConfig {
+                max_submitted_transactions: 0,
+                max_submitted_transactions_per_identity: 1,
+                ..Default::default()
+            },
+        );
+        let signer = PrivateKeySigner::random();
+        let raw_tx = signed_transfer(&signer, 0).await;
+
+        let first = executor.send_raw_transaction_async(raw_tx.clone()).await.unwrap();
+
+        assert!(matches!(
+            executor.send_raw_transaction_async(raw_tx).await,
+            Err(TransactionExecutorError::AlreadyTracked { existing, .. }) if existing == first
+        ));
+        // Another signer is unaffected, the same signer's other transaction is refused.
+        let other_nonce = signed_transfer(&signer, 1).await;
+        assert!(matches!(
+            executor.send_raw_transaction_async(other_nonce).await,
+            Err(TransactionExecutorError::OverloadedError)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_async_retry_of_a_timed_out_transaction_still_needs_capacity() {
+        let executor = RawTransactionExecutor::new(
+            MockRpcClient::new(),
+            TransactionStore::new(),
+            TransactionValidator::new(),
+            RawTransactionExecutorConfig {
+                max_submitted_transactions: 1,
+                max_submitted_transactions_per_identity: 0,
+                ..Default::default()
+            },
+        );
+        let store = executor.transaction_store();
+        let first_signer = PrivateKeySigner::random();
+        let raw_tx = signed_transfer(&first_signer, 0).await;
+
+        let first = executor.send_raw_transaction_async(raw_tx.clone()).await.unwrap();
+        store
+            .update_status_with_diagnosis(first, TransactionStatus::Timeout, None, Some(timed_out_queued()))
+            .unwrap();
+        // The freed slot is taken by another transaction.
+        let second = executor
+            .send_raw_transaction_async(signed_transfer(&PrivateKeySigner::random(), 0).await)
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            executor.send_raw_transaction_async(raw_tx.clone()).await,
+            Err(TransactionExecutorError::OverloadedError)
+        ));
+        assert_eq!(store.get(first).unwrap().status, TransactionStatus::Timeout);
+
+        // Once the slot is free again the retry resumes the timed-out transaction.
+        store.update_status(second, TransactionStatus::Confirmed, None).unwrap();
+        assert!(matches!(
+            executor.send_raw_transaction_async(raw_tx).await,
+            Err(TransactionExecutorError::AlreadyTracked { existing, .. }) if existing == first
+        ));
+        assert_eq!(store.get(first).unwrap().status, TransactionStatus::Submitted);
+        assert_eq!(store.submitted_count(), 1);
     }
 
     #[tokio::test]
