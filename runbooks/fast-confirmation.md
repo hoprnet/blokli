@@ -21,10 +21,12 @@ Blokli supports four modes:
 `depth` is the fallback distance used by `depth` and `safe_or_depth`. It defaults to the network value. `max_safe_gap` is the latest-to-safe
 gap at or above which FCR counts as degraded.
 
-The mode also applies to `sendTransactionSync` calls that omit `confirmations`: the call returns when the confirmed block reaches the block
-that included the transaction. The wait is limited to 60 seconds. In `finalized` mode, and in `safe` mode while FCR is stalled, the
-confirmed block trails by more than that, so these calls time out. The transaction itself is still submitted. Clients that need a result in
-these modes must pass an explicit `confirmations` value.
+The mode also applies to `sendTransactionSync` calls that omit `confirmations`: the call returns when the tracker's current confirmation
+height reaches the block that included the transaction. The wait uses the current height, not the monotonic confirmed block, and it checks
+the height again after reading the receipt. A height that drops below the receipt block during that read restarts the wait. The wait is
+limited to 60 seconds. In `finalized` mode, and in `safe` mode while FCR is stalled, the confirmation height trails by more than that, so
+these calls time out. The transaction itself is still submitted. Clients that need a result in these modes must pass an explicit
+`confirmations` value.
 
 ## Switch the Mode
 

@@ -116,17 +116,24 @@ pub async fn wait_for_confirmed_tip<L: ReceiptLookup>(
     loop {
         let receipt = wait_for_receipt(lookup, receipt_poll_interval).await?;
 
-        wait_for_tip(tips, receipt.block_number).await?;
+        wait_for_confirmation_height(tips, receipt.block_number).await?;
 
         match lookup.receipt().await {
             Ok(Some(current))
                 if current.block_number == receipt.block_number && current.block_hash == receipt.block_hash =>
             {
+                if current_confirmation_height(tips).is_some_and(|height| height >= receipt.block_number) {
+                    debug!(
+                        block_number = current.block_number,
+                        "chain tip confirmed the transaction block"
+                    );
+                    return Ok(current);
+                }
+
                 debug!(
-                    block_number = current.block_number,
-                    "chain tip confirmed the transaction block"
+                    block_number = receipt.block_number,
+                    "confirmation height dropped while reading the receipt, waiting for it to recover"
                 );
-                return Ok(current);
             }
             Ok(current) => {
                 debug!(
@@ -156,11 +163,18 @@ async fn wait_for_receipt<L: ReceiptLookup>(
     }
 }
 
-async fn wait_for_tip(tips: &mut watch::Receiver<Option<ChainTip>>, block_number: u64) -> Result<(), TipWaitError> {
+async fn wait_for_confirmation_height(
+    tips: &mut watch::Receiver<Option<ChainTip>>,
+    block_number: u64,
+) -> Result<(), TipWaitError> {
     loop {
         {
             let current = tips.borrow_and_update();
-            if current.as_ref().is_some_and(|tip| tip.confirmed >= block_number) {
+            if current
+                .as_ref()
+                .and_then(|tip| tip.confirmation_height)
+                .is_some_and(|height| height >= block_number)
+            {
                 return Ok(());
             }
         }
@@ -169,14 +183,25 @@ async fn wait_for_tip(tips: &mut watch::Receiver<Option<ChainTip>>, block_number
     }
 }
 
+fn current_confirmation_height(tips: &watch::Receiver<Option<ChainTip>>) -> Option<u64> {
+    tips.borrow().as_ref().and_then(|tip| tip.confirmation_height)
+}
+
 #[cfg(test)]
 mod tests {
-    use std::{collections::VecDeque, sync::Mutex, time::Duration};
+    use std::{
+        collections::VecDeque,
+        sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
 
     use hopr_bindings::exports::alloy::primitives::B256;
     use tokio::{
         sync::watch,
-        time::{sleep, timeout},
+        time::{Instant, sleep, timeout},
     };
 
     use super::{ConfirmationTarget, ConfirmedReceipt, ReceiptLookup, TipWaitError, wait_for_confirmed_tip};
@@ -184,15 +209,20 @@ mod tests {
 
     const RECEIPT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
-    fn tip(confirmed: u64) -> Option<ChainTip> {
+    fn tip_with_confirmation_height(confirmed: u64, confirmation_height: Option<u64>) -> Option<ChainTip> {
         Some(ChainTip {
             latest: confirmed,
             safe: None,
             finalized: None,
             confirmed,
+            confirmation_height,
             source: HeadSource::Polling,
             fcr: FcrState::Unavailable,
         })
+    }
+
+    fn tip(confirmed: u64) -> Option<ChainTip> {
+        tip_with_confirmation_height(confirmed, Some(confirmed))
     }
 
     fn receipt(block_number: u64, hash_byte: u8) -> ConfirmedReceipt {
@@ -233,6 +263,37 @@ mod tests {
         }
     }
 
+    struct RegressionOnSecondReadLookup {
+        receipts: Mutex<VecDeque<Result<Option<ConfirmedReceipt>, String>>>,
+        tips: watch::Sender<Option<ChainTip>>,
+        reads: AtomicUsize,
+    }
+
+    impl RegressionOnSecondReadLookup {
+        fn new(receipts: Vec<Result<Option<ConfirmedReceipt>, String>>, tips: watch::Sender<Option<ChainTip>>) -> Self {
+            Self {
+                receipts: Mutex::new(receipts.into()),
+                tips,
+                reads: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ReceiptLookup for RegressionOnSecondReadLookup {
+        async fn receipt(&self) -> Result<Option<ConfirmedReceipt>, String> {
+            if self.reads.fetch_add(1, Ordering::SeqCst) == 1 {
+                self.tips.send_replace(tip_with_confirmation_height(100, Some(98)));
+            }
+
+            self.receipts
+                .lock()
+                .expect("receipts lock should not be poisoned")
+                .pop_front()
+                .unwrap_or_else(|| Err("no scripted receipt left".to_string()))
+        }
+    }
+
     #[test]
     fn test_confirmation_target_default_is_confirmed_tip() {
         assert_eq!(ConfirmationTarget::default(), ConfirmationTarget::ConfirmedTip);
@@ -259,6 +320,97 @@ mod tests {
 
         assert_eq!(confirmed.block_number, 100);
         assert_eq!(lookup.remaining(), 0, "the receipt should be read once");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_wait_uses_the_current_confirmation_height() {
+        let (tips_tx, mut tips_rx) = watch::channel(tip_with_confirmation_height(100, Some(98)));
+        let lookup = ScriptedLookup::new(vec![Ok(Some(receipt(99, 1))), Ok(Some(receipt(99, 1)))]);
+
+        let publisher = tokio::spawn(async move {
+            sleep(Duration::from_secs(1)).await;
+            tips_tx.send_replace(tip_with_confirmation_height(100, Some(99)));
+        });
+
+        let started = Instant::now();
+        let confirmed = timeout(
+            Duration::from_secs(10),
+            wait_for_confirmed_tip(&mut tips_rx, &lookup, RECEIPT_POLL_INTERVAL),
+        )
+        .await
+        .expect("the confirmation height update should end the wait")
+        .expect("the wait should succeed");
+
+        assert_eq!(confirmed.block_number, 99);
+        assert!(
+            started.elapsed() >= Duration::from_secs(1),
+            "the wait must use the current confirmation height, not the monotonic confirmed block"
+        );
+        assert_eq!(lookup.remaining(), 0);
+        publisher.await.expect("the publisher should finish");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_wait_loops_when_the_confirmation_height_drops_after_the_receipt_matched() {
+        let (tips_tx, mut tips_rx) = watch::channel(tip_with_confirmation_height(100, Some(99)));
+        let lookup = RegressionOnSecondReadLookup::new(
+            vec![
+                Ok(Some(receipt(99, 1))),
+                Ok(Some(receipt(99, 1))),
+                Ok(Some(receipt(99, 1))),
+                Ok(Some(receipt(99, 1))),
+            ],
+            tips_tx.clone(),
+        );
+
+        let publisher = tokio::spawn(async move {
+            sleep(Duration::from_secs(1)).await;
+            tips_tx.send_replace(tip_with_confirmation_height(100, Some(99)));
+        });
+
+        let started = Instant::now();
+        let confirmed = timeout(
+            Duration::from_secs(10),
+            wait_for_confirmed_tip(&mut tips_rx, &lookup, RECEIPT_POLL_INTERVAL),
+        )
+        .await
+        .expect("the recovered confirmation height should end the wait")
+        .expect("the wait should succeed");
+
+        assert_eq!(confirmed.block_number, 99);
+        assert!(
+            started.elapsed() >= Duration::from_secs(1),
+            "a confirmation height that drops after the receipt matched must restart the wait"
+        );
+        publisher.await.expect("the publisher should finish");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_wait_holds_while_the_confirmation_height_is_unknown() {
+        let (tips_tx, mut tips_rx) = watch::channel(tip_with_confirmation_height(100, None));
+        let lookup = ScriptedLookup::new(vec![Ok(Some(receipt(99, 1))), Ok(Some(receipt(99, 1)))]);
+
+        let publisher = tokio::spawn(async move {
+            sleep(Duration::from_secs(1)).await;
+            tips_tx.send_replace(tip_with_confirmation_height(100, Some(99)));
+        });
+
+        let started = Instant::now();
+        let confirmed = timeout(
+            Duration::from_secs(10),
+            wait_for_confirmed_tip(&mut tips_rx, &lookup, RECEIPT_POLL_INTERVAL),
+        )
+        .await
+        .expect("the known confirmation height should end the wait")
+        .expect("the wait should succeed");
+
+        assert_eq!(confirmed.block_number, 99);
+        assert!(
+            started.elapsed() >= Duration::from_secs(1),
+            "an unknown confirmation height must not confirm the receipt"
+        );
+        assert_eq!(lookup.remaining(), 0);
+        publisher.await.expect("the publisher should finish");
     }
 
     #[tokio::test(start_paused = true)]

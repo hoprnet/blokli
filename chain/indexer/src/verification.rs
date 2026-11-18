@@ -635,6 +635,7 @@ mod tests {
             safe: None,
             finalized,
             confirmed: 180,
+            confirmation_height: finalized,
             source: HeadSource::Polling,
             fcr: FcrState::Unavailable,
         }

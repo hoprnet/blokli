@@ -343,7 +343,7 @@ The schema is organized into three root types following GraphQL best practices:
 
 - Fire-and-forget: Returns transaction hash immediately, no tracking
 - Async: Returns UUID for status tracking, background monitoring
-- Sync: Waits for the confirmed chain tip, or a requested block depth, before returning
+- Sync: Waits for the current confirmation height, or a requested block depth, before returning
 
 **Subscription Operations** (via SSE):
 
@@ -433,9 +433,10 @@ selectors against permitted operations. Prevents submission of malicious or unin
 2. **Async Mode**: Submits transaction, stores record with generated UUID, returns immediately. Background monitor tracks confirmation.
    Suitable for most applications needing status tracking.
 
-3. **Sync Mode**: Submits transaction and waits until the chain tip tracker confirms the receipt block, or for a requested number of blocks,
-   before returning. Without an explicit depth it follows the same confirmation rule as the indexer, so callers see the same latency gain
-   and the same reorg guarantee. Highest certainty, suitable for critical operations requiring immediate confirmation.
+3. **Sync Mode**: Submits transaction and waits until the chain tip tracker's current confirmation height reaches the receipt block, or for
+   a requested number of blocks, before returning. Without an explicit depth it follows the same confirmation rule as the indexer, so
+   callers see the same latency gain and the same reorg guarantee. A height that drops after the receipt was read keeps the call waiting.
+   Highest certainty, suitable for critical operations requiring immediate confirmation.
 
 **TransactionStore**: In-memory storage using concurrent hash map (DashMap) for thread-safe access. Tracks transaction records with UUID
 identifiers, maintains status lifecycle, and provides query interface for GraphQL resolvers.
@@ -1587,6 +1588,12 @@ a different node or chain reduces to polling instead of corrupting the tip.
 unavailable when the endpoint exposes no safe block. The tracker rejects observations where safe is above latest or finalized is above safe
 and keeps the previous tip. The confirmed block never moves backwards: when the safe block regresses, the tracker keeps the previous value
 and counts the event, and post-finality verification decides whether anything already indexed was affected.
+
+**Confirmation height.** Next to the confirmed watermark the tracker publishes the confirmation height of the current observation. This
+value is not clamped. It drops when the safe or finalized tag regresses, and it is unknown when the mode needs a tag that the endpoint does
+not report. Sync transaction waits read this value instead of the watermark, so a replacement block on a shorter fork is not treated as
+confirmed only because the watermark is higher. After the receipt re-read the wait also checks the latest published height again, so a
+height that drops while the receipt is read restarts the wait.
 
 **Consumers.** The indexer waits for the next published confirmed tip instead of sleeping for a fixed block time, then fetches logs up to
 that block. Readiness and the GraphQL server read the same cached confirmed block, so lag is measured against confirmed blocks without an

@@ -93,7 +93,15 @@ pub struct ChainTip {
     /// Finalized block reported by the endpoint, when available.
     pub finalized: Option<u64>,
     /// Block considered confirmed under the configured confirmation mode.
+    ///
+    /// This value is monotonic: it is the indexing watermark and never moves backwards.
     pub confirmed: u64,
+    /// Confirmation height of the current observation under the configured mode.
+    ///
+    /// Unlike [`ChainTip::confirmed`], this value is not clamped to never decrease. It follows the
+    /// safe or finalized tag backwards when that tag regresses and is `None` in safe and finalized
+    /// mode when the endpoint reports no such tag.
+    pub confirmation_height: Option<u64>,
     /// Source that produced the observation.
     pub source: HeadSource,
     /// Health of the safe block at the time of the observation.
@@ -245,14 +253,21 @@ pub fn next_tip(
     let previous_fallback =
         previous.is_some_and(|tip| cfg.mode == ConfirmationMode::SafeOrDepth && tip.fcr != FcrState::Healthy);
 
-    let (candidate, uses_fallback) = match cfg.mode {
-        ConfirmationMode::Depth => (depth_candidate, false),
+    let (candidate, uses_fallback, confirmation_height) = match cfg.mode {
+        ConfirmationMode::Depth => (depth_candidate, false, Some(depth_candidate)),
         ConfirmationMode::SafeOrDepth => match observation.safe {
-            Some(safe) if fcr == FcrState::Healthy => (safe.max(depth_candidate), false),
-            _ => (depth_candidate, true),
+            Some(safe) if fcr == FcrState::Healthy => {
+                let candidate = safe.max(depth_candidate);
+                (candidate, false, Some(candidate))
+            }
+            _ => (depth_candidate, true, Some(depth_candidate)),
         },
-        ConfirmationMode::Safe => (observation.safe.unwrap_or(previous_confirmed), false),
-        ConfirmationMode::Finalized => (observation.finalized.unwrap_or(previous_confirmed), false),
+        ConfirmationMode::Safe => (observation.safe.unwrap_or(previous_confirmed), false, observation.safe),
+        ConfirmationMode::Finalized => (
+            observation.finalized.unwrap_or(previous_confirmed),
+            false,
+            observation.finalized,
+        ),
     };
 
     let confirmed = candidate.max(previous_confirmed);
@@ -267,6 +282,7 @@ pub fn next_tip(
             safe: observation.safe,
             finalized: observation.finalized,
             confirmed,
+            confirmation_height,
             source,
             fcr,
         },
@@ -1021,6 +1037,85 @@ mod tests {
 
         assert!(next.safe_regressed);
         assert_eq!(next.tip.confirmed, 95);
+    }
+
+    #[test]
+    fn test_next_tip_confirmation_height_follows_depth_mode() {
+        let cfg = config(ConfirmationMode::Depth);
+        let first = update(None, &observation(100, Some(99), Some(80)), &cfg).tip;
+        assert_eq!(first.confirmation_height, Some(97));
+
+        let next = update(Some(&first), &observation(98, Some(97), Some(80)), &cfg).tip;
+        assert_eq!(next.confirmed, 97, "the confirmed watermark stays monotonic");
+        assert_eq!(
+            next.confirmation_height,
+            Some(95),
+            "the current height follows the observation"
+        );
+    }
+
+    #[test]
+    fn test_next_tip_confirmation_height_follows_safe_or_depth_mode() {
+        let cfg = config(ConfirmationMode::SafeOrDepth);
+
+        let healthy = update(None, &observation(100, Some(99), Some(80)), &cfg).tip;
+        assert_eq!(healthy.confirmation_height, Some(99));
+
+        let degraded = update(Some(&healthy), &observation(100, Some(68), None), &cfg).tip;
+        assert_eq!(degraded.confirmation_height, Some(97));
+    }
+
+    #[test]
+    fn test_next_tip_confirmation_height_is_unknown_without_the_required_tag() {
+        let safe = update(None, &observation(100, None, Some(80)), &config(ConfirmationMode::Safe)).tip;
+        assert_eq!(safe.confirmed, 0);
+        assert_eq!(safe.confirmation_height, None);
+
+        let finalized = update(
+            None,
+            &observation(100, Some(90), None),
+            &config(ConfirmationMode::Finalized),
+        )
+        .tip;
+        assert_eq!(finalized.confirmed, 0);
+        assert_eq!(finalized.confirmation_height, None);
+    }
+
+    #[test]
+    fn test_next_tip_confirmation_height_drops_when_safe_regresses() {
+        let cfg = config(ConfirmationMode::Safe);
+        let first = update(None, &observation(100, Some(100), Some(80)), &cfg).tip;
+        assert_eq!(first.confirmed, 100);
+        assert_eq!(first.confirmation_height, Some(100));
+
+        let next = update(Some(&first), &observation(100, Some(98), Some(80)), &cfg);
+
+        assert!(next.safe_regressed);
+        assert_eq!(next.tip.confirmed, 100, "the confirmed watermark stays monotonic");
+        assert_eq!(
+            next.tip.confirmation_height,
+            Some(98),
+            "the current confirmation height follows the regression"
+        );
+    }
+
+    #[test]
+    fn test_next_tip_confirmation_height_follows_safe_and_finalized_tags() {
+        let safe = update(
+            None,
+            &observation(100, Some(90), Some(80)),
+            &config(ConfirmationMode::Safe),
+        )
+        .tip;
+        assert_eq!(safe.confirmation_height, Some(90));
+
+        let finalized = update(
+            None,
+            &observation(100, Some(90), Some(80)),
+            &config(ConfirmationMode::Finalized),
+        )
+        .tip;
+        assert_eq!(finalized.confirmation_height, Some(80));
     }
 
     #[test]
