@@ -17,7 +17,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     broadcast_error::{BroadcastRejection, classify_broadcast_error},
-    fee_recommendation::{GasFeeFloors, RecommendedFees, recommended_fees},
+    fee_recommendation::{GasFeePolicy, RecommendedFees, recommended_fees},
     safe_execution::{decode_transaction_signer, decode_transaction_summary},
     transaction_executor::{BroadcastOutcome, ConfirmationError, RpcClient},
     transaction_monitor::{ReceiptLog, ReceiptProvider, TransactionReceipt},
@@ -31,7 +31,7 @@ use crate::{
 pub struct RpcAdapter<R: HttpRequestor + 'static + Clone> {
     rpc: Arc<RpcOperations<R>>,
     gas_multiplier: f64,
-    gas_fee_floors: GasFeeFloors,
+    gas_fee_policy: GasFeePolicy,
 }
 
 impl<R: HttpRequestor + 'static + Clone> RpcAdapter<R> {
@@ -40,14 +40,14 @@ impl<R: HttpRequestor + 'static + Clone> RpcAdapter<R> {
         Self {
             rpc: Arc::new(rpc),
             gas_multiplier: 1.0,
-            gas_fee_floors: GasFeeFloors::default(),
+            gas_fee_policy: GasFeePolicy::default(),
         }
     }
 
-    /// Set the multiplier and floors that turn the node's fee estimate into the recommended fee
-    pub fn with_fee_policy(mut self, gas_multiplier: f64, gas_fee_floors: GasFeeFloors) -> Self {
+    /// Set the multiplier and policy that turn the node's fee estimate into the recommended fee
+    pub fn with_fee_policy(mut self, gas_multiplier: f64, gas_fee_policy: GasFeePolicy) -> Self {
         self.gas_multiplier = gas_multiplier;
-        self.gas_fee_floors = gas_fee_floors;
+        self.gas_fee_policy = gas_fee_policy;
         self
     }
 }
@@ -318,7 +318,7 @@ impl<R: HttpRequestor + 'static + Clone> ReceiptProvider for RpcAdapter<R> {
     }
 
     async fn get_recommended_fees(&self) -> Result<RecommendedFees, String> {
-        recommended_fees(&*self.rpc, self.gas_multiplier, self.gas_fee_floors)
+        recommended_fees(&*self.rpc, self.gas_multiplier, self.gas_fee_policy)
             .await
             .map_err(|e| format!("Fee estimate error: {e}"))
     }

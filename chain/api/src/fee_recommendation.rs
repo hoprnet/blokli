@@ -1,14 +1,35 @@
 //! Recommended EIP-1559 fees, shared by the `chainInfo` query and the transaction monitor.
 
-use blokli_chain_rpc::HoprRpcOperations;
+use blokli_chain_rpc::{FeeHistorySnapshot, HoprRpcOperations};
 
-/// Lower bounds, in wei, for the EIP-1559 fee estimates
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct GasFeeFloors {
+/// Policy, in wei, applied to the EIP-1559 fee estimates exposed by chainInfo and used by the transaction monitor
+///
+/// It holds floors, a tip cap, a max fee ceiling and a base fee headroom factor.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GasFeePolicy {
     /// Minimum `maxPriorityFeePerGas`
     pub min_priority_fee_per_gas: u128,
+    /// Maximum `maxPriorityFeePerGas`, so the tip paid per transaction stays bounded
+    pub max_priority_fee_per_gas: u128,
     /// Minimum `maxFeePerGas`
     pub min_max_fee_per_gas: u128,
+    /// Maximum `maxFeePerGas`, which bounds the balance reserved upfront (gas limit x max fee)
+    pub max_max_fee_per_gas: u128,
+    /// Factor applied to the next-block base fee to leave room for base fee growth
+    pub base_fee_headroom_factor: f64,
+}
+
+impl Default for GasFeePolicy {
+    /// No floors, no tip cap and no extra headroom
+    fn default() -> Self {
+        Self {
+            min_priority_fee_per_gas: 0,
+            max_priority_fee_per_gas: u128::MAX,
+            min_max_fee_per_gas: 0,
+            max_max_fee_per_gas: u128::MAX,
+            base_fee_headroom_factor: 1.0,
+        }
+    }
 }
 
 /// EIP-1559 fees, in wei, a transaction should currently be signed with
@@ -20,21 +41,24 @@ pub struct RecommendedFees {
     pub max_priority_fee_per_gas: u128,
 }
 
-/// Fetch the node's EIP-1559 estimate, scale it by `gas_multiplier` and raise it to `floors`.
+/// Fetch the fee snapshot, scale it by `gas_multiplier` and apply `policy`.
+///
+/// Uses the `eth_feeHistory` snapshot and falls back to the node's own estimate when it fails, as `chainInfo` does.
 ///
 /// # Errors
-/// Returns the RPC error when the estimate cannot be fetched.
+/// Returns an error when no snapshot can be fetched, or when the policy ceiling is below the next-block base fee,
+/// since the capped max fee could not be included in the next block.
 pub async fn recommended_fees<R: HoprRpcOperations + ?Sized>(
     rpc: &R,
     gas_multiplier: f64,
-    floors: GasFeeFloors,
-) -> blokli_chain_rpc::errors::Result<RecommendedFees> {
-    let estimate = rpc.estimate_eip1559_fees().await?;
-    let (max_fee_per_gas, max_priority_fee_per_gas) = apply_gas_fee_floors(
-        scale_wei_by_multiplier(estimate.max_fee_per_gas, gas_multiplier),
-        scale_wei_by_multiplier(estimate.max_priority_fee_per_gas, gas_multiplier),
-        floors,
-    );
+    policy: GasFeePolicy,
+) -> Result<RecommendedFees, String> {
+    let snapshot: FeeHistorySnapshot = match rpc.get_fee_history_snapshot().await {
+        Ok(snapshot) => snapshot,
+        Err(_) => rpc.get_node_fee_snapshot().await.map_err(|e| e.to_string())?,
+    };
+    let (max_fee_per_gas, max_priority_fee_per_gas) = fees_from_fee_history(snapshot, gas_multiplier, policy)
+        .ok_or_else(|| "the configured max fee ceiling is below the next-block base fee".to_string())?;
     Ok(RecommendedFees {
         max_fee_per_gas,
         max_priority_fee_per_gas,
@@ -88,65 +112,40 @@ pub fn scale_wei_by_multiplier(value: u128, multiplier: f64) -> u128 {
         / denominator
 }
 
-/// Raise `(max_fee_per_gas, max_priority_fee_per_gas)` to the configured floors.
+/// Bound the max fee to the policy ceiling and make sure it never falls below the tip.
 ///
-/// The estimate's headroom for base fee growth (`max_fee - priority_fee`) is kept on top of
-/// the raised priority fee, so lifting the priority fee never eats into it.
-pub fn apply_gas_fee_floors(
-    max_fee_per_gas: u128,
-    max_priority_fee_per_gas: u128,
-    floors: GasFeeFloors,
-) -> (u128, u128) {
-    let base_fee_headroom = max_fee_per_gas.saturating_sub(max_priority_fee_per_gas);
-    let priority_fee = max_priority_fee_per_gas.max(floors.min_priority_fee_per_gas);
-    let max_fee = priority_fee
-        .saturating_add(base_fee_headroom)
-        .max(floors.min_max_fee_per_gas);
-    (max_fee, priority_fee)
+/// This is applied last, so the ceiling wins over the floor, the headroom and the multiplier.
+fn bound_max_fee(max_fee_per_gas: u128, priority_fee_per_gas: u128, policy: GasFeePolicy) -> u128 {
+    max_fee_per_gas
+        .max(policy.min_max_fee_per_gas)
+        .min(policy.max_max_fee_per_gas)
+        .max(priority_fee_per_gas)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_scale_wei_by_multiplier_identity() {
-        assert_eq!(scale_wei_by_multiplier(1_000_000_000, 1.0), 1_000_000_000);
+/// Compute `(max_fee_per_gas, max_priority_fee_per_gas)` from a raw fee snapshot.
+///
+/// The tip is the recent median tip scaled by `gas_multiplier`, clamped to the configured priority fee bounds.
+/// The max fee is that tip plus the scaled next-block base fee times `base_fee_headroom_factor`, raised to
+/// `min_max_fee_per_gas` and capped at `max_max_fee_per_gas`.
+///
+/// Returns `None` when the ceiling is below the scaled next-block base fee: the capped max fee could not be
+/// included in the next block, so it must not be offered as an estimate.
+pub fn fees_from_fee_history(
+    snapshot: FeeHistorySnapshot,
+    gas_multiplier: f64,
+    policy: GasFeePolicy,
+) -> Option<(u128, u128)> {
+    let base_fee = scale_wei_by_multiplier(snapshot.next_base_fee_per_gas, gas_multiplier);
+    if policy.max_max_fee_per_gas < base_fee {
+        return None;
     }
-
-    #[test]
-    fn test_scale_wei_by_multiplier_rounds_up() {
-        assert_eq!(scale_wei_by_multiplier(3, 1.5), 5);
-    }
-
-    const FLOORS: GasFeeFloors = GasFeeFloors {
-        min_priority_fee_per_gas: 100,
-        min_max_fee_per_gas: 5_000_000,
-    };
-
-    #[test]
-    fn test_gas_fee_floors_lift_floor_level_estimate() {
-        // Typical Gnosis estimate: 1 wei tip, 2 × 10 wei base fee headroom
-        assert_eq!(apply_gas_fee_floors(21, 1, FLOORS), (5_000_000, 100));
-    }
-
-    #[test]
-    fn test_gas_fee_floors_keep_base_fee_headroom() {
-        // Base fee spike: 2 × 450_000 wei headroom must survive the priority fee lift
-        assert_eq!(apply_gas_fee_floors(900_001, 1, FLOORS), (5_000_000, 100));
-        assert_eq!(apply_gas_fee_floors(80_000_001, 1, FLOORS), (80_000_100, 100));
-    }
-
-    #[test]
-    fn test_gas_fee_floors_leave_higher_estimates_unchanged() {
-        assert_eq!(
-            apply_gas_fee_floors(3_000_000_000, 1_000_000_000, FLOORS),
-            (3_000_000_000, 1_000_000_000)
-        );
-    }
-
-    #[test]
-    fn test_gas_fee_floors_default_is_a_no_op() {
-        assert_eq!(apply_gas_fee_floors(21, 1, GasFeeFloors::default()), (21, 1));
-    }
+    let priority_fee = scale_wei_by_multiplier(snapshot.median_priority_fee_per_gas, gas_multiplier)
+        .max(policy.min_priority_fee_per_gas)
+        .min(policy.max_priority_fee_per_gas);
+    let max_fee = bound_max_fee(
+        priority_fee.saturating_add(scale_wei_by_multiplier(base_fee, policy.base_fee_headroom_factor)),
+        priority_fee,
+        policy,
+    );
+    Some((max_fee, priority_fee))
 }

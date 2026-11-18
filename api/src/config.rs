@@ -2,11 +2,9 @@
 
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
-use blokli_chain_api::fee_recommendation::GasFeeFloors;
+use blokli_chain_api::fee_recommendation::GasFeePolicy;
 use blokli_chain_types::ContractAddresses;
 use serde::{Deserialize, Serialize};
-
-use crate::schema::GasFeePolicy;
 
 /// API server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -3,7 +3,7 @@
 use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use async_graphql::{ObjectType, Schema, SubscriptionType};
-pub use blokli_chain_api::fee_recommendation::GasFeeFloors;
+pub use blokli_chain_api::fee_recommendation::GasFeePolicy;
 use blokli_chain_api::{
     DefaultHttpRequestor, rpc_adapter::RpcAdapter, transaction_executor::RawTransactionExecutor,
     transaction_store::TransactionStore,
@@ -35,36 +35,6 @@ pub struct Finality(pub u16);
 /// Wrapper type for gas multiplier to avoid type confusion in context
 #[derive(Debug, Clone, Copy)]
 pub struct GasMultiplier(pub f64);
-
-/// Policy, in wei, applied to the EIP-1559 fee estimates exposed by chainInfo
-///
-/// It holds floors, a tip cap, a max fee ceiling and a base fee headroom factor.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct GasFeePolicy {
-    /// Minimum `maxPriorityFeePerGas`
-    pub min_priority_fee_per_gas: u128,
-    /// Maximum `maxPriorityFeePerGas`, so the tip paid per transaction stays bounded
-    pub max_priority_fee_per_gas: u128,
-    /// Minimum `maxFeePerGas`
-    pub min_max_fee_per_gas: u128,
-    /// Maximum `maxFeePerGas`, which bounds the balance reserved upfront (gas limit x max fee)
-    pub max_max_fee_per_gas: u128,
-    /// Factor applied to the next-block base fee to leave room for base fee growth
-    pub base_fee_headroom_factor: f64,
-}
-
-impl Default for GasFeePolicy {
-    /// No floors, no tip cap and no extra headroom
-    fn default() -> Self {
-        Self {
-            min_priority_fee_per_gas: 0,
-            max_priority_fee_per_gas: u128::MAX,
-            min_max_fee_per_gas: 0,
-            max_max_fee_per_gas: u128::MAX,
-            base_fee_headroom_factor: 1.0,
-        }
-    }
-}
 
 /// Wrapper type for chain ID to avoid type confusion in context
 #[derive(Debug, Clone, Copy)]

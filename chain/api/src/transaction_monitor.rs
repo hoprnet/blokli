@@ -23,7 +23,7 @@ use tokio::{
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    fee_recommendation::{GasFeeFloors, RecommendedFees},
+    fee_recommendation::{GasFeePolicy, RecommendedFees},
     metrics::{
         record_safe_execution, record_safe_inspection_retry, record_trace_failure, record_trace_queue_saturated,
         record_trace_timeout,
@@ -328,7 +328,7 @@ pub struct TransactionMonitorConfig {
     /// Multiplier applied to the node's fee estimate to obtain the recommended fee
     pub gas_multiplier: f64,
     /// Lower bounds applied to the recommended fee
-    pub gas_fee_floors: GasFeeFloors,
+    pub gas_fee_policy: GasFeePolicy,
 }
 
 impl TransactionMonitorConfig {
@@ -385,7 +385,7 @@ impl Default for TransactionMonitorConfig {
             enable_revert_reason_tracing: true,
             expected_block_time: Duration::from_secs(5),
             gas_multiplier: 1.0,
-            gas_fee_floors: GasFeeFloors::default(),
+            gas_fee_policy: GasFeePolicy::default(),
         }
     }
 }
