@@ -410,23 +410,28 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         // resuming that one rather than tracking the same hash twice is a single step per hash,
         // so concurrent identical submissions end up with one identity.
         match self.transaction_store.insert_or_resume(record, reservation) {
-            Ok(TrackOutcome::Inserted) => {}
+            Ok(TrackOutcome::Inserted) => {
+                // Bind the logical action to this identity only once it is actually tracked, so
+                // a failed submission never suppresses the retry that follows it.
+                if let Some(action) = admitted {
+                    action.register(id);
+                }
+                Ok(id)
+            }
             Ok(TrackOutcome::Resumed { existing, diagnosis }) => {
-                return Err(TransactionExecutorError::AlreadyTracked { existing, diagnosis });
+                // The policy released the action when the original timed out, so it admitted
+                // this retry afresh. The resumed transaction carries the action again: bind it,
+                // or a re-signed copy at another nonce would be admitted and broadcast too.
+                if let Some(action) = admitted {
+                    action.register(existing);
+                }
+                Err(TransactionExecutorError::AlreadyTracked { existing, diagnosis })
             }
             Err(e) => {
                 error!(id = %id, tx_hash = %tx_hash, error = %e, "Failed to store submitted transaction");
-                return Err(e.into());
+                Err(e.into())
             }
         }
-
-        // Bind the logical action to this identity only once it is actually tracked, so a
-        // failed submission never suppresses the retry that follows it.
-        if let Some(action) = admitted {
-            action.register(id);
-        }
-
-        Ok(id)
     }
 
     /// Sync mode: Submit transaction and wait for confirmations
@@ -521,8 +526,24 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
 mod tests {
     use std::sync::Mutex;
 
+    use hopr_bindings::{
+        exports::alloy::{
+            consensus::{SignableTransaction, TxLegacy},
+            eips::eip2718::Encodable2718,
+            primitives::{Address as AlloyAddress, Bytes, TxKind, U256},
+            signers::{Signer, local::PrivateKeySigner},
+            sol_types::SolCall,
+        },
+        hopr_node_management_module::HoprNodeManagementModule,
+        hopr_token::HoprToken,
+    };
+
     use super::*;
-    use crate::transaction_store::UnminedReason;
+    use crate::{
+        hopr_action::HoprContracts,
+        hopr_policy::{ChannelState, HoprChainState},
+        transaction_store::UnminedReason,
+    };
 
     /// Hash the mock node reports for `raw_tx`: distinct for distinct transactions.
     fn mock_tx_hash(raw_tx: &[u8]) -> Hash {
@@ -751,6 +772,113 @@ mod tests {
 
         assert_ne!(first, second);
         assert_eq!(executor.transaction_store().count(), 2);
+    }
+
+    /// Chain state that knows one module, so the HOPR policy applies to calls through it.
+    struct ModuleChain;
+
+    #[async_trait]
+    impl HoprChainState for ModuleChain {
+        async fn safe_for_module(&self, _module: Address) -> Result<Option<Address>, String> {
+            Ok(Some(Address::from([0xDD; 20])))
+        }
+
+        async fn channel_status(
+            &self,
+            _source: Address,
+            _destination: Address,
+        ) -> Result<Option<ChannelState>, String> {
+            Ok(None)
+        }
+    }
+
+    /// A signed announcement through the node-management module, at the given nonce.
+    async fn signed_announcement(signer: &PrivateKeySigner, nonce: u64) -> Vec<u8> {
+        let announce = HoprToken::sendCall {
+            recipient: AlloyAddress::from_slice(&[0x33; 20]),
+            amount: U256::from(1_000u64),
+            data: Bytes::from_static(b"key-binding-and-multiaddr"),
+        }
+        .abi_encode();
+        let input = HoprNodeManagementModule::execTransactionFromModuleCall {
+            to: AlloyAddress::from_slice(&[0x11; 20]),
+            value: U256::ZERO,
+            data: Bytes::from(announce),
+            operation: 0,
+        }
+        .abi_encode();
+        let tx = TxLegacy {
+            chain_id: Some(1),
+            nonce,
+            gas_price: 1_000_000_000,
+            gas_limit: 200_000,
+            to: TxKind::Call(AlloyAddress::from_slice(&[0xAA; 20])),
+            value: U256::ZERO,
+            input: input.into(),
+        };
+        let signature = signer.sign_hash(&tx.signature_hash()).await.unwrap();
+        let mut encoded = Vec::new();
+        tx.into_signed(signature).encode_2718(&mut encoded);
+        encoded
+    }
+
+    #[tokio::test]
+    async fn test_resumed_transaction_carries_the_action_admitted_for_its_retry() {
+        let store = Arc::new(TransactionStore::new());
+        let policy = Arc::new(HoprPolicy::new(
+            Arc::new(ModuleChain),
+            store.clone(),
+            HoprPolicyConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            HoprContracts {
+                token: Address::from([0x11; 20]),
+                channels: Address::from([0xCC; 20]),
+                announcements: Address::from([0x33; 20]),
+            },
+        ));
+        let executor = RawTransactionExecutor::with_shared_dependencies(
+            Arc::new(MockRpcClient::new()),
+            store.clone(),
+            Arc::new(TransactionValidator::new()),
+            RawTransactionExecutorConfig::default(),
+        )
+        .with_hopr_policy(policy);
+        let signer = PrivateKeySigner::random();
+        let original = signed_announcement(&signer, 0).await;
+        let resigned = signed_announcement(&signer, 1).await;
+
+        let first = executor.send_raw_transaction_async(original.clone()).await.unwrap();
+        store
+            .update_status_with_diagnosis(
+                first,
+                TransactionStatus::Timeout,
+                None,
+                Some(TransactionDiagnosis {
+                    reason: UnminedReason::Queued,
+                    signed_fees: None,
+                    recommended_fees: None,
+                    min_replacement_fees: None,
+                    retry_after: Duration::from_secs(5),
+                }),
+            )
+            .unwrap();
+
+        // The identical retry resumes the original, which carries the announcement again.
+        let retry = executor.send_raw_transaction_async(original).await;
+        assert!(matches!(
+            retry,
+            Err(TransactionExecutorError::AlreadyTracked { existing, .. }) if existing == first
+        ));
+
+        // So the same announcement signed again at another nonce resolves to it too.
+        let duplicate = executor.send_raw_transaction_async(resigned).await;
+        assert!(matches!(
+            duplicate,
+            Err(TransactionExecutorError::DuplicateHoprAction { existing, .. }) if existing == first
+        ));
+        assert_eq!(store.count(), 1);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
