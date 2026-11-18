@@ -83,12 +83,26 @@ reorged out or a canonical log was missed.
    transaction hash and log index.
 3. Compare the same range against an independent node with the same filter set.
 4. Check whether the endpoint that served `safe` had FCR enabled and whether it switched clients or nodes.
-5. Record the affected range before restarting. A restart clears the halt, and the verification cursor starts at the finalized block at that
-   moment, so a range below it is not checked again.
-6. Repair or re-index the affected range, then restart the daemon.
+5. Record the affected range before restarting. A restart clears the halt, and the verification position is stored in the index database, so
+   the restarted process resumes above the ranges that were already checked. A range below the stored position is not checked again.
+6. Repair or re-index the affected range, then restart the daemon. Clearing the index database resets the stored position, because a
+   re-synchronised index owes its checks again.
 
 Setting `verify_finalized = false` is the last resort. It disables the post-finality comparison, so false confirmations are no longer
 detected at all and the halt never fires. Use it only with `depth` or `finalized` mode, or together with external verification.
+
+### Which logs are checked
+
+Three kinds of difference are reported: a stored log that the canonical chain does not have, a stored log whose block hash or transaction
+hash changed, and a canonical log that is missing from the store. The first two are checked for every contract address. The last one depends
+on the address and the block:
+
+- Logs of the static contracts are always expected in the store.
+- Logs of a Safe are expected only when the block was indexed by the continuous phase of the running process and the Safe was discovered in
+  an earlier block. The indexer filters Safes from the block after their discovery, and the historical discovery phase filters none.
+
+So a canonical Safe log is not reported as missing when it sits in a block that a previous process indexed, in a block that the historical
+discovery phase indexed, or in the block of the Safe's own discovery.
 
 ## WebSocket Head Source
 

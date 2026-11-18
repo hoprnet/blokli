@@ -698,6 +698,12 @@ where
                 }
 
                 is_synced.store(true, Ordering::Relaxed);
+
+                // Every block from here on is filtered with all Safes that are known when the stream is built.
+                // Post-finality verification uses the value to tell a Safe log that was never requested from one
+                // that the store lost.
+                indexer_state.set_continuous_start_block(stream_start_block);
+
                 if let Err(error) = tx.try_send(()) {
                     error!(%error, "failed to notify about achieving indexer synchronization")
                 }
@@ -1887,7 +1893,7 @@ mod tests {
     use crate::{
         safe_owner_refresh::SAFE_SNAPSHOT_BATCH_SIZE,
         traits::{ChainLogHandler, MockChainLogHandler, PrefetchedTransactions},
-        verification::compare_logs,
+        verification::{StoreCoverage, compare_logs},
     };
 
     lazy_static::lazy_static! {
@@ -3632,8 +3638,11 @@ mod tests {
 
         // The canonical set as an `eth_getLogs` call with the non-token filters returns it.
         let canonical = vec![base_log];
-        let static_addresses = BTreeSet::from([announcement_address, token_address]);
-        let mismatch = compare_logs(&stored, &canonical, &static_addresses);
+        let coverage = StoreCoverage {
+            static_addresses: BTreeSet::from([announcement_address, token_address]),
+            ..Default::default()
+        };
+        let mismatch = compare_logs(&stored, &canonical, &coverage);
 
         assert!(
             mismatch.is_empty(),

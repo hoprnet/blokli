@@ -175,6 +175,14 @@ pub struct IndexerState {
     /// Monotonic counter used to trigger Safe filter refreshes.
     safe_filter_epoch: Arc<AtomicU64>,
 
+    /// First block indexed by the continuous phase of this process, stored as `block + 1` so that
+    /// a zero value means unset.
+    ///
+    /// Only blocks from here on were filtered with the Safes that were known when they were
+    /// processed; the post-finality verification uses it to tell a Safe log that was never
+    /// requested from one that the store lost.
+    continuous_start_block: Arc<AtomicU64>,
+
     /// Number of reorganizations signaled to subscriptions.
     reorg_epoch: Arc<AtomicU64>,
 
@@ -220,6 +228,7 @@ impl std::fmt::Debug for IndexerState {
             .field("_event_bus_rx", &"Arc<InactiveReceiver<Arc<IndexerEvent>>>")
             .field("_shutdown_rx", &"Arc<Receiver<()>>")
             .field("safe_filter_epoch", &"Arc<AtomicU64>")
+            .field("continuous_start_block", &"Arc<AtomicU64>")
             .field("reorg_epoch", &"Arc<AtomicU64>")
             .field("failed_indexed_block_updates", &"Arc<AtomicU64>")
             .field("safe_owner_sync", &"Arc<SafeOwnerSync>")
@@ -255,6 +264,7 @@ impl IndexerState {
             _event_bus_rx: Arc::new(event_bus_rx.deactivate()),
             _shutdown_rx: Arc::new(shutdown_rx),
             safe_filter_epoch: Arc::new(AtomicU64::new(0)),
+            continuous_start_block: Arc::new(AtomicU64::new(0)),
             reorg_epoch: Arc::new(AtomicU64::new(0)),
             failed_indexed_block_updates: Arc::new(AtomicU64::new(0)),
             safe_owner_sync: Arc::new(SafeOwnerSync::default()),
@@ -504,6 +514,23 @@ impl IndexerState {
         self.safe_filter_epoch.fetch_add(1, Ordering::Relaxed) + 1
     }
 
+    /// Records the first block indexed by the continuous phase of this process.
+    pub fn set_continuous_start_block(&self, block: u64) {
+        self.continuous_start_block
+            .store(block.saturating_add(1), Ordering::Relaxed);
+    }
+
+    /// First block indexed by the continuous phase of this process.
+    ///
+    /// Returns `None` until the continuous phase begins, so no block counts as continuously
+    /// indexed while the historical discovery phase runs.
+    pub fn continuous_start_block(&self) -> Option<u64> {
+        match self.continuous_start_block.load(Ordering::Relaxed) {
+            0 => None,
+            stored => Some(stored - 1),
+        }
+    }
+
     /// Returns the post-finality verification status shared with the rest of the process.
     pub fn verification_status(&self) -> VerificationStatus {
         self.verification_status.clone()
@@ -687,5 +714,19 @@ mod tests {
         assert_eq!(state.safe_filter_epoch(), 1);
         assert_eq!(state.mark_safe_filters_dirty(), 2);
         assert_eq!(state.safe_filter_epoch(), 2);
+    }
+
+    #[test]
+    fn test_continuous_start_block_is_unset_until_the_continuous_phase() {
+        let state = IndexerState::default();
+
+        assert_eq!(state.continuous_start_block(), None);
+
+        state.set_continuous_start_block(0);
+        assert_eq!(state.continuous_start_block(), Some(0));
+
+        state.set_continuous_start_block(42);
+        assert_eq!(state.continuous_start_block(), Some(42));
+        assert_eq!(state.clone().continuous_start_block(), Some(42));
     }
 }

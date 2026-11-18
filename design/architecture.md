@@ -1600,6 +1600,15 @@ that block. Readiness and the GraphQL server read the same cached confirmed bloc
 additional RPC call. The `chainInfo` GraphQL field reports the configured mode and the live FCR status so clients can see which rule is in
 effect.
 
+**Post-finality verification.** A background task of the indexer re-reads every indexed range once the tracker reports it as final. It
+compares the canonical logs with the stored ones on block number, block hash, transaction hash and log index. The task walks forward from a
+position stored in the index database, so a restart resumes above the blocks an earlier process checked and also covers the blocks that
+became final while the daemon was down. A difference sets a sticky flag: the indexer stops advancing and readiness reports the failure until
+an operator restarts the process. A failed read, or a failed write of the stored position, is retried on the next tip update instead of
+being reported. Because the set of Safe contract addresses grows while indexing, a canonical log of a Safe has to be in the store only when
+the block was indexed by the continuous phase of the same process and the Safe was discovered in an earlier block. Logs of the static
+contracts are always required.
+
 ### Finality Handling in Readiness Checks
 
 The readiness check automatically accounts for blockchain finality to prevent false-positive "ready" states:

@@ -12,9 +12,14 @@
 //! readiness reports not ready until an operator restarts the process. A failing RPC or database
 //! read is not a mismatch: the same range is retried on the next tip update.
 //!
+//! The position the task reached is stored in the index database, so a restart resumes where the
+//! previous process stopped instead of skipping the blocks that became final while it was down.
+//!
 //! The set of Safe contract addresses grows at runtime, while the stored logs of a block only
-//! contain the addresses known when that block was indexed. Canonical logs emitted by a Safe that
-//! was discovered later are therefore never reported as missing from the store.
+//! contain the addresses known when that block was indexed. A canonical log of a Safe is therefore
+//! only reported as missing from the store when the continuous phase of this process indexed the
+//! block and the Safe was discovered in an earlier block; the canonical logs of the static
+//! contracts are always required.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -143,6 +148,42 @@ fn log_position(log: &SerializableLog) -> (u64, u64) {
     (log.block_number, log.log_index)
 }
 
+/// Which canonical logs the store is expected to hold.
+///
+/// A canonical log can only be in the store when it was requested while its block was indexed. The
+/// static contracts are filtered from the first block on. A Safe is filtered only from the block
+/// after its discovery, and only once the continuous phase of this process began: the historical
+/// discovery phase indexes with no Safe filters at all.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StoreCoverage {
+    /// Contract addresses that are configured at startup and never change.
+    pub static_addresses: BTreeSet<Address>,
+    /// Block in which each Safe first appeared, from the earliest state stored for it.
+    pub safe_discovery_blocks: BTreeMap<Address, u64>,
+    /// First block indexed by the continuous phase of this process.
+    pub continuous_start: Option<u64>,
+}
+
+impl StoreCoverage {
+    /// Returns whether a canonical log of `address` at `block` must be present in the store.
+    pub fn requires_log(&self, address: &Address, block: u64) -> bool {
+        if self.static_addresses.contains(address) {
+            return true;
+        }
+
+        let Some(continuous_start) = self.continuous_start else {
+            return false;
+        };
+
+        // A Safe discovered in block `d` is not in the filter for `d` itself: the filter is rebuilt for the
+        // next block once the discovery is processed, so a log of the Safe in its own discovery block was
+        // never requested.
+        self.safe_discovery_blocks
+            .get(address)
+            .is_some_and(|discovery_block| *discovery_block < block && block >= continuous_start)
+    }
+}
+
 /// Compares the stored logs of a range with the canonical logs of the same range.
 ///
 /// Logs are matched by their position within the chain, that is a block number and a log index.
@@ -150,13 +191,12 @@ fn log_position(log: &SerializableLog) -> (u64, u64) {
 /// which is what a reorganization produces. The event payload itself is not compared, because a
 /// matching position and block hash pin down the payload.
 ///
-/// `static_addresses` lists the contract addresses that do not change at runtime. A canonical log
-/// is only reported as missing from the store when it was emitted by one of them: a log from a Safe
-/// that was discovered after the block was indexed could not have been stored for that block.
+/// `coverage` decides whether a canonical log that is absent from the store can be reported: only
+/// logs the store was able to hold when the block was indexed are compared that way.
 pub fn compare_logs(
     stored: &[SerializableLog],
     canonical: &[SerializableLog],
-    static_addresses: &BTreeSet<Address>,
+    coverage: &StoreCoverage,
 ) -> VerificationMismatch {
     let stored_by_position = stored
         .iter()
@@ -185,7 +225,9 @@ pub fn compare_logs(
     }
 
     for (position, canonical_log) in &canonical_by_position {
-        if !stored_by_position.contains_key(position) && static_addresses.contains(&canonical_log.address) {
+        if !stored_by_position.contains_key(position)
+            && coverage.requires_log(&canonical_log.address, canonical_log.block_number)
+        {
             mismatch.missing_from_store.push(LogIdentity::from_log(canonical_log));
         }
     }
@@ -198,8 +240,6 @@ pub fn compare_logs(
 pub enum CursorStep {
     /// Nothing to verify: the finalized block is unknown or did not move past the cursor.
     Idle,
-    /// The cursor starts at the given finalized block; nothing indexed above it is verified yet.
-    Initialised(u64),
     /// Verify the inclusive range and advance the cursor to `to` once it matches.
     Verify {
         /// First block of the range.
@@ -209,30 +249,37 @@ pub enum CursorStep {
     },
 }
 
-/// Plans the next post-finality verification round.
+/// Chooses the block at which an unset cursor starts once a finalized block is known.
 ///
-/// The cursor is initialised to the first finalized block observed after startup and only ever
-/// advances over blocks that the indexer has already committed. `last_indexed` bounds the range
-/// from above, so a finalized tag that moves faster than the indexer never asks for logs that were
-/// not stored yet, and a round covers at most [`MAX_VERIFICATION_RANGE`] blocks. The cursor is only
-/// advanced by the caller after the range matched, so a finalized block moving backwards never moves
-/// it backwards.
-pub fn next_cursor_step(cursor: Option<u64>, finalized: Option<u64>, last_indexed: u64) -> CursorStep {
-    match (cursor, finalized) {
-        (_, None) => CursorStep::Idle,
-        (None, Some(finalized)) => CursorStep::Initialised(finalized),
-        (Some(cursor), Some(finalized)) => {
-            let upper = finalized.min(last_indexed);
-            if upper > cursor {
-                let from = cursor.saturating_add(1);
-                CursorStep::Verify {
-                    from,
-                    to: upper.min(from.saturating_add(MAX_VERIFICATION_RANGE - 1)),
-                }
-            } else {
-                CursorStep::Idle
-            }
+/// `first_round_last_indexed` is the last block the indexer had committed when the first round ran
+/// without a finalized block. Everything above it may have been indexed while finality was still
+/// unknown, so the cursor starts at its minimum with the first finalized block and those blocks are
+/// re-checked once they become final. Returns `None` while the finalized block is unknown.
+pub fn initial_cursor(first_round_last_indexed: Option<u64>, finalized: Option<u64>) -> Option<u64> {
+    finalized.map(|finalized| first_round_last_indexed.map_or(finalized, |last_indexed| last_indexed.min(finalized)))
+}
+
+/// Plans the next post-finality verification round of a cursor that is already set.
+///
+/// The cursor only ever advances over blocks that the indexer has already committed. `last_indexed`
+/// bounds the range from above, so a finalized tag that moves faster than the indexer never asks for
+/// logs that were not stored yet, and a round covers at most [`MAX_VERIFICATION_RANGE`] blocks. The
+/// cursor is only advanced by the caller after the range matched, so a finalized block moving
+/// backwards never moves it backwards.
+pub fn next_cursor_step(cursor: u64, finalized: Option<u64>, last_indexed: u64) -> CursorStep {
+    let Some(finalized) = finalized else {
+        return CursorStep::Idle;
+    };
+
+    let upper = finalized.min(last_indexed);
+    if upper > cursor {
+        let from = cursor.saturating_add(1);
+        CursorStep::Verify {
+            from,
+            to: upper.min(from.saturating_add(MAX_VERIFICATION_RANGE - 1)),
         }
+    } else {
+        CursorStep::Idle
     }
 }
 
@@ -279,16 +326,16 @@ fn describe_mismatch(mismatch: &VerificationMismatch) -> Vec<String> {
     examples
 }
 
-fn record_read_failure(failure_streak: &mut u32, range: Option<(u64, u64)>, error: &str) {
+fn record_failure(failure_streak: &mut u32, range: Option<(u64, u64)>, error: &str) {
     if *failure_streak == 0 {
         warn!(
             ?range,
-            error, "post-finality verification read failed, retrying the same range on the next tip update"
+            error, "post-finality verification failed, retrying the same range on the next tip update"
         );
     } else {
         debug!(
             ?range,
-            error, "post-finality verification read failed again, retrying the same range on the next tip update"
+            error, "post-finality verification failed again, retrying the same range on the next tip update"
         );
     }
 
@@ -316,6 +363,7 @@ async fn verify_range<T, U, Db>(
     rpc: &T,
     db: &Db,
     logs_handler: &Arc<U>,
+    indexer_state: &IndexerState,
     from: u64,
     to: u64,
 ) -> Result<VerificationMismatch>
@@ -344,15 +392,19 @@ where
 
     // Only the contracts that are configured from the start can be expected to be in the store of
     // every block. Safe addresses appear while indexing, so their canonical logs are exempt from
-    // the missing-from-store direction.
+    // the missing-from-store direction wherever the filter could not have contained them yet.
     let token = logs_handler.contract_addresses_map().token;
-    let static_addresses = logs_handler
-        .contract_addresses()
-        .into_iter()
-        .filter(|address| *address != token)
-        .collect::<BTreeSet<_>>();
+    let coverage = StoreCoverage {
+        static_addresses: logs_handler
+            .contract_addresses()
+            .into_iter()
+            .filter(|address| *address != token)
+            .collect::<BTreeSet<_>>(),
+        safe_discovery_blocks: db.get_safe_contract_discovery_blocks(None).await?,
+        continuous_start: indexer_state.continuous_start_block(),
+    };
 
-    Ok(compare_logs(&stored, &canonical, &static_addresses))
+    Ok(compare_logs(&stored, &canonical, &coverage))
 }
 
 /// Verifies indexed ranges once the chain tip tracker reports them as final.
@@ -381,6 +433,10 @@ pub(crate) async fn run_verification<T, U, Db>(
         + 'static,
 {
     let mut cursor: Option<u64> = None;
+    let mut cursor_loaded = false;
+    // Last block the indexer had committed in the first round that ran without a finalized block and
+    // with at least one indexed block.
+    let mut first_round_last_indexed: Option<u64> = None;
     let mut failure_streak: u32 = 0;
     let mut rounds: u32 = 0;
 
@@ -391,52 +447,100 @@ pub(crate) async fn run_verification<T, U, Db>(
         let last_indexed = match db.get_indexer_state_info(None).await {
             Ok(info) => Some(u64::from(info.latest_block_number)),
             Err(error) => {
-                record_read_failure(&mut failure_streak, None, &error.to_string());
+                record_failure(&mut failure_streak, None, &error.to_string());
                 None
             }
         };
 
         if let Some(last_indexed) = last_indexed {
-            let finalized = tip_updates.borrow().and_then(|tip| tip.finalized);
-
-            match next_cursor_step(cursor, finalized, last_indexed) {
-                CursorStep::Idle => {}
-                CursorStep::Initialised(finalized) => {
-                    cursor = Some(finalized);
-                    failure_streak = 0;
-                    info!(
-                        verified_up_to = finalized,
-                        "post-finality verification started, blocks above the finalized block are re-checked once \
-                         they become final"
-                    );
-                }
-                CursorStep::Verify { from, to } => match verify_range(rpc, &db, &logs_handler, from, to).await {
-                    Ok(mismatch) if mismatch.is_empty() => {
-                        cursor = Some(to);
+            // The persisted position is read once. A failed read retries the round, because starting
+            // over from the finalized block would skip the blocks below the stored position.
+            if !cursor_loaded {
+                match db.get_last_verified_block(None).await {
+                    Ok(persisted) => {
+                        cursor = persisted;
+                        cursor_loaded = true;
                         failure_streak = 0;
-                        debug!(
-                            from_block = from,
-                            to_block = to,
-                            "post-finality verification matched the stored logs"
-                        );
+                        if let Some(cursor) = cursor {
+                            info!(
+                                verified_up_to = cursor,
+                                "resuming post-finality verification from the stored position"
+                            );
+                        }
                     }
-                    Ok(mismatch) => {
-                        error!(
-                            from_block = from,
-                            to_block = to,
-                            missing_from_chain = mismatch.missing_from_chain.len(),
-                            missing_from_store = mismatch.missing_from_store.len(),
-                            changed = mismatch.changed.len(),
-                            examples = ?describe_mismatch(&mismatch),
-                            "post-finality verification found logs that the canonical chain does not confirm, \
-                             halting the indexer"
-                        );
-                        record_false_confirmation();
-                        indexer_state.mark_verification_failed();
-                        return;
+                    Err(error) => record_failure(&mut failure_streak, None, &error.to_string()),
+                }
+            }
+
+            if cursor_loaded {
+                let finalized = tip_updates.borrow().and_then(|tip| tip.finalized);
+
+                match cursor {
+                    None => {
+                        // A zero value means that nothing is indexed yet, so no block is owed a check.
+                        // Recording it would start the cursor at the genesis block and walk the whole
+                        // chain below the first indexed block.
+                        if finalized.is_none() && first_round_last_indexed.is_none() && last_indexed > 0 {
+                            first_round_last_indexed = Some(last_indexed);
+                        }
+
+                        if let Some(start) = initial_cursor(first_round_last_indexed, finalized) {
+                            match db.set_last_verified_block(None, start).await {
+                                Ok(()) => {
+                                    cursor = Some(start);
+                                    failure_streak = 0;
+                                    info!(
+                                        verified_up_to = start,
+                                        "post-finality verification started, blocks above the cursor are re-checked \
+                                         once they become final"
+                                    );
+                                }
+                                Err(error) => record_failure(&mut failure_streak, None, &error.to_string()),
+                            }
+                        }
                     }
-                    Err(error) => record_read_failure(&mut failure_streak, Some((from, to)), &error.to_string()),
-                },
+                    Some(current) => match next_cursor_step(current, finalized, last_indexed) {
+                        CursorStep::Idle => {}
+                        CursorStep::Verify { from, to } => {
+                            match verify_range(rpc, &db, &logs_handler, &indexer_state, from, to).await {
+                                Ok(mismatch) if mismatch.is_empty() => {
+                                    // The cursor only moves once its new value is stored: a failed write
+                                    // re-verifies the same range instead of leaving it unchecked.
+                                    match db.set_last_verified_block(None, to).await {
+                                        Ok(()) => {
+                                            cursor = Some(to);
+                                            failure_streak = 0;
+                                            debug!(
+                                                from_block = from,
+                                                to_block = to,
+                                                "post-finality verification matched the stored logs"
+                                            );
+                                        }
+                                        Err(error) => {
+                                            record_failure(&mut failure_streak, Some((from, to)), &error.to_string())
+                                        }
+                                    }
+                                }
+                                Ok(mismatch) => {
+                                    error!(
+                                        from_block = from,
+                                        to_block = to,
+                                        missing_from_chain = mismatch.missing_from_chain.len(),
+                                        missing_from_store = mismatch.missing_from_store.len(),
+                                        changed = mismatch.changed.len(),
+                                        examples = ?describe_mismatch(&mismatch),
+                                        "post-finality verification found logs that the canonical chain does not \
+                                         confirm, halting the indexer"
+                                    );
+                                    record_false_confirmation();
+                                    indexer_state.mark_verification_failed();
+                                    return;
+                                }
+                                Err(error) => record_failure(&mut failure_streak, Some((from, to)), &error.to_string()),
+                            }
+                        }
+                    },
+                }
             }
         }
 
@@ -455,7 +559,7 @@ pub(crate) async fn run_verification<T, U, Db>(
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::BTreeSet,
+        collections::{BTreeMap, BTreeSet},
         pin::Pin,
         sync::{
             Arc,
@@ -472,8 +576,8 @@ mod tests {
     };
     use blokli_chain_types::ContractAddresses;
     use blokli_db::{
-        api::logs::BlokliDbLogOperations, db::BlokliDb, info::BlokliDbInfoOperations,
-        safe_contracts::BlokliDbSafeContractOperations,
+        BlokliDbGeneralModelOperations, TargetDb, api::logs::BlokliDbLogOperations, db::BlokliDb,
+        info::BlokliDbInfoOperations, safe_contracts::BlokliDbSafeContractOperations,
     };
     use futures::Stream;
     use hopr_bindings::exports::alloy::{primitives::B256, rpc::types::Filter};
@@ -482,9 +586,10 @@ mod tests {
         primitive::prelude::{Address, HoprBalance, SerializableLog, XDaiBalance, XHoprBalance},
     };
     use mockall::mock;
+    use sea_orm::ConnectionTrait;
     use tokio::sync::watch;
 
-    use super::{CursorStep, compare_logs, next_cursor_step, run_verification};
+    use super::{CursorStep, StoreCoverage, compare_logs, initial_cursor, next_cursor_step, run_verification};
     use crate::{IndexerState, traits::MockChainLogHandler};
 
     fn sample_log(block_number: u64, log_index: u64, block_hash: u8, tx_hash: u8) -> SerializableLog {
@@ -505,15 +610,29 @@ mod tests {
         addresses.iter().copied().collect()
     }
 
-    fn sample_static_addresses() -> BTreeSet<Address> {
-        static_addresses(&[Address::from([0x11; 20])])
+    /// Coverage of a chain whose only static contract emitted the sample logs.
+    fn sample_coverage() -> StoreCoverage {
+        StoreCoverage {
+            static_addresses: static_addresses(&[Address::from([0x11; 20])]),
+            safe_discovery_blocks: BTreeMap::new(),
+            continuous_start: Some(0),
+        }
+    }
+
+    /// Coverage of a chain that also holds the given Safes, discovered in the given blocks.
+    fn coverage_with_safes(safes: &[(Address, u64)], continuous_start: Option<u64>) -> StoreCoverage {
+        StoreCoverage {
+            static_addresses: static_addresses(&[Address::from([0x11; 20])]),
+            safe_discovery_blocks: safes.iter().copied().collect(),
+            continuous_start,
+        }
     }
 
     #[test]
     fn identical_log_sets_have_no_mismatch() {
         let logs = vec![sample_log(10, 0, 1, 2), sample_log(10, 1, 3, 4)];
 
-        let mismatch = compare_logs(&logs, &logs, &sample_static_addresses());
+        let mismatch = compare_logs(&logs, &logs, &sample_coverage());
 
         assert!(mismatch.is_empty());
         assert_eq!(mismatch.len(), 0);
@@ -521,7 +640,7 @@ mod tests {
 
     #[test]
     fn empty_ranges_have_no_mismatch() {
-        let mismatch = compare_logs(&[], &[], &sample_static_addresses());
+        let mismatch = compare_logs(&[], &[], &sample_coverage());
 
         assert!(mismatch.is_empty());
     }
@@ -531,7 +650,7 @@ mod tests {
         let stored = vec![sample_log(10, 0, 1, 2)];
         let canonical = vec![sample_log(10, 0, 9, 2)];
 
-        let mismatch = compare_logs(&stored, &canonical, &sample_static_addresses());
+        let mismatch = compare_logs(&stored, &canonical, &sample_coverage());
 
         insta::assert_yaml_snapshot!("changed_block_hash", mismatch);
     }
@@ -541,7 +660,7 @@ mod tests {
         let stored = vec![sample_log(10, 0, 1, 2)];
         let canonical = vec![sample_log(10, 0, 1, 9)];
 
-        let mismatch = compare_logs(&stored, &canonical, &sample_static_addresses());
+        let mismatch = compare_logs(&stored, &canonical, &sample_coverage());
 
         insta::assert_yaml_snapshot!("changed_transaction_hash", mismatch);
     }
@@ -551,7 +670,7 @@ mod tests {
         let stored = vec![sample_log(10, 0, 1, 2), sample_log(11, 0, 3, 4)];
         let canonical = vec![sample_log(10, 0, 1, 2)];
 
-        let mismatch = compare_logs(&stored, &canonical, &sample_static_addresses());
+        let mismatch = compare_logs(&stored, &canonical, &sample_coverage());
 
         insta::assert_yaml_snapshot!("stored_log_missing_from_chain", mismatch);
     }
@@ -561,21 +680,42 @@ mod tests {
         let stored = vec![sample_log(10, 0, 1, 2)];
         let canonical = vec![sample_log(10, 0, 1, 2), sample_log(11, 0, 3, 4)];
 
-        let mismatch = compare_logs(&stored, &canonical, &sample_static_addresses());
+        let mismatch = compare_logs(&stored, &canonical, &sample_coverage());
 
         insta::assert_yaml_snapshot!("canonical_log_missing_from_store", mismatch);
     }
 
-    #[test]
-    fn canonical_log_from_a_safe_outside_the_static_set_is_not_missing_from_store() {
-        let stored = vec![sample_log(10, 0, 1, 2)];
-        let safe_log = SerializableLog {
-            address: Address::from([0x33; 20]),
-            ..sample_log(11, 0, 3, 4)
-        };
-        let canonical = vec![sample_log(10, 0, 1, 2), safe_log];
+    fn sample_safe_log(address: Address, block_number: u64) -> SerializableLog {
+        SerializableLog {
+            address,
+            ..sample_log(block_number, 1, 3, 4)
+        }
+    }
 
-        let mismatch = compare_logs(&stored, &canonical, &sample_static_addresses());
+    /// A canonical log of a Safe that was in the filter for the block, in the continuous phase of
+    /// this process, is only accepted when it is stored.
+    #[test]
+    fn canonical_log_of_a_known_safe_in_a_continuous_block_is_missing_from_store() {
+        let safe = Address::from([0x33; 20]);
+        let coverage = coverage_with_safes(&[(safe, 10)], Some(5));
+        let stored = vec![sample_log(20, 0, 1, 2)];
+        let canonical = vec![sample_log(20, 0, 1, 2), sample_safe_log(safe, 20)];
+
+        let mismatch = compare_logs(&stored, &canonical, &coverage);
+
+        assert_eq!(mismatch.missing_from_store.len(), 1);
+        assert_eq!(mismatch.missing_from_store[0].block_number, 20);
+        assert_eq!(mismatch.missing_from_store[0].log_index, 1);
+    }
+
+    #[test]
+    fn canonical_log_of_a_safe_discovered_after_the_block_is_exempt() {
+        let safe = Address::from([0x33; 20]);
+        let coverage = coverage_with_safes(&[(safe, 30)], Some(5));
+        let stored = vec![sample_log(20, 0, 1, 2)];
+        let canonical = vec![sample_log(20, 0, 1, 2), sample_safe_log(safe, 20)];
+
+        let mismatch = compare_logs(&stored, &canonical, &coverage);
 
         assert!(
             mismatch.is_empty(),
@@ -583,48 +723,135 @@ mod tests {
         );
     }
 
+    /// The filter is rebuilt for the block after the discovery, so the Safe was not requested in
+    /// its own discovery block.
     #[test]
-    fn cursor_step_is_idle_while_finalized_is_unknown() {
-        assert_eq!(next_cursor_step(None, None, 100), CursorStep::Idle);
-        assert_eq!(next_cursor_step(Some(10), None, 100), CursorStep::Idle);
+    fn canonical_log_of_a_safe_in_its_discovery_block_is_exempt() {
+        let safe = Address::from([0x33; 20]);
+        let coverage = coverage_with_safes(&[(safe, 20)], Some(5));
+        let stored = vec![sample_log(20, 0, 1, 2)];
+        let canonical = vec![sample_log(20, 0, 1, 2), sample_safe_log(safe, 20)];
+
+        let in_discovery_block = compare_logs(&stored, &canonical, &coverage);
+        assert!(
+            in_discovery_block.is_empty(),
+            "the discovery block itself was indexed without the Safe filter: {in_discovery_block:?}"
+        );
+
+        let after_discovery = compare_logs(
+            &stored,
+            &[sample_log(20, 0, 1, 2), sample_safe_log(safe, 21)],
+            &coverage,
+        );
+        assert_eq!(after_discovery.missing_from_store.len(), 1);
     }
 
     #[test]
-    fn cursor_step_initialises_on_the_first_finalized_block() {
-        assert_eq!(next_cursor_step(None, Some(42), 100), CursorStep::Initialised(42));
+    fn canonical_log_of_a_safe_below_the_continuous_start_is_exempt() {
+        let safe = Address::from([0x33; 20]);
+        let coverage = coverage_with_safes(&[(safe, 5)], Some(20));
+        let stored = vec![sample_log(10, 0, 1, 2)];
+        let canonical = vec![sample_log(10, 0, 1, 2), sample_safe_log(safe, 10)];
+
+        let mismatch = compare_logs(&stored, &canonical, &coverage);
+
+        assert!(
+            mismatch.is_empty(),
+            "a block the historical discovery phase indexed holds no Safe logs: {mismatch:?}"
+        );
+    }
+
+    #[test]
+    fn canonical_log_of_a_safe_is_exempt_before_the_continuous_phase_began() {
+        let safe = Address::from([0x33; 20]);
+        let coverage = coverage_with_safes(&[(safe, 5)], None);
+        let stored = vec![sample_log(10, 0, 1, 2)];
+        let canonical = vec![sample_log(10, 0, 1, 2), sample_safe_log(safe, 10)];
+
+        assert!(compare_logs(&stored, &canonical, &coverage).is_empty());
+    }
+
+    /// Static contract logs keep the strict rule, including before the continuous phase began.
+    #[test]
+    fn canonical_log_of_a_static_contract_is_missing_from_store_without_continuous_coverage() {
+        let coverage = coverage_with_safes(&[], None);
+        let stored = vec![sample_log(10, 0, 1, 2)];
+        let canonical = vec![sample_log(10, 0, 1, 2), sample_log(10, 1, 3, 4)];
+
+        let mismatch = compare_logs(&stored, &canonical, &coverage);
+
+        assert_eq!(mismatch.missing_from_store.len(), 1);
+    }
+
+    /// The Safe exemption only applies to the missing-from-store direction.
+    #[test]
+    fn stored_safe_logs_are_compared_strictly() {
+        let safe = Address::from([0x33; 20]);
+        let coverage = coverage_with_safes(&[(safe, 5)], Some(0));
+        let stored = vec![sample_safe_log(safe, 20), sample_safe_log(safe, 21)];
+        let canonical = vec![sample_safe_log(safe, 20)];
+
+        let mismatch = compare_logs(&stored, &canonical, &coverage);
+
+        assert_eq!(mismatch.missing_from_chain.len(), 1);
+        assert_eq!(mismatch.missing_from_chain[0].block_number, 21);
+    }
+
+    #[test]
+    fn initial_cursor_is_unset_while_finalized_is_unknown() {
+        assert_eq!(initial_cursor(None, None), None);
+        assert_eq!(initial_cursor(Some(100), None), None);
+    }
+
+    #[test]
+    fn initial_cursor_starts_at_the_first_finalized_block() {
+        assert_eq!(initial_cursor(None, Some(42)), Some(42));
+        assert_eq!(initial_cursor(Some(100), Some(42)), Some(42));
+    }
+
+    /// Blocks indexed while finality was unknown are re-checked from the position of the first round.
+    #[test]
+    fn initial_cursor_starts_at_the_lower_of_the_first_round_and_the_finalized_block() {
+        assert_eq!(initial_cursor(Some(100), Some(110)), Some(100));
+        assert_eq!(initial_cursor(Some(110), Some(110)), Some(110));
+    }
+
+    #[test]
+    fn cursor_step_is_idle_while_finalized_is_unknown() {
+        assert_eq!(next_cursor_step(10, None, 100), CursorStep::Idle);
     }
 
     #[test]
     fn cursor_step_verifies_above_the_cursor() {
         assert_eq!(
-            next_cursor_step(Some(10), Some(15), 100),
+            next_cursor_step(10, Some(15), 100),
             CursorStep::Verify { from: 11, to: 15 }
         );
     }
 
     #[test]
     fn cursor_step_stays_idle_when_finalized_is_at_or_below_the_cursor() {
-        assert_eq!(next_cursor_step(Some(10), Some(10), 100), CursorStep::Idle);
-        assert_eq!(next_cursor_step(Some(10), Some(9), 100), CursorStep::Idle);
+        assert_eq!(next_cursor_step(10, Some(10), 100), CursorStep::Idle);
+        assert_eq!(next_cursor_step(10, Some(9), 100), CursorStep::Idle);
     }
 
     #[test]
     fn cursor_step_is_bounded_by_the_last_indexed_block() {
         assert_eq!(
-            next_cursor_step(Some(10), Some(20), 15),
+            next_cursor_step(10, Some(20), 15),
             CursorStep::Verify { from: 11, to: 15 }
         );
-        assert_eq!(next_cursor_step(Some(10), Some(20), 10), CursorStep::Idle);
+        assert_eq!(next_cursor_step(10, Some(20), 10), CursorStep::Idle);
     }
 
     #[test]
     fn cursor_step_caps_one_round_at_the_maximum_range() {
         assert_eq!(
-            next_cursor_step(Some(10), Some(5_000), 5_000),
+            next_cursor_step(10, Some(5_000), 5_000),
             CursorStep::Verify { from: 11, to: 1_010 }
         );
         assert_eq!(
-            next_cursor_step(Some(1_010), Some(5_000), 5_000),
+            next_cursor_step(1_010, Some(5_000), 5_000),
             CursorStep::Verify { from: 1_011, to: 2_010 }
         );
     }
@@ -735,9 +962,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn clean_range_advances_the_cursor_and_leaves_the_flag_unset() -> anyhow::Result<()> {
+    async fn clean_range_advances_and_persists_the_cursor_and_leaves_the_flag_unset() -> anyhow::Result<()> {
         let logs = vec![sample_log(11, 0, 1, 2), sample_log(12, 0, 3, 4)];
         let db = prepare_db(12, logs.clone()).await?;
+        let observed = db.clone();
         let calls = Arc::new(AtomicUsize::new(0));
         let calls_for_rpc = calls.clone();
 
@@ -769,6 +997,11 @@ mod tests {
         wait_for_round(&mut round_rx, 3).await;
 
         assert_eq!(calls.load(AtomicOrdering::SeqCst), 1, "the cursor should have advanced");
+        assert_eq!(
+            observed.get_last_verified_block(None).await?,
+            Some(12),
+            "the advanced cursor is stored so a restart resumes from it"
+        );
         assert!(!indexer_state.verification_failed());
         drop(tip_tx);
         task.await?;
@@ -780,6 +1013,7 @@ mod tests {
     async fn mismatch_sets_the_flag_stops_the_task_and_keeps_the_cursor() -> anyhow::Result<()> {
         let stored = vec![sample_log(11, 0, 1, 2), sample_log(12, 0, 3, 4)];
         let db = prepare_db(12, stored).await?;
+        let observed = db.clone();
         let calls = Arc::new(AtomicUsize::new(0));
         let calls_for_rpc = calls.clone();
 
@@ -816,6 +1050,11 @@ mod tests {
             "the task should stop after a mismatch"
         );
         assert!(indexer_state.verification_failed());
+        assert_eq!(
+            observed.get_last_verified_block(None).await?,
+            Some(10),
+            "a mismatching range does not advance the stored position"
+        );
 
         Ok(())
     }
@@ -873,7 +1112,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn canonical_logs_from_a_safe_discovered_after_indexing_are_not_missing_from_store() -> anyhow::Result<()> {
+    async fn canonical_logs_from_a_safe_discovered_in_the_verified_block_are_not_missing_from_store()
+    -> anyhow::Result<()> {
         let base_address = Address::from([0x11; 20]);
         let safe_address = Address::from([0x33; 20]);
         let base_log = sample_log(11, 0, 1, 2);
@@ -900,6 +1140,8 @@ mod tests {
             });
 
         let indexer_state = IndexerState::default();
+        // The block was indexed by the continuous phase, so only the discovery boundary exempts it.
+        indexer_state.set_continuous_start_block(1);
         let (tip_tx, tip_rx) = watch::channel(Some(sample_tip(Some(10))));
         let (round_tx, mut round_rx) = watch::channel(0);
         let task = spawn_verification(
@@ -917,9 +1159,300 @@ mod tests {
 
         assert!(
             !indexer_state.verification_failed(),
-            "a Safe discovered after indexing must not halt the indexer"
+            "a Safe discovered in the verified block must not halt the indexer"
         );
         assert_eq!(calls.load(AtomicOrdering::SeqCst), 1);
+        drop(tip_tx);
+        task.await?;
+
+        Ok(())
+    }
+
+    /// A canonical log of a Safe that was in the filter long before the block must be in the store.
+    #[tokio::test]
+    async fn canonical_log_of_a_known_safe_in_a_continuous_block_halts_the_indexer() -> anyhow::Result<()> {
+        let base_address = Address::from([0x11; 20]);
+        let safe_address = Address::from([0x33; 20]);
+        let base_log = sample_log(11, 0, 1, 2);
+        let db = prepare_db(11, vec![base_log.clone()]).await?;
+        db.create_safe_contract(None, safe_address, Address::default(), Address::default(), 10, 0, 0)
+            .await?;
+
+        let canonical = vec![
+            base_log,
+            SerializableLog {
+                address: safe_address,
+                ..sample_log(11, 1, 1, 2)
+            },
+        ];
+        let mut rpc = MockVerificationRpc::new();
+        rpc.expect_get_logs_for_block_range()
+            .withf(|_, from: &u64, to: &u64| *from == 11 && *to == 11)
+            .returning(move |_, _, _| Ok(canonical.clone()));
+
+        let indexer_state = IndexerState::default();
+        indexer_state.set_continuous_start_block(1);
+        let (tip_tx, tip_rx) = watch::channel(Some(sample_tip(Some(10))));
+        let (round_tx, mut round_rx) = watch::channel(0);
+        let task = spawn_verification(
+            Arc::new(rpc),
+            db,
+            log_handler(vec![base_address]),
+            indexer_state.clone(),
+            tip_rx,
+            round_tx,
+        );
+
+        wait_for_round(&mut round_rx, 1).await;
+        tip_tx.send_replace(Some(sample_tip(Some(11))));
+
+        tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("the task should stop after a mismatch")?;
+
+        assert!(
+            indexer_state.verification_failed(),
+            "a missing log of a known Safe is a mismatch"
+        );
+
+        Ok(())
+    }
+
+    /// Blocks that the historical discovery phase indexed hold no Safe logs at all.
+    #[tokio::test]
+    async fn canonical_logs_of_a_safe_below_the_continuous_start_are_not_missing_from_store() -> anyhow::Result<()> {
+        let base_address = Address::from([0x11; 20]);
+        let safe_address = Address::from([0x33; 20]);
+        let base_log = sample_log(11, 0, 1, 2);
+        let db = prepare_db(11, vec![base_log.clone()]).await?;
+        db.create_safe_contract(None, safe_address, Address::default(), Address::default(), 5, 0, 0)
+            .await?;
+
+        let canonical = vec![
+            base_log,
+            SerializableLog {
+                address: safe_address,
+                ..sample_log(11, 1, 1, 2)
+            },
+        ];
+        let mut rpc = MockVerificationRpc::new();
+        rpc.expect_get_logs_for_block_range()
+            .withf(|_, from: &u64, to: &u64| *from == 11 && *to == 11)
+            .returning(move |_, _, _| Ok(canonical.clone()));
+
+        let indexer_state = IndexerState::default();
+        indexer_state.set_continuous_start_block(100);
+        let (tip_tx, tip_rx) = watch::channel(Some(sample_tip(Some(10))));
+        let (round_tx, mut round_rx) = watch::channel(0);
+        let task = spawn_verification(
+            Arc::new(rpc),
+            db,
+            log_handler(vec![base_address]),
+            indexer_state.clone(),
+            tip_rx,
+            round_tx,
+        );
+
+        wait_for_round(&mut round_rx, 1).await;
+        tip_tx.send_replace(Some(sample_tip(Some(11))));
+        wait_for_round(&mut round_rx, 2).await;
+
+        assert!(!indexer_state.verification_failed());
+        drop(tip_tx);
+        task.await?;
+
+        Ok(())
+    }
+
+    /// A cursor stored by an earlier process resumes the blocks that became final while it was down.
+    #[tokio::test]
+    async fn stored_cursor_below_the_finalized_block_resumes_the_range_in_between() -> anyhow::Result<()> {
+        let logs = vec![sample_log(101, 0, 1, 2), sample_log(110, 0, 3, 4)];
+        let db = prepare_db(110, logs.clone()).await?;
+        db.set_last_verified_block(None, 100).await?;
+        let observed = db.clone();
+
+        let mut rpc = MockVerificationRpc::new();
+        rpc.expect_get_logs_for_block_range()
+            .withf(|_, from: &u64, to: &u64| *from == 101 && *to == 110)
+            .returning(move |_, _, _| Ok(logs.clone()));
+
+        let indexer_state = IndexerState::default();
+        let (tip_tx, tip_rx) = watch::channel(Some(sample_tip(Some(110))));
+        let (round_tx, mut round_rx) = watch::channel(0);
+        let task = spawn_verification(
+            Arc::new(rpc),
+            db,
+            log_handler(Vec::new()),
+            indexer_state.clone(),
+            tip_rx,
+            round_tx,
+        );
+
+        wait_for_round(&mut round_rx, 1).await;
+
+        assert_eq!(
+            observed.get_last_verified_block(None).await?,
+            Some(110),
+            "the range between the stored cursor and the finalized block is verified and stored"
+        );
+        assert!(!indexer_state.verification_failed());
+        drop(tip_tx);
+        task.await?;
+
+        Ok(())
+    }
+
+    /// Blocks indexed while finality was unknown are verified once it appears.
+    #[tokio::test]
+    async fn blocks_indexed_while_finality_was_unknown_are_verified() -> anyhow::Result<()> {
+        let logs = vec![sample_log(101, 0, 1, 2), sample_log(110, 0, 3, 4)];
+        let db = prepare_db(100, logs.clone()).await?;
+        let observed = db.clone();
+
+        let mut rpc = MockVerificationRpc::new();
+        rpc.expect_get_logs_for_block_range()
+            .withf(|_, from: &u64, to: &u64| *from == 101 && *to == 110)
+            .returning(move |_, _, _| Ok(logs.clone()));
+
+        let indexer_state = IndexerState::default();
+        let (tip_tx, tip_rx) = watch::channel(Some(sample_tip(None)));
+        let (round_tx, mut round_rx) = watch::channel(0);
+        let task = spawn_verification(
+            Arc::new(rpc),
+            db,
+            log_handler(Vec::new()),
+            indexer_state.clone(),
+            tip_rx,
+            round_tx,
+        );
+
+        wait_for_round(&mut round_rx, 1).await;
+        assert_eq!(
+            observed.get_last_verified_block(None).await?,
+            None,
+            "nothing is stored while the cursor is unset"
+        );
+
+        // The indexer advances while finality stays unknown.
+        observed.set_indexer_state_info(None, 110).await?;
+        tip_tx.send_replace(Some(sample_tip(None)));
+        wait_for_round(&mut round_rx, 2).await;
+
+        // Finality appears above everything indexed meanwhile, so the cursor starts at the block
+        // the first round saw and the blocks above it are verified.
+        tip_tx.send_replace(Some(sample_tip(Some(110))));
+        wait_for_round(&mut round_rx, 3).await;
+        assert_eq!(observed.get_last_verified_block(None).await?, Some(100));
+
+        tip_tx.send_replace(Some(sample_tip(Some(110))));
+        wait_for_round(&mut round_rx, 4).await;
+
+        assert_eq!(observed.get_last_verified_block(None).await?, Some(110));
+        assert!(!indexer_state.verification_failed());
+        drop(tip_tx);
+        task.await?;
+
+        Ok(())
+    }
+
+    /// An empty index does not pull the cursor down to the genesis block.
+    #[tokio::test]
+    async fn empty_index_without_finality_starts_the_cursor_at_the_first_finalized_block() -> anyhow::Result<()> {
+        let db = prepare_db(0, Vec::new()).await?;
+        let observed = db.clone();
+
+        // No expectation is set: a fetched range would fail the test.
+        let rpc = MockVerificationRpc::new();
+
+        let indexer_state = IndexerState::default();
+        let (tip_tx, tip_rx) = watch::channel(Some(sample_tip(None)));
+        let (round_tx, mut round_rx) = watch::channel(0);
+        let task = spawn_verification(
+            Arc::new(rpc),
+            db,
+            log_handler(Vec::new()),
+            indexer_state.clone(),
+            tip_rx,
+            round_tx,
+        );
+
+        wait_for_round(&mut round_rx, 1).await;
+
+        tip_tx.send_replace(Some(sample_tip(Some(50))));
+        wait_for_round(&mut round_rx, 2).await;
+        assert_eq!(observed.get_last_verified_block(None).await?, Some(50));
+
+        tip_tx.send_replace(Some(sample_tip(Some(50))));
+        wait_for_round(&mut round_rx, 3).await;
+
+        assert_eq!(observed.get_last_verified_block(None).await?, Some(50));
+        assert!(!indexer_state.verification_failed());
+        drop(tip_tx);
+        task.await?;
+
+        Ok(())
+    }
+
+    /// A failed cursor write keeps the stored position and re-verifies the same range.
+    #[tokio::test]
+    async fn cursor_is_not_advanced_when_the_store_write_fails() -> anyhow::Result<()> {
+        let logs = vec![sample_log(11, 0, 1, 2)];
+        let db = prepare_db(11, logs.clone()).await?;
+        db.set_last_verified_block(None, 10).await?;
+        let observed = db.clone();
+
+        // A trigger fails only the cursor write, so the store stays readable.
+        db.conn(TargetDb::Index)
+            .execute_unprepared(
+                "CREATE TRIGGER fail_last_verified_block_write BEFORE UPDATE OF last_verified_block ON chain_info \
+                 BEGIN SELECT RAISE(ABORT, 'injected cursor write failure'); END",
+            )
+            .await?;
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_for_rpc = calls.clone();
+
+        let mut rpc = MockVerificationRpc::new();
+        rpc.expect_get_logs_for_block_range()
+            .withf(|_, from: &u64, to: &u64| *from == 11 && *to == 11)
+            .returning(move |_, _, _| {
+                calls_for_rpc.fetch_add(1, AtomicOrdering::SeqCst);
+                Ok(logs.clone())
+            });
+
+        let indexer_state = IndexerState::default();
+        let (tip_tx, tip_rx) = watch::channel(Some(sample_tip(Some(10))));
+        let (round_tx, mut round_rx) = watch::channel(0);
+        let task = spawn_verification(
+            Arc::new(rpc),
+            db,
+            log_handler(Vec::new()),
+            indexer_state.clone(),
+            tip_rx,
+            round_tx,
+        );
+
+        wait_for_round(&mut round_rx, 1).await;
+        tip_tx.send_replace(Some(sample_tip(Some(11))));
+        wait_for_round(&mut round_rx, 2).await;
+
+        assert_eq!(calls.load(AtomicOrdering::SeqCst), 1);
+        assert_eq!(
+            observed.get_last_verified_block(None).await?,
+            Some(10),
+            "the stored position must not move past a failed write"
+        );
+
+        tip_tx.send_replace(Some(sample_tip(Some(11))));
+        wait_for_round(&mut round_rx, 3).await;
+
+        assert_eq!(
+            calls.load(AtomicOrdering::SeqCst),
+            2,
+            "the same range is verified again"
+        );
+        assert!(!indexer_state.verification_failed(), "a failed write is not a mismatch");
         drop(tip_tx);
         task.await?;
 
@@ -948,14 +1481,14 @@ mod tests {
         );
 
         let canonical = vec![sample_log(11, 0, 3, 4), sample_log(12, 0, 5, 6)];
-        let mismatch = compare_logs(&stored, &canonical, &sample_static_addresses());
+        let mismatch = compare_logs(&stored, &canonical, &sample_coverage());
         assert!(
             mismatch.is_empty(),
             "the stored log outside the range must not be compared: {mismatch:?}"
         );
 
         let canonical_without_to = vec![sample_log(11, 0, 3, 4)];
-        let mismatch = compare_logs(&stored, &canonical_without_to, &sample_static_addresses());
+        let mismatch = compare_logs(&stored, &canonical_without_to, &sample_coverage());
         assert_eq!(mismatch.missing_from_chain.len(), 1);
         assert_eq!(mismatch.missing_from_chain[0].block_number, 12);
 
