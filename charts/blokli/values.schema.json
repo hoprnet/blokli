@@ -183,13 +183,15 @@
               "type": "object",
               "properties": {
                 "headSubscription": {
-                  "type": "boolean",
-                  "description": "Use newHeads over WebSocket when the RPC endpoint supports it"
+                  "oneOf": [
+                    { "type": "boolean" },
+                    { "type": "string", "maxLength": 0 }
+                  ],
+                  "description": "Use newHeads over WebSocket when the RPC endpoint supports it (empty uses the daemon default)"
                 },
                 "headPollInterval": {
                   "type": "string",
-                  "minLength": 1,
-                  "description": "Polling interval used when newHeads is unavailable or disabled"
+                  "description": "Polling interval used when newHeads is unavailable or disabled (empty uses the daemon default)"
                 }
               }
             },
@@ -209,13 +211,18 @@
                   "description": "Blocks behind latest used by depth-based modes (empty uses the network default)"
                 },
                 "maxSafeGap": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "description": "Latest-to-safe gap at or above which the Fast Confirmation Rule counts as degraded"
+                  "oneOf": [
+                    { "type": "integer", "minimum": 1 },
+                    { "type": "string", "maxLength": 0 }
+                  ],
+                  "description": "Latest-to-safe gap at or above which the Fast Confirmation Rule counts as degraded (empty uses the daemon default)"
                 },
                 "verifyFinalized": {
-                  "type": "boolean",
-                  "description": "Re-check indexed blocks against the canonical chain once they become final"
+                  "oneOf": [
+                    { "type": "boolean" },
+                    { "type": "string", "maxLength": 0 }
+                  ],
+                  "description": "Re-check indexed blocks against the canonical chain once they become final (empty uses the daemon default)"
                 }
               }
             }

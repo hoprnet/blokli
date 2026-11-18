@@ -44,21 +44,39 @@ data:
     logs_snapshot_sha256 = "{{ required "config.indexer.logsSnapshotSha256 is required" .Values.config.indexer.logsSnapshotSha256 }}"
     {{- end }}
 
+    {{- $headSubscription := .Values.config.indexer.headTracking.headSubscription | toString }}
+    {{- $headPollInterval := .Values.config.indexer.headTracking.headPollInterval | toString }}
+    {{- if or (ne $headSubscription "") (ne $headPollInterval "") }}
     # Chain head tracking
     [indexer.head_tracking]
-    head_subscription = {{ .Values.config.indexer.headTracking.headSubscription }}
-    head_poll_interval = {{ .Values.config.indexer.headTracking.headPollInterval | quote }}
+    {{- if ne $headSubscription "" }}
+    head_subscription = {{ $headSubscription }}
+    {{- end }}
+    {{- if ne $headPollInterval "" }}
+    head_poll_interval = {{ $headPollInterval | quote }}
+    {{- end }}
+    {{- end }}
 
+    {{- $confirmationMode := .Values.config.indexer.confirmation.mode | toString }}
+    {{- $confirmationDepth := .Values.config.indexer.confirmation.depth | toString }}
+    {{- $maxSafeGap := .Values.config.indexer.confirmation.maxSafeGap | toString }}
+    {{- $verifyFinalized := .Values.config.indexer.confirmation.verifyFinalized | toString }}
+    {{- if or (ne $confirmationMode "") (ne $confirmationDepth "") (ne $maxSafeGap "") (ne $verifyFinalized "") }}
     # Confirmation rule
     [indexer.confirmation]
-    {{- if .Values.config.indexer.confirmation.mode }}
-    mode = {{ .Values.config.indexer.confirmation.mode | quote }}
+    {{- if ne $confirmationMode "" }}
+    mode = {{ $confirmationMode | quote }}
     {{- end }}
-    {{- if .Values.config.indexer.confirmation.depth }}
-    depth = {{ .Values.config.indexer.confirmation.depth | int }}
+    {{- if ne $confirmationDepth "" }}
+    depth = {{ $confirmationDepth | int }}
     {{- end }}
-    max_safe_gap = {{ .Values.config.indexer.confirmation.maxSafeGap | int }}
-    verify_finalized = {{ .Values.config.indexer.confirmation.verifyFinalized }}
+    {{- if ne $maxSafeGap "" }}
+    max_safe_gap = {{ $maxSafeGap | int }}
+    {{- end }}
+    {{- if ne $verifyFinalized "" }}
+    verify_finalized = {{ $verifyFinalized }}
+    {{- end }}
+    {{- end }}
 
     # Indexer subscription configuration
     [indexer.subscription]
