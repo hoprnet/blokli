@@ -57,11 +57,17 @@ data:
     {{- $gm := .Values.config.api.gasMultiplier | toString }}
     gas_multiplier = {{ if contains "." $gm }}{{ $gm }}{{ else }}{{ $gm }}.0{{ end }}
     min_max_fee_per_gas = {{ .Values.config.api.minMaxFeePerGas | int }}
+    {{- if hasKey .Values.config.api "maxMaxFeePerGas" }}
     max_max_fee_per_gas = {{ .Values.config.api.maxMaxFeePerGas | int }}
+    {{- end }}
     min_priority_fee_per_gas = {{ .Values.config.api.minPriorityFeePerGas | int }}
+    {{- if hasKey .Values.config.api "maxPriorityFeePerGas" }}
     max_priority_fee_per_gas = {{ .Values.config.api.maxPriorityFeePerGas | int }}
+    {{- end }}
+    {{- if hasKey .Values.config.api "baseFeeHeadroomFactor" }}
     {{- $bf := .Values.config.api.baseFeeHeadroomFactor | toString }}
-    base_fee_headroom_factor = {{ if contains "." $bf }}{{ $bf }}{{ else }}{{ $bf }}.0{{ end }}
+    base_fee_headroom_factor = {{ if regexMatch "^[0-9]+$" $bf }}{{ $bf }}.0{{ else }}{{ $bf }}{{ end }}
+    {{- end }}
     max_query_depth = {{ .Values.config.api.maxQueryDepth | int }}
     max_query_complexity = {{ .Values.config.api.maxQueryComplexity | int }}
     database_max_connections = {{ .Values.config.api.databaseMaxConnections | int }}
