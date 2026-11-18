@@ -96,6 +96,19 @@ pub enum TransactionExecutorError {
         /// Lowest fees, in wei, at which the replacement is accepted.
         minimum: FeePair,
     },
+    /// The RPC node refused a replacement as underpriced although it met Blokli's minimum.
+    ///
+    /// The node applies its own rule, so the node may require more than `minimum`, which Blokli
+    /// computed from the tracked transaction and the recommended fees and is only a lower bound.
+    #[error(
+        "the node refused the replacement as underpriced; it needs at least maxFeePerGas {} and \
+         maxPriorityFeePerGas {} and the node may require more",
+        minimum.max_fee_per_gas, minimum.max_priority_fee_per_gas
+    )]
+    ReplacementRefusedByNode {
+        /// Blokli's minimum, in wei: a lower bound of what the node accepts.
+        minimum: FeePair,
+    },
     /// The pending transaction of this signer and nonce was already replaced the maximum number
     /// of times.
     #[error("the transaction at this nonce was already replaced {max} times, the maximum")]
@@ -671,10 +684,11 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             Ok(outcome) => outcome,
             Err(e) => {
                 record_transaction_status(STATUS_SUBMISSION_FAILED);
-                // The node's own refusal to replace is the same condition as our minimum.
+                // The node's own refusal to replace is reported under the same code, but our
+                // minimum is only a lower bound of what it requires.
                 return Err(match classify_broadcast_error(&e) {
                     Some(BroadcastRejection::ReplacementUnderpriced) => {
-                        TransactionExecutorError::ReplacementUnderpriced { minimum }
+                        TransactionExecutorError::ReplacementRefusedByNode { minimum }
                     }
                     _ => TransactionExecutorError::RpcError(e),
                 });
@@ -1876,11 +1890,13 @@ mod tests {
         let result = executor
             .send_raw_transaction_async(signed_priced_transfer(&signer, 0, BUMPED_PRICE, 0).await)
             .await;
-        assert!(matches!(
-            result,
-            Err(TransactionExecutorError::ReplacementUnderpriced { minimum })
-                if minimum.max_fee_per_gas == BUMPED_PRICE
-        ));
+        let Err(TransactionExecutorError::ReplacementRefusedByNode { minimum }) = &result else {
+            panic!("unexpected result: {result:?}");
+        };
+        assert_eq!(minimum.max_fee_per_gas, BUMPED_PRICE);
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("node refused"), "{message}");
+        assert!(message.contains("may require more"), "{message}");
         assert_eq!(executor.transaction_store().count(), 1);
     }
 

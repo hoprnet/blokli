@@ -287,7 +287,8 @@ fn executor_error_to_async_result(error: TransactionExecutorError) -> SendTransa
             SendTransactionAsyncResult::Overloaded(errors::submission_capacity_exceeded())
         }
         // Replacement refusals reuse `RpcError`, so no client needs a new result type.
-        TransactionExecutorError::ReplacementUnderpriced { .. } => {
+        TransactionExecutorError::ReplacementUnderpriced { .. }
+        | TransactionExecutorError::ReplacementRefusedByNode { .. } => {
             SendTransactionAsyncResult::RpcError(errors::replacement_underpriced(error.to_string()))
         }
         TransactionExecutorError::ReplacementLimitReached { .. } => {
@@ -359,6 +360,18 @@ mod tests {
         assert_eq!(code, errors::codes::REPLACEMENT_UNDERPRICED);
         assert!(message.contains("1125000000"), "{message}");
         assert!(message.contains("250000000"), "{message}");
+
+        let refused_by_node = executor_error_to_async_result(TransactionExecutorError::ReplacementRefusedByNode {
+            minimum: FeePair {
+                max_fee_per_gas: 1_125_000_000,
+                max_priority_fee_per_gas: 250_000_000,
+            },
+        });
+        let SendTransactionAsyncResult::RpcError(RpcError { code, message }) = refused_by_node else {
+            panic!("a replacement the node refused must be an RpcError");
+        };
+        assert_eq!(code, errors::codes::REPLACEMENT_UNDERPRICED);
+        assert!(message.contains("may require more"), "{message}");
 
         let capped = executor_error_to_async_result(TransactionExecutorError::ReplacementLimitReached { max: 3 });
         let SendTransactionAsyncResult::RpcError(RpcError { code, message }) = capped else {
