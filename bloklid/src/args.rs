@@ -163,6 +163,10 @@ impl Args {
                 "api.transactions.terminal_transaction_ttl",
             ),
             (
+                "BLOKLI_API_TRANSACTIONS_UNMINED_TIMEOUT",
+                "api.transactions.unmined_timeout",
+            ),
+            (
                 "BLOKLI_API_TRANSACTIONS_MAX_TERMINAL_TRANSACTIONS",
                 "api.transactions.max_terminal_transactions",
             ),

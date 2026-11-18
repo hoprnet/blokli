@@ -302,8 +302,8 @@ pub enum SafeExecutionInspectionError {
 pub struct TransactionMonitorConfig {
     /// Interval between monitor polls
     pub poll_interval: Duration,
-    /// Maximum time to wait before marking a transaction as timed out
-    pub timeout: Duration,
+    /// Maximum time a submitted transaction may stay unmined before it is marked as timed out
+    pub unmined_timeout: Duration,
     /// How long terminal transaction records remain queryable. `Duration::ZERO` disables TTL eviction.
     pub terminal_transaction_ttl: Duration,
     /// Maximum terminal transaction records to retain. `0` means unbounded.
@@ -338,6 +338,7 @@ impl TransactionMonitorConfig {
     /// Returns a message naming the offending `[api.transactions]` key.
     pub fn validate(&self) -> Result<(), String> {
         let durations = [
+            ("unmined_timeout", self.unmined_timeout),
             ("request_timeout", self.request_timeout),
             ("safe_inspection_timeout", self.safe_inspection_timeout),
             ("revert_reason_timeout", self.revert_reason_timeout),
@@ -373,7 +374,7 @@ impl Default for TransactionMonitorConfig {
     fn default() -> Self {
         Self {
             poll_interval: Duration::from_secs(5),
-            timeout: Duration::from_secs(300), // 5 minutes
+            unmined_timeout: Duration::from_secs(300), // 5 minutes
             terminal_transaction_ttl: Duration::from_secs(24 * 60 * 60),
             max_terminal_transactions: 10_000,
             request_timeout: Duration::from_secs(30),
@@ -684,7 +685,7 @@ impl<R: ReceiptProvider + 'static, S: SafeAddressChecker> TransactionMonitor<R, 
             }
             Ok(Ok(None)) => {
                 let elapsed = chrono::Utc::now().signed_duration_since(record.timeout_clock_start());
-                if elapsed.to_std().ok() > Some(self.config.timeout) {
+                if elapsed.to_std().ok() > Some(self.config.unmined_timeout) {
                     let (diagnosis, recommended_fees) = self.diagnose_unmined(&record).await;
                     if diagnosis == UnminedDiagnosis::MinedSinceCheck {
                         debug!(id = %record.id, tx_hash = %tx_hash, "Transaction mined since the receipt lookup");
@@ -1513,6 +1514,10 @@ mod tests {
     fn config_validation_rejects_zero_values() {
         let configs = [
             TransactionMonitorConfig {
+                unmined_timeout: Duration::ZERO,
+                ..Default::default()
+            },
+            TransactionMonitorConfig {
                 request_timeout: Duration::ZERO,
                 ..Default::default()
             },
@@ -1714,6 +1719,42 @@ mod tests {
         let updated = store.get(id).unwrap();
         assert_eq!(updated.status, TransactionStatus::Timeout);
         assert!(updated.error_message.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_monitor_uses_configured_unmined_timeout() {
+        let store = Arc::new(TransactionStore::new());
+        let tx_hash = test_tx_hash();
+        let record = TransactionRecord {
+            id: TEST_UUID,
+            raw_transaction: vec![0x01],
+            transaction_hash: tx_hash,
+            status: TransactionStatus::Submitted,
+            submitted_at: chrono::Utc::now() - chrono::Duration::try_seconds(10).unwrap(),
+            confirmed_at: None,
+            error_message: None,
+            safe_execution: None,
+            diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
+        };
+        let id = record.id;
+        store.insert(record).unwrap();
+
+        // Ten seconds old is well inside the 300s default, so the transaction stays submitted.
+        let monitor = create_monitor(store.clone(), MockReceiptProvider::new());
+        monitor.poll_once().await.unwrap();
+        assert_eq!(store.get(id).unwrap().status, TransactionStatus::Submitted);
+
+        // A shorter configured timeout marks the same transaction as timed out.
+        let config = TransactionMonitorConfig {
+            unmined_timeout: Duration::from_secs(5),
+            ..Default::default()
+        };
+        let monitor: TransactionMonitor<MockReceiptProvider, NoSafeEnrichment> =
+            TransactionMonitor::new(store.clone(), MockReceiptProvider::new(), config, None);
+        monitor.poll_once().await.unwrap();
+        assert_eq!(store.get(id).unwrap().status, TransactionStatus::Timeout);
     }
 
     #[test]

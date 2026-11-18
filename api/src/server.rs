@@ -57,14 +57,14 @@ use crate::{
 #[derive(Serialize)]
 struct HealthResponse {
     status: String,
-    version: &'static str,
+    version: String,
 }
 
 /// Readiness check response
 #[derive(Serialize)]
 struct ReadinessResponse {
     status: String,
-    version: &'static str,
+    version: String,
     checks: ReadinessChecks,
 }
 
@@ -284,6 +284,8 @@ pub struct AppState {
     pub db: DatabaseConnection,
     pub rpc_operations: Arc<RpcOperations<ReqwestClient>>,
     pub health_config: HealthConfig,
+    /// Version of the running service (bloklid), reported by the health endpoints.
+    pub app_version: String,
     pub readiness_checker: ReadinessChecker,
     pub sse_keepalive: crate::config::SseKeepAliveConfig,
 }
@@ -339,6 +341,7 @@ pub async fn build_app(
         logs_db.clone(),
         config.chain_id,
         network.clone(),
+        config.app_version.clone(),
         config.contract_addresses,
         expected_block_time,
         finality,
@@ -358,6 +361,7 @@ pub async fn build_app(
         logs_db,
         config.chain_id,
         network,
+        config.app_version.clone(),
         config.contract_addresses,
         expected_block_time,
         finality,
@@ -383,6 +387,7 @@ pub async fn build_app(
         db,
         rpc_operations,
         health_config: config.health,
+        app_version: config.app_version,
         readiness_checker,
         sse_keepalive: config.sse_keepalive,
     };
@@ -620,11 +625,15 @@ async fn graphql_playground(State(state): State<AppState>) -> impl IntoResponse 
 }
 
 /// Liveness probe endpoint - minimal check that process is alive
-async fn healthz_handler() -> impl IntoResponse {
-    Json(HealthResponse {
+async fn healthz_handler(State(state): State<AppState>) -> impl IntoResponse {
+    Json(health_response(state.app_version))
+}
+
+fn health_response(version: String) -> HealthResponse {
+    HealthResponse {
         status: "healthy".to_string(),
-        version: env!("CARGO_PKG_VERSION"),
-    })
+        version,
+    }
 }
 
 /// Readiness probe endpoint - comprehensive check for service readiness
@@ -713,7 +722,7 @@ async fn readyz_handler(State(state): State<AppState>) -> impl IntoResponse {
 
     let response = ReadinessResponse {
         status: if all_healthy { "ready" } else { "not_ready" }.to_string(),
-        version: env!("CARGO_PKG_VERSION"),
+        version: state.app_version.clone(),
         checks,
     };
 
@@ -752,7 +761,7 @@ mod tests {
     fn test_health_response_serialization() {
         let response = HealthResponse {
             status: "healthy".to_string(),
-            version: "1.0.0",
+            version: "1.0.0".to_string(),
         };
         let json = serde_json::to_value(&response).unwrap();
         assert_eq!(json["status"], "healthy");
@@ -781,7 +790,7 @@ mod tests {
 
         let response = ReadinessResponse {
             status: "ready".to_string(),
-            version: "1.0.0",
+            version: "1.0.0".to_string(),
             checks,
         };
 
@@ -816,7 +825,7 @@ mod tests {
 
         let response = ReadinessResponse {
             status: "not_ready".to_string(),
-            version: "1.0.0",
+            version: "1.0.0".to_string(),
             checks,
         };
 
@@ -848,7 +857,7 @@ mod tests {
 
         let response = ReadinessResponse {
             status: "not_ready".to_string(),
-            version: "1.0.0",
+            version: "1.0.0".to_string(),
             checks,
         };
 
@@ -881,7 +890,7 @@ mod tests {
 
         let response = ReadinessResponse {
             status: "not_ready".to_string(),
-            version: "1.0.0",
+            version: "1.0.0".to_string(),
             checks,
         };
 
@@ -940,33 +949,13 @@ mod tests {
         assert!(!obj.contains_key("error"));
     }
 
-    // Test healthz handler directly
-    #[tokio::test]
-    async fn test_healthz_handler_returns_healthy() {
-        let response = healthz_handler().await;
-        let response = response.into_response();
-
-        assert_eq!(response.status(), StatusCode::OK);
-
-        // Extract and verify body
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    // The liveness response reports the version it is given (the bloklid version at runtime)
+    #[test]
+    fn test_health_response_reports_given_version() {
+        let json = serde_json::to_value(health_response("9.8.7".to_string())).unwrap();
 
         assert_eq!(json["status"], "healthy");
-        assert!(json["version"].is_string());
-    }
-
-    // Test that healthz handler uses correct CARGO_PKG_VERSION
-    #[tokio::test]
-    async fn test_healthz_handler_version() {
-        let response = healthz_handler().await;
-        let response = response.into_response();
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-
-        // Version should match the package version
-        assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(json["version"], "9.8.7");
     }
 
     #[test]

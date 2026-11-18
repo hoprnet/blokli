@@ -258,7 +258,8 @@ Response for the legacy `compatibility` query.
 """
 type Compatibility {
 	"""
-	Server version (semver).
+	Version of the blokli-api crate, i.e. the API/schema version (semver). Not the bloklid version; see the
+	`version` query for that.
 	"""
 	apiVersion: String!
 	"""
@@ -1897,9 +1898,10 @@ type QueryRoot {
 		ownerAddress: String
 	): SafesBalanceResult!
 	"""
-	API version information
+	Service version
 	
-	Returns the current version of the blokli-api package
+	Returns the version of the running bloklid service. This is not the API/schema version, which is
+	reported by `compatibility.apiVersion`.
 	"""
 	version: String!
 	"""

@@ -50,6 +50,9 @@ use migration::{Migrator, MigratorTrait};
 use sea_orm::DatabaseConnection;
 use tokio::task::AbortHandle;
 
+/// Service version injected into the API under test; deliberately unlike the blokli-api crate version.
+pub const TEST_APP_VERSION: &str = "0.0.0-test";
+
 /// Test environment configuration options
 #[derive(Debug, Clone)]
 pub struct TestEnvironmentConfig {
@@ -157,6 +160,7 @@ fn build_subscription_test_schema(
         db.conn(TargetDb::Logs).clone(),
         1,
         "test-network".to_string(),
+        TEST_APP_VERSION.to_string(),
         ContractAddresses::default(),
         1,
         3,
@@ -303,6 +307,7 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
         db.clone(),
         chain_id,
         "test-network".to_string(),
+        TEST_APP_VERSION.to_string(),
         contract_addrs,
         config.expected_block_time.as_secs(),
         3, // Test finality value
@@ -452,6 +457,7 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
     // Create API config with health settings
     let api_config = ApiConfig {
         playground_enabled: false,
+        app_version: TEST_APP_VERSION.to_string(),
         chain_id,
         contract_addresses: contract_addrs,
         sse_keepalive: SseKeepAliveConfig {
@@ -593,7 +599,7 @@ pub async fn setup_transaction_test_environment(
 
     let monitor_config = TransactionMonitorConfig {
         poll_interval,
-        timeout: Duration::from_secs(30),
+        unmined_timeout: Duration::from_secs(30),
         terminal_transaction_ttl: Duration::from_secs(24 * 60 * 60),
         max_terminal_transactions: 10_000,
         request_timeout: Duration::from_secs(5),

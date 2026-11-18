@@ -44,6 +44,10 @@ pub struct ChainId(pub u64);
 #[derive(Debug, Clone)]
 pub struct NetworkName(pub String);
 
+/// Version of the running service (bloklid), reported by the `version` query.
+#[derive(Debug, Clone)]
+pub struct AppVersion(pub String);
+
 /// Raw logs database used by resumable event subscriptions.
 #[derive(Debug, Clone)]
 pub struct LogsDatabase(pub DatabaseConnection);
@@ -63,6 +67,7 @@ pub fn build_version_registry<R: HttpRequestor + 'static + Clone>(
     logs_db: DatabaseConnection,
     chain_id: u64,
     network: String,
+    app_version: String,
     contract_addresses: ContractAddresses,
     expected_block_time: u64,
     finality: u16,
@@ -81,6 +86,7 @@ pub fn build_version_registry<R: HttpRequestor + 'static + Clone>(
         logs_db,
         chain_id,
         network,
+        app_version,
         contract_addresses,
         expected_block_time,
         finality,
@@ -156,6 +162,7 @@ where
 /// - Batch loaders for account lookups by chain key and channel lookups by safe injected as context data
 /// - Chain ID injected as context data
 /// - Network name injected as context data
+/// - Service (bloklid) version injected as context data
 /// - Contract addresses injected as context data
 /// - Expected block time injected as context data
 /// - Finality (block confirmations) injected as context data
@@ -174,6 +181,7 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
     logs_db: DatabaseConnection,
     chain_id: u64,
     network: String,
+    app_version: String,
     contract_addresses: ContractAddresses,
     expected_block_time: u64,
     finality: u16,
@@ -195,6 +203,7 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
         .data(LogsDatabase(logs_db))
         .data(ChainId(chain_id))
         .data(NetworkName(network))
+        .data(AppVersion(app_version))
         .data(contract_addresses)
         .data(ExpectedBlockTime(expected_block_time))
         .data(Finality(finality))
@@ -236,6 +245,7 @@ pub fn export_schema_sdl<R: HttpRequestor + 'static + Clone>(
         db.clone(),
         db,
         chain_id,
+        "PLACEHOLDER".to_string(),
         "PLACEHOLDER".to_string(),
         contract_addresses,
         5,   // Placeholder expected block time

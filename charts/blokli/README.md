@@ -214,6 +214,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | `config.api.transactions.maxSubmittedTransactionsPerIdentity` | Per-signer limit of transactions awaiting receipt monitoring (0 = unbounded) | `64` |
 | `config.api.transactions.maxTerminalTransactions` | Maximum completed transaction records retained (0 = no cap) | `10000` |
 | `config.api.transactions.terminalTransactionTtl` | How long completed transaction records stay queryable ("0s" = no TTL eviction) | `24h` |
+| `config.api.transactions.unminedTimeout` | How long a submitted transaction may stay unmined before it is marked as timed out and diagnosed | `300s` |
 | `config.api.transactions.maxConcurrentTraceJobs` | Concurrent revert-reason trace jobs (0 = unbounded) | `2` |
 | `config.api.transactions.maxQueuedTraceJobs` | Trace jobs waiting for a worker (0 = unbounded) | `128` |
 | `config.api.transactions.enableRevertReasonTracing` | Fetch revert reasons with debug_traceTransaction; disable for RPC providers without it | `true` |
