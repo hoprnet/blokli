@@ -21,7 +21,7 @@ use blokli_chain_api::{
 };
 use blokli_chain_indexer::{snapshot::SnapshotManager, startup, utils::redact_url};
 use blokli_db::{
-    db::{BlokliDb, BlokliDbConfig},
+    db::{BlokliDb, BlokliDbConfig, connect_pool},
     utils::redact_database_url,
 };
 use clap::Parser;
@@ -29,7 +29,7 @@ use futures::TryStreamExt;
 use tokio::net::TcpListener;
 
 use crate::{
-    config::{Config, DatabaseConfig},
+    config::{Config, DatabaseConfig, PoolRole, pool_application_name},
     errors::BloklidError,
 };
 
@@ -128,6 +128,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 max_connections: database.max_connections(),
                 log_slow_queries: Duration::from_secs(1),
                 network_name: config.network.to_string(),
+                application_name: Some(pool_application_name(PoolRole::Indexer)),
             };
 
             let db = if database.is_in_memory() {
@@ -176,7 +177,16 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
 
     // Initialize components
     let (process_handles, api_handle) = {
-        let (database_path, logs_database_path, chain_network, contracts, indexer_config, rpc_url, api_config) = {
+        let (
+            database_path,
+            logs_database_path,
+            dedicated_api_pool,
+            chain_network,
+            contracts,
+            indexer_config,
+            rpc_url,
+            api_config,
+        ) = {
             let cfg = config
                 .read()
                 .map_err(|_| BloklidError::NonSpecific("failed to lock config".into()))?;
@@ -208,6 +218,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
             (
                 database.to_url(),
                 database.to_logs_url(),
+                database.supports_dedicated_api_pool(),
                 chain_network,
                 cfg.contracts,
                 indexer_config,
@@ -244,6 +255,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 },
                 log_slow_queries: Duration::from_secs(1),
                 network_name: cfg.network.to_string(),
+                application_name: Some(pool_application_name(PoolRole::Indexer)),
             }
         };
 
@@ -358,6 +370,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 bind_address: api_config.bind_address,
                 playground_enabled: api_config.playground_enabled,
                 database_url: database_path.clone(),
+                max_connections: api_config.database_max_connections,
                 tls: None,
                 cors_allowed_origins: vec!["*".to_string()], // Permissive for now
                 chain_id,
@@ -378,14 +391,29 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 },
                 max_query_depth: api_config.max_query_depth,
                 max_query_complexity: api_config.max_query_complexity,
+                max_concurrent_snapshots: api_config.max_concurrent_snapshots,
+                snapshot_queue_timeout: api_config.snapshot_queue_timeout,
             };
 
             // Get RPC operations from blokli_chain for balance queries
             let rpc_operations = Arc::new(blokli_chain.rpc().clone());
 
+            // The API reads through a pool of its own where the database allows it, so that a burst
+            // of API requests cannot take the connections the indexer needs to keep up with the chain.
+            let api_databases = if dedicated_api_pool {
+                let api_db_config = BlokliDbConfig {
+                    max_connections: api_config.database_max_connections,
+                    application_name: Some(pool_application_name(PoolRole::Api)),
+                    ..db_config.clone()
+                };
+                ApiDatabases::single(connect_pool(&database_path, &api_db_config).await?)
+            } else {
+                ApiDatabases::from_blokli(blokli_chain.db())
+            };
+
             // Build API app with indexer state for subscriptions and transaction components
             let api_app = blokli_api::server::build_app(
-                ApiDatabases::from_blokli(blokli_chain.db()),
+                api_databases,
                 network.clone(),
                 blokli_api_config,
                 expected_block_time,

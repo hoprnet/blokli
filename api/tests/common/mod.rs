@@ -22,6 +22,7 @@ use blokli_api::{
     readiness::ReadinessChecker,
     schema::{GasFeeFloors, build_schema},
     server::{ApiDatabases, build_app},
+    snapshot::SubscriptionSnapshots,
     subscription::SubscriptionRoot,
 };
 use blokli_chain_api::{
@@ -166,6 +167,7 @@ fn build_subscription_test_schema(
         transaction_store,
         rpc_operations,
         readiness_checker,
+        SubscriptionSnapshots::default(),
         None,
     )
 }
@@ -311,6 +313,7 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
         transaction_store.clone(),
         rpc_operations.clone(),
         readiness_checker,
+        SubscriptionSnapshots::default(),
         None,
     );
 

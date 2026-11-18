@@ -1,5 +1,7 @@
 //! Channel aggregation utilities using the `channel_current` database view
 
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use hopr_types::primitive::prelude::{Address, HoprBalance, IntoEndian};
@@ -93,29 +95,90 @@ where
 
     let result = rows
         .into_iter()
-        .map(|row| {
-            let balance_slice: [u8; 12] = row.balance.as_slice().try_into().map_err(|_| {
-                sea_orm::DbErr::Custom(format!(
-                    "Invalid balance length for channel {}: expected 12, got {}",
-                    row.concrete_channel_id,
-                    row.balance.len()
-                ))
-            })?;
-
-            Ok(AggregatedChannel {
-                concrete_channel_id: row.concrete_channel_id,
-                source: row.source,
-                destination: row.destination,
-                balance: HoprBalance::from_be_bytes(balance_slice),
-                status: row.status,
-                epoch: row.epoch,
-                ticket_index: row.ticket_index,
-                closure_time: row.closure_time.map(|time| time.with_timezone(&Utc)),
-            })
-        })
+        .map(aggregate_channel)
         .collect::<Result<Vec<_>, sea_orm::DbErr>>()?;
 
     Ok(result)
+}
+
+/// Build an aggregated channel from a `channel_current` view row
+fn aggregate_channel(row: channel_current::Model) -> Result<AggregatedChannel, sea_orm::DbErr> {
+    let balance_slice: [u8; 12] = row.balance.as_slice().try_into().map_err(|_| {
+        sea_orm::DbErr::Custom(format!(
+            "Invalid balance length for channel {}: expected 12, got {}",
+            row.concrete_channel_id,
+            row.balance.len()
+        ))
+    })?;
+
+    Ok(AggregatedChannel {
+        concrete_channel_id: row.concrete_channel_id,
+        source: row.source,
+        destination: row.destination,
+        balance: HoprBalance::from_be_bytes(balance_slice),
+        status: row.status,
+        epoch: row.epoch,
+        ticket_index: row.ticket_index,
+        closure_time: row.closure_time.map(|time| time.with_timezone(&Utc)),
+    })
+}
+
+/// Fetch the channels of several safes at once using the `channel_current` view
+///
+/// A channel belongs to a safe when its source account is currently associated with that safe.
+/// The result has no entry for a safe without channels.
+///
+/// # Arguments
+/// * `conn` - Database connection
+/// * `safe_addresses` - Safe contract addresses to fetch the channels of
+///
+/// # Returns
+/// * `Result<HashMap<Address, Vec<AggregatedChannel>>, sea_orm::DbErr>` - Aggregated channels by safe address
+pub async fn fetch_channels_for_safes<C>(
+    conn: &C,
+    safe_addresses: &[Address],
+) -> Result<HashMap<Address, Vec<AggregatedChannel>>, sea_orm::DbErr>
+where
+    C: ConnectionTrait,
+{
+    if safe_addresses.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let safe_by_bytes: HashMap<Vec<u8>, Address> = safe_addresses
+        .iter()
+        .map(|safe| (safe.as_ref().to_vec(), *safe))
+        .collect();
+
+    // Resolve which account keyids belong to each safe
+    let safe_by_account: HashMap<i64, Address> = account_current::Entity::find()
+        .filter(account_current::Column::SafeAddress.is_in(safe_by_bytes.keys().cloned()))
+        .all(conn)
+        .await?
+        .into_iter()
+        .filter_map(|row| {
+            let safe = safe_by_bytes.get(row.safe_address.as_ref()?)?;
+            Some((row.account_id, *safe))
+        })
+        .collect();
+
+    if safe_by_account.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let rows = channel_current::Entity::find()
+        .filter(channel_current::Column::Source.is_in(safe_by_account.keys().copied()))
+        .all(conn)
+        .await?;
+
+    let mut channels_by_safe: HashMap<Address, Vec<AggregatedChannel>> = HashMap::new();
+    for row in rows {
+        if let Some(safe) = safe_by_account.get(&row.source) {
+            channels_by_safe.entry(*safe).or_default().push(aggregate_channel(row)?);
+        }
+    }
+
+    Ok(channels_by_safe)
 }
 
 /// Aggregated channel statistics: count and total wxHOPR balance.

@@ -8,6 +8,7 @@ pub mod config;
 pub mod conversions;
 pub mod curvy;
 pub mod errors;
+pub mod loader;
 pub mod logging;
 pub mod metrics;
 pub mod mutation;
@@ -15,12 +16,13 @@ pub mod query;
 pub mod readiness;
 pub mod schema;
 pub mod server;
+pub mod snapshot;
 mod sse_connection;
 pub mod subscription;
 pub mod tls;
 pub mod validation;
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use axum::serve;
 use blokli_chain_api::{
@@ -48,6 +50,12 @@ use hopr_bindings::exports::alloy::{
 use sea_orm::Database;
 use tokio::net::TcpListener;
 use tracing::{info, warn};
+
+/// Longest a database read may hold the indexer's watermark lock.
+///
+/// The indexer cannot process a block while the lock is held, so a read that has to wait for a
+/// free connection must fail rather than keep indexing waiting.
+pub(crate) const SYNCHRONIZED_READ_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Redact credentials from a database URL for safe logging
 ///
@@ -87,8 +95,14 @@ pub async fn start_server(network: String, finality: u16, config: ApiConfig) -> 
     info!("Starting blokli API server on {}", config.bind_address);
     info!("Connecting to database: {}", redact_database_url(&config.database_url));
 
-    // Connect to database
-    let db = Database::connect(build_connect_options(&config.database_url, &BlokliDbConfig::default())).await?;
+    // Connect to database. Standalone deployments must use the same pool size as bloklid,
+    // otherwise every API process adds an implicitly-sized pool on top of the configured
+    // connection budget.
+    let db_config = BlokliDbConfig {
+        max_connections: config.max_connections,
+        ..BlokliDbConfig::default()
+    };
+    let db = Database::connect(build_connect_options(&config.database_url, &db_config)).await?;
     info!("Database connection established");
 
     // Create a default IndexerState for standalone API server

@@ -29,6 +29,9 @@ pub struct BlokliDbConfig {
     pub log_slow_queries: Duration,
     #[default("jura-prod")]
     pub network_name: String,
+    /// Name the pool's connections report to PostgreSQL (`pg_stat_activity.application_name`),
+    /// which tells the backends of one pool or process apart from those of another.
+    pub application_name: Option<String>,
 }
 
 /// Build [`ConnectOptions`] for a PostgreSQL connection with consistent pool sizing and
@@ -47,12 +50,26 @@ pub fn build_connect_options(url: &str, cfg: &BlokliDbConfig) -> ConnectOptions 
         .max_lifetime(Duration::from_secs(1800))
         .sqlx_logging(true)
         .sqlx_logging_level(LevelFilter::Debug);
+    if let Some(application_name) = &cfg.application_name {
+        opt.set_application_name(application_name);
+    }
     // A zero duration means slow-query warnings are disabled; leave the setting at
     // its default (Off) rather than warning on every statement.
     if !cfg.log_slow_queries.is_zero() {
         opt.sqlx_slow_statements_logging_settings(LevelFilter::Warn, cfg.log_slow_queries);
     }
     opt
+}
+
+/// Open a connection pool of its own to the database at `url`, sized and named by `cfg`.
+///
+/// [`BlokliDb`] owns the pool the indexer writes through. A caller that must not compete with
+/// the indexer for connections (the API server) opens a separate pool with this function, so
+/// that exhausting one pool leaves the other untouched. No migrations are run.
+pub async fn connect_pool(url: &str, cfg: &BlokliDbConfig) -> Result<sea_orm::DatabaseConnection> {
+    Database::connect(build_connect_options(url, cfg))
+        .await
+        .map_err(|e| DbSqlError::Construction(format!("failed to connect to database: {e}")))
 }
 
 /// Main database handle for HOPR node operations.
@@ -338,7 +355,57 @@ mod tests {
     use migration::{Migrator, MigratorTrait};
     use sea_orm::{EntityTrait, PaginatorTrait};
 
-    use crate::{BlokliDbGeneralModelOperations, SINGULAR_TABLE_FIXED_ID, TargetDb, db::BlokliDb};
+    use crate::{
+        BlokliDbGeneralModelOperations, SINGULAR_TABLE_FIXED_ID, TargetDb,
+        db::{BlokliDb, BlokliDbConfig, build_connect_options, connect_pool},
+    };
+
+    const POSTGRES_URL: &str = "postgres://user:pw@127.0.0.1/blokli";
+
+    #[test]
+    fn test_connect_options_carry_the_configured_application_name() {
+        let cfg = BlokliDbConfig {
+            application_name: Some("bloklid-api@pod-1".to_string()),
+            ..Default::default()
+        };
+
+        let options = format!("{:?}", build_connect_options(POSTGRES_URL, &cfg));
+
+        assert!(options.contains(r#"application_name: Some("bloklid-api@pod-1")"#));
+    }
+
+    #[test]
+    fn test_connect_options_have_no_application_name_by_default() {
+        let options = format!("{:?}", build_connect_options(POSTGRES_URL, &BlokliDbConfig::default()));
+
+        assert!(options.contains("application_name: None"));
+    }
+
+    #[test]
+    fn test_connect_options_use_the_configured_pool_size() {
+        let cfg = BlokliDbConfig {
+            max_connections: 3,
+            ..Default::default()
+        };
+
+        assert_eq!(build_connect_options(POSTGRES_URL, &cfg).get_max_connections(), Some(3));
+    }
+
+    #[tokio::test]
+    async fn test_connect_pool_opens_a_usable_pool() -> anyhow::Result<()> {
+        let pool = connect_pool("sqlite::memory:", &BlokliDbConfig::default()).await?;
+
+        pool.ping().await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_connect_pool_reports_an_unreachable_database() {
+        let result = connect_pool("sqlite:///nonexistent-dir/blokli.db", &BlokliDbConfig::default()).await;
+
+        assert!(result.is_err());
+    }
 
     #[tokio::test]
     async fn test_basic_db_init() -> anyhow::Result<()> {

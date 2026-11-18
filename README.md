@@ -310,6 +310,9 @@ fields. SQLite uses separate index and raw-log databases.
 | `api.gas_multiplier`                  | `1.0`            | `BLOKLI_API_GAS_MULTIPLIER`                  | Finite EIP-1559 fee multiplier, minimum `1.0` |
 | `api.max_query_depth`                 | `8`              | —                                            | Maximum GraphQL nesting depth                 |
 | `api.max_query_complexity`            | `500`            | —                                            | Maximum GraphQL complexity budget             |
+| `api.database_max_connections`        | `10`             | —                                            | Size of the API's own PostgreSQL pool         |
+| `api.max_concurrent_snapshots`        | `8`              | —                                            | Subscription snapshots loaded at once         |
+| `api.snapshot_queue_timeout`          | `10s`            | —                                            | Longest wait for a snapshot load slot         |
 | `api.sse_keepalive.enabled`           | `true`           | `BLOKLI_API_SSE_KEEPALIVE_ENABLED`           | Enables SSE keep-alive events                 |
 | `api.sse_keepalive.interval`          | `15s`            | `BLOKLI_API_SSE_KEEPALIVE_INTERVAL`          | Keep-alive interval                           |
 | `api.health.max_indexer_lag`          | `10`             | `BLOKLI_API_HEALTH_MAX_INDEXER_LAG`          | Maximum finality-adjusted lag for readiness   |
