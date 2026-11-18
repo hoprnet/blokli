@@ -4,7 +4,7 @@
 
 use std::{fmt::Display, future::Future, time::Duration};
 
-use blokli_chain_rpc::Eip1559FeeEstimation;
+use blokli_chain_rpc::FeeHistorySnapshot;
 use blokli_db_entity::conversions::channel_aggregation::AggregatedChannelStats;
 use moka::future::Cache;
 use sea_orm::DbErr;
@@ -14,13 +14,14 @@ pub const FEE_RPC_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Caches the raw RPC fee estimates exposed by `chainInfo` for roughly one block.
 ///
-/// Concurrent misses are coalesced into a single RPC call. Only successful lookups are stored, so a failure is
-/// retried by the next request. Values are stored as returned by the RPC: gas multiplier and fee floors are applied
-/// by the caller afterwards.
+/// Concurrent misses are coalesced into a single RPC call. A failed gas price lookup is retried by the next request,
+/// failed fee snapshots are cached for one TTL. Values are stored as returned by the RPC: gas multiplier and fee floors
+/// are applied by the caller afterwards.
 #[derive(Clone)]
 pub struct FeeEstimateCache {
     gas_price: Cache<(), u128>,
-    eip1559: Cache<(), Eip1559FeeEstimation>,
+    node_fees: Cache<(), Result<FeeHistorySnapshot, String>>,
+    fee_history: Cache<(), Result<FeeHistorySnapshot, String>>,
     timeout: Duration,
 }
 
@@ -34,7 +35,8 @@ impl FeeEstimateCache {
     pub fn with_timeout(ttl: Duration, timeout: Duration) -> Self {
         Self {
             gas_price: Cache::builder().max_capacity(1).time_to_live(ttl).build(),
-            eip1559: Cache::builder().max_capacity(1).time_to_live(ttl).build(),
+            node_fees: Cache::builder().max_capacity(1).time_to_live(ttl).build(),
+            fee_history: Cache::builder().max_capacity(1).time_to_live(ttl).build(),
             timeout,
         }
     }
@@ -48,14 +50,47 @@ impl FeeEstimateCache {
         get_or_fetch(&self.gas_price, self.timeout, fetch).await
     }
 
-    /// Returns the cached EIP-1559 fee estimate, or awaits `fetch` on a miss.
-    pub async fn eip1559_fees<F, E>(&self, fetch: F) -> Result<Eip1559FeeEstimation, String>
+    /// Returns the cached fee history snapshot, or awaits `fetch` on a miss.
+    ///
+    /// Unlike the other entries, a failure is cached too (for one TTL), so a node that does not serve
+    /// `eth_feeHistory` is not asked again on every request.
+    pub async fn fee_history<F, E>(&self, fetch: F) -> Result<FeeHistorySnapshot, String>
     where
-        F: Future<Output = Result<Eip1559FeeEstimation, E>>,
+        F: Future<Output = Result<FeeHistorySnapshot, E>>,
         E: Display,
     {
-        get_or_fetch(&self.eip1559, self.timeout, fetch).await
+        cached_result(&self.fee_history, self.timeout, fetch).await
     }
+
+    /// Returns the cached node fee snapshot used when fee history is unavailable, or awaits `fetch` on a miss.
+    ///
+    /// Failures are cached for one TTL as well, so a node that serves neither source is not asked on every request.
+    pub async fn node_fee_snapshot<F, E>(&self, fetch: F) -> Result<FeeHistorySnapshot, String>
+    where
+        F: Future<Output = Result<FeeHistorySnapshot, E>>,
+        E: Display,
+    {
+        cached_result(&self.node_fees, self.timeout, fetch).await
+    }
+}
+
+/// Like [`get_or_fetch`], but the failure is stored as the entry value too.
+///
+/// A single timeout bounds `fetch`; elapsing it becomes a cached error instead of an uncached cancellation.
+async fn cached_result<V, F, E>(cache: &Cache<(), Result<V, String>>, timeout: Duration, fetch: F) -> Result<V, String>
+where
+    V: Clone + Send + Sync + 'static,
+    F: Future<Output = Result<V, E>>,
+    E: Display,
+{
+    cache
+        .get_with((), async {
+            match tokio::time::timeout(timeout, fetch).await {
+                Ok(result) => result.map_err(|e| e.to_string()),
+                Err(_) => Err(format!("timed out after {timeout:?}")),
+            }
+        })
+        .await
 }
 
 async fn get_or_fetch<V, F, E>(cache: &Cache<(), V>, timeout: Duration, fetch: F) -> Result<V, String>
@@ -143,7 +178,13 @@ impl ChannelStatsCache {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::{
+        future::pending,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+
+    use futures::future::join_all;
+    use tokio::time::sleep;
 
     use super::*;
 
@@ -151,17 +192,14 @@ mod tests {
 
     async fn counted_price(calls: &AtomicUsize, value: u128) -> Result<u128, String> {
         calls.fetch_add(1, Ordering::SeqCst);
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        sleep(Duration::from_millis(20)).await;
         Ok(value)
     }
 
-    async fn counted_fees(calls: &AtomicUsize) -> Result<Eip1559FeeEstimation, String> {
+    async fn counted_snapshot(calls: &AtomicUsize) -> Result<FeeHistorySnapshot, String> {
         calls.fetch_add(1, Ordering::SeqCst);
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        Ok(Eip1559FeeEstimation {
-            max_fee_per_gas: 10,
-            max_priority_fee_per_gas: 2,
-        })
+        sleep(Duration::from_millis(20)).await;
+        Ok(snapshot(10))
     }
 
     #[tokio::test]
@@ -181,15 +219,15 @@ mod tests {
         let fee_calls = AtomicUsize::new(0);
 
         let (prices, estimates) = tokio::join!(
-            futures::future::join_all((0..16).map(|_| cache.gas_price(counted_price(&price_calls, 5)))),
-            futures::future::join_all((0..16).map(|_| cache.eip1559_fees(counted_fees(&fee_calls)))),
+            join_all((0..16).map(|_| cache.gas_price(counted_price(&price_calls, 5)))),
+            join_all((0..16).map(|_| cache.node_fee_snapshot(counted_snapshot(&fee_calls)))),
         );
 
         assert!(prices.iter().all(|p| *p == Ok(5)));
         assert!(
             estimates
                 .iter()
-                .all(|e| e.as_ref().map(|f| f.max_fee_per_gas) == Ok(10))
+                .all(|e| e.as_ref().map(|f| f.next_base_fee_per_gas) == Ok(10))
         );
         assert_eq!(price_calls.load(Ordering::SeqCst), 1);
         assert_eq!(fee_calls.load(Ordering::SeqCst), 1);
@@ -201,7 +239,7 @@ mod tests {
         let calls = AtomicUsize::new(0);
 
         assert_eq!(cache.gas_price(counted_price(&calls, 1)).await, Ok(1));
-        tokio::time::sleep(Duration::from_millis(120)).await;
+        sleep(Duration::from_millis(120)).await;
         assert_eq!(cache.gas_price(counted_price(&calls, 2)).await, Ok(2));
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
@@ -216,13 +254,113 @@ mod tests {
         assert_eq!(cache.gas_price(async { Ok::<_, String>(9) }).await, Ok(9));
     }
 
+    fn snapshot(next_base_fee_per_gas: u128) -> FeeHistorySnapshot {
+        FeeHistorySnapshot {
+            next_base_fee_per_gas,
+            median_priority_fee_per_gas: 3,
+        }
+    }
+
+    #[tokio::test]
+    async fn fee_history_hit_does_not_refetch() {
+        let cache = FeeEstimateCache::new(LONG_TTL);
+
+        assert_eq!(
+            cache.fee_history(async { Ok::<_, String>(snapshot(1)) }).await,
+            Ok(snapshot(1))
+        );
+        assert_eq!(
+            cache.fee_history(async { Ok::<_, String>(snapshot(2)) }).await,
+            Ok(snapshot(1))
+        );
+    }
+
+    #[tokio::test]
+    async fn fee_history_expires_after_ttl() {
+        let cache = FeeEstimateCache::new(Duration::from_millis(50));
+
+        assert_eq!(
+            cache.fee_history(async { Ok::<_, String>(snapshot(1)) }).await,
+            Ok(snapshot(1))
+        );
+        sleep(Duration::from_millis(120)).await;
+        assert_eq!(
+            cache.fee_history(async { Ok::<_, String>(snapshot(2)) }).await,
+            Ok(snapshot(2))
+        );
+    }
+
+    #[tokio::test]
+    async fn fee_history_failure_is_cached_for_one_ttl() {
+        let cache = FeeEstimateCache::new(Duration::from_millis(80));
+
+        let failed = cache
+            .fee_history(async { Err::<FeeHistorySnapshot, _>("no fee history") })
+            .await;
+        assert_eq!(failed, Err("no fee history".to_string()));
+
+        // Served from the negative entry, the successful fetch is not even started
+        let again = cache.fee_history(async { Ok::<_, String>(snapshot(4)) }).await;
+        assert_eq!(again, Err("no fee history".to_string()));
+
+        sleep(Duration::from_millis(160)).await;
+        assert_eq!(
+            cache.fee_history(async { Ok::<_, String>(snapshot(4)) }).await,
+            Ok(snapshot(4))
+        );
+    }
+
+    #[tokio::test]
+    async fn fee_history_timeout_is_cached_as_a_failure() {
+        let cache = FeeEstimateCache::with_timeout(LONG_TTL, Duration::from_millis(30));
+
+        let hung = cache
+            .fee_history(async {
+                pending::<()>().await;
+                Ok::<FeeHistorySnapshot, String>(snapshot(1))
+            })
+            .await;
+        assert!(hung.as_ref().is_err_and(|e| e.contains("timed out")), "got {hung:?}");
+
+        // Served from the cached failure: the second fetch is never polled
+        let polled = AtomicUsize::new(0);
+        let again = cache
+            .fee_history(async {
+                polled.fetch_add(1, Ordering::SeqCst);
+                Ok::<_, String>(snapshot(2))
+            })
+            .await;
+        assert_eq!(again, hung);
+        assert_eq!(polled.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn fee_history_failure_does_not_affect_other_entries() {
+        let cache = FeeEstimateCache::new(LONG_TTL);
+
+        assert!(
+            cache
+                .fee_history(async { Err::<FeeHistorySnapshot, _>("no fee history") })
+                .await
+                .is_err()
+        );
+        assert_eq!(cache.gas_price(async { Ok::<_, String>(9) }).await, Ok(9));
+        assert_eq!(
+            cache
+                .node_fee_snapshot(counted_snapshot(&AtomicUsize::new(0)))
+                .await
+                .map(|f| f.next_base_fee_per_gas),
+            Ok(10)
+        );
+    }
+
     #[tokio::test]
     async fn hung_fetch_times_out_and_is_not_cached() {
         let cache = FeeEstimateCache::with_timeout(LONG_TTL, Duration::from_millis(30));
 
         let hung = cache
             .gas_price(async {
-                std::future::pending::<()>().await;
+                pending::<()>().await;
                 Ok::<u128, String>(0)
             })
             .await;
@@ -252,7 +390,7 @@ mod tests {
 
     async fn counted_stats(calls: &AtomicUsize, count: u64) -> Result<AggregatedChannelStats, DbErr> {
         calls.fetch_add(1, Ordering::SeqCst);
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        sleep(Duration::from_millis(20)).await;
         Ok(stats(count))
     }
 
@@ -356,8 +494,7 @@ mod tests {
         let cache = ChannelStatsCache::default();
         let calls = AtomicUsize::new(0);
 
-        let results =
-            futures::future::join_all((0..16).map(|_| cache.get_or_fetch(key(1), counted_stats(&calls, 4)))).await;
+        let results = join_all((0..16).map(|_| cache.get_or_fetch(key(1), counted_stats(&calls, 4)))).await;
 
         assert!(results.iter().all(|r| r.as_ref().is_ok_and(|s| s.count == 4)));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -391,7 +528,7 @@ mod tests {
                 .count,
             1
         );
-        tokio::time::sleep(Duration::from_millis(120)).await;
+        sleep(Duration::from_millis(120)).await;
         assert_eq!(
             cache
                 .get_or_fetch(key(1), counted_stats(&calls, 2))

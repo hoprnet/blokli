@@ -15,6 +15,7 @@ use curvy_bindings::{
 use hopr_bindings::{
     exports::alloy::{
         contract::Error as AlloyContractError,
+        eips::BlockNumberOrTag,
         primitives::{Address as AlloyAddress, FixedBytes, U256},
         providers::{
             Identity, PendingTransaction, Provider, ProviderBuilder, RootProvider,
@@ -24,7 +25,7 @@ use hopr_bindings::{
         },
         rpc::{
             client::RpcClient,
-            types::{Block, TransactionRequest},
+            types::{Block, FeeHistory, TransactionRequest},
         },
         sol,
     },
@@ -46,7 +47,7 @@ use validator::Validate;
 
 // use crate::middleware::GnosisScan;
 use crate::{
-    CurvyAggregatorFees, CurvyAggregatorState, CurvyGasFees, CurvyVaultToken, Eip1559FeeEstimation, HoprRpcOperations,
+    CurvyAggregatorFees, CurvyAggregatorState, CurvyGasFees, CurvyVaultToken, FeeHistorySnapshot, HoprRpcOperations,
     client::GasOracleFiller,
     errors::{Result, RpcError},
     transport::HttpRequestor,
@@ -459,6 +460,44 @@ pub(crate) fn is_log_block_range_limit_error(error: &RpcError) -> bool {
     }
 
     message_indicates_known_log_range_limit(&error.to_string())
+}
+
+/// Number of recent blocks read from `eth_feeHistory`.
+const FEE_HISTORY_BLOCKS: u64 = 10;
+
+/// Reward percentile requested per block from `eth_feeHistory`.
+const FEE_HISTORY_REWARD_PERCENTILE: f64 = 50.0;
+
+/// Reduces an `eth_feeHistory` response to the next-block base fee and the median of the per-block median tips.
+///
+/// Blocks without a reward entry or with a zero median tip carry no information about what block builders accept
+/// and are ignored. The median of an even number of tips is the lower of the two middle values. When no non-zero
+/// tip remains, the median is 0 and the caller's priority fee floor applies.
+fn snapshot_from_fee_history(history: &FeeHistory) -> Result<FeeHistorySnapshot> {
+    let next_base_fee_per_gas = history
+        .base_fee_per_gas
+        .last()
+        .copied()
+        .ok_or_else(|| RpcError::Other("fee history has no base fee".to_string()))?;
+
+    let mut tips: Vec<u128> = history
+        .reward
+        .iter()
+        .flatten()
+        .filter_map(|block_rewards| block_rewards.first().copied())
+        .filter(|tip| *tip > 0)
+        .collect();
+    tips.sort_unstable();
+
+    let median_priority_fee_per_gas = match tips.len() {
+        0 => 0,
+        len => tips[(len - 1) / 2],
+    };
+
+    Ok(FeeHistorySnapshot {
+        next_base_fee_per_gas,
+        median_priority_fee_per_gas,
+    })
 }
 
 /// Implementation of `HoprRpcOperations` and `HoprIndexerRpcOperations` trait via `alloy`
@@ -951,12 +990,42 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
         Ok(self.provider.get_gas_price().await?)
     }
 
-    async fn estimate_eip1559_fees(&self) -> Result<Eip1559FeeEstimation> {
-        let estimate = self.provider.estimate_eip1559_fees().await?;
-        Ok(Eip1559FeeEstimation {
-            max_fee_per_gas: estimate.max_fee_per_gas,
-            max_priority_fee_per_gas: estimate.max_priority_fee_per_gas,
+    async fn get_node_fee_snapshot(&self) -> Result<FeeHistorySnapshot> {
+        let latest = self
+            .provider
+            .get_block_by_number(BlockNumberOrTag::Latest)
+            .await?
+            .ok_or_else(|| RpcError::Other("latest block not found".to_string()))?;
+        let base_fee_per_gas = latest
+            .header
+            .base_fee_per_gas
+            .map(u128::from)
+            .ok_or_else(|| RpcError::Other("latest block has no base fee".to_string()))?;
+
+        let median_priority_fee_per_gas = match self.provider.get_max_priority_fee_per_gas().await {
+            Ok(tip) => tip,
+            Err(error) => {
+                debug!(%error, "eth_maxPriorityFeePerGas unavailable, deriving the tip from the gas price");
+                self.provider.get_gas_price().await?.saturating_sub(base_fee_per_gas)
+            }
+        };
+
+        Ok(FeeHistorySnapshot {
+            next_base_fee_per_gas: base_fee_per_gas,
+            median_priority_fee_per_gas,
         })
+    }
+
+    async fn get_fee_history_snapshot(&self) -> Result<FeeHistorySnapshot> {
+        let history = self
+            .provider
+            .get_fee_history(
+                FEE_HISTORY_BLOCKS,
+                BlockNumberOrTag::Latest,
+                &[FEE_HISTORY_REWARD_PERCENTILE],
+            )
+            .await?;
+        snapshot_from_fee_history(&history)
     }
 
     async fn get_curvy_aggregator_state(&self) -> Result<CurvyAggregatorState> {
@@ -1200,16 +1269,75 @@ mod tests {
 
     use hopr_bindings::exports::alloy::{
         contract::Error as AlloyContractError,
-        rpc::json_rpc::ErrorPayload,
+        rpc::{json_rpc::ErrorPayload, types::FeeHistory},
         transports::{RpcError as AlloyRpcError, TransportErrorKind},
     };
     use serde_json::value::RawValue;
 
     use super::{
         DEFAULT_AUTO_LOG_BLOCK_RANGE_CAP, DEFAULT_LOG_BLOCK_RANGE_REPROBE_INTERVAL as REPROBE_INTERVAL,
-        LogBlockRangeLimit, is_curvy_token_not_registered, is_log_block_range_limit_error,
+        LogBlockRangeLimit, is_curvy_token_not_registered, is_log_block_range_limit_error, snapshot_from_fee_history,
     };
     use crate::errors::RpcError;
+
+    fn history(base_fees: Vec<u128>, tips: Option<Vec<Vec<u128>>>) -> FeeHistory {
+        FeeHistory {
+            base_fee_per_gas: base_fees,
+            reward: tips,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn fee_history_snapshot_uses_next_base_fee_and_median_tip() {
+        let snapshot = snapshot_from_fee_history(&history(
+            vec![10, 11, 229_083_357],
+            Some(vec![vec![5], vec![300], vec![7], vec![9]]),
+        ))
+        .expect("snapshot");
+        assert_eq!(snapshot.next_base_fee_per_gas, 229_083_357);
+        assert_eq!(snapshot.median_priority_fee_per_gas, 7);
+    }
+
+    #[test]
+    fn fee_history_snapshot_ignores_zero_tips() {
+        let snapshot = snapshot_from_fee_history(&history(
+            vec![10, 11],
+            Some(vec![vec![0], vec![0], vec![40], vec![0], vec![60], vec![50]]),
+        ))
+        .expect("snapshot");
+        assert_eq!(snapshot.median_priority_fee_per_gas, 50);
+    }
+
+    #[test]
+    fn fee_history_snapshot_takes_the_lower_middle_for_even_counts() {
+        let snapshot = snapshot_from_fee_history(&history(vec![1, 2], Some(vec![vec![4], vec![8], vec![2], vec![6]])))
+            .expect("snapshot");
+        assert_eq!(snapshot.median_priority_fee_per_gas, 4);
+    }
+
+    #[test]
+    fn fee_history_snapshot_with_only_zero_tips_has_a_zero_median() {
+        let snapshot =
+            snapshot_from_fee_history(&history(vec![1, 2], Some(vec![vec![0], vec![0], vec![]]))).expect("snapshot");
+        assert_eq!(snapshot.median_priority_fee_per_gas, 0);
+        assert_eq!(snapshot.next_base_fee_per_gas, 2);
+    }
+
+    #[test]
+    fn fee_history_snapshot_without_rewards_has_a_zero_median() {
+        assert_eq!(
+            snapshot_from_fee_history(&history(vec![1, 2], None))
+                .expect("snapshot")
+                .median_priority_fee_per_gas,
+            0
+        );
+    }
+
+    #[test]
+    fn fee_history_snapshot_rejects_missing_base_fee() {
+        assert!(snapshot_from_fee_history(&history(vec![], Some(vec![vec![1]]))).is_err());
+    }
 
     fn rpc_error_response(code: i64, message: &'static str) -> RpcError {
         RpcError::AlloyRpcError(AlloyRpcError::<TransportErrorKind>::ErrorResp(ErrorPayload {

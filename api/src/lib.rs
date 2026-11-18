@@ -88,6 +88,8 @@ fn redact_url(url: &str) -> String {
 
 /// Start the API server
 pub async fn start_server(network: String, finality: u16, config: ApiConfig) -> ApiResult<()> {
+    config.validate_fee_settings().map_err(ApiError::ConfigError)?;
+
     // Initialize tracing
     logging::setup_tracing_env_like("blokli_api=info,tower_http=debug")
         .map_err(|error| ApiError::ConfigError(format!("Failed to initialize tracing: {error}")))?;

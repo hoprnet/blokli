@@ -6,6 +6,8 @@ use blokli_chain_api::fee_recommendation::GasFeeFloors;
 use blokli_chain_types::ContractAddresses;
 use serde::{Deserialize, Serialize};
 
+use crate::schema::GasFeePolicy;
+
 /// API server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -59,9 +61,21 @@ pub struct ApiConfig {
     #[serde(default = "default_min_priority_fee_per_gas")]
     pub min_priority_fee_per_gas: u64,
 
+    /// Maximum `maxPriorityFeePerGas` exposed by chainInfo, in wei
+    #[serde(default = "default_max_priority_fee_per_gas")]
+    pub max_priority_fee_per_gas: u64,
+
     /// Minimum `maxFeePerGas` exposed by chainInfo, in wei
     #[serde(default = "default_min_max_fee_per_gas")]
     pub min_max_fee_per_gas: u64,
+
+    /// Maximum `maxFeePerGas` exposed by chainInfo, in wei
+    #[serde(default = "default_max_max_fee_per_gas")]
+    pub max_max_fee_per_gas: u64,
+
+    /// Factor applied to the next-block base fee when computing `maxFeePerGas`
+    #[serde(default = "default_base_fee_headroom_factor")]
+    pub base_fee_headroom_factor: f64,
 
     #[serde(default)]
     pub sse_keepalive: SseKeepAliveConfig,
@@ -195,7 +209,10 @@ impl Default for ApiConfig {
             expected_block_time: default_expected_block_time(),
             gas_multiplier: default_gas_multiplier(),
             min_priority_fee_per_gas: default_min_priority_fee_per_gas(),
+            max_priority_fee_per_gas: default_max_priority_fee_per_gas(),
             min_max_fee_per_gas: default_min_max_fee_per_gas(),
+            max_max_fee_per_gas: default_max_max_fee_per_gas(),
+            base_fee_headroom_factor: default_base_fee_headroom_factor(),
             sse_keepalive: SseKeepAliveConfig::default(),
             health: HealthConfig::default(),
             max_query_depth: default_max_query_depth(),
@@ -261,28 +278,100 @@ fn default_gas_multiplier() -> f64 {
     1.0
 }
 
-/// 100 wei: just above the 1-2 wei tips Gnosis estimates usually return, at negligible cost
-pub const DEFAULT_MIN_PRIORITY_FEE_PER_GAS: u64 = 100;
+/// 0.01 gwei: Gnosis median tips are around 0.1 gwei but idle blocks often carry none, so a small floor keeps
+/// transactions attractive to block builders while a 300k gas transaction pays at most 0.000003 xDAI of tip.
+pub const DEFAULT_MIN_PRIORITY_FEE_PER_GAS: u64 = 10_000_000;
 
-/// 0.005 gwei: with the 10M gas limit nodes sign with, the upfront balance stays at 0.00005 xDAI
-pub const DEFAULT_MIN_MAX_FEE_PER_GAS: u64 = 5_000_000;
+/// 0.05 gwei: caps the tip so a transaction using ~300k gas never pays more than 0.000015 xDAI of it, even when
+/// recent tips burst to 0.4-25 gwei.
+pub const DEFAULT_MAX_PRIORITY_FEE_PER_GAS: u64 = 50_000_000;
+
+/// 0.5 gwei: the Gnosis base fee idles at 9-20 wei but peaked at 0.23 gwei in 24 hours of blocks, and it can grow
+/// about 14x within two minutes. A 5_000_000 wei floor was exceeded ~8% of the day. Nodes pay base fee plus tip,
+/// not this cap; it only raises the balance reserved upfront (0.005 xDAI at a 10M gas limit).
+pub const DEFAULT_MIN_MAX_FEE_PER_GAS: u64 = 500_000_000;
+
+/// 1 gwei: 4x the largest base fee seen in a 24h Gnosis sample (0.23 gwei). It bounds the balance reserved upfront
+/// (gas limit x max fee) to 0.01 xDAI at a 10M gas limit.
+pub const DEFAULT_MAX_MAX_FEE_PER_GAS: u64 = 1_000_000_000;
+
+/// 8x: the base fee grows at most 12.5% per block, so 8x covers about 17 blocks of worst-case growth, where the
+/// default alloy estimate of 2x only covers about 6.
+pub const DEFAULT_BASE_FEE_HEADROOM_FACTOR: f64 = 8.0;
 
 fn default_min_priority_fee_per_gas() -> u64 {
     DEFAULT_MIN_PRIORITY_FEE_PER_GAS
+}
+
+fn default_max_priority_fee_per_gas() -> u64 {
+    DEFAULT_MAX_PRIORITY_FEE_PER_GAS
 }
 
 fn default_min_max_fee_per_gas() -> u64 {
     DEFAULT_MIN_MAX_FEE_PER_GAS
 }
 
+fn default_max_max_fee_per_gas() -> u64 {
+    DEFAULT_MAX_MAX_FEE_PER_GAS
+}
+
+fn default_base_fee_headroom_factor() -> f64 {
+    DEFAULT_BASE_FEE_HEADROOM_FACTOR
+}
+
 impl ApiConfig {
-    /// Fee floors applied to the chainInfo EIP-1559 estimates
-    pub fn gas_fee_floors(&self) -> GasFeeFloors {
-        GasFeeFloors {
+    /// Fee policy (floors, tip cap, max fee ceiling, headroom) applied to the chainInfo EIP-1559 estimates
+    pub fn gas_fee_policy(&self) -> GasFeePolicy {
+        GasFeePolicy {
             min_priority_fee_per_gas: u128::from(self.min_priority_fee_per_gas),
+            max_priority_fee_per_gas: u128::from(self.max_priority_fee_per_gas),
             min_max_fee_per_gas: u128::from(self.min_max_fee_per_gas),
+            max_max_fee_per_gas: u128::from(self.max_max_fee_per_gas),
+            base_fee_headroom_factor: self.base_fee_headroom_factor,
         }
     }
+
+    /// Check that the gas multiplier, the headroom factor and the fee bounds are consistent.
+    pub fn validate_fee_settings(&self) -> Result<(), String> {
+        validate_fee_settings(self.gas_multiplier, self.gas_fee_policy())
+    }
+}
+
+/// Check that the gas multiplier, the headroom factor and the fee bounds are consistent.
+///
+/// Shared by the daemon and the standalone server so both reject the same configurations.
+pub fn validate_fee_settings(gas_multiplier: f64, policy: GasFeePolicy) -> Result<(), String> {
+    if !gas_multiplier.is_finite() || gas_multiplier < 1.0 {
+        return Err("api.gas_multiplier must be a finite number greater than or equal to 1".to_string());
+    }
+
+    if !policy.base_fee_headroom_factor.is_finite() || policy.base_fee_headroom_factor < 1.0 {
+        return Err("api.base_fee_headroom_factor must be a finite number greater than or equal to 1".to_string());
+    }
+
+    if policy.max_priority_fee_per_gas < policy.min_priority_fee_per_gas {
+        return Err(
+            "api.max_priority_fee_per_gas must be greater than or equal to api.min_priority_fee_per_gas".to_string(),
+        );
+    }
+
+    if policy.max_max_fee_per_gas < policy.min_max_fee_per_gas {
+        return Err("api.max_max_fee_per_gas must be greater than or equal to api.min_max_fee_per_gas".to_string());
+    }
+
+    if policy.max_max_fee_per_gas < policy.max_priority_fee_per_gas {
+        return Err(
+            "api.max_max_fee_per_gas must be greater than or equal to api.max_priority_fee_per_gas".to_string(),
+        );
+    }
+
+    if policy.min_max_fee_per_gas < policy.min_priority_fee_per_gas {
+        return Err(
+            "api.min_max_fee_per_gas must be greater than or equal to api.min_priority_fee_per_gas".to_string(),
+        );
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -296,11 +385,63 @@ mod tests {
         assert_eq!(config.sse_keepalive.interval, Duration::from_secs(15));
         assert_eq!(config.gas_multiplier, 1.0);
         assert_eq!(
-            config.gas_fee_floors(),
-            GasFeeFloors {
-                min_priority_fee_per_gas: 100,
-                min_max_fee_per_gas: 5_000_000,
+            config.gas_fee_policy(),
+            GasFeePolicy {
+                min_priority_fee_per_gas: 10_000_000,
+                max_priority_fee_per_gas: 50_000_000,
+                min_max_fee_per_gas: 500_000_000,
+                max_max_fee_per_gas: 1_000_000_000,
+                base_fee_headroom_factor: 8.0,
             }
+        );
+    }
+
+    #[test]
+    fn test_default_fee_settings_are_valid() {
+        assert_eq!(ApiConfig::default().validate_fee_settings(), Ok(()));
+    }
+
+    #[test]
+    fn test_inconsistent_fee_settings_are_rejected() {
+        let invalid = |edit: fn(&mut ApiConfig)| {
+            let mut config = ApiConfig::default();
+            edit(&mut config);
+            config.validate_fee_settings().expect_err("settings should be rejected")
+        };
+
+        assert!(invalid(|c| c.gas_multiplier = 0.5).contains("api.gas_multiplier"));
+        assert!(invalid(|c| c.base_fee_headroom_factor = f64::NAN).contains("api.base_fee_headroom_factor"));
+        assert!(
+            invalid(|c| {
+                c.min_priority_fee_per_gas = 100;
+                c.max_priority_fee_per_gas = 50;
+            })
+            .contains("api.max_priority_fee_per_gas")
+        );
+        assert!(
+            invalid(|c| {
+                c.min_max_fee_per_gas = 2_000;
+                c.max_max_fee_per_gas = 1_000;
+                c.max_priority_fee_per_gas = 1;
+                c.min_priority_fee_per_gas = 1;
+            })
+            .contains("api.max_max_fee_per_gas must be greater than or equal to api.min_max_fee_per_gas")
+        );
+        // The standalone case from review: ceiling below the tip cap
+        assert!(
+            invalid(|c| {
+                c.min_max_fee_per_gas = 1;
+                c.max_max_fee_per_gas = 20_000_000;
+                c.max_priority_fee_per_gas = 50_000_000;
+            })
+            .contains("api.max_max_fee_per_gas must be greater than or equal to api.max_priority_fee_per_gas")
+        );
+        assert!(
+            invalid(|c| {
+                c.min_max_fee_per_gas = 5;
+                c.min_priority_fee_per_gas = 10;
+            })
+            .contains("api.min_max_fee_per_gas must be greater than or equal to api.min_priority_fee_per_gas")
         );
     }
 

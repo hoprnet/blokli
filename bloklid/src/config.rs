@@ -429,8 +429,20 @@ impl Config {
             self.api.min_priority_fee_per_gas
         ));
         output.push_str(&format!(
+            "  api.max_priority_fee_per_gas: {}\n",
+            self.api.max_priority_fee_per_gas
+        ));
+        output.push_str(&format!(
             "  api.min_max_fee_per_gas: {}\n",
             self.api.min_max_fee_per_gas
+        ));
+        output.push_str(&format!(
+            "  api.max_max_fee_per_gas: {}\n",
+            self.api.max_max_fee_per_gas
+        ));
+        output.push_str(&format!(
+            "  api.base_fee_headroom_factor: {}\n",
+            self.api.base_fee_headroom_factor
         ));
         output.push_str(&format!("  api.max_query_depth: {}\n", self.api.max_query_depth));
         output.push_str(&format!(
@@ -667,9 +679,21 @@ pub struct ApiConfig {
     #[serde(default = "default_api_min_priority_fee_per_gas")]
     pub min_priority_fee_per_gas: u64,
 
+    #[default(blokli_api::config::DEFAULT_MAX_PRIORITY_FEE_PER_GAS)]
+    #[serde(default = "default_api_max_priority_fee_per_gas")]
+    pub max_priority_fee_per_gas: u64,
+
     #[default(blokli_api::config::DEFAULT_MIN_MAX_FEE_PER_GAS)]
     #[serde(default = "default_api_min_max_fee_per_gas")]
     pub min_max_fee_per_gas: u64,
+
+    #[default(blokli_api::config::DEFAULT_MAX_MAX_FEE_PER_GAS)]
+    #[serde(default = "default_api_max_max_fee_per_gas")]
+    pub max_max_fee_per_gas: u64,
+
+    #[default(blokli_api::config::DEFAULT_BASE_FEE_HEADROOM_FACTOR)]
+    #[serde(default = "default_api_base_fee_headroom_factor")]
+    pub base_fee_headroom_factor: f64,
 
     #[serde(default)]
     pub sse_keepalive: SseKeepAliveConfig,
@@ -868,8 +892,20 @@ fn default_api_min_priority_fee_per_gas() -> u64 {
     blokli_api::config::DEFAULT_MIN_PRIORITY_FEE_PER_GAS
 }
 
+fn default_api_max_priority_fee_per_gas() -> u64 {
+    blokli_api::config::DEFAULT_MAX_PRIORITY_FEE_PER_GAS
+}
+
 fn default_api_min_max_fee_per_gas() -> u64 {
     blokli_api::config::DEFAULT_MIN_MAX_FEE_PER_GAS
+}
+
+fn default_api_max_max_fee_per_gas() -> u64 {
+    blokli_api::config::DEFAULT_MAX_MAX_FEE_PER_GAS
+}
+
+fn default_api_base_fee_headroom_factor() -> f64 {
+    blokli_api::config::DEFAULT_BASE_FEE_HEADROOM_FACTOR
 }
 
 fn default_sse_keepalive_interval() -> Duration {
@@ -1474,8 +1510,11 @@ mod tests {
         assert!(!cfg.api.playground_enabled); // Default
         assert_eq!(cfg.api.bind_address.to_string(), "127.0.0.1:8080"); // Default
         assert_eq!(cfg.api.gas_multiplier, 1.0); // Default
-        assert_eq!(cfg.api.min_priority_fee_per_gas, 100); // Default
-        assert_eq!(cfg.api.min_max_fee_per_gas, 5_000_000); // Default
+        assert_eq!(cfg.api.min_priority_fee_per_gas, 10_000_000); // Default
+        assert_eq!(cfg.api.max_priority_fee_per_gas, 50_000_000); // Default
+        assert_eq!(cfg.api.min_max_fee_per_gas, 500_000_000); // Default
+        assert_eq!(cfg.api.max_max_fee_per_gas, 1_000_000_000); // Default
+        assert_eq!(cfg.api.base_fee_headroom_factor, 8.0); // Default
         assert_eq!(cfg.api.health.max_indexer_lag, 10); // Default
         assert_eq!(cfg.api.health.timeout, Duration::from_millis(5000)); // Default
         assert!(cfg.database.is_some()); // Database was provided
@@ -1496,11 +1535,14 @@ mod tests {
     }
 
     #[test]
-    fn test_api_gas_fee_floors_override() {
+    fn test_api_gas_fee_policy_override() {
         let config = r#"
          [api]
          min_priority_fee_per_gas = 100000000
+         max_priority_fee_per_gas = 200000000
          min_max_fee_per_gas = 1000000000
+         max_max_fee_per_gas = 3000000000
+         base_fee_headroom_factor = 4.5
          [database]
          type = "sqlite"
          index_path = ":memory:"
@@ -1508,7 +1550,10 @@ mod tests {
      "#;
         let cfg: Config = toml::from_str(config).expect("Failed to parse config");
         assert_eq!(cfg.api.min_priority_fee_per_gas, 100_000_000);
+        assert_eq!(cfg.api.max_priority_fee_per_gas, 200_000_000);
         assert_eq!(cfg.api.min_max_fee_per_gas, 1_000_000_000);
+        assert_eq!(cfg.api.max_max_fee_per_gas, 3_000_000_000);
+        assert_eq!(cfg.api.base_fee_headroom_factor, 4.5);
     }
 
     #[test]

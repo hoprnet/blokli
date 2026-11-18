@@ -255,11 +255,15 @@ impl NodeSafeModuleStatus {
     }
 }
 
-/// EIP-1559 gas fee estimates in wei.
+/// Raw fee market snapshot, in wei.
+///
+/// Derived from `eth_feeHistory`, or from the latest block and a node tip estimate when that method is unavailable.
 #[derive(Clone, Debug, Copy, PartialEq, Eq)]
-pub struct Eip1559FeeEstimation {
-    pub max_fee_per_gas: u128,
-    pub max_priority_fee_per_gas: u128,
+pub struct FeeHistorySnapshot {
+    /// Base fee per gas of the next block as derived by the node, or the latest block's when read without fee history.
+    pub next_base_fee_per_gas: u128,
+    /// Median over the recent blocks of the per-block median priority fee per gas.
+    pub median_priority_fee_per_gas: u128,
 }
 
 /// Current Curvy Aggregator state returned by typed RPC operations.
@@ -341,8 +345,14 @@ pub trait HoprRpcOperations {
     /// Retrieves the current network gas price estimate (wei) for legacy transactions.
     async fn get_gas_price(&self) -> Result<u128>;
 
-    /// Retrieves EIP-1559 gas fee estimates (wei).
-    async fn estimate_eip1559_fees(&self) -> Result<Eip1559FeeEstimation>;
+    /// Reads a fee snapshot without `eth_feeHistory`, for nodes that do not serve it.
+    ///
+    /// The base fee is the latest block's, the tip is `eth_maxPriorityFeePerGas` or, when that is unavailable,
+    /// `eth_gasPrice` minus the base fee.
+    async fn get_node_fee_snapshot(&self) -> Result<FeeHistorySnapshot>;
+
+    /// Reads the next-block base fee and the recent median priority fee from `eth_feeHistory`.
+    async fn get_fee_history_snapshot(&self) -> Result<FeeHistorySnapshot>;
 
     /// Retrieves the current notes root and dense indices from the Curvy Aggregator.
     async fn get_curvy_aggregator_state(&self) -> Result<CurvyAggregatorState>;
