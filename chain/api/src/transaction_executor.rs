@@ -24,7 +24,8 @@ use crate::{
     safe_execution::decode_transaction_summary,
     transaction_monitor::{ReceiptProvider, SafeAddressChecker, enrich_safe_execution},
     transaction_store::{
-        SubmissionLimit, TransactionRecord, TransactionStatus, TransactionStore, TransactionStoreError,
+        SubmissionLimit, SubmissionReservation, TrackOutcome, TransactionDiagnosis, TransactionRecord,
+        TransactionStatus, TransactionStore, TransactionStoreError,
     },
     transaction_validator::{TransactionValidator, ValidationError},
 };
@@ -67,6 +68,21 @@ pub enum TransactionExecutorError {
         /// Identity of the transaction already carrying this logical action.
         existing: Uuid,
     },
+    /// The RPC node already holds this exact transaction and it is already tracked.
+    ///
+    /// Like [`TransactionExecutorError::DuplicateHoprAction`], a non-failure outcome carried as
+    /// an error: nothing new is tracked, and callers report the `existing` transaction and its
+    /// diagnosis instead.
+    #[error("the transaction is already tracked as {existing}")]
+    AlreadyTracked {
+        /// Identity of the transaction already tracking this raw transaction.
+        existing: Uuid,
+        /// Why that transaction last timed out unmined, when this resubmission resumed its
+        /// tracking. Resuming clears the stored diagnosis, so it is carried here instead.
+        ///
+        /// Boxed to keep this error small.
+        diagnosis: Option<Box<TransactionDiagnosis>>,
+    },
     /// The signer is on cooldown after repeated deterministically invalid submissions.
     #[error("HOPR {operation} suppressed for {}s: {reason}", retry_after.as_secs())]
     HoprActionThrottled {
@@ -97,6 +113,25 @@ pub enum ConfirmationError {
     Timeout(String),
 }
 
+/// How the RPC node answered a broadcast that it did not reject.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BroadcastOutcome {
+    /// The node accepted the transaction with this broadcast.
+    Accepted(Hash),
+    /// The node reported the transaction as already known and returned it for this hash, so it
+    /// holds it from an earlier broadcast.
+    AlreadyKnown(Hash),
+}
+
+impl BroadcastOutcome {
+    /// Hash of the transaction the node accepted or already holds.
+    pub fn hash(self) -> Hash {
+        match self {
+            BroadcastOutcome::Accepted(hash) | BroadcastOutcome::AlreadyKnown(hash) => hash,
+        }
+    }
+}
+
 /// Trait for RPC operations needed by the transaction executor
 ///
 /// This trait abstracts the RPC client so we can mock it in tests
@@ -104,6 +139,15 @@ pub enum ConfirmationError {
 pub trait RpcClient: Send + Sync {
     /// Send a raw transaction and return its hash
     async fn send_raw_transaction(&self, raw_tx: Vec<u8>) -> Result<Hash, String>;
+
+    /// Send a raw transaction and report whether the node accepted it now or verifiably
+    /// already held it.
+    ///
+    /// Clients that cannot tell the two apart report every acceptance as
+    /// [`BroadcastOutcome::Accepted`].
+    async fn broadcast_raw_transaction(&self, raw_tx: Vec<u8>) -> Result<BroadcastOutcome, String> {
+        self.send_raw_transaction(raw_tx).await.map(BroadcastOutcome::Accepted)
+    }
 
     /// Send a raw transaction and wait for confirmations
     async fn send_raw_transaction_with_confirm(
@@ -314,6 +358,39 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         Ok(tx_hash)
     }
 
+    /// Reserve receipt-monitoring capacity for a raw transaction.
+    ///
+    /// The reservation releases its slot when dropped, so an early return gives it back.
+    fn reserve_submission(&self, raw_tx: &[u8]) -> Result<SubmissionReservation, TransactionExecutorError> {
+        self.transaction_store
+            .try_reserve_submission(
+                raw_tx,
+                self.config.max_submitted_transactions,
+                self.config.max_submitted_transactions_per_identity,
+            )
+            .map_err(|exhausted| {
+                let (limit, max) = match exhausted.limit {
+                    SubmissionLimit::Global(max) => ("global", max),
+                    SubmissionLimit::PerIdentity(max) => ("per_identity", max),
+                };
+                let summary = decode_transaction_summary(raw_tx);
+                warn!(
+                    limit,
+                    max,
+                    submitted = exhausted.submitted_total,
+                    submitted_for_signer = exhausted.submitted_for_identity,
+                    signer = ?exhausted.identity.map(Address::from),
+                    tx_hash = ?summary.map(|tx| tx.transaction_hash),
+                    nonce = ?summary.map(|tx| tx.nonce),
+                    to = ?summary.and_then(|tx| tx.to),
+                    max_fee_per_gas = ?summary.map(|tx| tx.max_fee_per_gas),
+                    max_priority_fee_per_gas = ?summary.and_then(|tx| tx.max_priority_fee_per_gas),
+                    "Rejecting raw transaction because submission capacity is exhausted"
+                );
+                TransactionExecutorError::OverloadedError
+            })
+    }
+
     /// Async mode: Submit transaction, track in store, return UUID
     ///
     /// This mode:
@@ -338,41 +415,56 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         // only ones that occupy receipt-monitoring capacity. The slot is reserved
         // before broadcasting so concurrent submissions cannot overshoot the limits
         // while they wait on the RPC; returning early drops and releases it.
-        let reservation = match self.transaction_store.try_reserve_submission(
-            &raw_tx,
-            self.config.max_submitted_transactions,
-            self.config.max_submitted_transactions_per_identity,
-        ) {
-            Ok(reservation) => reservation,
-            Err(exhausted) => {
-                let (limit, max) = match exhausted.limit {
-                    SubmissionLimit::Global(max) => ("global", max),
-                    SubmissionLimit::PerIdentity(max) => ("per_identity", max),
-                };
-                let summary = decode_transaction_summary(&raw_tx);
-                warn!(
-                    limit,
-                    max,
-                    submitted = exhausted.submitted_total,
-                    submitted_for_signer = exhausted.submitted_for_identity,
-                    signer = ?exhausted.identity.map(Address::from),
-                    tx_hash = ?summary.map(|tx| tx.transaction_hash),
-                    nonce = ?summary.map(|tx| tx.nonce),
-                    to = ?summary.and_then(|tx| tx.to),
-                    max_fee_per_gas = ?summary.map(|tx| tx.max_fee_per_gas),
-                    max_priority_fee_per_gas = ?summary.and_then(|tx| tx.max_priority_fee_per_gas),
-                    "Rejecting raw transaction before broadcast because submission capacity is exhausted"
-                );
-                return Err(TransactionExecutorError::OverloadedError);
-            }
+        //
+        // A transaction that is already being monitored occupies its slot, so a repeat of it
+        // takes no new one and must not be refused for capacity. Its hash is verified by the
+        // node's answer below before it is treated as the same transaction.
+        let reservation = if decode_transaction_summary(&raw_tx)
+            .is_some_and(|summary| self.transaction_store.has_in_flight_hash(summary.transaction_hash))
+        {
+            None
+        } else {
+            Some(self.reserve_submission(&raw_tx)?)
         };
 
         // Submit to RPC first to get transaction hash
-        let tx_hash = match self.rpc_client.send_raw_transaction(raw_tx.clone()).await {
-            Ok(hash) => hash,
+        let outcome = match self.rpc_client.broadcast_raw_transaction(raw_tx.clone()).await {
+            Ok(outcome) => outcome,
             Err(e) => {
                 record_transaction_status(STATUS_SUBMISSION_FAILED);
                 return Err(TransactionExecutorError::RpcError(e));
+            }
+        };
+        let tx_hash = outcome.hash();
+        let verified_known = matches!(outcome, BroadcastOutcome::AlreadyKnown(_));
+
+        // A transaction that decodes locally has a hash we can compute: an answer naming another
+        // transaction must not bind this action to, or resume, the record that hash belongs to.
+        if let Some(local_hash) = decode_transaction_summary(&raw_tx)
+            .map(|summary| summary.transaction_hash)
+            .filter(|local_hash| *local_hash != tx_hash)
+        {
+            record_transaction_status(STATUS_SUBMISSION_FAILED);
+            return Err(TransactionExecutorError::RpcError(format!(
+                "node returned a different hash ({tx_hash}) than the submitted transaction ({local_hash})"
+            )));
+        }
+
+        let reservation = match reservation {
+            Some(reservation) => reservation,
+            None => {
+                if let Some(existing) = self.transaction_store.resume_in_flight_hash(tx_hash) {
+                    if let Some(action) = admitted {
+                        action.register(existing);
+                    }
+                    return Err(TransactionExecutorError::AlreadyTracked {
+                        existing,
+                        diagnosis: None,
+                    });
+                }
+                // The transaction concluded since the check, or the node answered with another
+                // hash: this is a new submission like any other and needs capacity.
+                self.reserve_submission(&raw_tx)?
             }
         };
 
@@ -387,20 +479,43 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
-        if let Err(e) = self.transaction_store.insert_reserved(record, reservation) {
-            error!(id = %id, tx_hash = %tx_hash, error = %e, "Failed to store submitted transaction");
-            return Err(e.into());
+        // The node may still hold a transaction we already track (an identical resubmission):
+        // resuming that one rather than tracking the same hash twice is a single step per hash,
+        // so concurrent identical submissions end up with one identity.
+        match self
+            .transaction_store
+            .insert_or_resume(record, reservation, verified_known)
+        {
+            Ok(TrackOutcome::Inserted) => {
+                // Bind the logical action to this identity only once it is actually tracked, so
+                // a failed submission never suppresses the retry that follows it.
+                if let Some(action) = admitted {
+                    action.register(id);
+                }
+                Ok(id)
+            }
+            Ok(TrackOutcome::Resumed { existing, diagnosis }) => {
+                // The policy released the action when the original timed out, so it admitted
+                // this retry afresh. The resumed transaction carries the action again: bind it,
+                // or a re-signed copy at another nonce would be admitted and broadcast too.
+                if let Some(action) = admitted {
+                    action.register(existing);
+                }
+                Err(TransactionExecutorError::AlreadyTracked {
+                    existing,
+                    diagnosis: diagnosis.map(Box::new),
+                })
+            }
+            Err(e) => {
+                error!(id = %id, tx_hash = %tx_hash, error = %e, "Failed to store submitted transaction");
+                Err(e.into())
+            }
         }
-
-        // Bind the logical action to this identity only once it is actually tracked, so a
-        // failed submission never suppresses the retry that follows it.
-        if let Some(action) = admitted {
-            action.register(id);
-        }
-
-        Ok(id)
     }
 
     /// Sync mode: Submit transaction and wait for confirmations
@@ -460,6 +575,9 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             confirmed_at: Some(Utc::now()),
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         if let (Some(receipt_provider), Some(safe_checker)) =
@@ -492,10 +610,40 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
 mod tests {
     use std::sync::Mutex;
 
+    use hopr_bindings::{
+        exports::alloy::{
+            consensus::{SignableTransaction, TxLegacy},
+            eips::eip2718::Encodable2718,
+            primitives::{Address as AlloyAddress, Bytes, TxKind, U256},
+            signers::{Signer, local::PrivateKeySigner},
+            sol_types::SolCall,
+        },
+        hopr_node_management_module::HoprNodeManagementModule,
+        hopr_token::HoprToken,
+    };
+
     use super::*;
+    use crate::{
+        hopr_action::HoprContracts,
+        hopr_policy::{ChannelState, HoprChainState},
+        transaction_store::UnminedReason,
+    };
+
+    /// Hash the mock node reports for `raw_tx`: distinct for distinct transactions.
+    fn mock_tx_hash(raw_tx: &[u8]) -> Hash {
+        // A decodable transaction has its real hash, as the node would report it.
+        if let Some(summary) = decode_transaction_summary(raw_tx) {
+            return summary.transaction_hash;
+        }
+        let mut hash = [0xABu8; 32];
+        for (i, byte) in raw_tx.iter().enumerate() {
+            hash[i % 32] ^= byte;
+        }
+        Hash::from(hash)
+    }
 
     fn test_tx_hash() -> Hash {
-        Hash::from([0xABu8; 32])
+        mock_tx_hash(&[0x01, 0x02, 0x03])
     }
 
     // Mock RPC client for testing
@@ -503,6 +651,8 @@ mod tests {
         should_fail: bool,
         should_timeout: bool,
         call_count: Arc<Mutex<usize>>,
+        /// Answer every broadcast as an already-known transaction the node holds.
+        already_known: Arc<Mutex<bool>>,
     }
 
     impl MockRpcClient {
@@ -511,6 +661,7 @@ mod tests {
                 should_fail: false,
                 should_timeout: false,
                 call_count: Arc::new(Mutex::new(0)),
+                already_known: Arc::new(Mutex::new(false)),
             }
         }
 
@@ -519,6 +670,7 @@ mod tests {
                 should_fail: true,
                 should_timeout: false,
                 call_count: Arc::new(Mutex::new(0)),
+                already_known: Arc::new(Mutex::new(false)),
             }
         }
 
@@ -527,6 +679,7 @@ mod tests {
                 should_fail: false,
                 should_timeout: true,
                 call_count: Arc::new(Mutex::new(0)),
+                already_known: Arc::new(Mutex::new(false)),
             }
         }
 
@@ -538,19 +691,28 @@ mod tests {
 
     #[async_trait]
     impl RpcClient for MockRpcClient {
-        async fn send_raw_transaction(&self, _raw_tx: Vec<u8>) -> Result<Hash, String> {
+        async fn send_raw_transaction(&self, raw_tx: Vec<u8>) -> Result<Hash, String> {
             *self.call_count.lock().unwrap() += 1;
 
             if self.should_fail {
                 return Err("RPC error: transaction failed".to_string());
             }
 
-            Ok(test_tx_hash())
+            Ok(mock_tx_hash(&raw_tx))
+        }
+
+        async fn broadcast_raw_transaction(&self, raw_tx: Vec<u8>) -> Result<BroadcastOutcome, String> {
+            let hash = self.send_raw_transaction(raw_tx).await?;
+            if *self.already_known.lock().unwrap() {
+                Ok(BroadcastOutcome::AlreadyKnown(hash))
+            } else {
+                Ok(BroadcastOutcome::Accepted(hash))
+            }
         }
 
         async fn send_raw_transaction_with_confirm(
             &self,
-            _raw_tx: Vec<u8>,
+            raw_tx: Vec<u8>,
             _confirmations: u64,
             _timeout: Option<Duration>,
         ) -> Result<Hash, ConfirmationError> {
@@ -566,7 +728,7 @@ mod tests {
                 ));
             }
 
-            Ok(test_tx_hash())
+            Ok(mock_tx_hash(&raw_tx))
         }
     }
 
@@ -636,6 +798,344 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_async_resubmission_of_a_held_transaction_returns_the_tracked_one() {
+        let executor = create_executor(MockRpcClient::new());
+
+        let first = executor.send_raw_transaction_async(vec![0x01]).await.unwrap();
+        let second = executor.send_raw_transaction_async(vec![0x01]).await;
+
+        assert!(matches!(
+            second,
+            Err(TransactionExecutorError::AlreadyTracked { existing, .. }) if existing == first
+        ));
+        assert_eq!(executor.transaction_store().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_async_resubmission_of_a_timed_out_held_transaction_resumes_tracking() {
+        let executor = create_executor(MockRpcClient::new());
+        let store = executor.transaction_store();
+
+        let first = executor.send_raw_transaction_async(vec![0x01]).await.unwrap();
+        store
+            .update_status_with_diagnosis(
+                first,
+                TransactionStatus::Timeout,
+                None,
+                Some(TransactionDiagnosis {
+                    reason: UnminedReason::Queued,
+                    signed_fees: None,
+                    recommended_fees: None,
+                    min_replacement_fees: None,
+                    retry_after: Duration::from_secs(5),
+                }),
+            )
+            .unwrap();
+
+        let second = executor.send_raw_transaction_async(vec![0x01]).await;
+        // The stored diagnosis is cleared on resumption, so the retry carries it instead.
+        assert!(matches!(
+            second,
+            Err(TransactionExecutorError::AlreadyTracked { existing, diagnosis: Some(diagnosis) })
+                if existing == first && diagnosis.reason == UnminedReason::Queued
+        ));
+
+        let resumed = store.get(first).unwrap();
+        assert_eq!(resumed.status, TransactionStatus::Submitted);
+        assert_eq!(resumed.diagnosis, None);
+        assert_eq!(store.list_submitted_fair().len(), 1);
+
+        store.update_status(first, TransactionStatus::Confirmed, None).unwrap();
+        assert_eq!(store.get(first).unwrap().status, TransactionStatus::Confirmed);
+    }
+
+    fn unknown_diagnosis() -> TransactionDiagnosis {
+        TransactionDiagnosis {
+            reason: UnminedReason::Unknown,
+            signed_fees: None,
+            recommended_fees: None,
+            min_replacement_fees: None,
+            retry_after: Duration::from_secs(5),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_async_resubmission_of_an_unknown_timeout_the_node_still_holds_resumes_it() {
+        let rpc = MockRpcClient::new();
+        let already_known = rpc.already_known.clone();
+        let executor = create_executor(rpc);
+        let store = executor.transaction_store();
+
+        let first = executor.send_raw_transaction_async(vec![0x01]).await.unwrap();
+        store
+            .update_status_with_diagnosis(first, TransactionStatus::Timeout, None, Some(unknown_diagnosis()))
+            .unwrap();
+
+        // The node reports the transaction as already known and returns it.
+        *already_known.lock().unwrap() = true;
+        let second = executor.send_raw_transaction_async(vec![0x01]).await;
+
+        assert!(matches!(
+            second,
+            Err(TransactionExecutorError::AlreadyTracked { existing, diagnosis: Some(diagnosis) })
+                if existing == first && diagnosis.reason == UnminedReason::Unknown
+        ));
+        assert_eq!(store.count(), 1);
+        assert_eq!(store.get(first).unwrap().status, TransactionStatus::Submitted);
+    }
+
+    #[tokio::test]
+    async fn test_async_resubmission_of_an_unknown_timeout_the_node_accepts_afresh_is_tracked_afresh() {
+        let executor = create_executor(MockRpcClient::new());
+        let store = executor.transaction_store();
+
+        let first = executor.send_raw_transaction_async(vec![0x01]).await.unwrap();
+        store
+            .update_status_with_diagnosis(first, TransactionStatus::Timeout, None, Some(unknown_diagnosis()))
+            .unwrap();
+
+        let second = executor.send_raw_transaction_async(vec![0x01]).await.unwrap();
+
+        assert_ne!(first, second);
+        assert_eq!(store.get(first).unwrap().status, TransactionStatus::Timeout);
+        assert_eq!(store.count(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_async_resubmission_of_a_dropped_transaction_is_tracked_afresh() {
+        let executor = create_executor(MockRpcClient::new());
+
+        let first = executor.send_raw_transaction_async(vec![0x01]).await.unwrap();
+        executor
+            .transaction_store()
+            .update_status_with_diagnosis(
+                first,
+                TransactionStatus::Timeout,
+                None,
+                Some(TransactionDiagnosis {
+                    reason: UnminedReason::Dropped,
+                    signed_fees: None,
+                    recommended_fees: None,
+                    min_replacement_fees: None,
+                    retry_after: Duration::from_secs(5),
+                }),
+            )
+            .unwrap();
+
+        let second = executor.send_raw_transaction_async(vec![0x01]).await.unwrap();
+
+        assert_ne!(first, second);
+        assert_eq!(executor.transaction_store().count(), 2);
+    }
+
+    /// Chain state that knows one module, so the HOPR policy applies to calls through it.
+    struct ModuleChain;
+
+    #[async_trait]
+    impl HoprChainState for ModuleChain {
+        async fn safe_for_module(&self, _module: Address) -> Result<Option<Address>, String> {
+            Ok(Some(Address::from([0xDD; 20])))
+        }
+
+        async fn channel_status(
+            &self,
+            _source: Address,
+            _destination: Address,
+        ) -> Result<Option<ChannelState>, String> {
+            Ok(None)
+        }
+    }
+
+    /// A signed announcement through the node-management module, at the given nonce.
+    async fn signed_announcement(signer: &PrivateKeySigner, nonce: u64) -> Vec<u8> {
+        let announce = HoprToken::sendCall {
+            recipient: AlloyAddress::from_slice(&[0x33; 20]),
+            amount: U256::from(1_000u64),
+            data: Bytes::from_static(b"key-binding-and-multiaddr"),
+        }
+        .abi_encode();
+        let input = HoprNodeManagementModule::execTransactionFromModuleCall {
+            to: AlloyAddress::from_slice(&[0x11; 20]),
+            value: U256::ZERO,
+            data: Bytes::from(announce),
+            operation: 0,
+        }
+        .abi_encode();
+        let tx = TxLegacy {
+            chain_id: Some(1),
+            nonce,
+            gas_price: 1_000_000_000,
+            gas_limit: 200_000,
+            to: TxKind::Call(AlloyAddress::from_slice(&[0xAA; 20])),
+            value: U256::ZERO,
+            input: input.into(),
+        };
+        let signature = signer.sign_hash(&tx.signature_hash()).await.unwrap();
+        let mut encoded = Vec::new();
+        tx.into_signed(signature).encode_2718(&mut encoded);
+        encoded
+    }
+
+    #[tokio::test]
+    async fn test_resumed_transaction_carries_the_action_admitted_for_its_retry() {
+        let store = Arc::new(TransactionStore::new());
+        let policy = Arc::new(HoprPolicy::new(
+            Arc::new(ModuleChain),
+            store.clone(),
+            HoprPolicyConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            HoprContracts {
+                token: Address::from([0x11; 20]),
+                channels: Address::from([0xCC; 20]),
+                announcements: Address::from([0x33; 20]),
+            },
+        ));
+        let executor = RawTransactionExecutor::with_shared_dependencies(
+            Arc::new(MockRpcClient::new()),
+            store.clone(),
+            Arc::new(TransactionValidator::new()),
+            RawTransactionExecutorConfig::default(),
+        )
+        .with_hopr_policy(policy);
+        let signer = PrivateKeySigner::random();
+        let original = signed_announcement(&signer, 0).await;
+        let resigned = signed_announcement(&signer, 1).await;
+
+        let first = executor.send_raw_transaction_async(original.clone()).await.unwrap();
+        store
+            .update_status_with_diagnosis(
+                first,
+                TransactionStatus::Timeout,
+                None,
+                Some(TransactionDiagnosis {
+                    reason: UnminedReason::Queued,
+                    signed_fees: None,
+                    recommended_fees: None,
+                    min_replacement_fees: None,
+                    retry_after: Duration::from_secs(5),
+                }),
+            )
+            .unwrap();
+
+        // The identical retry resumes the original, which carries the announcement again.
+        let retry = executor.send_raw_transaction_async(original).await;
+        assert!(matches!(
+            retry,
+            Err(TransactionExecutorError::AlreadyTracked { existing, .. }) if existing == first
+        ));
+
+        // So the same announcement signed again at another nonce resolves to it too.
+        let duplicate = executor.send_raw_transaction_async(resigned).await;
+        assert!(matches!(
+            duplicate,
+            Err(TransactionExecutorError::DuplicateHoprAction { existing, .. }) if existing == first
+        ));
+        assert_eq!(store.count(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_concurrent_identical_async_submissions_share_one_identity_and_slot() {
+        let executor = Arc::new(create_executor(MockRpcClient::new()));
+
+        let tasks = (0..16)
+            .map(|_| {
+                let executor = executor.clone();
+                tokio::spawn(async move { executor.send_raw_transaction_async(vec![0x01]).await })
+            })
+            .collect::<Vec<_>>();
+        let mut created = Vec::new();
+        let mut tracked = Vec::new();
+        for task in tasks {
+            match task.await.unwrap() {
+                Ok(id) => created.push(id),
+                Err(TransactionExecutorError::AlreadyTracked { existing, .. }) => tracked.push(existing),
+                Err(other) => panic!("unexpected outcome: {other}"),
+            }
+        }
+
+        assert_eq!(created.len(), 1);
+        assert!(tracked.iter().all(|existing| *existing == created[0]));
+        let store = executor.transaction_store();
+        assert_eq!(store.count(), 1);
+        assert_eq!(store.submitted_count(), 1);
+    }
+
+    /// Mock node that answers every broadcast with a fixed hash.
+    struct FixedHashRpcClient(Hash);
+
+    #[async_trait]
+    impl RpcClient for FixedHashRpcClient {
+        async fn send_raw_transaction(&self, _raw_tx: Vec<u8>) -> Result<Hash, String> {
+            Ok(self.0)
+        }
+
+        async fn broadcast_raw_transaction(&self, _raw_tx: Vec<u8>) -> Result<BroadcastOutcome, String> {
+            Ok(BroadcastOutcome::Accepted(self.0))
+        }
+
+        async fn send_raw_transaction_with_confirm(
+            &self,
+            _raw_tx: Vec<u8>,
+            _confirmations: u64,
+            _timeout: Option<Duration>,
+        ) -> Result<Hash, ConfirmationError> {
+            Ok(self.0)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_async_node_answering_another_hash_is_rejected_without_touching_that_record() {
+        let signer = PrivateKeySigner::random();
+        let other_raw = signed_transfer(&signer, 0).await;
+        let raw_tx = signed_transfer(&signer, 1).await;
+        let other_hash = decode_transaction_summary(&other_raw).unwrap().transaction_hash;
+
+        let store = TransactionStore::new();
+        let other_id = Uuid::new_v4();
+        let reservation = store.try_reserve_submission(&other_raw, 0, 0).unwrap();
+        store
+            .insert_or_resume(
+                TransactionRecord {
+                    id: other_id,
+                    raw_transaction: other_raw,
+                    transaction_hash: other_hash,
+                    status: TransactionStatus::Submitted,
+                    submitted_at: Utc::now(),
+                    confirmed_at: None,
+                    error_message: None,
+                    safe_execution: None,
+                    diagnosis: None,
+                    resume_generation: 0,
+                    last_resumed_at: None,
+                },
+                reservation,
+                false,
+            )
+            .unwrap();
+
+        let executor = RawTransactionExecutor::new(
+            FixedHashRpcClient(other_hash),
+            store,
+            TransactionValidator::new(),
+            RawTransactionExecutorConfig::default(),
+        );
+        let result = executor.send_raw_transaction_async(raw_tx).await;
+
+        assert!(
+            matches!(&result, Err(TransactionExecutorError::RpcError(message)) if message.contains("different hash")),
+            "unexpected result: {result:?}"
+        );
+        let store = executor.transaction_store();
+        assert_eq!(store.count(), 1);
+        assert_eq!(store.submitted_count(), 1);
+        let other = store.get(other_id).unwrap();
+        assert_eq!(other.resume_generation, 0);
+        assert!(other.last_resumed_at.is_none());
+    }
+
+    #[tokio::test]
     async fn test_async_overload_is_rejected_before_broadcast() {
         let executor = RawTransactionExecutor::new(
             MockRpcClient::new(),
@@ -652,6 +1152,135 @@ mod tests {
 
         let result = executor.send_raw_transaction_async(vec![0x02]).await;
         assert!(matches!(result, Err(TransactionExecutorError::OverloadedError)));
+    }
+
+    /// A signed transfer from `signer` at `nonce`: decodable, so its hash and signer are real.
+    async fn signed_transfer(signer: &PrivateKeySigner, nonce: u64) -> Vec<u8> {
+        let tx = TxLegacy {
+            chain_id: Some(1),
+            nonce,
+            gas_price: 1_000_000_000,
+            gas_limit: 21_000,
+            to: TxKind::Call(AlloyAddress::from_slice(&[0x22; 20])),
+            value: U256::ZERO,
+            input: Bytes::new(),
+        };
+        let signature = signer.sign_hash(&tx.signature_hash()).await.unwrap();
+        let mut encoded = Vec::new();
+        tx.into_signed(signature).encode_2718(&mut encoded);
+        encoded
+    }
+
+    fn timed_out_queued() -> TransactionDiagnosis {
+        TransactionDiagnosis {
+            reason: UnminedReason::Queued,
+            signed_fees: None,
+            recommended_fees: None,
+            min_replacement_fees: None,
+            retry_after: Duration::from_secs(5),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_async_retry_of_an_in_flight_transaction_is_not_refused_at_the_global_limit() {
+        let executor = RawTransactionExecutor::new(
+            MockRpcClient::new(),
+            TransactionStore::new(),
+            TransactionValidator::new(),
+            RawTransactionExecutorConfig {
+                max_submitted_transactions: 1,
+                max_submitted_transactions_per_identity: 0,
+                ..Default::default()
+            },
+        );
+        let signer = PrivateKeySigner::random();
+        let raw_tx = signed_transfer(&signer, 0).await;
+
+        let first = executor.send_raw_transaction_async(raw_tx.clone()).await.unwrap();
+        let retry = executor.send_raw_transaction_async(raw_tx).await;
+
+        assert!(matches!(
+            retry,
+            Err(TransactionExecutorError::AlreadyTracked { existing, .. }) if existing == first
+        ));
+        // Another transaction still finds the single slot taken.
+        let other = signed_transfer(&signer, 1).await;
+        assert!(matches!(
+            executor.send_raw_transaction_async(other).await,
+            Err(TransactionExecutorError::OverloadedError)
+        ));
+        assert_eq!(executor.transaction_store().submitted_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_async_retry_of_an_in_flight_transaction_is_not_refused_at_the_per_signer_limit() {
+        let executor = RawTransactionExecutor::new(
+            MockRpcClient::new(),
+            TransactionStore::new(),
+            TransactionValidator::new(),
+            RawTransactionExecutorConfig {
+                max_submitted_transactions: 0,
+                max_submitted_transactions_per_identity: 1,
+                ..Default::default()
+            },
+        );
+        let signer = PrivateKeySigner::random();
+        let raw_tx = signed_transfer(&signer, 0).await;
+
+        let first = executor.send_raw_transaction_async(raw_tx.clone()).await.unwrap();
+
+        assert!(matches!(
+            executor.send_raw_transaction_async(raw_tx).await,
+            Err(TransactionExecutorError::AlreadyTracked { existing, .. }) if existing == first
+        ));
+        // Another signer is unaffected, the same signer's other transaction is refused.
+        let other_nonce = signed_transfer(&signer, 1).await;
+        assert!(matches!(
+            executor.send_raw_transaction_async(other_nonce).await,
+            Err(TransactionExecutorError::OverloadedError)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_async_retry_of_a_timed_out_transaction_still_needs_capacity() {
+        let executor = RawTransactionExecutor::new(
+            MockRpcClient::new(),
+            TransactionStore::new(),
+            TransactionValidator::new(),
+            RawTransactionExecutorConfig {
+                max_submitted_transactions: 1,
+                max_submitted_transactions_per_identity: 0,
+                ..Default::default()
+            },
+        );
+        let store = executor.transaction_store();
+        let first_signer = PrivateKeySigner::random();
+        let raw_tx = signed_transfer(&first_signer, 0).await;
+
+        let first = executor.send_raw_transaction_async(raw_tx.clone()).await.unwrap();
+        store
+            .update_status_with_diagnosis(first, TransactionStatus::Timeout, None, Some(timed_out_queued()))
+            .unwrap();
+        // The freed slot is taken by another transaction.
+        let second = executor
+            .send_raw_transaction_async(signed_transfer(&PrivateKeySigner::random(), 0).await)
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            executor.send_raw_transaction_async(raw_tx.clone()).await,
+            Err(TransactionExecutorError::OverloadedError)
+        ));
+        assert_eq!(store.get(first).unwrap().status, TransactionStatus::Timeout);
+
+        // Once the slot is free again the retry resumes the timed-out transaction.
+        store.update_status(second, TransactionStatus::Confirmed, None).unwrap();
+        assert!(matches!(
+            executor.send_raw_transaction_async(raw_tx).await,
+            Err(TransactionExecutorError::AlreadyTracked { existing, .. }) if existing == first
+        ));
+        assert_eq!(store.get(first).unwrap().status, TransactionStatus::Submitted);
+        assert_eq!(store.submitted_count(), 1);
     }
 
     #[tokio::test]
@@ -687,8 +1316,8 @@ mod tests {
             },
         );
 
-        for _ in 0..8 {
-            assert!(executor.send_raw_transaction_async(vec![0x01]).await.is_ok());
+        for i in 0..8u8 {
+            assert!(executor.send_raw_transaction_async(vec![i]).await.is_ok());
         }
     }
 

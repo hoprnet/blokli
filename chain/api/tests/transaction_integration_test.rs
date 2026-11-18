@@ -122,6 +122,7 @@ async fn setup_test_environment(
         max_queued_trace_jobs: 128,
         max_concurrent_trace_jobs: 2,
         enable_revert_reason_tracing: true,
+        ..Default::default()
     };
 
     let transaction_monitor = Arc::new(TransactionMonitor::new(

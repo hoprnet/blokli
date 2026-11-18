@@ -557,6 +557,62 @@ async fn test_send_transaction_already_known_returns_the_same_hash() -> Result<(
     Ok(())
 }
 
+/// Submit `raw_tx` through the asynchronous mutation and return its result object
+async fn send_transaction_async(ctx: &TestContext, raw_tx: &[u8]) -> serde_json::Value {
+    let query = format!(
+        r#"mutation {{
+            sendTransactionAsync(input: {{ rawTransaction: "0x{}" }}) {{
+                __typename
+                ... on Transaction {{
+                    id
+                }}
+                ... on DeduplicatedTransaction {{
+                    operation
+                    transaction {{
+                        id
+                        status
+                        diagnosis {{ reason }}
+                    }}
+                }}
+                ... on RpcError {{
+                    code
+                    message
+                }}
+            }}
+        }}"#,
+        hex::encode(raw_tx)
+    );
+    execute_mutation(&ctx.schema, &query).await["data"]["sendTransactionAsync"].clone()
+}
+
+#[tokio::test]
+async fn test_send_transaction_async_resubmission_returns_the_tracked_transaction() -> Result<()> {
+    let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
+
+    // Keep the transaction in the mempool so the second submission finds it there
+    let provider = ProviderBuilder::new().connect_http(ctx._tx_ctx.anvil.endpoint_url());
+    provider
+        .client()
+        .request::<_, serde_json::Value>("evm_setIntervalMining", (0u64,))
+        .await?;
+
+    let nonce = get_current_nonce(&ctx).await;
+    let raw_tx = create_test_transaction(ctx.chain_key(), AlloyAddress::ZERO, 1_000_000, nonce, ctx.chain_id);
+
+    let first = send_transaction_async(&ctx, &raw_tx).await;
+    let second = send_transaction_async(&ctx, &raw_tx).await;
+
+    assert_eq!(first["__typename"], "Transaction", "{first}");
+    assert_eq!(second["__typename"], "DeduplicatedTransaction", "{second}");
+    assert_eq!(second["operation"], "raw_transaction");
+    assert_eq!(second["transaction"]["id"], first["id"]);
+    assert_eq!(second["transaction"]["status"], "SUBMITTED");
+    assert!(second["transaction"]["diagnosis"].is_null());
+    assert_eq!(ctx.store().count(), 1);
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_send_transaction_with_used_nonce_reports_nonce_too_low() -> Result<()> {
     let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;

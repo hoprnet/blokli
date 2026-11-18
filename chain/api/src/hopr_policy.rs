@@ -980,6 +980,9 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         }
     }
 

@@ -11,3 +11,4 @@ submitted_at: "[timestamp]"
 confirmed_at: "[timestamp]"
 error_message: ~
 safe_execution: ~
+diagnosis: ~

@@ -11,3 +11,4 @@ submitted_at: "[timestamp]"
 confirmed_at: ~
 error_message: Transaction reverted on-chain
 safe_execution: ~
+diagnosis: ~

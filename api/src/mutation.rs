@@ -136,6 +136,20 @@ impl MutationRoot {
                     Err(e) => Ok(SendTransactionAsyncResult::RpcError(errors::rpc_internal_error(e))),
                 }
             }
+            // The node still holds this exact transaction and it is already tracked: hand back
+            // that transaction with its diagnosis instead of reporting a fresh submission.
+            Err(TransactionExecutorError::AlreadyTracked { existing, diagnosis }) => match store.get_public(existing) {
+                Ok(mut record) => {
+                    // Resuming tracking cleared the stored diagnosis; report the one captured
+                    // before that, so the caller still sees the fees and retry hint.
+                    record.diagnosis = record.diagnosis.or(diagnosis.map(|diagnosis| *diagnosis));
+                    Ok(SendTransactionAsyncResult::Deduplicated(DeduplicatedTransaction {
+                        transaction: transaction_from_record(record),
+                        operation: RAW_TRANSACTION_OPERATION.to_string(),
+                    }))
+                }
+                Err(e) => Ok(SendTransactionAsyncResult::RpcError(errors::rpc_internal_error(e))),
+            },
             Err(e) => Ok(executor_error_to_async_result(e)),
         }
     }
@@ -169,6 +183,9 @@ impl MutationRoot {
         }
     }
 }
+
+/// `operation` reported when a resubmitted raw transaction is deduplicated by its hash.
+const RAW_TRANSACTION_OPERATION: &str = "raw_transaction";
 
 /// Maximum number of confirmations `sendTransactionSync` will wait for.
 const MAX_SYNC_CONFIRMATIONS: u64 = 64;

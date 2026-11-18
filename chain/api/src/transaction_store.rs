@@ -64,6 +64,46 @@ fn serialize_hash<S: serde::Serializer>(hash: &Hash, s: S) -> Result<S::Ok, S::E
     s.serialize_str(&hash.to_hex())
 }
 
+/// Why a submitted transaction was not mined before it timed out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum UnminedReason {
+    /// The node holds the transaction, but it was signed below the current recommended fee.
+    Underpriced,
+    /// The node holds the transaction, signed at or above the recommended fee, and it waits
+    /// behind earlier pending transactions of the signer.
+    Queued,
+    /// An earlier nonce of the signer is neither mined nor pending.
+    NonceGap,
+    /// The node no longer knows the transaction and its nonce is still unused.
+    Dropped,
+    /// The node no longer knows the transaction and its nonce was consumed by another one.
+    Replaced,
+    /// The reason could not be established.
+    Unknown,
+}
+
+/// EIP-1559 fee pair in wei.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct FeePair {
+    pub max_fee_per_gas: u128,
+    pub max_priority_fee_per_gas: u128,
+}
+
+/// Structured explanation of a transaction that timed out unmined.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct TransactionDiagnosis {
+    /// Why the transaction was not mined
+    pub reason: UnminedReason,
+    /// Fees the transaction was signed with
+    pub signed_fees: Option<FeePair>,
+    /// Fees a transaction should currently be signed with, when the fee estimate was available
+    pub recommended_fees: Option<FeePair>,
+    /// Lowest fees at which a replacement would be accepted, when the fee estimate was available
+    pub min_replacement_fees: Option<FeePair>,
+    /// How long to wait before checking or retrying
+    pub retry_after: Duration,
+}
+
 /// Status of a submitted transaction
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum TransactionStatus {
@@ -138,6 +178,21 @@ pub struct TransactionRecord {
     pub error_message: Option<String>,
     /// Internal Safe execution result (populated after confirmation for Safe transactions)
     pub safe_execution: Option<SafeExecutionResult>,
+    /// Why the transaction was not mined (populated when it times out)
+    pub diagnosis: Option<TransactionDiagnosis>,
+    /// Number of times a resubmission resumed tracking of this record
+    #[serde(skip)]
+    pub resume_generation: u64,
+    /// When tracking was last resumed; restarts the timeout clock without touching `submitted_at`
+    #[serde(skip)]
+    pub last_resumed_at: Option<DateTime<Utc>>,
+}
+
+impl TransactionRecord {
+    /// Instant the timeout clock counts from: the last resumption, else the submission.
+    pub fn timeout_clock_start(&self) -> DateTime<Utc> {
+        self.last_resumed_at.unwrap_or(self.submitted_at)
+    }
 }
 
 /// Identity used for per-client submission fairness.
@@ -225,10 +280,34 @@ pub struct SubmissionCapacityExhausted {
     pub submitted_for_identity: usize,
 }
 
+/// Outcome of [`TransactionStore::insert_or_resume`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackOutcome {
+    /// No tracked transaction with this hash was resumable, so the record was inserted.
+    Inserted,
+    /// A tracked transaction with this hash was resumed instead; the record was not inserted.
+    Resumed {
+        /// Identity of the transaction that already tracks this hash.
+        existing: Uuid,
+        /// The diagnosis it carried before resuming cleared it.
+        diagnosis: Option<TransactionDiagnosis>,
+    },
+}
+
 /// Thread-safe in-memory store for transaction records
+///
+/// Lock order, outermost first: `hash_index` entry, `transactions` record, `submitted_identities`,
+/// the capacity counts. Code holding an inner lock never takes an outer one.
 #[derive(Clone)]
 pub struct TransactionStore {
     transactions: Arc<DashMap<Uuid, TransactionRecord>>,
+    /// Latest record id per transaction hash.
+    ///
+    /// Lets a submission find the record that already tracks its hash without scanning the
+    /// store, and serialises concurrent submissions of the same bytes: the entry stays locked
+    /// from lookup to insertion. An entry can outlive its record (it is then ignored and
+    /// replaced), so the record it points to is always re-checked.
+    hash_index: Arc<DashMap<Hash, Uuid>>,
     /// Time at which a transaction entered a terminal status.
     ///
     /// This metadata is kept separately to avoid exposing an implementation-only timestamp
@@ -289,6 +368,7 @@ impl TransactionStore {
 
         let store = Self {
             transactions: Arc::new(DashMap::new()),
+            hash_index: Arc::new(DashMap::new()),
             terminal_timestamps: Arc::new(DashMap::new()),
             submitted_identities: Arc::new(DashMap::new()),
             submission_counts: Arc::new(Mutex::new(SubmissionCounts::default())),
@@ -309,6 +389,7 @@ impl TransactionStore {
                 let submitted = record.status == TransactionStatus::Submitted;
                 let id = record.id;
                 let identity = submitted.then(|| transaction_identity(&record.raw_transaction));
+                let hash = record.transaction_hash;
                 entry.insert(record);
                 if submitted {
                     self.clear_terminal_timestamp(id);
@@ -318,6 +399,7 @@ impl TransactionStore {
                 if let Some(identity) = identity {
                     self.track_submitted(id, identity);
                 }
+                self.index_hash(hash, id);
                 self.update_size_metric();
                 Ok(())
             }
@@ -334,6 +416,59 @@ impl TransactionStore {
     /// # Errors
     /// Returns `TransactionStoreError::AlreadyExists` if a transaction with the same ID already exists
     pub fn insert_reserved(
+        &self,
+        record: TransactionRecord,
+        reservation: SubmissionReservation,
+    ) -> Result<(), TransactionStoreError> {
+        let (hash, id) = (record.transaction_hash, record.id);
+        self.insert_reserved_unindexed(record, reservation)?;
+        self.index_hash(hash, id);
+        Ok(())
+    }
+
+    /// Insert an async submission, or resume the tracked transaction that already carries its
+    /// hash, as one step per hash.
+    ///
+    /// The hash entry is held from the lookup to the insertion, so concurrent submissions of
+    /// the same bytes cannot both insert: the second finds the first and resumes it. A tracked
+    /// transaction counts as carrying the hash while the node can still hold it (see
+    /// [`Self::resume_tracking`]); a dropped, replaced or concluded one is not resumed and the
+    /// record is inserted next to it. When a transaction is resumed the reservation is dropped.
+    ///
+    /// `verified_known` is set when the node reported the transaction as already known and
+    /// returned it for this hash. That is current evidence it holds the transaction, so a
+    /// transaction that timed out with an unknown cause is resumed too, where a fresh
+    /// acceptance of the same hash leaves it alone and inserts the record.
+    ///
+    /// # Errors
+    /// Returns `TransactionStoreError::AlreadyExists` if a transaction with the same ID already exists
+    pub fn insert_or_resume(
+        &self,
+        record: TransactionRecord,
+        reservation: SubmissionReservation,
+        verified_known: bool,
+    ) -> Result<TrackOutcome, TransactionStoreError> {
+        let id = record.id;
+        match self.hash_index.entry(record.transaction_hash) {
+            Entry::Occupied(mut index) => {
+                let existing = *index.get();
+                if let Some(diagnosis) = self.resume_held(existing, |held| {
+                    held.transaction_hash == record.transaction_hash && is_held_by_node(held, verified_known)
+                }) {
+                    return Ok(TrackOutcome::Resumed { existing, diagnosis });
+                }
+                self.insert_reserved_unindexed(record, reservation)?;
+                index.insert(id);
+            }
+            Entry::Vacant(index) => {
+                self.insert_reserved_unindexed(record, reservation)?;
+                index.insert(id);
+            }
+        }
+        Ok(TrackOutcome::Inserted)
+    }
+
+    fn insert_reserved_unindexed(
         &self,
         record: TransactionRecord,
         mut reservation: SubmissionReservation,
@@ -462,9 +597,116 @@ impl TransactionStore {
                     confirmed_at: record.confirmed_at,
                     error_message: record.error_message.clone(),
                     safe_execution: record.safe_execution.clone(),
+                    diagnosis: record.diagnosis,
+                    resume_generation: record.resume_generation,
+                    last_resumed_at: record.last_resumed_at,
                 }
             })
             .ok_or(TransactionStoreError::NotFound(id))
+    }
+
+    /// Point the hash index at `id`, unless it already points at a record the node can hold.
+    fn index_hash(&self, hash: Hash, id: Uuid) {
+        match self.hash_index.entry(hash) {
+            Entry::Vacant(index) => {
+                index.insert(id);
+            }
+            Entry::Occupied(mut index) => {
+                let current = *index.get();
+                if current != id
+                    && !self
+                        .transactions
+                        .get(&current)
+                        .is_some_and(|r| is_held_by_node(r.value(), false))
+                {
+                    index.insert(id);
+                }
+            }
+        }
+    }
+
+    /// Id of the record with this hash that is still `Submitted`, i.e. occupies a monitoring slot.
+    fn in_flight_by_hash(&self, transaction_hash: Hash) -> Option<Uuid> {
+        let id = *self.hash_index.get(&transaction_hash)?;
+        self.transactions
+            .get(&id)
+            .is_some_and(|record| {
+                record.transaction_hash == transaction_hash && record.status == TransactionStatus::Submitted
+            })
+            .then_some(id)
+    }
+
+    /// Whether a record with this hash is `Submitted` and so already occupies a monitoring slot.
+    ///
+    /// A resubmission of it needs no new capacity; one of a timed-out record does.
+    pub fn has_in_flight_hash(&self, transaction_hash: Hash) -> bool {
+        self.in_flight_by_hash(transaction_hash).is_some()
+    }
+
+    /// Resume the `Submitted` record with this hash, returning its id.
+    ///
+    /// Takes no capacity, because the record already holds its slot. Returns `None` when no
+    /// record with this hash is `Submitted` any more, e.g. it concluded in the meantime.
+    pub fn resume_in_flight_hash(&self, transaction_hash: Hash) -> Option<Uuid> {
+        let id = self.in_flight_by_hash(transaction_hash)?;
+        self.resume_held(id, |record| {
+            record.transaction_hash == transaction_hash && record.status == TransactionStatus::Submitted
+        })
+        .map(|_| id)
+    }
+
+    /// Resume tracking a transaction the node still holds after an identical resubmission.
+    ///
+    /// A `Timeout` record moves back to `Submitted` with its diagnosis cleared, bumps the
+    /// resume generation and restarts the timeout clock (`submitted_at` keeps the original
+    /// submission time), so the monitor polls it again. A record that is already `Submitted`
+    /// keeps its generation and its timeout clock, so retrying an in-flight transaction cannot
+    /// postpone its diagnosis. Records in any other status are untouched. The check window is
+    /// extended only while the node still holds the transaction: each timeout re-diagnoses it,
+    /// and a dropped or replaced transaction is no longer resumable.
+    ///
+    /// Returns the diagnosis the record carried before it was cleared, so the caller can still
+    /// report it for the resubmission that resumed tracking; `None` when nothing was resumed.
+    ///
+    /// # Errors
+    /// Returns `TransactionStoreError::NotFound` if the transaction doesn't exist
+    pub fn resume_tracking(&self, id: Uuid) -> Result<Option<TransactionDiagnosis>, TransactionStoreError> {
+        self.resume_held(id, |_| true)
+            .ok_or(TransactionStoreError::NotFound(id))
+    }
+
+    /// Resume the record `id` if it exists and `held` accepts it, as [`Self::resume_tracking`] does.
+    ///
+    /// Returns `None` when the record is missing or not accepted, else the diagnosis it carried.
+    fn resume_held(&self, id: Uuid, held: impl Fn(&TransactionRecord) -> bool) -> Option<Option<TransactionDiagnosis>> {
+        // The submitted index is updated while the record guard is held, so a concurrent
+        // status change cannot interleave its own index update with this one.
+        let diagnosis = {
+            let mut entry = self.transactions.get_mut(&id)?;
+            let record = entry.value_mut();
+            if !held(record) {
+                return None;
+            }
+            if record.status != TransactionStatus::Timeout {
+                return Some(None);
+            }
+            record.resume_generation += 1;
+            record.last_resumed_at = Some(Utc::now());
+            record.status = TransactionStatus::Submitted;
+            record.error_message = None;
+            let previous = record.diagnosis.take();
+            let identity = transaction_identity(&record.raw_transaction);
+            self.sync_submitted_status(id, TransactionStatus::Submitted, identity);
+            previous
+        };
+        self.clear_terminal_timestamp(id);
+        self.broadcast_status_update(TransactionEvent::StatusUpdated {
+            id,
+            status: TransactionStatus::Submitted,
+            error_message: None,
+            confirmed_at: None,
+        });
+        Some(diagnosis)
     }
 
     /// Update an existing transaction record
@@ -481,9 +723,17 @@ impl TransactionStore {
                 let identity = (status == TransactionStatus::Submitted)
                     .then(|| transaction_identity(&record.raw_transaction))
                     .flatten();
+                let hash = record.transaction_hash;
+                let previous_hash = entry.get().transaction_hash;
                 entry.insert(record);
-                drop(entry);
+                // Lock order is `transactions` then `submitted_identities`, with the index
+                // updated under the record guard.
                 self.sync_submitted_status(id, status, identity);
+                drop(entry);
+                if previous_hash != hash {
+                    self.hash_index.remove_if(&previous_hash, |_, indexed| *indexed == id);
+                }
+                self.index_hash(hash, id);
                 if status.is_terminal() {
                     self.mark_terminal(id);
                 } else {
@@ -508,14 +758,72 @@ impl TransactionStore {
         status: TransactionStatus,
         error_message: Option<String>,
     ) -> Result<(), TransactionStoreError> {
+        self.update_status_with_diagnosis(id, status, error_message, None)
+    }
+
+    /// Update the status of a transaction together with its unmined diagnosis.
+    ///
+    /// # Errors
+    /// Returns `TransactionStoreError::NotFound` if the transaction doesn't exist
+    pub fn update_status_with_diagnosis(
+        &self,
+        id: Uuid,
+        status: TransactionStatus,
+        error_message: Option<String>,
+        diagnosis: Option<TransactionDiagnosis>,
+    ) -> Result<(), TransactionStoreError> {
+        self.apply_status(id, status, error_message, diagnosis, None)
+            .map(|_| ())
+    }
+
+    /// Mark a transaction as timed out, but only if it is still `Submitted` with the
+    /// `resume_generation` the caller read before diagnosing it.
+    ///
+    /// A resubmission bumps the generation, so a changed one means the record was resumed
+    /// while the diagnosis ran and the write is skipped. Returns whether it applied.
+    ///
+    /// # Errors
+    /// Returns `TransactionStoreError::NotFound` if the transaction doesn't exist
+    pub fn mark_timeout_if_unchanged(
+        &self,
+        id: Uuid,
+        expected_generation: u64,
+        error_message: Option<String>,
+        diagnosis: Option<TransactionDiagnosis>,
+    ) -> Result<bool, TransactionStoreError> {
+        self.apply_status(
+            id,
+            TransactionStatus::Timeout,
+            error_message,
+            diagnosis,
+            Some(expected_generation),
+        )
+    }
+
+    /// Apply a status change, optionally only while the record is `Submitted` at
+    /// `expected_generation`. Returns whether the change was applied.
+    fn apply_status(
+        &self,
+        id: Uuid,
+        status: TransactionStatus,
+        error_message: Option<String>,
+        diagnosis: Option<TransactionDiagnosis>,
+        expected_generation: Option<u64>,
+    ) -> Result<bool, TransactionStoreError> {
         // Update the transaction and extract delta fields for event
-        let (confirmed_at, error_msg, identity) = self
+        let Some((confirmed_at, error_msg)) = self
             .transactions
             .get_mut(&id)
             .map(|mut entry| {
                 let record = entry.value_mut();
+                if let Some(generation) = expected_generation {
+                    if record.status != TransactionStatus::Submitted || record.resume_generation != generation {
+                        return None;
+                    }
+                }
                 record.status = status;
                 record.error_message = error_message.clone();
+                record.diagnosis = diagnosis;
 
                 // Set confirmed_at timestamp if status is Confirmed
                 if status == TransactionStatus::Confirmed && record.confirmed_at.is_none() {
@@ -528,11 +836,16 @@ impl TransactionStore {
                 let identity = (status == TransactionStatus::Submitted)
                     .then(|| transaction_identity(&record.raw_transaction))
                     .flatten();
-                (record.confirmed_at, record.error_message.clone(), identity)
+                // Reconcile the submitted index while the record guard is held, so a concurrent
+                // resume cannot interleave its own index update with this one.
+                self.sync_submitted_status(id, status, identity);
+                Some((record.confirmed_at, record.error_message.clone()))
             })
-            .ok_or(TransactionStoreError::NotFound(id))?;
+            .ok_or(TransactionStoreError::NotFound(id))?
+        else {
+            return Ok(false);
+        };
 
-        self.sync_submitted_status(id, status, identity);
         if status.is_terminal() {
             self.mark_terminal(id);
         } else {
@@ -551,7 +864,7 @@ impl TransactionStore {
             confirmed_at,
         });
 
-        Ok(())
+        Ok(true)
     }
 
     /// Atomically confirm a transaction and set its Safe execution result.
@@ -577,11 +890,12 @@ impl TransactionStore {
                     record.confirmed_at = Some(Utc::now());
                 }
                 record.safe_execution = safe_execution;
+                record.diagnosis = None;
+                self.untrack_submitted(id);
                 record.confirmed_at
             })
             .ok_or(TransactionStoreError::NotFound(id))?;
 
-        self.untrack_submitted(id);
         self.mark_terminal(id);
 
         record_transaction_status(STATUS_CONFIRMED);
@@ -627,14 +941,21 @@ impl TransactionStore {
     /// header or IP.
     pub fn list_submitted_fair(&self) -> Vec<TransactionRecord> {
         let mut by_identity: HashMap<SubmissionIdentity, VecDeque<TransactionRecord>> = HashMap::new();
-        for entry in self.submitted_identities.iter() {
-            let Some(record) = self.transactions.get(entry.key()).map(|record| record.value().clone()) else {
+        // Snapshot the index first so no index guard is held while `transactions` is read: the
+        // lock order everywhere is `transactions` then `submitted_identities`.
+        let indexed: Vec<(Uuid, SubmissionIdentity)> = self
+            .submitted_identities
+            .iter()
+            .map(|entry| (*entry.key(), *entry.value()))
+            .collect();
+        for (id, identity) in indexed {
+            let Some(record) = self.transactions.get(&id).map(|record| record.value().clone()) else {
                 continue;
             };
             if record.status != TransactionStatus::Submitted {
                 continue;
             }
-            by_identity.entry(*entry.value()).or_default().push_back(record);
+            by_identity.entry(identity).or_default().push_back(record);
         }
         let mut queues: Vec<VecDeque<TransactionRecord>> = by_identity.into_values().collect();
         let mut fair = Vec::new();
@@ -760,14 +1081,15 @@ impl TransactionStore {
 
         let removed = eviction_ids
             .into_iter()
-            .filter(|id| {
+            .filter_map(|id| {
                 self.transactions
-                    .remove_if(id, |_, record| record.status.is_terminal())
-                    .is_some()
+                    .remove_if(&id, |_, record| record.status.is_terminal())
+                    .map(|(id, record)| (id, record.transaction_hash))
             })
             .collect::<Vec<_>>();
-        for id in &removed {
+        for (id, hash) in &removed {
             self.terminal_timestamps.remove(id);
+            self.hash_index.remove_if(hash, |_, indexed| indexed == id);
         }
         if !removed.is_empty() {
             self.update_size_metric();
@@ -818,6 +1140,29 @@ impl TransactionStore {
                 );
             }
         }
+    }
+}
+
+/// Whether the RPC node can still be holding this tracked transaction.
+///
+/// That is a transaction still awaiting confirmation, or one that timed out because it was
+/// underpriced, queued or waiting behind a nonce gap. A dropped or replaced transaction is no
+/// longer held, so a resubmission of it is a fresh one.
+///
+/// A transaction that timed out with an unknown cause (or none recorded) is held only when
+/// `verified_known` says the node just returned it for its hash.
+fn is_held_by_node(record: &TransactionRecord, verified_known: bool) -> bool {
+    match record.status {
+        TransactionStatus::Submitted => true,
+        TransactionStatus::Timeout => match record.diagnosis {
+            Some(diagnosis) => match diagnosis.reason {
+                UnminedReason::Underpriced | UnminedReason::Queued | UnminedReason::NonceGap => true,
+                UnminedReason::Unknown => verified_known,
+                UnminedReason::Dropped | UnminedReason::Replaced => false,
+            },
+            None => verified_known,
+        },
+        _ => false,
     }
 }
 
@@ -873,6 +1218,9 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         let id = record.id;
@@ -898,6 +1246,9 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         assert!(store.insert(record.clone()).is_ok());
@@ -916,6 +1267,420 @@ mod tests {
         assert!(matches!(result, Err(TransactionStoreError::NotFound(_))));
     }
 
+    fn diagnosis_with(reason: UnminedReason) -> TransactionDiagnosis {
+        TransactionDiagnosis {
+            reason,
+            signed_fees: None,
+            recommended_fees: None,
+            min_replacement_fees: None,
+            retry_after: Duration::from_secs(5),
+        }
+    }
+
+    #[test]
+    fn test_resume_tracking_on_a_timed_out_record_keeps_it_listed_and_counted() {
+        let store = TransactionStore::new();
+        store
+            .insert(submitted_record(TEST_UUID, vec![0x01, 0x02, 0x03]))
+            .unwrap();
+        let submitted_at = store.get(TEST_UUID).unwrap().submitted_at;
+
+        assert!(
+            store
+                .mark_timeout_if_unchanged(TEST_UUID, 0, None, Some(diagnosis_with(UnminedReason::Queued)))
+                .unwrap()
+        );
+        assert_eq!(store.submitted_count(), 0);
+
+        let previous = store.resume_tracking(TEST_UUID).unwrap();
+        assert_eq!(previous, Some(diagnosis_with(UnminedReason::Queued)));
+
+        let record = store.get(TEST_UUID).unwrap();
+        assert_eq!(record.status, TransactionStatus::Submitted);
+        assert_eq!(record.diagnosis, None);
+        assert_eq!(record.submitted_at, submitted_at);
+        assert_eq!(record.resume_generation, 1);
+        assert!(record.last_resumed_at.is_some());
+        assert_eq!(store.submitted_count(), 1);
+        assert_eq!(store.list_submitted_fair().len(), 1);
+    }
+
+    #[test]
+    fn test_resume_tracking_on_a_submitted_record_keeps_its_timeout_clock() {
+        let store = TransactionStore::new();
+        store
+            .insert(submitted_record(TEST_UUID, vec![0x01, 0x02, 0x03]))
+            .unwrap();
+        let submitted_at = store.get(TEST_UUID).unwrap().submitted_at;
+
+        assert_eq!(store.resume_tracking(TEST_UUID).unwrap(), None);
+
+        let record = store.get(TEST_UUID).unwrap();
+        assert_eq!(record.status, TransactionStatus::Submitted);
+        assert_eq!(record.submitted_at, submitted_at);
+        assert_eq!(record.resume_generation, 0);
+        assert_eq!(record.last_resumed_at, None);
+        assert_eq!(record.timeout_clock_start(), submitted_at);
+        assert_eq!(store.submitted_count(), 1);
+        assert_eq!(store.list_submitted_fair().len(), 1);
+    }
+
+    #[test]
+    fn test_repeated_resume_keeps_the_clock_set_by_the_timeout_resumption() {
+        let store = TransactionStore::new();
+        store
+            .insert(submitted_record(TEST_UUID, vec![0x01, 0x02, 0x03]))
+            .unwrap();
+        assert!(store.mark_timeout_if_unchanged(TEST_UUID, 0, None, None).unwrap());
+
+        store.resume_tracking(TEST_UUID).unwrap();
+        let resumed = store.get(TEST_UUID).unwrap();
+        assert_eq!(resumed.resume_generation, 1);
+        assert!(resumed.last_resumed_at.is_some());
+
+        // Identical retries of the now in-flight record leave the clock and generation alone.
+        for _ in 0..3 {
+            store.resume_tracking(TEST_UUID).unwrap();
+        }
+        let retried = store.get(TEST_UUID).unwrap();
+        assert_eq!(retried.resume_generation, 1);
+        assert_eq!(retried.last_resumed_at, resumed.last_resumed_at);
+    }
+
+    #[test]
+    fn test_mark_timeout_if_unchanged_skips_stale_and_non_submitted_records() {
+        let store = TransactionStore::new();
+        store
+            .insert(submitted_record(TEST_UUID, vec![0x01, 0x02, 0x03]))
+            .unwrap();
+        let submitted_at = store.get(TEST_UUID).unwrap().submitted_at;
+
+        assert!(store.mark_timeout_if_unchanged(TEST_UUID, 0, None, None).unwrap());
+        store.resume_tracking(TEST_UUID).unwrap();
+        assert!(!store.mark_timeout_if_unchanged(TEST_UUID, 0, None, None).unwrap());
+        assert_eq!(store.get(TEST_UUID).unwrap().status, TransactionStatus::Submitted);
+
+        store
+            .update_status(TEST_UUID, TransactionStatus::Confirmed, None)
+            .unwrap();
+        assert!(!store.mark_timeout_if_unchanged(TEST_UUID, 1, None, None).unwrap());
+        assert_eq!(store.get(TEST_UUID).unwrap().status, TransactionStatus::Confirmed);
+    }
+
+    /// Assert every `Submitted` record is both listed for polling and counted.
+    fn assert_submitted_listed_and_counted(store: &TransactionStore, ids: &[Uuid]) {
+        let submitted: HashSet<Uuid> = ids
+            .iter()
+            .copied()
+            .filter(|id| store.get(*id).unwrap().status == TransactionStatus::Submitted)
+            .collect();
+        let listed: HashSet<Uuid> = store.list_submitted_fair().iter().map(|record| record.id).collect();
+        assert_eq!(listed, submitted);
+        assert_eq!(store.submitted_count(), submitted.len());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_submitted_index_stays_consistent_under_concurrent_writers() {
+        let store = Arc::new(TransactionStore::new());
+        let ids: Vec<Uuid> = (0..8u128).map(Uuid::from_u128).collect();
+        for id in &ids {
+            store.insert(submitted_record(*id, vec![id.as_u128() as u8])).unwrap();
+        }
+
+        let mut tasks = Vec::new();
+        {
+            let store = store.clone();
+            tasks.push(tokio::task::spawn_blocking(move || {
+                for _ in 0..300 {
+                    store.list_submitted_fair();
+                    store.submitted_count();
+                }
+            }));
+        }
+        for worker in 0..3usize {
+            let store = store.clone();
+            let ids = ids.clone();
+            tasks.push(tokio::task::spawn_blocking(move || {
+                for round in 0..300usize {
+                    for id in &ids {
+                        match worker {
+                            0 => {
+                                store.resume_tracking(*id).unwrap();
+                            }
+                            1 => {
+                                let status = if round % 2 == 0 {
+                                    TransactionStatus::Timeout
+                                } else {
+                                    TransactionStatus::Submitted
+                                };
+                                store.update_status(*id, status, None).unwrap();
+                            }
+                            _ => {
+                                let generation = store.get(*id).unwrap().resume_generation;
+                                store.mark_timeout_if_unchanged(*id, generation, None, None).unwrap();
+                            }
+                        }
+                    }
+                }
+            }));
+        }
+
+        tokio::time::timeout(Duration::from_secs(60), async {
+            for task in tasks {
+                task.await.unwrap();
+            }
+        })
+        .await
+        .expect("concurrent store operations hung");
+
+        assert_submitted_listed_and_counted(&store, &ids);
+    }
+
+    #[tokio::test]
+    async fn test_submitted_index_follows_update_with_a_changed_signer_and_stale_timeouts() {
+        let store = TransactionStore::new();
+        let first = PrivateKeySigner::random();
+        let second = PrivateKeySigner::random();
+        let id = Uuid::from_u128(1);
+        store
+            .insert(submitted_record(id, signed_raw_tx(&first, [0x11; 20], 0).await))
+            .unwrap();
+
+        store
+            .update(submitted_record(id, signed_raw_tx(&second, [0x11; 20], 0).await))
+            .unwrap();
+        assert_submitted_listed_and_counted(&store, &[id]);
+
+        assert!(store.mark_timeout_if_unchanged(id, 0, None, None).unwrap());
+        store.resume_tracking(id).unwrap();
+        assert!(!store.mark_timeout_if_unchanged(id, 0, None, None).unwrap());
+        assert_submitted_listed_and_counted(&store, &[id]);
+        assert_eq!(store.list_submitted_fair().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_retry_of_old_bytes_does_not_resume_a_record_whose_hash_changed() {
+        let store = TransactionStore::new();
+        let signer = PrivateKeySigner::random();
+        let old_raw = signed_raw_tx(&signer, [0x11; 20], 0).await;
+        let old_hash = crate::safe_execution::decode_transaction_summary(&old_raw)
+            .unwrap()
+            .transaction_hash;
+        let id = Uuid::from_u128(1);
+        let mut record = submitted_record(id, old_raw.clone());
+        record.transaction_hash = old_hash;
+        store.insert(record).unwrap();
+
+        // The record is replaced by another transaction; the old hash is then indexed to it
+        // only by a stale entry.
+        let new_raw = signed_raw_tx(&signer, [0x11; 20], 1).await;
+        let mut replacement = submitted_record(id, new_raw);
+        replacement.transaction_hash = crate::safe_execution::decode_transaction_summary(&replacement.raw_transaction)
+            .unwrap()
+            .transaction_hash;
+        store.update(replacement).unwrap();
+        store.hash_index.insert(old_hash, id);
+
+        assert!(!store.has_in_flight_hash(old_hash));
+        assert!(store.resume_in_flight_hash(old_hash).is_none());
+
+        let mut retry = submitted_record(Uuid::from_u128(2), old_raw.clone());
+        retry.transaction_hash = old_hash;
+        let outcome = store.insert_or_resume(retry, reserve(&store, &old_raw), true).unwrap();
+        assert!(matches!(outcome, TrackOutcome::Inserted));
+        assert_eq!(store.get(id).unwrap().resume_generation, 0);
+    }
+
+    #[test]
+    fn test_insert_or_resume_matches_only_transactions_the_node_can_still_hold() {
+        let held = [
+            (TransactionStatus::Submitted, None),
+            (TransactionStatus::Timeout, Some(UnminedReason::Underpriced)),
+            (TransactionStatus::Timeout, Some(UnminedReason::Queued)),
+            (TransactionStatus::Timeout, Some(UnminedReason::NonceGap)),
+        ];
+        let not_held = [
+            (TransactionStatus::Timeout, Some(UnminedReason::Dropped)),
+            (TransactionStatus::Timeout, Some(UnminedReason::Replaced)),
+            (TransactionStatus::Timeout, Some(UnminedReason::Unknown)),
+            (TransactionStatus::Timeout, None),
+            (TransactionStatus::Confirmed, None),
+            (TransactionStatus::Reverted, None),
+        ];
+
+        for (resumed, cases) in [(true, held.as_slice()), (false, not_held.as_slice())] {
+            for (status, reason) in cases {
+                let store = TransactionStore::new();
+                store
+                    .insert(TransactionRecord {
+                        id: TEST_UUID,
+                        raw_transaction: vec![0x01, 0x02, 0x03],
+                        transaction_hash: test_tx_hash(),
+                        status: *status,
+                        submitted_at: test_timestamp(),
+                        confirmed_at: None,
+                        error_message: None,
+                        safe_execution: None,
+                        diagnosis: reason.map(diagnosis_with),
+                        resume_generation: 0,
+                        last_resumed_at: None,
+                    })
+                    .unwrap();
+
+                let other = Uuid::from_u128(2);
+                let outcome = store
+                    .insert_or_resume(
+                        submitted_record(other, vec![0x01, 0x02, 0x03]),
+                        reserve(&store, &[0x01, 0x02, 0x03]),
+                        false,
+                    )
+                    .unwrap();
+                let expected = if resumed {
+                    TrackOutcome::Resumed {
+                        existing: TEST_UUID,
+                        diagnosis: reason.map(diagnosis_with),
+                    }
+                } else {
+                    TrackOutcome::Inserted
+                };
+                assert_eq!(outcome, expected, "{status:?} {reason:?}");
+                assert_eq!(store.get(other).is_ok(), !resumed, "{status:?} {reason:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_insert_or_resume_resumes_an_unknown_timeout_only_when_the_node_verifiably_holds_it() {
+        let cases = [Some(UnminedReason::Unknown), None];
+        for reason in cases {
+            for (verified_known, resumed) in [(false, false), (true, true)] {
+                let store = TransactionStore::new();
+                let mut record = submitted_record(TEST_UUID, vec![0x01, 0x02, 0x03]);
+                record.status = TransactionStatus::Timeout;
+                record.diagnosis = reason.map(diagnosis_with);
+                store.insert(record).unwrap();
+
+                let other = Uuid::from_u128(2);
+                let outcome = store
+                    .insert_or_resume(
+                        submitted_record(other, vec![0x01, 0x02, 0x03]),
+                        reserve(&store, &[0x01, 0x02, 0x03]),
+                        verified_known,
+                    )
+                    .unwrap();
+
+                assert_eq!(
+                    outcome == TrackOutcome::Inserted,
+                    !resumed,
+                    "{reason:?} {verified_known}"
+                );
+                let original = store.get(TEST_UUID).unwrap();
+                assert_eq!(
+                    original.status,
+                    if resumed {
+                        TransactionStatus::Submitted
+                    } else {
+                        TransactionStatus::Timeout
+                    }
+                );
+                // A verified-known hash never ends up tracked under two identities.
+                assert_eq!(store.count(), if resumed { 1 } else { 2 });
+            }
+        }
+
+        // A dropped or replaced transaction is not resumed even when the node answers
+        // already-known: its diagnosis is the more specific evidence.
+        for reason in [UnminedReason::Dropped, UnminedReason::Replaced] {
+            let store = TransactionStore::new();
+            let mut record = submitted_record(TEST_UUID, vec![0x01, 0x02, 0x03]);
+            record.status = TransactionStatus::Timeout;
+            record.diagnosis = Some(diagnosis_with(reason));
+            store.insert(record).unwrap();
+            let outcome = store
+                .insert_or_resume(
+                    submitted_record(Uuid::from_u128(2), vec![0x01, 0x02, 0x03]),
+                    reserve(&store, &[0x01, 0x02, 0x03]),
+                    true,
+                )
+                .unwrap();
+            assert_eq!(outcome, TrackOutcome::Inserted);
+        }
+    }
+
+    #[test]
+    fn test_insert_or_resume_ignores_other_hashes() {
+        let store = TransactionStore::new();
+        store
+            .insert(submitted_record(TEST_UUID, vec![0x01, 0x02, 0x03]))
+            .unwrap();
+
+        let mut record = submitted_record(Uuid::from_u128(2), vec![0x04]);
+        record.transaction_hash = Hash::from([0x01; 32]);
+        let outcome = store.insert_or_resume(record, reserve(&store, &[0x04]), false).unwrap();
+
+        assert_eq!(outcome, TrackOutcome::Inserted);
+        assert_eq!(store.count(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_insert_or_resume_of_one_hash_yields_one_record() {
+        let store = Arc::new(TransactionStore::new());
+
+        let tasks = (0..16u128)
+            .map(|i| {
+                let store = store.clone();
+                tokio::task::spawn_blocking(move || {
+                    let raw = vec![0x01, 0x02, 0x03];
+                    let reservation = store.try_reserve_submission(&raw, 0, 0).unwrap();
+                    store.insert_or_resume(submitted_record(Uuid::from_u128(i + 1), raw), reservation, false)
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut inserted = 0;
+        for task in tasks {
+            if task.await.unwrap().unwrap() == TrackOutcome::Inserted {
+                inserted += 1;
+            }
+        }
+
+        assert_eq!(inserted, 1);
+        assert_eq!(store.count(), 1);
+        assert_eq!(store.submitted_count(), 1);
+        assert_eq!(store.counts().total, 1);
+    }
+
+    #[test]
+    fn test_hash_index_follows_replaced_and_evicted_records() {
+        let store = TransactionStore::new();
+        store
+            .insert(submitted_record(TEST_UUID, vec![0x01, 0x02, 0x03]))
+            .unwrap();
+
+        // A replacement under a new hash moves the index: the old hash is free again.
+        let mut replaced = submitted_record(TEST_UUID, vec![0x01, 0x02, 0x03]);
+        replaced.transaction_hash = Hash::from([0x02; 32]);
+        store.update(replaced).unwrap();
+        let outcome = store
+            .insert_or_resume(
+                submitted_record(Uuid::from_u128(2), vec![0x01, 0x02, 0x03]),
+                reserve(&store, &[0x01, 0x02, 0x03]),
+                false,
+            )
+            .unwrap();
+        assert_eq!(outcome, TrackOutcome::Inserted);
+
+        // An evicted record leaves nothing behind in the index.
+        store
+            .update_status(TEST_UUID, TransactionStatus::Confirmed, None)
+            .unwrap();
+        store
+            .update_status(Uuid::from_u128(2), TransactionStatus::Confirmed, None)
+            .unwrap();
+        thread::sleep(Duration::from_millis(5));
+        assert_eq!(store.evict_terminal_records(Duration::from_millis(1), 0), 2);
+        assert_eq!(store.hash_index.len(), 0);
+    }
+
     #[test]
     fn test_update_transaction_status() {
         let store = TransactionStore::new();
@@ -929,6 +1694,9 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         let id = record.id;
@@ -977,6 +1745,9 @@ mod tests {
                 confirmed_at: None,
                 error_message: None,
                 safe_execution: None,
+                diagnosis: None,
+                resume_generation: 0,
+                last_resumed_at: None,
             };
 
             store.insert(record).unwrap();
@@ -1007,6 +1778,9 @@ mod tests {
                     confirmed_at: None,
                     error_message: None,
                     safe_execution: None,
+                    diagnosis: None,
+                    resume_generation: 0,
+                    last_resumed_at: None,
                 };
                 store_clone1.insert(record).unwrap();
             }
@@ -1024,6 +1798,9 @@ mod tests {
                     confirmed_at: None,
                     error_message: None,
                     safe_execution: None,
+                    diagnosis: None,
+                    resume_generation: 0,
+                    last_resumed_at: None,
                 };
                 store_clone2.insert(record).unwrap();
             }
@@ -1049,6 +1826,9 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         let id = record.id;
@@ -1064,6 +1844,9 @@ mod tests {
             confirmed_at: Some(test_timestamp()),
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         store.update(updated_record.clone()).unwrap();
@@ -1089,6 +1872,9 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         let id = record.id;
@@ -1145,6 +1931,9 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         let id = record.id;
@@ -1184,6 +1973,9 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         let id = record.id;
@@ -1218,6 +2010,9 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         let id = record.id;
@@ -1251,6 +2046,9 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         };
 
         let id = record.id;
@@ -1291,6 +2089,10 @@ mod tests {
         encoded
     }
 
+    fn reserve(store: &TransactionStore, raw_transaction: &[u8]) -> SubmissionReservation {
+        store.try_reserve_submission(raw_transaction, 0, 0).unwrap()
+    }
+
     fn submitted_record(id: Uuid, raw_transaction: Vec<u8>) -> TransactionRecord {
         TransactionRecord {
             id,
@@ -1301,6 +2103,9 @@ mod tests {
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
+            diagnosis: None,
+            resume_generation: 0,
+            last_resumed_at: None,
         }
     }
 

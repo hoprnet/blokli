@@ -7,10 +7,12 @@
 
 use blokli_api_types::{
     Announcement, Hex32, QueryFailedError, SafeExecution, ServiceEntry, ServiceRegistryConfig, ServiceTypeInfo,
-    TokenValueString, Transaction, TransactionStatus as GqlTransactionStatus, UInt64,
+    TokenValueString, Transaction, TransactionDiagnosis, TransactionFees, TransactionStatus as GqlTransactionStatus,
+    UInt64, UnminedReason as GqlUnminedReason,
 };
 use blokli_chain_api::transaction_store::{
-    SafeExecutionResult, TransactionRecord, TransactionStatus as StoreTransactionStatus,
+    FeePair, SafeExecutionResult, TransactionDiagnosis as StoreTransactionDiagnosis, TransactionRecord,
+    TransactionStatus as StoreTransactionStatus, UnminedReason,
 };
 use blokli_db_entity::{
     conversions::service_aggregation::{AggregatedServiceEntry, AggregatedServiceType},
@@ -47,6 +49,31 @@ pub fn transaction_from_record(record: TransactionRecord) -> Transaction {
         submitted_at: record.submitted_at,
         transaction_hash: Hex32(record.transaction_hash.to_hex()),
         safe_execution: convert_safe_execution(record.safe_execution),
+        diagnosis: record.diagnosis.map(convert_diagnosis),
+    }
+}
+
+/// Convert a stored [`StoreTransactionDiagnosis`] to the GraphQL [`TransactionDiagnosis`] type
+pub fn convert_diagnosis(diagnosis: StoreTransactionDiagnosis) -> TransactionDiagnosis {
+    let fees = |fees: FeePair| TransactionFees {
+        max_fee_per_gas: fees.max_fee_per_gas.to_string(),
+        max_priority_fee_per_gas: fees.max_priority_fee_per_gas.to_string(),
+    };
+    let retry_after = diagnosis.retry_after;
+    let whole_seconds = retry_after.as_secs() + u64::from(retry_after.subsec_nanos() > 0);
+    TransactionDiagnosis {
+        reason: match diagnosis.reason {
+            UnminedReason::Underpriced => GqlUnminedReason::Underpriced,
+            UnminedReason::Queued => GqlUnminedReason::Queued,
+            UnminedReason::NonceGap => GqlUnminedReason::NonceGap,
+            UnminedReason::Dropped => GqlUnminedReason::Dropped,
+            UnminedReason::Replaced => GqlUnminedReason::Replaced,
+            UnminedReason::Unknown => GqlUnminedReason::Unknown,
+        },
+        signed_fees: diagnosis.signed_fees.map(fees),
+        recommended_fees: diagnosis.recommended_fees.map(fees),
+        min_replacement_fees: diagnosis.min_replacement_fees.map(fees),
+        retry_after_seconds: i32::try_from(whole_seconds).unwrap_or(i32::MAX),
     }
 }
 

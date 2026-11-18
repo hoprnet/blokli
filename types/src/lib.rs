@@ -792,6 +792,59 @@ pub struct SafeExecution {
     pub revert_reason: Option<String>,
 }
 
+/// Why a submitted transaction was not mined before it timed out
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum UnminedReason {
+    /// The node holds the transaction, but it was signed below the current recommended fee
+    #[graphql(name = "UNDERPRICED")]
+    Underpriced,
+    /// The node holds the transaction and it waits behind earlier pending transactions of the signer
+    #[graphql(name = "QUEUED")]
+    Queued,
+    /// An earlier nonce of the signer is neither mined nor pending
+    #[graphql(name = "NONCE_GAP")]
+    NonceGap,
+    /// The node no longer knows the transaction and its nonce is still unused
+    #[graphql(name = "DROPPED")]
+    Dropped,
+    /// The node no longer knows the transaction and its nonce was consumed by another one
+    #[graphql(name = "REPLACED")]
+    Replaced,
+    /// The reason could not be established
+    #[graphql(name = "UNKNOWN")]
+    Unknown,
+}
+
+/// EIP-1559 fees in wei
+#[derive(SimpleObject, Clone, Debug)]
+pub struct TransactionFees {
+    /// `maxFeePerGas` in wei
+    #[graphql(name = "maxFeePerGas")]
+    pub max_fee_per_gas: String,
+    /// `maxPriorityFeePerGas` in wei
+    #[graphql(name = "maxPriorityFeePerGas")]
+    pub max_priority_fee_per_gas: String,
+}
+
+/// Explanation of a transaction that timed out unmined
+#[derive(SimpleObject, Clone, Debug)]
+pub struct TransactionDiagnosis {
+    /// Why the transaction was not mined
+    pub reason: UnminedReason,
+    /// Fees the transaction was signed with
+    #[graphql(name = "signedFees")]
+    pub signed_fees: Option<TransactionFees>,
+    /// Fees a transaction should currently be signed with, when the fee estimate was available
+    #[graphql(name = "recommendedFees")]
+    pub recommended_fees: Option<TransactionFees>,
+    /// Lowest fees at which a replacement would be accepted, when the fee estimate was available
+    #[graphql(name = "minReplacementFees")]
+    pub min_replacement_fees: Option<TransactionFees>,
+    /// Seconds to wait before checking or retrying
+    #[graphql(name = "retryAfterSeconds")]
+    pub retry_after_seconds: i32,
+}
+
 /// Transaction submission result
 #[derive(SimpleObject, Clone, Debug)]
 pub struct Transaction {
@@ -808,6 +861,8 @@ pub struct Transaction {
     /// Internal Safe execution result (null for non-Safe transactions or before confirmation)
     #[graphql(name = "safeExecution")]
     pub safe_execution: Option<SafeExecution>,
+    /// Why the transaction was not mined (null unless the transaction timed out)
+    pub diagnosis: Option<TransactionDiagnosis>,
 }
 
 /// Success response for fire-and-forget transaction submission
@@ -912,7 +967,8 @@ pub struct HoprActionThrottledError {
 pub struct DeduplicatedTransaction {
     /// The transaction already tracking this logical action
     pub transaction: Transaction,
-    /// The decoded HOPR operation that was deduplicated
+    /// The decoded HOPR operation that was deduplicated, or `raw_transaction` when the identical raw
+    /// transaction was resubmitted
     pub operation: String,
 }
 

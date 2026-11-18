@@ -14,7 +14,10 @@ use blokli_api_types::{
     ServiceRegistryConfigResult, ServiceTypesList, ServiceTypesResult, ServicesList, ServicesResult, Token,
     TokenValueString, TransactionCount, UInt64, UInt256,
 };
-use blokli_chain_api::transaction_store::TransactionStore;
+use blokli_chain_api::{
+    fee_recommendation::{GasFeePolicy, fees_from_fee_history, scale_wei_by_multiplier},
+    transaction_store::TransactionStore,
+};
 use blokli_chain_indexer::IndexerState;
 use blokli_chain_rpc::{FeeHistorySnapshot, HoprIndexerRpcOperations, HoprRpcOperations, rpc::RpcOperations};
 use blokli_chain_types::ContractAddresses;
@@ -63,7 +66,7 @@ use crate::{
     curvy, errors,
     loader::{AccountsByChainKeyLoader, ChannelsBySafeLoader},
     mutation::TransactionResult,
-    schema::{GasFeePolicy, RpcOperationsContext},
+    schema::RpcOperationsContext,
     validation::{parse_service_type, validate_eth_address},
 };
 
@@ -306,91 +309,6 @@ fn parse_eth_address(address: String) -> Result<Address, InvalidAddressError> {
 
 fn parse_optional_eth_address(address: &Option<String>) -> Result<Option<Address>, InvalidAddressError> {
     address.as_ref().map(|addr| parse_eth_address(addr.clone())).transpose()
-}
-
-fn scale_wei_by_multiplier(value: u128, multiplier: f64) -> u128 {
-    let mut multiplier_string = format!("{multiplier:.12}");
-    while multiplier_string.ends_with('0') {
-        multiplier_string.pop();
-    }
-    if multiplier_string.ends_with('.') {
-        multiplier_string.pop();
-    }
-
-    let (whole_part, fractional_part) = match multiplier_string.split_once('.') {
-        Some(parts) => parts,
-        None => (multiplier_string.as_str(), ""),
-    };
-
-    let whole = match whole_part.parse::<u128>() {
-        Ok(parsed) => parsed,
-        Err(_) => return u128::MAX,
-    };
-
-    let fractional = if fractional_part.is_empty() {
-        0
-    } else {
-        match fractional_part.parse::<u128>() {
-            Ok(parsed) => parsed,
-            Err(_) => return u128::MAX,
-        }
-    };
-
-    let mut denominator = 1u128;
-    for _ in 0..fractional_part.len() {
-        denominator = denominator.saturating_mul(10);
-    }
-
-    let numerator = match whole
-        .checked_mul(denominator)
-        .and_then(|scaled_whole| scaled_whole.checked_add(fractional))
-    {
-        Some(parsed) => parsed,
-        None => return u128::MAX,
-    };
-
-    value
-        .saturating_mul(numerator)
-        .saturating_add(denominator.saturating_sub(1))
-        / denominator
-}
-
-/// Bound the max fee to the policy ceiling and make sure it never falls below the tip.
-///
-/// This is applied last, so the ceiling wins over the floor, the headroom and the multiplier.
-fn bound_max_fee(max_fee_per_gas: u128, priority_fee_per_gas: u128, policy: GasFeePolicy) -> u128 {
-    max_fee_per_gas
-        .max(policy.min_max_fee_per_gas)
-        .min(policy.max_max_fee_per_gas)
-        .max(priority_fee_per_gas)
-}
-
-/// Compute `(max_fee_per_gas, max_priority_fee_per_gas)` from a raw fee snapshot.
-///
-/// The tip is the recent median tip scaled by `gas_multiplier`, clamped to the configured priority fee bounds.
-/// The max fee is that tip plus the scaled next-block base fee times `base_fee_headroom_factor`, raised to
-/// `min_max_fee_per_gas` and capped at `max_max_fee_per_gas`.
-///
-/// Returns `None` when the ceiling is below the scaled next-block base fee: the capped max fee could not be
-/// included in the next block, so it must not be offered as an estimate.
-fn fees_from_fee_history(
-    snapshot: FeeHistorySnapshot,
-    gas_multiplier: f64,
-    policy: GasFeePolicy,
-) -> Option<(u128, u128)> {
-    let base_fee = scale_wei_by_multiplier(snapshot.next_base_fee_per_gas, gas_multiplier);
-    if policy.max_max_fee_per_gas < base_fee {
-        return None;
-    }
-    let priority_fee = scale_wei_by_multiplier(snapshot.median_priority_fee_per_gas, gas_multiplier)
-        .max(policy.min_priority_fee_per_gas)
-        .min(policy.max_priority_fee_per_gas);
-    let max_fee = bound_max_fee(
-        priority_fee.saturating_add(scale_wei_by_multiplier(base_fee, policy.base_fee_headroom_factor)),
-        priority_fee,
-        policy,
-    );
-    Some((max_fee, priority_fee))
 }
 
 /// Await a snapshot fetch and warn when its base fee exceeds the configured ceiling.

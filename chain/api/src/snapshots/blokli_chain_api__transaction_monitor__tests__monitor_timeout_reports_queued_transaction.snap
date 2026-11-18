@@ -1,0 +1,17 @@
+---
+source: chain/api/src/transaction_monitor.rs
+expression: updated.diagnosis
+---
+reason: Queued
+signed_fees:
+  max_fee_per_gas: 1000000000
+  max_priority_fee_per_gas: 1000000000
+recommended_fees:
+  max_fee_per_gas: 900000000
+  max_priority_fee_per_gas: 100000000
+min_replacement_fees:
+  max_fee_per_gas: 1125000000
+  max_priority_fee_per_gas: 1125000000
+retry_after:
+  secs: 5
+  nanos: 0
