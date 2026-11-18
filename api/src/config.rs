@@ -329,6 +329,48 @@ impl ApiConfig {
             base_fee_headroom_factor: self.base_fee_headroom_factor,
         }
     }
+
+    /// Check that the gas multiplier, the headroom factor and the fee bounds are consistent.
+    pub fn validate_fee_settings(&self) -> Result<(), String> {
+        validate_fee_settings(self.gas_multiplier, self.gas_fee_policy())
+    }
+}
+
+/// Check that the gas multiplier, the headroom factor and the fee bounds are consistent.
+///
+/// Shared by the daemon and the standalone server so both reject the same configurations.
+pub fn validate_fee_settings(gas_multiplier: f64, policy: GasFeePolicy) -> Result<(), String> {
+    if !gas_multiplier.is_finite() || gas_multiplier < 1.0 {
+        return Err("api.gas_multiplier must be a finite number greater than or equal to 1".to_string());
+    }
+
+    if !policy.base_fee_headroom_factor.is_finite() || policy.base_fee_headroom_factor < 1.0 {
+        return Err("api.base_fee_headroom_factor must be a finite number greater than or equal to 1".to_string());
+    }
+
+    if policy.max_priority_fee_per_gas < policy.min_priority_fee_per_gas {
+        return Err(
+            "api.max_priority_fee_per_gas must be greater than or equal to api.min_priority_fee_per_gas".to_string(),
+        );
+    }
+
+    if policy.max_max_fee_per_gas < policy.min_max_fee_per_gas {
+        return Err("api.max_max_fee_per_gas must be greater than or equal to api.min_max_fee_per_gas".to_string());
+    }
+
+    if policy.max_max_fee_per_gas < policy.max_priority_fee_per_gas {
+        return Err(
+            "api.max_max_fee_per_gas must be greater than or equal to api.max_priority_fee_per_gas".to_string(),
+        );
+    }
+
+    if policy.min_max_fee_per_gas < policy.min_priority_fee_per_gas {
+        return Err(
+            "api.min_max_fee_per_gas must be greater than or equal to api.min_priority_fee_per_gas".to_string(),
+        );
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -350,6 +392,55 @@ mod tests {
                 max_max_fee_per_gas: 1_000_000_000,
                 base_fee_headroom_factor: 8.0,
             }
+        );
+    }
+
+    #[test]
+    fn test_default_fee_settings_are_valid() {
+        assert_eq!(ApiConfig::default().validate_fee_settings(), Ok(()));
+    }
+
+    #[test]
+    fn test_inconsistent_fee_settings_are_rejected() {
+        let invalid = |edit: fn(&mut ApiConfig)| {
+            let mut config = ApiConfig::default();
+            edit(&mut config);
+            config.validate_fee_settings().expect_err("settings should be rejected")
+        };
+
+        assert!(invalid(|c| c.gas_multiplier = 0.5).contains("api.gas_multiplier"));
+        assert!(invalid(|c| c.base_fee_headroom_factor = f64::NAN).contains("api.base_fee_headroom_factor"));
+        assert!(
+            invalid(|c| {
+                c.min_priority_fee_per_gas = 100;
+                c.max_priority_fee_per_gas = 50;
+            })
+            .contains("api.max_priority_fee_per_gas")
+        );
+        assert!(
+            invalid(|c| {
+                c.min_max_fee_per_gas = 2_000;
+                c.max_max_fee_per_gas = 1_000;
+                c.max_priority_fee_per_gas = 1;
+                c.min_priority_fee_per_gas = 1;
+            })
+            .contains("api.max_max_fee_per_gas must be greater than or equal to api.min_max_fee_per_gas")
+        );
+        // The standalone case from review: ceiling below the tip cap
+        assert!(
+            invalid(|c| {
+                c.min_max_fee_per_gas = 1;
+                c.max_max_fee_per_gas = 20_000_000;
+                c.max_priority_fee_per_gas = 50_000_000;
+            })
+            .contains("api.max_max_fee_per_gas must be greater than or equal to api.max_priority_fee_per_gas")
+        );
+        assert!(
+            invalid(|c| {
+                c.min_max_fee_per_gas = 5;
+                c.min_priority_fee_per_gas = 10;
+            })
+            .contains("api.min_max_fee_per_gas must be greater than or equal to api.min_priority_fee_per_gas")
         );
     }
 

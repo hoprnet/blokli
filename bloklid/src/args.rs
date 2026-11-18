@@ -1,6 +1,7 @@
 use std::{ffi::OsString, path::PathBuf};
 
 use ::config as config_rs;
+use blokli_api::schema::GasFeePolicy;
 use blokli_chain_types::{AlloyAddressExt, ChainConfig};
 use clap::{Parser, Subcommand};
 use hopr_types::primitive::primitives::Address;
@@ -285,48 +286,17 @@ impl Args {
             .try_deserialize()
             .map_err(|error| ConfigError::Parse(error.to_string()))?;
 
-        if !config.api.gas_multiplier.is_finite() || config.api.gas_multiplier < 1.0 {
-            return Err(ConfigError::Parse(
-                "api.gas_multiplier must be a finite number greater than or equal to 1".to_string(),
-            )
-            .into());
-        }
-
-        if !config.api.base_fee_headroom_factor.is_finite() || config.api.base_fee_headroom_factor < 1.0 {
-            return Err(ConfigError::Parse(
-                "api.base_fee_headroom_factor must be a finite number greater than or equal to 1".to_string(),
-            )
-            .into());
-        }
-
-        if config.api.max_priority_fee_per_gas < config.api.min_priority_fee_per_gas {
-            return Err(ConfigError::Parse(
-                "api.max_priority_fee_per_gas must be greater than or equal to api.min_priority_fee_per_gas"
-                    .to_string(),
-            )
-            .into());
-        }
-
-        if config.api.max_max_fee_per_gas < config.api.min_max_fee_per_gas {
-            return Err(ConfigError::Parse(
-                "api.max_max_fee_per_gas must be greater than or equal to api.min_max_fee_per_gas".to_string(),
-            )
-            .into());
-        }
-
-        if config.api.max_max_fee_per_gas < config.api.max_priority_fee_per_gas {
-            return Err(ConfigError::Parse(
-                "api.max_max_fee_per_gas must be greater than or equal to api.max_priority_fee_per_gas".to_string(),
-            )
-            .into());
-        }
-
-        if config.api.min_max_fee_per_gas < config.api.min_priority_fee_per_gas {
-            return Err(ConfigError::Parse(
-                "api.min_max_fee_per_gas must be greater than or equal to api.min_priority_fee_per_gas".to_string(),
-            )
-            .into());
-        }
+        blokli_api::config::validate_fee_settings(
+            config.api.gas_multiplier,
+            GasFeePolicy {
+                min_priority_fee_per_gas: u128::from(config.api.min_priority_fee_per_gas),
+                max_priority_fee_per_gas: u128::from(config.api.max_priority_fee_per_gas),
+                min_max_fee_per_gas: u128::from(config.api.min_max_fee_per_gas),
+                max_max_fee_per_gas: u128::from(config.api.max_max_fee_per_gas),
+                base_fee_headroom_factor: config.api.base_fee_headroom_factor,
+            },
+        )
+        .map_err(ConfigError::Parse)?;
 
         if config
             .telemetry
@@ -1296,6 +1266,7 @@ mod tests {
         temp_env::with_vars(
             [
                 ("BLOKLI_API_MIN_PRIORITY_FEE_PER_GAS", None::<&str>),
+                ("BLOKLI_API_MIN_MAX_FEE_PER_GAS", None::<&str>),
                 ("BLOKLI_API_MAX_MAX_FEE_PER_GAS", None::<&str>),
             ],
             || {
