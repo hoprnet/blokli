@@ -47,8 +47,7 @@ use validator::Validate;
 
 // use crate::middleware::GnosisScan;
 use crate::{
-    CurvyAggregatorFees, CurvyAggregatorState, CurvyGasFees, CurvyVaultToken, Eip1559FeeEstimation, FeeHistorySnapshot,
-    HoprRpcOperations,
+    CurvyAggregatorFees, CurvyAggregatorState, CurvyGasFees, CurvyVaultToken, FeeHistorySnapshot, HoprRpcOperations,
     client::GasOracleFiller,
     errors::{Result, RpcError},
     transport::HttpRequestor,
@@ -991,11 +990,29 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
         Ok(self.provider.get_gas_price().await?)
     }
 
-    async fn estimate_eip1559_fees(&self) -> Result<Eip1559FeeEstimation> {
-        let estimate = self.provider.estimate_eip1559_fees().await?;
-        Ok(Eip1559FeeEstimation {
-            max_fee_per_gas: estimate.max_fee_per_gas,
-            max_priority_fee_per_gas: estimate.max_priority_fee_per_gas,
+    async fn get_node_fee_snapshot(&self) -> Result<FeeHistorySnapshot> {
+        let latest = self
+            .provider
+            .get_block_by_number(BlockNumberOrTag::Latest)
+            .await?
+            .ok_or_else(|| RpcError::Other("latest block not found".to_string()))?;
+        let base_fee_per_gas = latest
+            .header
+            .base_fee_per_gas
+            .map(u128::from)
+            .ok_or_else(|| RpcError::Other("latest block has no base fee".to_string()))?;
+
+        let median_priority_fee_per_gas = match self.provider.get_max_priority_fee_per_gas().await {
+            Ok(tip) => tip,
+            Err(error) => {
+                debug!(%error, "eth_maxPriorityFeePerGas unavailable, deriving the tip from the gas price");
+                self.provider.get_gas_price().await?.saturating_sub(base_fee_per_gas)
+            }
+        };
+
+        Ok(FeeHistorySnapshot {
+            next_base_fee_per_gas: base_fee_per_gas,
+            median_priority_fee_per_gas,
         })
     }
 
