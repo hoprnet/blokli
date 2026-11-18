@@ -10,6 +10,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ApiConfig {
+    /// Version of the running service (bloklid), reported by the `version` query and the health endpoints.
+    ///
+    /// Not read from configuration files; the embedding binary sets it. Defaults to the blokli-api crate version.
+    #[serde(skip, default = "default_app_version")]
+    pub app_version: String,
+
     /// Address to bind the server to
     #[serde(default = "default_bind_address")]
     pub bind_address: SocketAddr,
@@ -188,6 +194,10 @@ fn default_health_timeout() -> Duration {
     Duration::from_millis(5000)
 }
 
+fn default_app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
 fn default_readiness_check_interval() -> Duration {
     Duration::from_secs(60)
 }
@@ -195,6 +205,7 @@ fn default_readiness_check_interval() -> Duration {
 impl Default for ApiConfig {
     fn default() -> Self {
         Self {
+            app_version: default_app_version(),
             bind_address: default_bind_address(),
             playground_enabled: default_playground_enabled(),
             database_url: default_database_url(),
