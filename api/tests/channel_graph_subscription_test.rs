@@ -14,7 +14,7 @@
 mod common;
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     str::FromStr,
     time::{Duration, UNIX_EPOCH},
 };
@@ -894,6 +894,101 @@ async fn test_opened_channel_graph_subscription_ends_when_event_bus_overflows() 
     assert!(
         next.is_none(),
         "subscription must end after the event bus overflowed, got {next:?}"
+    );
+}
+
+/// `latest_channel_states` (the initial, no-cursor snapshot) filters only on `published_block <= watermark.block`,
+/// not on `(block, tx_index, log_index)` like the resume path's `position_after_condition` does. The comment next
+/// to `watermark_condition` says this is fine because the indexer commits a whole block atomically before moving
+/// the watermark, so block-level granularity can't miss anything. This test exercises that boundary directly: two
+/// channels both get a new state in the same block as the watermark, one at a transaction index below the
+/// watermark's recorded `tx_index` and one above it. If the snapshot silently dropped the one above it, it would
+/// be hit by the exact "fell between snapshot and live feed" gap raised as a hypothesis in #690.
+#[tokio::test]
+async fn test_opened_channel_graph_snapshot_includes_every_state_in_the_watermark_block() {
+    let db = BlokliDb::new_in_memory().await.unwrap();
+
+    let keypair1 = random_keypair();
+    let keypair2 = random_keypair();
+    let keypair3 = random_keypair();
+    let offchain1 = random_offchain_keypair();
+    let offchain2 = random_offchain_keypair();
+    let offchain3 = random_offchain_keypair();
+    let addr1 = keypair1.public().to_address();
+    let addr2 = keypair2.public().to_address();
+    let addr3 = keypair3.public().to_address();
+
+    db.upsert_account(None, 1, addr1, *offchain1.public(), None, 100, 0, 0)
+        .await
+        .unwrap();
+    db.upsert_account(None, 2, addr2, *offchain2.public(), None, 101, 0, 0)
+        .await
+        .unwrap();
+    db.upsert_account(None, 3, addr3, *offchain3.public(), None, 102, 0, 0)
+        .await
+        .unwrap();
+
+    // Both channels open long before the block under test.
+    let open_balance = HoprBalance::from_str("1000 wxHOPR").unwrap();
+    let channel_below = build_channel_entry(addr1, addr2, open_balance, 0, ChannelStatus::Open, 1);
+    db.upsert_channel(None, channel_below, 50, 0, 0).await.unwrap();
+    let channel_above = build_channel_entry(addr2, addr3, open_balance, 0, ChannelStatus::Open, 1);
+    db.upsert_channel(None, channel_above, 50, 0, 0).await.unwrap();
+
+    // Watermark block 200, tx_index 5: everything in block 200 is, by the atomic-commit invariant, fully
+    // processed, regardless of its own tx_index/log_index relative to 5.
+    let below_balance = HoprBalance::from_str("1234 wxHOPR").unwrap();
+    let below_update = build_channel_entry(addr1, addr2, below_balance, 0, ChannelStatus::Open, 1);
+    db.upsert_channel(None, below_update, 200, 2, 0).await.unwrap(); // tx_index 2 < watermark's 5
+
+    let above_balance = HoprBalance::from_str("5678 wxHOPR").unwrap();
+    let above_update = build_channel_entry(addr2, addr3, above_balance, 0, ChannelStatus::Open, 1);
+    db.upsert_channel(None, above_update, 200, 8, 0).await.unwrap(); // tx_index 8 > watermark's 5
+
+    update_watermark(&db, 200, 5, 0).await;
+
+    let (schema, _indexer_state) = common::create_test_schema(&db);
+    let query = r#"
+        subscription {
+            openedChannelGraphUpdated {
+                channel {
+                    source
+                    destination
+                    balance
+                }
+            }
+        }
+    "#;
+
+    let mut stream = schema.execute_stream(query).boxed();
+
+    let mut balances_by_pair = HashMap::new();
+    for _ in 0..2 {
+        let result = tokio::time::timeout(Duration::from_secs(2), stream.next())
+            .await
+            .expect("both snapshot entries within timeout")
+            .expect("snapshot entry");
+        assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+        let data = result.data.into_json().unwrap();
+        let entry = &data["openedChannelGraphUpdated"]["channel"];
+        let pair = (
+            entry["source"].as_i64().unwrap(),
+            entry["destination"].as_i64().unwrap(),
+        );
+        balances_by_pair.insert(pair, entry["balance"].as_str().unwrap().to_string());
+    }
+
+    // Both channels' post-block-200 state must be present, including the one published at a tx_index past the
+    // watermark's own tx_index — proving the block-level filter doesn't drop it.
+    assert_eq!(
+        balances_by_pair.get(&(1, 2)),
+        Some(&"1234 wxHOPR".to_string()),
+        "channel below the watermark's tx_index missing or stale: {balances_by_pair:?}"
+    );
+    assert_eq!(
+        balances_by_pair.get(&(2, 3)),
+        Some(&"5678 wxHOPR".to_string()),
+        "channel above the watermark's tx_index missing or stale: {balances_by_pair:?}"
     );
 }
 
