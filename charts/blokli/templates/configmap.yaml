@@ -80,6 +80,7 @@ data:
     max_submitted_transactions_per_identity = {{ .Values.config.api.transactions.maxSubmittedTransactionsPerIdentity | int }}
     max_terminal_transactions = {{ .Values.config.api.transactions.maxTerminalTransactions | int }}
     terminal_transaction_ttl = {{ .Values.config.api.transactions.terminalTransactionTtl | quote }}
+    unmined_timeout = {{ .Values.config.api.transactions.unminedTimeout | quote }}
     max_concurrent_trace_jobs = {{ .Values.config.api.transactions.maxConcurrentTraceJobs | int }}
     max_queued_trace_jobs = {{ .Values.config.api.transactions.maxQueuedTraceJobs | int }}
     enable_revert_reason_tracing = {{ .Values.config.api.transactions.enableRevertReasonTracing }}

@@ -486,6 +486,10 @@ impl Config {
             self.api.transactions.max_concurrent_trace_jobs
         ));
         output.push_str(&format!(
+            "  api.transactions.unmined_timeout: {:?}\n",
+            self.api.transactions.unmined_timeout
+        ));
+        output.push_str(&format!(
             "  api.transactions.request_timeout: {:?}\n",
             self.api.transactions.request_timeout
         ));
@@ -771,6 +775,12 @@ pub struct TransactionConfig {
     #[serde(default = "default_max_concurrent_trace_jobs")]
     pub max_concurrent_trace_jobs: usize,
 
+    /// How long a submitted transaction may stay unmined before it is marked as timed out and
+    /// diagnosed. Must be greater than `0s`.
+    #[default(_code = "Duration::from_secs(300)")]
+    #[serde(default = "default_unmined_timeout", with = "humantime_serde")]
+    pub unmined_timeout: Duration,
+
     /// Maximum time allowed for one transaction receipt RPC request. Must be greater than `0s`.
     #[default(_code = "Duration::from_secs(30)")]
     #[serde(default = "default_transaction_request_timeout", with = "humantime_serde")]
@@ -938,6 +948,10 @@ fn default_max_submitted_transactions() -> usize {
 
 fn default_max_submitted_transactions_per_identity() -> usize {
     64
+}
+
+fn default_unmined_timeout() -> Duration {
+    Duration::from_secs(300)
 }
 
 fn default_transaction_request_timeout() -> Duration {
@@ -1335,6 +1349,7 @@ mod tests {
         assert_eq!(config.api.max_query_complexity, 500);
 
         // Transaction monitor limits documented in the example
+        assert_eq!(config.api.transactions.unmined_timeout, Duration::from_secs(300));
         assert_eq!(config.api.transactions.request_timeout, Duration::from_secs(30));
         assert_eq!(config.api.transactions.safe_inspection_timeout, Duration::from_secs(30));
         assert_eq!(config.api.transactions.revert_reason_timeout, Duration::from_secs(30));
@@ -1356,6 +1371,8 @@ mod tests {
     fn test_transaction_monitor_limits_default_when_absent() {
         let config: Config = toml::from_str(MONITOR_LIMITS_DB).expect("config parses");
         let tx = &config.api.transactions;
+        assert_eq!(tx.unmined_timeout, Duration::from_secs(300));
+        assert_eq!(TransactionConfig::default().unmined_timeout, tx.unmined_timeout);
         let observed = (
             tx.request_timeout,
             tx.safe_inspection_timeout,
@@ -1386,6 +1403,7 @@ mod tests {
             r#"
             {MONITOR_LIMITS_DB}
             [api.transactions]
+            unmined_timeout = "20s"
             request_timeout = "5s"
             safe_inspection_timeout = "1m"
             revert_reason_timeout = "250ms"
@@ -1394,6 +1412,7 @@ mod tests {
         ))
         .expect("config parses");
         let tx = &config.api.transactions;
+        assert_eq!(tx.unmined_timeout, Duration::from_secs(20));
         assert_eq!(tx.request_timeout, Duration::from_secs(5));
         assert_eq!(tx.safe_inspection_timeout, Duration::from_secs(60));
         assert_eq!(tx.revert_reason_timeout, Duration::from_millis(250));
@@ -1404,6 +1423,7 @@ mod tests {
     fn test_transaction_monitor_limits_reject_invalid_values() {
         let invalid = [
             r#"request_timeout = "soon""#,
+            r#"unmined_timeout = "soon""#,
             r#"max_concurrent_checks = -1"#,
             r#"max_concurrent_checks = "many""#,
         ];

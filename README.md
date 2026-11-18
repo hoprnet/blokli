@@ -318,6 +318,7 @@ fields. SQLite uses separate index and raw-log databases.
 | `api.database_max_connections`        | `10`             | —                                            | Size of the API's own PostgreSQL pool         |
 | `api.max_concurrent_snapshots`        | `8`              | —                                            | Subscription snapshots loaded at once         |
 | `api.snapshot_queue_timeout`          | `10s`            | —                                            | Longest wait for a snapshot load slot         |
+| `api.transactions.unmined_timeout`    | `300s`           | `BLOKLI_API_TRANSACTIONS_UNMINED_TIMEOUT`    | Unmined time before a transaction times out   |
 | `api.sse_keepalive.enabled`           | `true`           | `BLOKLI_API_SSE_KEEPALIVE_ENABLED`           | Enables SSE keep-alive events                 |
 | `api.sse_keepalive.interval`          | `15s`            | `BLOKLI_API_SSE_KEEPALIVE_INTERVAL`          | Keep-alive interval                           |
 | `api.health.max_indexer_lag`          | `10`             | `BLOKLI_API_HEALTH_MAX_INDEXER_LAG`          | Maximum finality-adjusted lag for readiness   |

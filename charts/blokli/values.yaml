@@ -556,6 +556,9 @@ config:
       ## @param config.api.transactions.terminalTransactionTtl How long completed transaction records stay queryable ("0s" = no TTL eviction)
       ##
       terminalTransactionTtl: "24h"
+      ## @param config.api.transactions.unminedTimeout How long a submitted transaction may stay unmined before it is marked as timed out and diagnosed
+      ##
+      unminedTimeout: "300s"
       ## @param config.api.transactions.maxConcurrentTraceJobs Concurrent debug_traceTransaction jobs for failed Safe executions (0 = unbounded)
       ##
       maxConcurrentTraceJobs: 2
