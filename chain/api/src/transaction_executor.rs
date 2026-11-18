@@ -574,10 +574,11 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
     /// they share.
     ///
     /// `None` when the signer cannot be recovered, when nothing is pending at that nonce, or when
-    /// the pending transaction is `raw_tx` itself (an identical resubmission).
+    /// the store already holds a record for `raw_tx`'s hash (a resubmission, which resumes it).
     fn pending_replacement_target(&self, raw_tx: &[u8]) -> Option<([u8; 20], u64, ReplacementTarget)> {
         let hash = decode_transaction_summary(raw_tx)?.transaction_hash;
-        if self.transaction_store.has_in_flight_hash(hash) {
+        // Bytes the store already holds a record for, in any status, are a resubmission of it.
+        if self.transaction_store.tracks_hash(hash) {
             return None;
         }
         let (signer, nonce) = decode_transaction_signer_and_nonce(raw_tx)?;
@@ -2048,6 +2049,47 @@ mod tests {
         assert!(
             executor.pending_replacement_target(&raw).is_none(),
             "the same bytes are not a replacement"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_resending_a_timed_out_transaction_resumes_it_even_when_its_nonce_has_another_pending_one() {
+        let signer = PrivateKeySigner::random();
+        let executor = replacement_executor(ScriptedRpcClient::new(), RawTransactionExecutorConfig::default());
+        let timed_out_raw = signed_priced_transfer(&signer, 0, BASE_PRICE, 0).await;
+        let timed_out = executor
+            .send_raw_transaction_async(timed_out_raw.clone())
+            .await
+            .unwrap();
+        let store = executor.transaction_store();
+        store
+            .update_status_with_diagnosis(timed_out, TransactionStatus::Timeout, None, Some(timed_out_queued()))
+            .unwrap();
+        // Another transaction now occupies the nonce.
+        let pending = executor
+            .send_raw_transaction_async(signed_priced_transfer(&signer, 0, 5 * BASE_PRICE, 0).await)
+            .await
+            .unwrap();
+        assert_eq!(store.count(), 2);
+
+        // The timed-out bytes are a resubmission, not a replacement of the pending one: the
+        // ordinary path resumes the one record for that hash.
+        let again = executor.send_raw_transaction_async(timed_out_raw).await;
+        assert!(
+            matches!(&again, Err(TransactionExecutorError::AlreadyTracked { existing, .. }) if *existing == timed_out),
+            "unexpected result: {again:?}"
+        );
+        assert_eq!(store.count(), 2, "no second record for the hash");
+        assert_eq!(store.submitted_count(), 2);
+        assert_eq!(store.get(timed_out).unwrap().status, TransactionStatus::Submitted);
+        assert_eq!(store.get(pending).unwrap().status, TransactionStatus::Submitted);
+
+        // No replacement was counted: with a cap of one, a replacement is still allowed.
+        let tip = store.replacement_target(signer.address().into_array(), 0).unwrap();
+        assert!(
+            store
+                .begin_replacement(signer.address().into_array(), 0, tip.id, 1)
+                .is_ok()
         );
     }
 

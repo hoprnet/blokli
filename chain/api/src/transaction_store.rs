@@ -785,6 +785,19 @@ impl TransactionStore {
             .then_some(id)
     }
 
+    /// Whether the store holds a record, in any status, for this transaction hash.
+    ///
+    /// A submission of such bytes belongs on the resubmission path, which resumes or reuses that
+    /// record, and never on the replacement path, so one hash never gets two records.
+    pub fn tracks_hash(&self, transaction_hash: Hash) -> bool {
+        let Some(id) = self.hash_index.get(&transaction_hash).map(|id| *id) else {
+            return false;
+        };
+        self.transactions
+            .get(&id)
+            .is_some_and(|record| record.transaction_hash == transaction_hash)
+    }
+
     /// Whether a record with this hash is `Submitted` and so already occupies a monitoring slot.
     ///
     /// A resubmission of it needs no new capacity; one of a timed-out record does.
