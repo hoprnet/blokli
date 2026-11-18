@@ -652,6 +652,12 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         nonce: u64,
         target: ReplacementTarget,
     ) -> Result<Uuid, TransactionExecutorError> {
+        // Both fee pairs must be readable. A transaction that cannot be read must be refused, and
+        // never let through without the fee check; it is not a conflict that a retry would solve.
+        let signed = signed_fee_pair(&raw_tx).ok_or_else(|| {
+            TransactionExecutorError::RpcError("the replacement transaction's fees cannot be read".to_string())
+        })?;
+
         // A refusal the slot already knows about must not cost a node round trip for the fees.
         // The authoritative check is `begin_replacement` below.
         self.transaction_store
@@ -661,13 +667,13 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         let minimum = self
             .minimum_replacement_fees(&target.raw_transaction)
             .await
-            .ok_or(TransactionExecutorError::ReplacementConflict)?;
-        if let Some(signed) = signed_fee_pair(&raw_tx) {
-            if signed.max_fee_per_gas < minimum.max_fee_per_gas
-                || signed.max_priority_fee_per_gas < minimum.max_priority_fee_per_gas
-            {
-                return Err(TransactionExecutorError::ReplacementUnderpriced { minimum });
-            }
+            .ok_or_else(|| {
+                TransactionExecutorError::RpcError("the pending transaction's fees cannot be read".to_string())
+            })?;
+        if signed.max_fee_per_gas < minimum.max_fee_per_gas
+            || signed.max_priority_fee_per_gas < minimum.max_priority_fee_per_gas
+        {
+            return Err(TransactionExecutorError::ReplacementUnderpriced { minimum });
         }
 
         let ticket = self
@@ -2004,6 +2010,42 @@ mod tests {
         ));
         assert_eq!(*lookups.lock().unwrap(), 1);
         drop(ticket);
+    }
+
+    #[tokio::test]
+    async fn test_a_replacement_or_target_that_cannot_be_read_is_refused_not_retried() {
+        let signer = PrivateKeySigner::random();
+        let executor = replacement_executor(ScriptedRpcClient::new(), RawTransactionExecutorConfig::default());
+        let raw = signed_priced_transfer(&signer, 0, BUMPED_PRICE, 0).await;
+        executor
+            .send_raw_transaction_async(signed_priced_transfer(&signer, 0, BASE_PRICE, 0).await)
+            .await
+            .unwrap();
+        let address = signer.address().into_array();
+        let tracked = executor.transaction_store().replacement_target(address, 0).unwrap();
+        let target = |raw_transaction: Vec<u8>| ReplacementTarget {
+            raw_transaction,
+            ..tracked.clone()
+        };
+
+        // The pending transaction's fees cannot be read.
+        let unreadable_target = executor
+            .send_replacement(raw.clone(), address, 0, target(vec![0xff, 0x01]))
+            .await;
+        assert!(
+            matches!(&unreadable_target, Err(TransactionExecutorError::RpcError(message)) if message.contains("pending")),
+            "unexpected result: {unreadable_target:?}"
+        );
+
+        // The replacement's own fees cannot be read: refused before anything else is asked.
+        let unreadable_replacement = executor
+            .send_replacement(vec![0xff, 0x01], address, 0, tracked.clone())
+            .await;
+        assert!(
+            matches!(&unreadable_replacement, Err(TransactionExecutorError::RpcError(message)) if message.contains("replacement")),
+            "unexpected result: {unreadable_replacement:?}"
+        );
+        assert_eq!(broadcasts(&executor), 1, "only the original was broadcast");
     }
 
     #[tokio::test]
