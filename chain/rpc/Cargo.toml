@@ -60,3 +60,11 @@ reqwest     = { workspace = true }
 tempfile    = { workspace = true }
 test-log    = { workspace = true }
 tokio       = { workspace = true, features = ["test-util"] }
+
+# `alloy` is used through `hopr_bindings::exports::alloy`. The direct dependency only enables the
+# WebSocket provider features that the head subscription needs.
+[package.metadata.cargo-machete]
+ignored = ["alloy"]
+
+[package.metadata.cargo-shear]
+ignored = ["alloy"]
