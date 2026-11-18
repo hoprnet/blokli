@@ -14,7 +14,7 @@
 mod common;
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     str::FromStr,
     time::{Duration, UNIX_EPOCH},
 };
@@ -962,7 +962,7 @@ async fn test_opened_channel_graph_snapshot_includes_every_state_in_the_watermar
 
     let mut stream = schema.execute_stream(query).boxed();
 
-    let mut balances_by_pair = std::collections::HashMap::new();
+    let mut balances_by_pair = HashMap::new();
     for _ in 0..2 {
         let result = tokio::time::timeout(Duration::from_secs(2), stream.next())
             .await
