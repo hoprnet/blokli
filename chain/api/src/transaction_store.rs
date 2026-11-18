@@ -549,12 +549,13 @@ impl TransactionStore {
 
     /// Resume tracking a transaction the node still holds after an identical resubmission.
     ///
-    /// Bumps the resume generation and restarts the timeout clock (`submitted_at` keeps the
-    /// original submission time). A `Timeout` record also moves back to `Submitted` with its
-    /// diagnosis cleared, so the monitor polls it again. Records in any other status are
-    /// untouched. Repeated identical resubmission extends the check window only while the node
-    /// still holds the transaction: each timeout re-diagnoses it, and a dropped or replaced
-    /// transaction is no longer resumable.
+    /// A `Timeout` record moves back to `Submitted` with its diagnosis cleared, bumps the
+    /// resume generation and restarts the timeout clock (`submitted_at` keeps the original
+    /// submission time), so the monitor polls it again. A record that is already `Submitted`
+    /// keeps its generation and its timeout clock, so retrying an in-flight transaction cannot
+    /// postpone its diagnosis. Records in any other status are untouched. The check window is
+    /// extended only while the node still holds the transaction: each timeout re-diagnoses it,
+    /// and a dropped or replaced transaction is no longer resumable.
     ///
     /// # Errors
     /// Returns `TransactionStoreError::NotFound` if the transaction doesn't exist
@@ -567,20 +568,17 @@ impl TransactionStore {
                 .get_mut(&id)
                 .ok_or(TransactionStoreError::NotFound(id))?;
             let record = entry.value_mut();
-            if !matches!(record.status, TransactionStatus::Submitted | TransactionStatus::Timeout) {
+            if record.status != TransactionStatus::Timeout {
                 return Ok(());
             }
             record.resume_generation += 1;
             record.last_resumed_at = Some(Utc::now());
-            let was_timed_out = record.status == TransactionStatus::Timeout;
-            if was_timed_out {
-                record.status = TransactionStatus::Submitted;
-                record.error_message = None;
-                record.diagnosis = None;
-                let identity = transaction_identity(&record.raw_transaction);
-                self.sync_submitted_status(id, TransactionStatus::Submitted, identity);
-            }
-            was_timed_out
+            record.status = TransactionStatus::Submitted;
+            record.error_message = None;
+            record.diagnosis = None;
+            let identity = transaction_identity(&record.raw_transaction);
+            self.sync_submitted_status(id, TransactionStatus::Submitted, identity);
+            true
         };
         if resumed {
             self.clear_terminal_timestamp(id);
@@ -1160,7 +1158,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resume_tracking_on_a_submitted_record_bumps_the_generation_only() {
+    fn test_resume_tracking_on_a_submitted_record_keeps_its_timeout_clock() {
         let store = TransactionStore::new();
         store
             .insert(submitted_record(TEST_UUID, vec![0x01, 0x02, 0x03]))
@@ -1172,10 +1170,33 @@ mod tests {
         let record = store.get(TEST_UUID).unwrap();
         assert_eq!(record.status, TransactionStatus::Submitted);
         assert_eq!(record.submitted_at, submitted_at);
-        assert_eq!(record.resume_generation, 1);
-        assert_eq!(record.timeout_clock_start(), record.last_resumed_at.unwrap());
+        assert_eq!(record.resume_generation, 0);
+        assert_eq!(record.last_resumed_at, None);
+        assert_eq!(record.timeout_clock_start(), submitted_at);
         assert_eq!(store.submitted_count(), 1);
         assert_eq!(store.list_submitted_fair().len(), 1);
+    }
+
+    #[test]
+    fn test_repeated_resume_keeps_the_clock_set_by_the_timeout_resumption() {
+        let store = TransactionStore::new();
+        store
+            .insert(submitted_record(TEST_UUID, vec![0x01, 0x02, 0x03]))
+            .unwrap();
+        assert!(store.mark_timeout_if_unchanged(TEST_UUID, 0, None, None).unwrap());
+
+        store.resume_tracking(TEST_UUID).unwrap();
+        let resumed = store.get(TEST_UUID).unwrap();
+        assert_eq!(resumed.resume_generation, 1);
+        assert!(resumed.last_resumed_at.is_some());
+
+        // Identical retries of the now in-flight record leave the clock and generation alone.
+        for _ in 0..3 {
+            store.resume_tracking(TEST_UUID).unwrap();
+        }
+        let retried = store.get(TEST_UUID).unwrap();
+        assert_eq!(retried.resume_generation, 1);
+        assert_eq!(retried.last_resumed_at, resumed.last_resumed_at);
     }
 
     #[test]
@@ -1186,6 +1207,7 @@ mod tests {
             .unwrap();
         let submitted_at = store.get(TEST_UUID).unwrap().submitted_at;
 
+        assert!(store.mark_timeout_if_unchanged(TEST_UUID, 0, None, None).unwrap());
         store.resume_tracking(TEST_UUID).unwrap();
         assert!(!store.mark_timeout_if_unchanged(TEST_UUID, 0, None, None).unwrap());
         assert_eq!(store.get(TEST_UUID).unwrap().status, TransactionStatus::Submitted);
@@ -1279,6 +1301,7 @@ mod tests {
             .unwrap();
         assert_submitted_listed_and_counted(&store, &[id]);
 
+        assert!(store.mark_timeout_if_unchanged(id, 0, None, None).unwrap());
         store.resume_tracking(id).unwrap();
         assert!(!store.mark_timeout_if_unchanged(id, 0, None, None).unwrap());
         assert_submitted_listed_and_counted(&store, &[id]);

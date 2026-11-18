@@ -1167,6 +1167,10 @@ mod tests {
         async fn get_recommended_fees(&self) -> Result<RecommendedFees, String> {
             if let Some(entry) = self.resume_during_diagnosis.get(&()) {
                 let (store, id) = entry.value();
+                // Another timeout and an identical resubmission land while the diagnosis runs.
+                store
+                    .update_status_with_diagnosis(*id, TransactionStatus::Timeout, None, None)
+                    .unwrap();
                 store.resume_tracking(*id).unwrap();
             }
             self.recommended_fees
