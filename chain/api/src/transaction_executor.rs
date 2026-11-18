@@ -128,6 +128,16 @@ const NO_RECOMMENDED_FEES: FeePair = FeePair {
     max_priority_fee_per_gas: 0,
 };
 
+/// The error a refused replacement is reported as.
+fn replacement_refusal_error(refused: ReplacementRefused) -> TransactionExecutorError {
+    match refused {
+        ReplacementRefused::LimitReached { max } => TransactionExecutorError::ReplacementLimitReached { max },
+        ReplacementRefused::TargetMoved | ReplacementRefused::InProgress => {
+            TransactionExecutorError::ReplacementConflict
+        }
+    }
+}
+
 /// Reject an answer from the node that names another transaction than the one submitted.
 ///
 /// A transaction that decodes locally has a hash we can compute: an answer naming another
@@ -629,6 +639,12 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         nonce: u64,
         target: ReplacementTarget,
     ) -> Result<Uuid, TransactionExecutorError> {
+        // A refusal the slot already knows about must not cost a node round trip for the fees.
+        // The authoritative check is `begin_replacement` below.
+        self.transaction_store
+            .check_replacement(signer, nonce, target.id, self.config.max_replacements_per_nonce)
+            .map_err(replacement_refusal_error)?;
+
         let minimum = self
             .minimum_replacement_fees(&target.raw_transaction)
             .await
@@ -644,12 +660,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         let ticket = self
             .transaction_store
             .begin_replacement(signer, nonce, target.id, self.config.max_replacements_per_nonce)
-            .map_err(|refused| match refused {
-                ReplacementRefused::LimitReached { max } => TransactionExecutorError::ReplacementLimitReached { max },
-                ReplacementRefused::TargetMoved | ReplacementRefused::InProgress => {
-                    TransactionExecutorError::ReplacementConflict
-                }
-            })?;
+            .map_err(replacement_refusal_error)?;
 
         let admitted = self
             .apply_hopr_policy(&raw_tx, SubmissionMode::Replacement { replaces: target.id })
@@ -1681,7 +1692,7 @@ mod tests {
     }
 
     /// Fee source answering a fixed recommendation, or failing.
-    struct FixedFees(Option<RecommendedFees>);
+    struct FixedFees(Option<RecommendedFees>, Arc<Mutex<usize>>);
 
     #[async_trait]
     impl ReceiptProvider for FixedFees {
@@ -1716,6 +1727,7 @@ mod tests {
         }
 
         async fn get_recommended_fees(&self) -> Result<RecommendedFees, String> {
+            *self.1.lock().unwrap() += 1;
             self.0.ok_or_else(|| "no estimate".to_string())
         }
     }
@@ -1802,10 +1814,13 @@ mod tests {
         let signer = PrivateKeySigner::random();
         let executor = replacement_executor(ScriptedRpcClient::new(), RawTransactionExecutorConfig::default())
             .with_safe_enrichment(
-                Arc::new(FixedFees(Some(RecommendedFees {
-                    max_fee_per_gas: 3_000_000_000,
-                    max_priority_fee_per_gas: 1_200_000_000,
-                }))),
+                Arc::new(FixedFees(
+                    Some(RecommendedFees {
+                        max_fee_per_gas: 3_000_000_000,
+                        max_priority_fee_per_gas: 1_200_000_000,
+                    }),
+                    Default::default(),
+                )),
                 Arc::new(crate::transaction_monitor::NoSafeEnrichment),
             );
         executor
@@ -1835,7 +1850,7 @@ mod tests {
         let signer = PrivateKeySigner::random();
         let executor = replacement_executor(ScriptedRpcClient::new(), RawTransactionExecutorConfig::default())
             .with_safe_enrichment(
-                Arc::new(FixedFees(None)),
+                Arc::new(FixedFees(None, Default::default())),
                 Arc::new(crate::transaction_monitor::NoSafeEnrichment),
             );
         executor
@@ -1911,6 +1926,68 @@ mod tests {
             .send_raw_transaction_async(signed_priced_transfer(&signer, 1, BASE_PRICE, 0).await)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_refused_replacements_cost_no_fee_lookup() {
+        let signer = PrivateKeySigner::random();
+        let lookups: Arc<Mutex<usize>> = Default::default();
+        let executor = replacement_executor(
+            ScriptedRpcClient::new(),
+            RawTransactionExecutorConfig {
+                max_replacements_per_nonce: 1,
+                ..Default::default()
+            },
+        )
+        .with_safe_enrichment(
+            Arc::new(FixedFees(None, lookups.clone())),
+            Arc::new(crate::transaction_monitor::NoSafeEnrichment),
+        );
+        executor
+            .send_raw_transaction_async(signed_priced_transfer(&signer, 0, BASE_PRICE, 0).await)
+            .await
+            .unwrap();
+
+        // An accepted replacement does look the fees up, once.
+        executor
+            .send_raw_transaction_async(signed_priced_transfer(&signer, 0, BUMPED_PRICE, 0).await)
+            .await
+            .unwrap();
+        assert_eq!(*lookups.lock().unwrap(), 1);
+
+        // Over the cap: refused without another lookup.
+        let over_cap = executor
+            .send_raw_transaction_async(signed_priced_transfer(&signer, 0, 2 * BASE_PRICE, 0).await)
+            .await;
+        assert!(matches!(
+            over_cap,
+            Err(TransactionExecutorError::ReplacementLimitReached { max: 1 })
+        ));
+        assert_eq!(*lookups.lock().unwrap(), 1);
+
+        // Another replacement of the slot is in progress: also no lookup.
+        let other = PrivateKeySigner::random();
+        executor
+            .send_raw_transaction_async(signed_priced_transfer(&other, 0, BASE_PRICE, 0).await)
+            .await
+            .unwrap();
+        let target = executor
+            .transaction_store()
+            .replacement_target(other.address().into_array(), 0)
+            .unwrap();
+        let ticket = executor
+            .transaction_store()
+            .begin_replacement(other.address().into_array(), 0, target.id, 1)
+            .unwrap();
+        let conflicting = executor
+            .send_raw_transaction_async(signed_priced_transfer(&other, 0, BUMPED_PRICE, 0).await)
+            .await;
+        assert!(matches!(
+            conflicting,
+            Err(TransactionExecutorError::ReplacementConflict)
+        ));
+        assert_eq!(*lookups.lock().unwrap(), 1);
+        drop(ticket);
     }
 
     #[tokio::test]

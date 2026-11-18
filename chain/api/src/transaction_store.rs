@@ -1199,6 +1199,27 @@ impl TransactionStore {
         })
     }
 
+    /// Whether a replacement of `target` would be refused right now, without claiming anything.
+    ///
+    /// A cheap early answer for callers that would otherwise spend a node round trip first. It
+    /// can go stale at once: [`Self::begin_replacement`] is the authoritative check.
+    ///
+    /// # Errors
+    /// Returns the [`ReplacementRefused`] reason a ticket would be refused for.
+    pub fn check_replacement(
+        &self,
+        signer: [u8; 20],
+        nonce: u64,
+        target: Uuid,
+        max_replacements: usize,
+    ) -> Result<(), ReplacementRefused> {
+        let slot = self
+            .nonce_slots
+            .get(&(signer, nonce))
+            .ok_or(ReplacementRefused::TargetMoved)?;
+        replacement_refusal(&slot, target, max_replacements)
+    }
+
     /// Claim the right to broadcast one replacement of `target`, the newest transaction of its
     /// (signer, nonce) slot, as one step on the slot.
     ///
@@ -1217,15 +1238,7 @@ impl TransactionStore {
     ) -> Result<ReplacementTicket, ReplacementRefused> {
         let key = (signer, nonce);
         let mut slot = self.nonce_slots.get_mut(&key).ok_or(ReplacementRefused::TargetMoved)?;
-        if slot.ids.last() != Some(&target) {
-            return Err(ReplacementRefused::TargetMoved);
-        }
-        if slot.replacing {
-            return Err(ReplacementRefused::InProgress);
-        }
-        if slot.replacements >= max_replacements {
-            return Err(ReplacementRefused::LimitReached { max: max_replacements });
-        }
+        replacement_refusal(&slot, target, max_replacements)?;
         slot.replacing = true;
         Ok(ReplacementTicket {
             nonce_slots: self.nonce_slots.clone(),
@@ -1386,6 +1399,20 @@ impl TransactionStore {
             }
         }
     }
+}
+
+/// Why `slot` cannot take another replacement of `target` right now, if it cannot.
+fn replacement_refusal(slot: &NonceSlot, target: Uuid, max_replacements: usize) -> Result<(), ReplacementRefused> {
+    if slot.ids.last() != Some(&target) {
+        return Err(ReplacementRefused::TargetMoved);
+    }
+    if slot.replacing {
+        return Err(ReplacementRefused::InProgress);
+    }
+    if slot.replacements >= max_replacements {
+        return Err(ReplacementRefused::LimitReached { max: max_replacements });
+    }
+    Ok(())
 }
 
 /// Whether the RPC node can still be holding this tracked transaction.
