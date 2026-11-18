@@ -438,6 +438,18 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         let tx_hash = outcome.hash();
         let verified_known = matches!(outcome, BroadcastOutcome::AlreadyKnown(_));
 
+        // A transaction that decodes locally has a hash we can compute: an answer naming another
+        // transaction must not bind this action to, or resume, the record that hash belongs to.
+        if let Some(local_hash) = decode_transaction_summary(&raw_tx)
+            .map(|summary| summary.transaction_hash)
+            .filter(|local_hash| *local_hash != tx_hash)
+        {
+            record_transaction_status(STATUS_SUBMISSION_FAILED);
+            return Err(TransactionExecutorError::RpcError(format!(
+                "node returned a different hash ({tx_hash}) than the submitted transaction ({local_hash})"
+            )));
+        }
+
         let reservation = match reservation {
             Some(reservation) => reservation,
             None => {
@@ -1048,6 +1060,79 @@ mod tests {
         let store = executor.transaction_store();
         assert_eq!(store.count(), 1);
         assert_eq!(store.submitted_count(), 1);
+    }
+
+    /// Mock node that answers every broadcast with a fixed hash.
+    struct FixedHashRpcClient(Hash);
+
+    #[async_trait]
+    impl RpcClient for FixedHashRpcClient {
+        async fn send_raw_transaction(&self, _raw_tx: Vec<u8>) -> Result<Hash, String> {
+            Ok(self.0)
+        }
+
+        async fn broadcast_raw_transaction(&self, _raw_tx: Vec<u8>) -> Result<BroadcastOutcome, String> {
+            Ok(BroadcastOutcome::Accepted(self.0))
+        }
+
+        async fn send_raw_transaction_with_confirm(
+            &self,
+            _raw_tx: Vec<u8>,
+            _confirmations: u64,
+            _timeout: Option<Duration>,
+        ) -> Result<Hash, ConfirmationError> {
+            Ok(self.0)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_async_node_answering_another_hash_is_rejected_without_touching_that_record() {
+        let signer = PrivateKeySigner::random();
+        let other_raw = signed_transfer(&signer, 0).await;
+        let raw_tx = signed_transfer(&signer, 1).await;
+        let other_hash = decode_transaction_summary(&other_raw).unwrap().transaction_hash;
+
+        let store = TransactionStore::new();
+        let other_id = Uuid::new_v4();
+        let reservation = store.try_reserve_submission(&other_raw, 0, 0).unwrap();
+        store
+            .insert_or_resume(
+                TransactionRecord {
+                    id: other_id,
+                    raw_transaction: other_raw,
+                    transaction_hash: other_hash,
+                    status: TransactionStatus::Submitted,
+                    submitted_at: Utc::now(),
+                    confirmed_at: None,
+                    error_message: None,
+                    safe_execution: None,
+                    diagnosis: None,
+                    resume_generation: 0,
+                    last_resumed_at: None,
+                },
+                reservation,
+                false,
+            )
+            .unwrap();
+
+        let executor = RawTransactionExecutor::new(
+            FixedHashRpcClient(other_hash),
+            store,
+            TransactionValidator::new(),
+            RawTransactionExecutorConfig::default(),
+        );
+        let result = executor.send_raw_transaction_async(raw_tx).await;
+
+        assert!(
+            matches!(&result, Err(TransactionExecutorError::RpcError(message)) if message.contains("different hash")),
+            "unexpected result: {result:?}"
+        );
+        let store = executor.transaction_store();
+        assert_eq!(store.count(), 1);
+        assert_eq!(store.submitted_count(), 1);
+        let other = store.get(other_id).unwrap();
+        assert_eq!(other.resume_generation, 0);
+        assert!(other.last_resumed_at.is_none());
     }
 
     #[tokio::test]

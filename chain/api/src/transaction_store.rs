@@ -452,7 +452,9 @@ impl TransactionStore {
         match self.hash_index.entry(record.transaction_hash) {
             Entry::Occupied(mut index) => {
                 let existing = *index.get();
-                if let Some(diagnosis) = self.resume_held(existing, |record| is_held_by_node(record, verified_known)) {
+                if let Some(diagnosis) = self.resume_held(existing, |held| {
+                    held.transaction_hash == record.transaction_hash && is_held_by_node(held, verified_known)
+                }) {
                     return Ok(TrackOutcome::Resumed { existing, diagnosis });
                 }
                 self.insert_reserved_unindexed(record, reservation)?;
@@ -628,7 +630,9 @@ impl TransactionStore {
         let id = *self.hash_index.get(&transaction_hash)?;
         self.transactions
             .get(&id)
-            .is_some_and(|record| record.status == TransactionStatus::Submitted)
+            .is_some_and(|record| {
+                record.transaction_hash == transaction_hash && record.status == TransactionStatus::Submitted
+            })
             .then_some(id)
     }
 
@@ -645,8 +649,10 @@ impl TransactionStore {
     /// record with this hash is `Submitted` any more, e.g. it concluded in the meantime.
     pub fn resume_in_flight_hash(&self, transaction_hash: Hash) -> Option<Uuid> {
         let id = self.in_flight_by_hash(transaction_hash)?;
-        self.resume_held(id, |record| record.status == TransactionStatus::Submitted)
-            .map(|_| id)
+        self.resume_held(id, |record| {
+            record.transaction_hash == transaction_hash && record.status == TransactionStatus::Submitted
+        })
+        .map(|_| id)
     }
 
     /// Resume tracking a transaction the node still holds after an identical resubmission.
@@ -1450,6 +1456,39 @@ mod tests {
         assert!(!store.mark_timeout_if_unchanged(id, 0, None, None).unwrap());
         assert_submitted_listed_and_counted(&store, &[id]);
         assert_eq!(store.list_submitted_fair().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_retry_of_old_bytes_does_not_resume_a_record_whose_hash_changed() {
+        let store = TransactionStore::new();
+        let signer = PrivateKeySigner::random();
+        let old_raw = signed_raw_tx(&signer, [0x11; 20], 0).await;
+        let old_hash = crate::safe_execution::decode_transaction_summary(&old_raw)
+            .unwrap()
+            .transaction_hash;
+        let id = Uuid::from_u128(1);
+        let mut record = submitted_record(id, old_raw.clone());
+        record.transaction_hash = old_hash;
+        store.insert(record).unwrap();
+
+        // The record is replaced by another transaction; the old hash is then indexed to it
+        // only by a stale entry.
+        let new_raw = signed_raw_tx(&signer, [0x11; 20], 1).await;
+        let mut replacement = submitted_record(id, new_raw);
+        replacement.transaction_hash = crate::safe_execution::decode_transaction_summary(&replacement.raw_transaction)
+            .unwrap()
+            .transaction_hash;
+        store.update(replacement).unwrap();
+        store.hash_index.insert(old_hash, id);
+
+        assert!(!store.has_in_flight_hash(old_hash));
+        assert!(store.resume_in_flight_hash(old_hash).is_none());
+
+        let mut retry = submitted_record(Uuid::from_u128(2), old_raw.clone());
+        retry.transaction_hash = old_hash;
+        let outcome = store.insert_or_resume(retry, reserve(&store, &old_raw), true).unwrap();
+        assert!(matches!(outcome, TrackOutcome::Inserted));
+        assert_eq!(store.get(id).unwrap().resume_generation, 0);
     }
 
     #[test]

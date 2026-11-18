@@ -1968,7 +1968,20 @@ mod tests {
         );
         // The raised fee still fits just below the top of the range.
         let fits = u128::MAX - (u128::MAX >> 3) - 1;
-        assert!(min_replacement_fees(fees(fits, fits), fees(0, 0)).max_fee_per_gas >= fits);
+        let expected = fits + fits.div_ceil(8);
+        assert_eq!(
+            min_replacement_fees(fees(fits, fits), fees(0, 0)),
+            fees(expected, expected)
+        );
+        // One above it no longer fits and saturates.
+        let over = fits + 1;
+        assert_eq!(
+            min_replacement_fees(fees(over, over), fees(0, 0)),
+            fees(
+                over.saturating_add(over.div_ceil(8)),
+                over.saturating_add(over.div_ceil(8))
+            )
+        );
         assert_eq!(min_replacement_fees(fees(u128::MAX, 1), fees(0, 0)), fees(u128::MAX, 2));
         assert_eq!(
             min_replacement_fees(fees(u128::MAX - 1, u128::MAX), fees(0, 0)),
