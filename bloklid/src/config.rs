@@ -755,8 +755,9 @@ pub struct TransactionConfig {
     #[serde(default = "default_max_submitted_transactions_per_identity")]
     pub max_submitted_transactions_per_identity: usize,
 
-    /// Fee-bumped replacements accepted per signer and nonce of a pending transaction, the
-    /// original not counted. `0` refuses every replacement.
+    /// Fee-bumped replacements accepted per signer and nonce while a transaction of that nonce is
+    /// pending, the original not counted. The count restarts once no transaction of the nonce
+    /// is pending any more. `0` refuses every replacement.
     #[default(3)]
     #[serde(default = "default_max_replacements_per_nonce")]
     pub max_replacements_per_nonce: usize,

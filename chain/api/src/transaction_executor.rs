@@ -253,7 +253,8 @@ pub struct RawTransactionExecutorConfig {
     /// cannot consume the global capacity by spreading submissions across
     /// contract targets.
     pub max_submitted_transactions_per_identity: usize,
-    /// Maximum fee-bumped replacements accepted per signer and nonce, the original not counted.
+    /// Maximum fee-bumped replacements accepted per signer and nonce while a transaction of that
+    /// nonce is pending, the original not counted; the count restarts once none is pending.
     /// `0` refuses every replacement.
     pub max_replacements_per_nonce: usize,
     /// Enable optional Safe revert-reason tracing in synchronous transaction execution.

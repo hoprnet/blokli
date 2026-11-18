@@ -247,8 +247,9 @@ snapshot_queue_timeout = "10s"
 max_submitted_transactions              = 1024
 max_submitted_transactions_per_identity = 64
 
-# Fee-bumped replacements accepted per signer and nonce of a pending transaction, the original
-# not counted. Set to 0 to refuse every replacement. Default: 3.
+# Fee-bumped replacements accepted per signer and nonce while a transaction of that nonce is
+# pending, the original not counted. The count restarts once no transaction of the nonce is
+# pending any more. Set to 0 to refuse every replacement. Default: 3.
 max_replacements_per_nonce = 3
 
 # Retain completed transaction results for 24 hours, while capping retained terminal

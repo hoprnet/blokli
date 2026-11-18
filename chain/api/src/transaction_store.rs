@@ -213,13 +213,18 @@ type NonceKey = ([u8; 20], u64);
 /// Only the node can mine one of them; the others are replacements of it. Entries exist
 /// exactly while at least one `Submitted` transaction occupies the slot, so a client cannot
 /// grow the index beyond the monitoring capacity.
+///
+/// The replacement cap therefore applies per pending period: the count lives while a `Submitted`
+/// transaction occupies the (signer, nonce) slot and resets once every transaction of that nonce
+/// has left `Submitted`.
 #[derive(Debug, Default)]
 struct NonceSlot {
     /// `Submitted` transactions in the slot, oldest first. The last one is the newest, the one
     /// a replacement targets.
     ids: Vec<Uuid>,
-    /// Replacements committed in this slot. It lives in the slot and not on a record, so
-    /// evicting a terminal record never resets it.
+    /// Replacements committed in this slot during the current pending period. It lives in the
+    /// slot and not on a record, so evicting a terminal record never resets it; it resets only
+    /// when the slot empties.
     replacements: usize,
     /// A replacement holds a [`ReplacementTicket`] and is being broadcast.
     replacing: bool,
@@ -1225,7 +1230,8 @@ impl TransactionStore {
     ///
     /// Of several replacements racing for the same slot exactly one gets a ticket; the others are
     /// refused before anything is broadcast. At most `max_replacements` replacements are made per
-    /// slot, the original not counted.
+    /// slot, the original not counted, for as long as the slot stays occupied by a `Submitted`
+    /// transaction; the count starts again once it empties.
     ///
     /// # Errors
     /// Returns the [`ReplacementRefused`] reason when no ticket can be granted.
