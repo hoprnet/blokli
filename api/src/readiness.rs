@@ -36,6 +36,63 @@ pub enum ReadinessState {
     NotReady,
 }
 
+/// Result of one readiness evaluation.
+///
+/// The report gathers every check even when an earlier one already decided the state, so the
+/// `/readyz` body keeps its diagnostic details when verification failed or the database is
+/// unreachable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadinessReport {
+    /// Readiness decision that feeds the cached state, the HTTP status and the health metric.
+    pub state: ReadinessState,
+    /// Health status label for the `blokli_health` metric.
+    pub health_status: &'static str,
+    /// Database check details.
+    pub database: DatabaseCheck,
+    /// RPC check details.
+    pub rpc: RpcCheck,
+    /// Indexer lag check details.
+    pub indexer: IndexerCheck,
+    /// Post-finality verification check details.
+    pub verification: VerificationCheck,
+}
+
+/// Database check details reported by `/readyz`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DatabaseCheck {
+    /// Last indexed block, when chain info exists.
+    pub last_indexed_block: Option<i64>,
+    /// Failure reason, when the database could not provide chain info.
+    pub error: Option<String>,
+}
+
+/// RPC check details reported by `/readyz`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RpcCheck {
+    /// Confirmed block reported by the chain tip tracker.
+    pub block_number: Option<u64>,
+    /// Failure reason, when the confirmed block could not be read.
+    pub error: Option<String>,
+}
+
+/// Indexer lag check details reported by `/readyz`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IndexerCheck {
+    /// Last indexed block, when chain info exists.
+    pub last_indexed_block: Option<i64>,
+    /// Lag between the confirmed block and the indexer watermark.
+    pub lag: Option<u64>,
+    /// Whether the lag exceeds the configured threshold.
+    pub lag_exceeded: bool,
+}
+
+/// Post-finality verification check details reported by `/readyz`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VerificationCheck {
+    /// Whether the verification task found a mismatch.
+    pub failed: bool,
+}
+
 /// Shared readiness state tracker with caching and periodic updates
 #[derive(Clone)]
 pub struct ReadinessChecker {
@@ -86,8 +143,10 @@ impl ReadinessChecker {
 
     /// Perform a full readiness check and update the cached state
     /// This is used by /readyz endpoint and indexer completion signals
-    pub async fn check_and_update(&self) {
-        let (new_state, health_status) = self.check_readiness().await;
+    pub async fn check_and_update(&self) -> ReadinessReport {
+        let report = self.check_readiness().await;
+        let new_state = report.state;
+        let health_status = report.health_status;
         let mut cached = self.cached_state.write().await;
         let old_state = *cached;
         *cached = new_state;
@@ -107,11 +166,13 @@ impl ReadinessChecker {
                 }
             }
         }
+
+        report
     }
 
     /// Trigger an out-of-band readiness check (used by indexer completion signal)
     pub async fn trigger_update(&self) {
-        self.check_and_update().await;
+        let _ = self.check_and_update().await;
     }
 
     /// Unconditionally set the cached state to `Ready`. Only for use in tests.
@@ -127,52 +188,63 @@ impl ReadinessChecker {
             let mut ticker = tokio::time::interval(interval);
             loop {
                 ticker.tick().await;
-                self.check_and_update().await;
+                let _ = self.check_and_update().await;
             }
         });
     }
 
     /// Check if the server is ready
     ///
-    /// Returns a tuple of (`ReadinessState`, health status label) where the
-    /// health status label is one of the `metrics::HEALTH_STATUS_*` constants.
-    async fn check_readiness(&self) -> (ReadinessState, &'static str) {
+    /// The returned report holds the readiness decision and the details of every individual check.
+    /// All checks run even when an earlier one already failed, so the `/readyz` body keeps its
+    /// diagnostic details. A post-finality verification mismatch wins over the other checks for
+    /// the health status label.
+    async fn check_readiness(&self) -> ReadinessReport {
+        let verification_failed = self.verification_status.failed();
+
         // A post-finality verification mismatch means the indexed data can no longer be trusted,
         // so readiness stays failed until an operator restarts the daemon. Checking it first makes
         // it win over the other conditions; the transition log reports the change once.
-        if self.verification_status.failed() {
+        if verification_failed {
             debug!("Post-finality verification found a mismatch, indexed data is no longer trusted");
-            return (ReadinessState::NotReady, metrics::HEALTH_STATUS_VERIFICATION_FAILED);
         }
 
         // 1. Check database connectivity by querying chain_info
-        let indexed_block = match ChainInfo::find().one(&self.db).await {
-            Ok(Some(info)) => Some(info.last_indexed_block),
+        let mut database = DatabaseCheck::default();
+        let mut database_health_status = None;
+        match ChainInfo::find().one(&self.db).await {
+            Ok(Some(info)) => database.last_indexed_block = Some(info.last_indexed_block),
             Ok(None) => {
                 // No chain info yet - indexer hasn't started
-                return (ReadinessState::NotReady, metrics::HEALTH_STATUS_UNSYNCHED);
+                database.error = Some("No chain info found - indexer may not have started".to_string());
+                database_health_status = Some(metrics::HEALTH_STATUS_UNSYNCHED);
             }
             Err(e) => {
                 error!("Database check failed: {}", e);
-                return (ReadinessState::NotReady, metrics::HEALTH_STATUS_CORRUPTED);
+                database.error = Some(e.to_string());
+                database_health_status = Some(metrics::HEALTH_STATUS_CORRUPTED);
             }
-        };
+        }
 
         // 2. Check RPC connectivity and get the tracker's confirmed tip
         // NOTE: get_block_number() returns the chain tip tracker's confirmed block
         // This ensures we only compare lag against confirmed blocks, not unconfirmed chain head
-        let rpc_block = match self.rpc_operations.get_block_number().await {
-            Ok(block) => Some(block),
+        let mut rpc = RpcCheck::default();
+        match self.rpc_operations.get_block_number().await {
+            Ok(block) => rpc.block_number = Some(block),
             Err(e) => {
                 error!("RPC check failed: {}", e);
-                return (ReadinessState::NotReady, metrics::HEALTH_STATUS_TIMEOUT);
+                rpc.error = Some(e.to_string());
             }
-        };
+        }
 
         // 3. Check indexer lag
-        if let (Some(indexed), Some(rpc_block)) = (indexed_block, rpc_block) {
+        let mut indexer = IndexerCheck::default();
+        if let (Some(indexed), Some(rpc_block)) = (database.last_indexed_block, rpc.block_number) {
             let indexed_u64 = u64::try_from(indexed).unwrap_or(0);
             let lag = rpc_block.saturating_sub(indexed_u64);
+            indexer.last_indexed_block = Some(indexed);
+            indexer.lag = Some(lag);
 
             if lag > self.health_config.max_indexer_lag {
                 warn!(
@@ -182,21 +254,49 @@ impl ReadinessChecker {
                     max_lag = self.health_config.max_indexer_lag,
                     "Indexer lag exceeds threshold (lag compared against the tracker's confirmed tip)"
                 );
-                return (ReadinessState::NotReady, metrics::HEALTH_STATUS_UNSYNCHED);
+                indexer.lag_exceeded = true;
+            } else {
+                // Log successful readiness check
+                debug!(
+                    %lag,
+                    confirmed_block = %rpc_block,
+                    indexed = %indexed,
+                    "Indexer within acceptable lag of confirmed blocks"
+                );
             }
-
-            // Log successful readiness check
-            debug!(
-                %lag,
-                confirmed_block = %rpc_block,
-                indexed = %indexed,
-                "Indexer within acceptable lag of confirmed blocks"
-            );
-        } else {
-            return (ReadinessState::NotReady, metrics::HEALTH_STATUS_UNSYNCHED);
+        } else if let Some(indexed) = database.last_indexed_block {
+            // We have indexed block but no RPC block - the RPC check already failed
+            indexer.last_indexed_block = Some(indexed);
         }
 
-        (ReadinessState::Ready, metrics::HEALTH_STATUS_OK)
+        let health_status = if verification_failed {
+            metrics::HEALTH_STATUS_VERIFICATION_FAILED
+        } else if let Some(status) = database_health_status {
+            status
+        } else if rpc.error.is_some() {
+            metrics::HEALTH_STATUS_TIMEOUT
+        } else if indexer.lag_exceeded || indexer.lag.is_none() {
+            metrics::HEALTH_STATUS_UNSYNCHED
+        } else {
+            metrics::HEALTH_STATUS_OK
+        };
+
+        let state = if health_status == metrics::HEALTH_STATUS_OK {
+            ReadinessState::Ready
+        } else {
+            ReadinessState::NotReady
+        };
+
+        ReadinessReport {
+            state,
+            health_status,
+            database,
+            rpc,
+            indexer,
+            verification: VerificationCheck {
+                failed: verification_failed,
+            },
+        }
     }
 }
 
@@ -238,10 +338,15 @@ mod tests {
         )
         .with_verification_status(indexer_state.verification_status());
 
-        let (state, health_status) = checker.check_readiness().await;
+        let report = checker.check_readiness().await;
 
-        assert_eq!(state, ReadinessState::NotReady);
-        assert_eq!(health_status, metrics::HEALTH_STATUS_VERIFICATION_FAILED);
+        assert_eq!(report.state, ReadinessState::NotReady);
+        assert_eq!(report.health_status, metrics::HEALTH_STATUS_VERIFICATION_FAILED);
+        assert!(report.verification.failed);
+        assert!(
+            report.rpc.error.is_some(),
+            "the RPC check must still run when verification failed"
+        );
 
         Ok(())
     }

@@ -390,6 +390,8 @@ pub struct HttpTestContext {
     pub rpc_operations: Arc<RpcOperations<ReqwestClient>>,
     /// In-memory transaction store used by the HTTP API
     pub transaction_store: Arc<TransactionStore>,
+    /// Shared indexer state, including post-finality verification status
+    pub indexer_state: IndexerState,
 }
 
 /// Setup test environment for HTTP endpoint testing.
@@ -483,7 +485,7 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
         expected_block_time.as_secs(),
         3, // Test finality value
         ChainConfirmationMode::Depth,
-        indexer_state,
+        indexer_state.clone(),
         transaction_executor,
         transaction_store.clone(),
         rpc_operations.clone(),
@@ -497,6 +499,7 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
         db,
         rpc_operations,
         transaction_store,
+        indexer_state,
     })
 }
 
