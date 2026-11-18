@@ -1398,7 +1398,7 @@ impl Default for TransactionStore {
 
 #[cfg(test)]
 mod tests {
-    use std::thread;
+    use std::{sync::Barrier, thread};
 
     use chrono::Duration as ChronoDuration;
     use hopr_bindings::exports::alloy::{
@@ -2859,7 +2859,7 @@ mod tests {
                 let raw = signed_raw_tx_priced(&signer, round, 2_000 + attempt).await;
                 replacements.push(hashed_record(raw));
             }
-            let barrier = Arc::new(std::sync::Barrier::new(replacements.len()));
+            let barrier = Arc::new(Barrier::new(replacements.len()));
             let signer_address = signer_of(&signer);
             let handles: Vec<_> = replacements
                 .into_iter()
