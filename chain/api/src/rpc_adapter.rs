@@ -19,7 +19,7 @@ use crate::{
     broadcast_error::{BroadcastRejection, classify_broadcast_error},
     fee_recommendation::{GasFeeFloors, RecommendedFees, recommended_fees},
     safe_execution::{decode_transaction_signer, decode_transaction_summary},
-    transaction_executor::{ConfirmationError, RpcClient},
+    transaction_executor::{BroadcastOutcome, ConfirmationError, RpcClient},
     transaction_monitor::{ReceiptLog, ReceiptProvider, TransactionReceipt},
 };
 
@@ -59,6 +59,14 @@ impl<R: HttpRequestor + 'static + Clone> RpcClient for RpcAdapter<R> {
     /// Converts the raw transaction bytes to alloy Bytes format and submits to the RPC provider.
     /// Returns the transaction hash immediately without waiting for confirmation.
     async fn send_raw_transaction(&self, raw_tx: Vec<u8>) -> Result<Hash, String> {
+        self.broadcast_raw_transaction(raw_tx).await.map(BroadcastOutcome::hash)
+    }
+
+    /// Send a raw transaction and report whether the node accepted it now or already held it
+    ///
+    /// An already-known answer is only reported as such once the node returns the transaction
+    /// for its hash, so [`BroadcastOutcome::AlreadyKnown`] is evidence the node holds it.
+    async fn broadcast_raw_transaction(&self, raw_tx: Vec<u8>) -> Result<BroadcastOutcome, String> {
         let raw_tx_len = raw_tx.len();
         debug!(length = raw_tx_len, "sending raw transaction");
 
@@ -73,7 +81,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcClient for RpcAdapter<R> {
 
                 // Convert alloy B256 to Hash
                 let hash = Hash::from(tx_hash.0);
-                Ok(hash)
+                Ok(BroadcastOutcome::Accepted(hash))
             }
             Err(e) => {
                 let rejection = classify_broadcast_error(&e.to_string());
@@ -91,7 +99,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcClient for RpcAdapter<R> {
                                 nonce = summary.nonce,
                                 "transaction already known to the RPC node, treating it as submitted"
                             );
-                            return Ok(summary.transaction_hash);
+                            return Ok(BroadcastOutcome::AlreadyKnown(summary.transaction_hash));
                         }
                         Ok(false) => {
                             warn!(

@@ -435,18 +435,24 @@ impl TransactionStore {
     /// [`Self::resume_tracking`]); a dropped, replaced or concluded one is not resumed and the
     /// record is inserted next to it. When a transaction is resumed the reservation is dropped.
     ///
+    /// `verified_known` is set when the node reported the transaction as already known and
+    /// returned it for this hash. That is current evidence it holds the transaction, so a
+    /// transaction that timed out with an unknown cause is resumed too, where a fresh
+    /// acceptance of the same hash leaves it alone and inserts the record.
+    ///
     /// # Errors
     /// Returns `TransactionStoreError::AlreadyExists` if a transaction with the same ID already exists
     pub fn insert_or_resume(
         &self,
         record: TransactionRecord,
         reservation: SubmissionReservation,
+        verified_known: bool,
     ) -> Result<TrackOutcome, TransactionStoreError> {
         let id = record.id;
         match self.hash_index.entry(record.transaction_hash) {
             Entry::Occupied(mut index) => {
                 let existing = *index.get();
-                if let Some(diagnosis) = self.resume_held(existing, is_held_by_node) {
+                if let Some(diagnosis) = self.resume_held(existing, |record| is_held_by_node(record, verified_known)) {
                     return Ok(TrackOutcome::Resumed { existing, diagnosis });
                 }
                 self.insert_reserved_unindexed(record, reservation)?;
@@ -609,7 +615,7 @@ impl TransactionStore {
                     && !self
                         .transactions
                         .get(&current)
-                        .is_some_and(|r| is_held_by_node(r.value()))
+                        .is_some_and(|r| is_held_by_node(r.value(), false))
                 {
                     index.insert(id);
                 }
@@ -1136,15 +1142,20 @@ impl TransactionStore {
 /// That is a transaction still awaiting confirmation, or one that timed out because it was
 /// underpriced, queued or waiting behind a nonce gap. A dropped or replaced transaction is no
 /// longer held, so a resubmission of it is a fresh one.
-fn is_held_by_node(record: &TransactionRecord) -> bool {
+///
+/// A transaction that timed out with an unknown cause (or none recorded) is held only when
+/// `verified_known` says the node just returned it for its hash.
+fn is_held_by_node(record: &TransactionRecord, verified_known: bool) -> bool {
     match record.status {
         TransactionStatus::Submitted => true,
-        TransactionStatus::Timeout => record.diagnosis.is_some_and(|diagnosis| {
-            matches!(
-                diagnosis.reason,
-                UnminedReason::Underpriced | UnminedReason::Queued | UnminedReason::NonceGap
-            )
-        }),
+        TransactionStatus::Timeout => match record.diagnosis {
+            Some(diagnosis) => match diagnosis.reason {
+                UnminedReason::Underpriced | UnminedReason::Queued | UnminedReason::NonceGap => true,
+                UnminedReason::Unknown => verified_known,
+                UnminedReason::Dropped | UnminedReason::Replaced => false,
+            },
+            None => verified_known,
+        },
         _ => false,
     }
 }
@@ -1482,6 +1493,7 @@ mod tests {
                     .insert_or_resume(
                         submitted_record(other, vec![0x01, 0x02, 0x03]),
                         reserve(&store, &[0x01, 0x02, 0x03]),
+                        false,
                     )
                     .unwrap();
                 let expected = if resumed {
@@ -1499,6 +1511,64 @@ mod tests {
     }
 
     #[test]
+    fn test_insert_or_resume_resumes_an_unknown_timeout_only_when_the_node_verifiably_holds_it() {
+        let cases = [Some(UnminedReason::Unknown), None];
+        for reason in cases {
+            for (verified_known, resumed) in [(false, false), (true, true)] {
+                let store = TransactionStore::new();
+                let mut record = submitted_record(TEST_UUID, vec![0x01, 0x02, 0x03]);
+                record.status = TransactionStatus::Timeout;
+                record.diagnosis = reason.map(diagnosis_with);
+                store.insert(record).unwrap();
+
+                let other = Uuid::from_u128(2);
+                let outcome = store
+                    .insert_or_resume(
+                        submitted_record(other, vec![0x01, 0x02, 0x03]),
+                        reserve(&store, &[0x01, 0x02, 0x03]),
+                        verified_known,
+                    )
+                    .unwrap();
+
+                assert_eq!(
+                    outcome == TrackOutcome::Inserted,
+                    !resumed,
+                    "{reason:?} {verified_known}"
+                );
+                let original = store.get(TEST_UUID).unwrap();
+                assert_eq!(
+                    original.status,
+                    if resumed {
+                        TransactionStatus::Submitted
+                    } else {
+                        TransactionStatus::Timeout
+                    }
+                );
+                // A verified-known hash never ends up tracked under two identities.
+                assert_eq!(store.count(), if resumed { 1 } else { 2 });
+            }
+        }
+
+        // A dropped or replaced transaction is not resumed even when the node answers
+        // already-known: its diagnosis is the more specific evidence.
+        for reason in [UnminedReason::Dropped, UnminedReason::Replaced] {
+            let store = TransactionStore::new();
+            let mut record = submitted_record(TEST_UUID, vec![0x01, 0x02, 0x03]);
+            record.status = TransactionStatus::Timeout;
+            record.diagnosis = Some(diagnosis_with(reason));
+            store.insert(record).unwrap();
+            let outcome = store
+                .insert_or_resume(
+                    submitted_record(Uuid::from_u128(2), vec![0x01, 0x02, 0x03]),
+                    reserve(&store, &[0x01, 0x02, 0x03]),
+                    true,
+                )
+                .unwrap();
+            assert_eq!(outcome, TrackOutcome::Inserted);
+        }
+    }
+
+    #[test]
     fn test_insert_or_resume_ignores_other_hashes() {
         let store = TransactionStore::new();
         store
@@ -1507,7 +1577,7 @@ mod tests {
 
         let mut record = submitted_record(Uuid::from_u128(2), vec![0x04]);
         record.transaction_hash = Hash::from([0x01; 32]);
-        let outcome = store.insert_or_resume(record, reserve(&store, &[0x04])).unwrap();
+        let outcome = store.insert_or_resume(record, reserve(&store, &[0x04]), false).unwrap();
 
         assert_eq!(outcome, TrackOutcome::Inserted);
         assert_eq!(store.count(), 2);
@@ -1523,7 +1593,7 @@ mod tests {
                 tokio::task::spawn_blocking(move || {
                     let raw = vec![0x01, 0x02, 0x03];
                     let reservation = store.try_reserve_submission(&raw, 0, 0).unwrap();
-                    store.insert_or_resume(submitted_record(Uuid::from_u128(i + 1), raw), reservation)
+                    store.insert_or_resume(submitted_record(Uuid::from_u128(i + 1), raw), reservation, false)
                 })
             })
             .collect::<Vec<_>>();
@@ -1555,6 +1625,7 @@ mod tests {
             .insert_or_resume(
                 submitted_record(Uuid::from_u128(2), vec![0x01, 0x02, 0x03]),
                 reserve(&store, &[0x01, 0x02, 0x03]),
+                false,
             )
             .unwrap();
         assert_eq!(outcome, TrackOutcome::Inserted);

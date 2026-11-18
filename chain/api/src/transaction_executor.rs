@@ -111,6 +111,25 @@ pub enum ConfirmationError {
     Timeout(String),
 }
 
+/// How the RPC node answered a broadcast that it did not reject.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BroadcastOutcome {
+    /// The node accepted the transaction with this broadcast.
+    Accepted(Hash),
+    /// The node reported the transaction as already known and returned it for this hash, so it
+    /// holds it from an earlier broadcast.
+    AlreadyKnown(Hash),
+}
+
+impl BroadcastOutcome {
+    /// Hash of the transaction the node accepted or already holds.
+    pub fn hash(self) -> Hash {
+        match self {
+            BroadcastOutcome::Accepted(hash) | BroadcastOutcome::AlreadyKnown(hash) => hash,
+        }
+    }
+}
+
 /// Trait for RPC operations needed by the transaction executor
 ///
 /// This trait abstracts the RPC client so we can mock it in tests
@@ -118,6 +137,15 @@ pub enum ConfirmationError {
 pub trait RpcClient: Send + Sync {
     /// Send a raw transaction and return its hash
     async fn send_raw_transaction(&self, raw_tx: Vec<u8>) -> Result<Hash, String>;
+
+    /// Send a raw transaction and report whether the node accepted it now or verifiably
+    /// already held it.
+    ///
+    /// Clients that cannot tell the two apart report every acceptance as
+    /// [`BroadcastOutcome::Accepted`].
+    async fn broadcast_raw_transaction(&self, raw_tx: Vec<u8>) -> Result<BroadcastOutcome, String> {
+        self.send_raw_transaction(raw_tx).await.map(BroadcastOutcome::Accepted)
+    }
 
     /// Send a raw transaction and wait for confirmations
     async fn send_raw_transaction_with_confirm(
@@ -398,13 +426,15 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         };
 
         // Submit to RPC first to get transaction hash
-        let tx_hash = match self.rpc_client.send_raw_transaction(raw_tx.clone()).await {
-            Ok(hash) => hash,
+        let outcome = match self.rpc_client.broadcast_raw_transaction(raw_tx.clone()).await {
+            Ok(outcome) => outcome,
             Err(e) => {
                 record_transaction_status(STATUS_SUBMISSION_FAILED);
                 return Err(TransactionExecutorError::RpcError(e));
             }
         };
+        let tx_hash = outcome.hash();
+        let verified_known = matches!(outcome, BroadcastOutcome::AlreadyKnown(_));
 
         let reservation = match reservation {
             Some(reservation) => reservation,
@@ -443,7 +473,10 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         // The node may still hold a transaction we already track (an identical resubmission):
         // resuming that one rather than tracking the same hash twice is a single step per hash,
         // so concurrent identical submissions end up with one identity.
-        match self.transaction_store.insert_or_resume(record, reservation) {
+        match self
+            .transaction_store
+            .insert_or_resume(record, reservation, verified_known)
+        {
             Ok(TrackOutcome::Inserted) => {
                 // Bind the logical action to this identity only once it is actually tracked, so
                 // a failed submission never suppresses the retry that follows it.
@@ -601,6 +634,8 @@ mod tests {
         should_fail: bool,
         should_timeout: bool,
         call_count: Arc<Mutex<usize>>,
+        /// Answer every broadcast as an already-known transaction the node holds.
+        already_known: Arc<Mutex<bool>>,
     }
 
     impl MockRpcClient {
@@ -609,6 +644,7 @@ mod tests {
                 should_fail: false,
                 should_timeout: false,
                 call_count: Arc::new(Mutex::new(0)),
+                already_known: Arc::new(Mutex::new(false)),
             }
         }
 
@@ -617,6 +653,7 @@ mod tests {
                 should_fail: true,
                 should_timeout: false,
                 call_count: Arc::new(Mutex::new(0)),
+                already_known: Arc::new(Mutex::new(false)),
             }
         }
 
@@ -625,6 +662,7 @@ mod tests {
                 should_fail: false,
                 should_timeout: true,
                 call_count: Arc::new(Mutex::new(0)),
+                already_known: Arc::new(Mutex::new(false)),
             }
         }
 
@@ -644,6 +682,15 @@ mod tests {
             }
 
             Ok(mock_tx_hash(&raw_tx))
+        }
+
+        async fn broadcast_raw_transaction(&self, raw_tx: Vec<u8>) -> Result<BroadcastOutcome, String> {
+            let hash = self.send_raw_transaction(raw_tx).await?;
+            if *self.already_known.lock().unwrap() {
+                Ok(BroadcastOutcome::AlreadyKnown(hash))
+            } else {
+                Ok(BroadcastOutcome::Accepted(hash))
+            }
         }
 
         async fn send_raw_transaction_with_confirm(
@@ -783,6 +830,58 @@ mod tests {
 
         store.update_status(first, TransactionStatus::Confirmed, None).unwrap();
         assert_eq!(store.get(first).unwrap().status, TransactionStatus::Confirmed);
+    }
+
+    fn unknown_diagnosis() -> TransactionDiagnosis {
+        TransactionDiagnosis {
+            reason: UnminedReason::Unknown,
+            signed_fees: None,
+            recommended_fees: None,
+            min_replacement_fees: None,
+            retry_after: Duration::from_secs(5),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_async_resubmission_of_an_unknown_timeout_the_node_still_holds_resumes_it() {
+        let rpc = MockRpcClient::new();
+        let already_known = rpc.already_known.clone();
+        let executor = create_executor(rpc);
+        let store = executor.transaction_store();
+
+        let first = executor.send_raw_transaction_async(vec![0x01]).await.unwrap();
+        store
+            .update_status_with_diagnosis(first, TransactionStatus::Timeout, None, Some(unknown_diagnosis()))
+            .unwrap();
+
+        // The node reports the transaction as already known and returns it.
+        *already_known.lock().unwrap() = true;
+        let second = executor.send_raw_transaction_async(vec![0x01]).await;
+
+        assert!(matches!(
+            second,
+            Err(TransactionExecutorError::AlreadyTracked { existing, diagnosis: Some(diagnosis) })
+                if existing == first && diagnosis.reason == UnminedReason::Unknown
+        ));
+        assert_eq!(store.count(), 1);
+        assert_eq!(store.get(first).unwrap().status, TransactionStatus::Submitted);
+    }
+
+    #[tokio::test]
+    async fn test_async_resubmission_of_an_unknown_timeout_the_node_accepts_afresh_is_tracked_afresh() {
+        let executor = create_executor(MockRpcClient::new());
+        let store = executor.transaction_store();
+
+        let first = executor.send_raw_transaction_async(vec![0x01]).await.unwrap();
+        store
+            .update_status_with_diagnosis(first, TransactionStatus::Timeout, None, Some(unknown_diagnosis()))
+            .unwrap();
+
+        let second = executor.send_raw_transaction_async(vec![0x01]).await.unwrap();
+
+        assert_ne!(first, second);
+        assert_eq!(store.get(first).unwrap().status, TransactionStatus::Timeout);
+        assert_eq!(store.count(), 2);
     }
 
     #[tokio::test]
