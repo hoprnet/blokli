@@ -247,6 +247,10 @@ snapshot_queue_timeout = "10s"
 max_submitted_transactions              = 1024
 max_submitted_transactions_per_identity = 64
 
+# Fee-bumped replacements accepted per signer and nonce of a pending transaction, the original
+# not counted. Set to 0 to refuse every replacement. Default: 3.
+max_replacements_per_nonce = 3
+
 # Retain completed transaction results for 24 hours, while capping retained terminal
 # records at 10,000. Set the TTL to "0s" or the cap to 0 to disable that eviction limit.
 max_terminal_transactions = 10000

@@ -299,6 +299,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
         let transaction_executor_config = RawTransactionExecutorConfig {
             max_submitted_transactions: api_config.transactions.max_submitted_transactions,
             max_submitted_transactions_per_identity: api_config.transactions.max_submitted_transactions_per_identity,
+            max_replacements_per_nonce: api_config.transactions.max_replacements_per_nonce,
             enable_revert_reason_tracing: api_config.transactions.enable_revert_reason_tracing,
             hopr_policy: HoprPolicyConfig {
                 enabled: api_config.transactions.enable_hopr_action_validation,
