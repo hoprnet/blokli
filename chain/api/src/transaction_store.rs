@@ -280,10 +280,34 @@ pub struct SubmissionCapacityExhausted {
     pub submitted_for_identity: usize,
 }
 
+/// Outcome of [`TransactionStore::insert_or_resume`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackOutcome {
+    /// No tracked transaction with this hash was resumable, so the record was inserted.
+    Inserted,
+    /// A tracked transaction with this hash was resumed instead; the record was not inserted.
+    Resumed {
+        /// Identity of the transaction that already tracks this hash.
+        existing: Uuid,
+        /// The diagnosis it carried before resuming cleared it.
+        diagnosis: Option<TransactionDiagnosis>,
+    },
+}
+
 /// Thread-safe in-memory store for transaction records
+///
+/// Lock order, outermost first: `hash_index` entry, `transactions` record, `submitted_identities`,
+/// the capacity counts. Code holding an inner lock never takes an outer one.
 #[derive(Clone)]
 pub struct TransactionStore {
     transactions: Arc<DashMap<Uuid, TransactionRecord>>,
+    /// Latest record id per transaction hash.
+    ///
+    /// Lets a submission find the record that already tracks its hash without scanning the
+    /// store, and serialises concurrent submissions of the same bytes: the entry stays locked
+    /// from lookup to insertion. An entry can outlive its record (it is then ignored and
+    /// replaced), so the record it points to is always re-checked.
+    hash_index: Arc<DashMap<Hash, Uuid>>,
     /// Time at which a transaction entered a terminal status.
     ///
     /// This metadata is kept separately to avoid exposing an implementation-only timestamp
@@ -344,6 +368,7 @@ impl TransactionStore {
 
         let store = Self {
             transactions: Arc::new(DashMap::new()),
+            hash_index: Arc::new(DashMap::new()),
             terminal_timestamps: Arc::new(DashMap::new()),
             submitted_identities: Arc::new(DashMap::new()),
             submission_counts: Arc::new(Mutex::new(SubmissionCounts::default())),
@@ -364,6 +389,7 @@ impl TransactionStore {
                 let submitted = record.status == TransactionStatus::Submitted;
                 let id = record.id;
                 let identity = submitted.then(|| transaction_identity(&record.raw_transaction));
+                let hash = record.transaction_hash;
                 entry.insert(record);
                 if submitted {
                     self.clear_terminal_timestamp(id);
@@ -373,6 +399,7 @@ impl TransactionStore {
                 if let Some(identity) = identity {
                     self.track_submitted(id, identity);
                 }
+                self.index_hash(hash, id);
                 self.update_size_metric();
                 Ok(())
             }
@@ -389,6 +416,51 @@ impl TransactionStore {
     /// # Errors
     /// Returns `TransactionStoreError::AlreadyExists` if a transaction with the same ID already exists
     pub fn insert_reserved(
+        &self,
+        record: TransactionRecord,
+        reservation: SubmissionReservation,
+    ) -> Result<(), TransactionStoreError> {
+        let (hash, id) = (record.transaction_hash, record.id);
+        self.insert_reserved_unindexed(record, reservation)?;
+        self.index_hash(hash, id);
+        Ok(())
+    }
+
+    /// Insert an async submission, or resume the tracked transaction that already carries its
+    /// hash, as one step per hash.
+    ///
+    /// The hash entry is held from the lookup to the insertion, so concurrent submissions of
+    /// the same bytes cannot both insert: the second finds the first and resumes it. A tracked
+    /// transaction counts as carrying the hash while the node can still hold it (see
+    /// [`Self::resume_tracking`]); a dropped, replaced or concluded one is not resumed and the
+    /// record is inserted next to it. When a transaction is resumed the reservation is dropped.
+    ///
+    /// # Errors
+    /// Returns `TransactionStoreError::AlreadyExists` if a transaction with the same ID already exists
+    pub fn insert_or_resume(
+        &self,
+        record: TransactionRecord,
+        reservation: SubmissionReservation,
+    ) -> Result<TrackOutcome, TransactionStoreError> {
+        let id = record.id;
+        match self.hash_index.entry(record.transaction_hash) {
+            Entry::Occupied(mut index) => {
+                let existing = *index.get();
+                if let Some(diagnosis) = self.resume_held(existing, is_held_by_node) {
+                    return Ok(TrackOutcome::Resumed { existing, diagnosis });
+                }
+                self.insert_reserved_unindexed(record, reservation)?;
+                index.insert(id);
+            }
+            Entry::Vacant(index) => {
+                self.insert_reserved_unindexed(record, reservation)?;
+                index.insert(id);
+            }
+        }
+        Ok(TrackOutcome::Inserted)
+    }
+
+    fn insert_reserved_unindexed(
         &self,
         record: TransactionRecord,
         mut reservation: SubmissionReservation,
@@ -525,26 +597,24 @@ impl TransactionStore {
             .ok_or(TransactionStoreError::NotFound(id))
     }
 
-    /// Find the tracked transaction with this hash that the RPC node can still be holding.
-    ///
-    /// That is a transaction still awaiting confirmation, or one that timed out because it
-    /// was underpriced, queued or waiting behind a nonce gap. A dropped or replaced
-    /// transaction is no longer held, so a resubmission of it is a fresh one.
-    pub fn find_held_by_hash(&self, transaction_hash: Hash) -> Option<Uuid> {
-        self.transactions.iter().find_map(|entry| {
-            let record = entry.value();
-            let held = match record.status {
-                TransactionStatus::Submitted => true,
-                TransactionStatus::Timeout => record.diagnosis.is_some_and(|diagnosis| {
-                    matches!(
-                        diagnosis.reason,
-                        UnminedReason::Underpriced | UnminedReason::Queued | UnminedReason::NonceGap
-                    )
-                }),
-                _ => false,
-            };
-            (held && record.transaction_hash == transaction_hash).then_some(record.id)
-        })
+    /// Point the hash index at `id`, unless it already points at a record the node can hold.
+    fn index_hash(&self, hash: Hash, id: Uuid) {
+        match self.hash_index.entry(hash) {
+            Entry::Vacant(index) => {
+                index.insert(id);
+            }
+            Entry::Occupied(mut index) => {
+                let current = *index.get();
+                if current != id
+                    && !self
+                        .transactions
+                        .get(&current)
+                        .is_some_and(|r| is_held_by_node(r.value()))
+                {
+                    index.insert(id);
+                }
+            }
+        }
     }
 
     /// Resume tracking a transaction the node still holds after an identical resubmission.
@@ -563,16 +633,24 @@ impl TransactionStore {
     /// # Errors
     /// Returns `TransactionStoreError::NotFound` if the transaction doesn't exist
     pub fn resume_tracking(&self, id: Uuid) -> Result<Option<TransactionDiagnosis>, TransactionStoreError> {
+        self.resume_held(id, |_| true)
+            .ok_or(TransactionStoreError::NotFound(id))
+    }
+
+    /// Resume the record `id` if it exists and `held` accepts it, as [`Self::resume_tracking`] does.
+    ///
+    /// Returns `None` when the record is missing or not accepted, else the diagnosis it carried.
+    fn resume_held(&self, id: Uuid, held: impl Fn(&TransactionRecord) -> bool) -> Option<Option<TransactionDiagnosis>> {
         // The submitted index is updated while the record guard is held, so a concurrent
         // status change cannot interleave its own index update with this one.
-        let resumed: Option<Option<TransactionDiagnosis>> = {
-            let mut entry = self
-                .transactions
-                .get_mut(&id)
-                .ok_or(TransactionStoreError::NotFound(id))?;
+        let diagnosis = {
+            let mut entry = self.transactions.get_mut(&id)?;
             let record = entry.value_mut();
+            if !held(record) {
+                return None;
+            }
             if record.status != TransactionStatus::Timeout {
-                return Ok(None);
+                return Some(None);
             }
             record.resume_generation += 1;
             record.last_resumed_at = Some(Utc::now());
@@ -581,19 +659,16 @@ impl TransactionStore {
             let previous = record.diagnosis.take();
             let identity = transaction_identity(&record.raw_transaction);
             self.sync_submitted_status(id, TransactionStatus::Submitted, identity);
-            Some(previous)
+            previous
         };
-        let resumed_diagnosis = resumed.flatten();
-        if resumed.is_some() {
-            self.clear_terminal_timestamp(id);
-            self.broadcast_status_update(TransactionEvent::StatusUpdated {
-                id,
-                status: TransactionStatus::Submitted,
-                error_message: None,
-                confirmed_at: None,
-            });
-        }
-        Ok(resumed_diagnosis)
+        self.clear_terminal_timestamp(id);
+        self.broadcast_status_update(TransactionEvent::StatusUpdated {
+            id,
+            status: TransactionStatus::Submitted,
+            error_message: None,
+            confirmed_at: None,
+        });
+        Some(diagnosis)
     }
 
     /// Update an existing transaction record
@@ -610,11 +685,17 @@ impl TransactionStore {
                 let identity = (status == TransactionStatus::Submitted)
                     .then(|| transaction_identity(&record.raw_transaction))
                     .flatten();
+                let hash = record.transaction_hash;
+                let previous_hash = entry.get().transaction_hash;
                 entry.insert(record);
                 // Lock order is `transactions` then `submitted_identities`, with the index
                 // updated under the record guard.
                 self.sync_submitted_status(id, status, identity);
                 drop(entry);
+                if previous_hash != hash {
+                    self.hash_index.remove_if(&previous_hash, |_, indexed| *indexed == id);
+                }
+                self.index_hash(hash, id);
                 if status.is_terminal() {
                     self.mark_terminal(id);
                 } else {
@@ -962,14 +1043,15 @@ impl TransactionStore {
 
         let removed = eviction_ids
             .into_iter()
-            .filter(|id| {
+            .filter_map(|id| {
                 self.transactions
-                    .remove_if(id, |_, record| record.status.is_terminal())
-                    .is_some()
+                    .remove_if(&id, |_, record| record.status.is_terminal())
+                    .map(|(id, record)| (id, record.transaction_hash))
             })
             .collect::<Vec<_>>();
-        for id in &removed {
+        for (id, hash) in &removed {
             self.terminal_timestamps.remove(id);
+            self.hash_index.remove_if(hash, |_, indexed| indexed == id);
         }
         if !removed.is_empty() {
             self.update_size_metric();
@@ -1020,6 +1102,24 @@ impl TransactionStore {
                 );
             }
         }
+    }
+}
+
+/// Whether the RPC node can still be holding this tracked transaction.
+///
+/// That is a transaction still awaiting confirmation, or one that timed out because it was
+/// underpriced, queued or waiting behind a nonce gap. A dropped or replaced transaction is no
+/// longer held, so a resubmission of it is a fresh one.
+fn is_held_by_node(record: &TransactionRecord) -> bool {
+    match record.status {
+        TransactionStatus::Submitted => true,
+        TransactionStatus::Timeout => record.diagnosis.is_some_and(|diagnosis| {
+            matches!(
+                diagnosis.reason,
+                UnminedReason::Underpriced | UnminedReason::Queued | UnminedReason::NonceGap
+            )
+        }),
+        _ => false,
     }
 }
 
@@ -1316,7 +1416,7 @@ mod tests {
     }
 
     #[test]
-    fn test_find_held_by_hash_matches_only_transactions_the_node_can_still_hold() {
+    fn test_insert_or_resume_matches_only_transactions_the_node_can_still_hold() {
         let held = [
             (TransactionStatus::Submitted, None),
             (TransactionStatus::Timeout, Some(UnminedReason::Underpriced)),
@@ -1332,7 +1432,7 @@ mod tests {
             (TransactionStatus::Reverted, None),
         ];
 
-        for (expected, cases) in [(Some(TEST_UUID), held.as_slice()), (None, not_held.as_slice())] {
+        for (resumed, cases) in [(true, held.as_slice()), (false, not_held.as_slice())] {
             for (status, reason) in cases {
                 let store = TransactionStore::new();
                 store
@@ -1351,14 +1451,98 @@ mod tests {
                     })
                     .unwrap();
 
-                assert_eq!(
-                    store.find_held_by_hash(test_tx_hash()),
-                    expected,
-                    "{status:?} {reason:?}"
-                );
-                assert_eq!(store.find_held_by_hash(Hash::from([0x01; 32])), None);
+                let other = Uuid::from_u128(2);
+                let outcome = store
+                    .insert_or_resume(
+                        submitted_record(other, vec![0x01, 0x02, 0x03]),
+                        reserve(&store, &[0x01, 0x02, 0x03]),
+                    )
+                    .unwrap();
+                let expected = if resumed {
+                    TrackOutcome::Resumed {
+                        existing: TEST_UUID,
+                        diagnosis: reason.map(diagnosis_with),
+                    }
+                } else {
+                    TrackOutcome::Inserted
+                };
+                assert_eq!(outcome, expected, "{status:?} {reason:?}");
+                assert_eq!(store.get(other).is_ok(), !resumed, "{status:?} {reason:?}");
             }
         }
+    }
+
+    #[test]
+    fn test_insert_or_resume_ignores_other_hashes() {
+        let store = TransactionStore::new();
+        store
+            .insert(submitted_record(TEST_UUID, vec![0x01, 0x02, 0x03]))
+            .unwrap();
+
+        let mut record = submitted_record(Uuid::from_u128(2), vec![0x04]);
+        record.transaction_hash = Hash::from([0x01; 32]);
+        let outcome = store.insert_or_resume(record, reserve(&store, &[0x04])).unwrap();
+
+        assert_eq!(outcome, TrackOutcome::Inserted);
+        assert_eq!(store.count(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_insert_or_resume_of_one_hash_yields_one_record() {
+        let store = Arc::new(TransactionStore::new());
+
+        let tasks = (0..16u128)
+            .map(|i| {
+                let store = store.clone();
+                tokio::task::spawn_blocking(move || {
+                    let raw = vec![0x01, 0x02, 0x03];
+                    let reservation = store.try_reserve_submission(&raw, 0, 0).unwrap();
+                    store.insert_or_resume(submitted_record(Uuid::from_u128(i + 1), raw), reservation)
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut inserted = 0;
+        for task in tasks {
+            if task.await.unwrap().unwrap() == TrackOutcome::Inserted {
+                inserted += 1;
+            }
+        }
+
+        assert_eq!(inserted, 1);
+        assert_eq!(store.count(), 1);
+        assert_eq!(store.submitted_count(), 1);
+        assert_eq!(store.counts().total, 1);
+    }
+
+    #[test]
+    fn test_hash_index_follows_replaced_and_evicted_records() {
+        let store = TransactionStore::new();
+        store
+            .insert(submitted_record(TEST_UUID, vec![0x01, 0x02, 0x03]))
+            .unwrap();
+
+        // A replacement under a new hash moves the index: the old hash is free again.
+        let mut replaced = submitted_record(TEST_UUID, vec![0x01, 0x02, 0x03]);
+        replaced.transaction_hash = Hash::from([0x02; 32]);
+        store.update(replaced).unwrap();
+        let outcome = store
+            .insert_or_resume(
+                submitted_record(Uuid::from_u128(2), vec![0x01, 0x02, 0x03]),
+                reserve(&store, &[0x01, 0x02, 0x03]),
+            )
+            .unwrap();
+        assert_eq!(outcome, TrackOutcome::Inserted);
+
+        // An evicted record leaves nothing behind in the index.
+        store
+            .update_status(TEST_UUID, TransactionStatus::Confirmed, None)
+            .unwrap();
+        store
+            .update_status(Uuid::from_u128(2), TransactionStatus::Confirmed, None)
+            .unwrap();
+        thread::sleep(Duration::from_millis(5));
+        assert_eq!(store.evict_terminal_records(Duration::from_millis(1), 0), 2);
+        assert_eq!(store.hash_index.len(), 0);
     }
 
     #[test]
@@ -1767,6 +1951,10 @@ mod tests {
         let mut encoded = Vec::new();
         tx.into_signed(signature).encode_2718(&mut encoded);
         encoded
+    }
+
+    fn reserve(store: &TransactionStore, raw_transaction: &[u8]) -> SubmissionReservation {
+        store.try_reserve_submission(raw_transaction, 0, 0).unwrap()
     }
 
     fn submitted_record(id: Uuid, raw_transaction: Vec<u8>) -> TransactionRecord {

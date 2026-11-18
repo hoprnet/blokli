@@ -24,7 +24,7 @@ use crate::{
     safe_execution::decode_transaction_summary,
     transaction_monitor::{ReceiptProvider, SafeAddressChecker, enrich_safe_execution},
     transaction_store::{
-        SubmissionLimit, TransactionDiagnosis, TransactionRecord, TransactionStatus, TransactionStore,
+        SubmissionLimit, TrackOutcome, TransactionDiagnosis, TransactionRecord, TransactionStatus, TransactionStore,
         TransactionStoreError,
     },
     transaction_validator::{TransactionValidator, ValidationError},
@@ -390,13 +390,6 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             }
         };
 
-        // The node still holds a transaction we already track (an identical resubmission):
-        // report that one rather than tracking the same hash twice.
-        if let Some(existing) = self.transaction_store.find_held_by_hash(tx_hash) {
-            let diagnosis = self.transaction_store.resume_tracking(existing)?;
-            return Err(TransactionExecutorError::AlreadyTracked { existing, diagnosis });
-        }
-
         // Create transaction record with hash and Submitted status
         let id = Uuid::new_v4();
         let record = TransactionRecord {
@@ -413,9 +406,18 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             last_resumed_at: None,
         };
 
-        if let Err(e) = self.transaction_store.insert_reserved(record, reservation) {
-            error!(id = %id, tx_hash = %tx_hash, error = %e, "Failed to store submitted transaction");
-            return Err(e.into());
+        // The node may still hold a transaction we already track (an identical resubmission):
+        // resuming that one rather than tracking the same hash twice is a single step per hash,
+        // so concurrent identical submissions end up with one identity.
+        match self.transaction_store.insert_or_resume(record, reservation) {
+            Ok(TrackOutcome::Inserted) => {}
+            Ok(TrackOutcome::Resumed { existing, diagnosis }) => {
+                return Err(TransactionExecutorError::AlreadyTracked { existing, diagnosis });
+            }
+            Err(e) => {
+                error!(id = %id, tx_hash = %tx_hash, error = %e, "Failed to store submitted transaction");
+                return Err(e.into());
+            }
         }
 
         // Bind the logical action to this identity only once it is actually tracked, so a
@@ -749,6 +751,33 @@ mod tests {
 
         assert_ne!(first, second);
         assert_eq!(executor.transaction_store().count(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_concurrent_identical_async_submissions_share_one_identity_and_slot() {
+        let executor = Arc::new(create_executor(MockRpcClient::new()));
+
+        let tasks = (0..16)
+            .map(|_| {
+                let executor = executor.clone();
+                tokio::spawn(async move { executor.send_raw_transaction_async(vec![0x01]).await })
+            })
+            .collect::<Vec<_>>();
+        let mut created = Vec::new();
+        let mut tracked = Vec::new();
+        for task in tasks {
+            match task.await.unwrap() {
+                Ok(id) => created.push(id),
+                Err(TransactionExecutorError::AlreadyTracked { existing, .. }) => tracked.push(existing),
+                Err(other) => panic!("unexpected outcome: {other}"),
+            }
+        }
+
+        assert_eq!(created.len(), 1);
+        assert!(tracked.iter().all(|existing| *existing == created[0]));
+        let store = executor.transaction_store();
+        assert_eq!(store.count(), 1);
+        assert_eq!(store.submitted_count(), 1);
     }
 
     #[tokio::test]
