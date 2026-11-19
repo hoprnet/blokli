@@ -175,6 +175,39 @@ where
     }
 }
 
+/// Parks the caller for good once post-finality verification found a mismatch.
+///
+/// The flag is sticky, so the caller never continues. Awaiting forever keeps the process alive:
+/// the API keeps serving the already indexed data until an operator restarts the daemon.
+async fn halt_if_verification_failed(indexer_state: &IndexerState, at_block: u64) {
+    if !indexer_state.verification_failed() {
+        return;
+    }
+
+    error!(
+        at_block,
+        "post-finality verification failed, the indexer stops advancing until the daemon restarts"
+    );
+    pending::<()>().await;
+}
+
+/// One item the continuous indexing loop waits for between blocks.
+enum LiveItem {
+    /// A block of the continuous log stream together with its pre-fetched chain data.
+    Block(BlockWithLogs, PrefetchedLogData),
+    /// An owner snapshot read by the Safe owner refresh task.
+    Snapshot(SafeSnapshotRead),
+}
+
+impl LiveItem {
+    /// Block the item belongs to: the block itself, or the block a snapshot was pinned at.
+    fn block_id(&self) -> u64 {
+        match self {
+            Self::Block(block, _) => block.block_id,
+            Self::Snapshot(read) => read.block,
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Display)]
 pub(crate) enum LogFilterPhase {
     HistoricalDiscovery,
@@ -658,6 +691,14 @@ where
 
         info!(next_block_to_process, "Indexer start point");
 
+        // The committed watermark is captured before the indexing loop runs. The first finalized
+        // response from the provider can arrive only after that loop has written blocks, and those
+        // blocks must still be covered by the verification cursor that starts from this value.
+        let verification_baseline = match self.db.get_indexer_state_info(None).await?.latest_block_number {
+            0 => None,
+            last_indexed => Some(u64::from(last_indexed)),
+        };
+
         let indexer_state = self.indexer_state.clone();
         let tip_updates = if self.cfg.verify_finalized {
             rpc.subscribe_tip()
@@ -679,6 +720,7 @@ where
                         verification_db,
                         verification_handler,
                         verification_state,
+                        verification_baseline,
                         None,
                     )
                     .await;
@@ -740,6 +782,10 @@ where
                         return;
                     }
 
+                    // The last historical block can be the one whose processing set the flag, so the
+                    // historical head is only committed once verification still agrees.
+                    halt_if_verification_failed(&indexer_state, historical_sync_head).await;
+
                     let checksum = match db.update_logs_checksums().await {
                         Ok(checksum) => checksum,
                         Err(error) => {
@@ -786,7 +832,7 @@ where
                 // The lookup of the Safes to refresh is retried; if it keeps failing the phase fails below, because
                 // nothing rescans later and Safes whose owners changed during downtime would stay stale.
                 let mut startup_failure: Option<String> = None;
-                let _owner_refresh_guard = {
+                let mut owner_refresh_guard = {
                     match queue_pending_safe_owner_snapshots(
                         || db.get_safes_pending_owner_snapshot(None, refresh_goal_block),
                         &indexer_state,
@@ -842,35 +888,53 @@ where
                     let mut event_stream = Box::pin(Self::prefetch_block_data(&logs_handler, block_stream, true));
 
                     loop {
-                        let (block, prefetched) = tokio::select! {
+                        let item = tokio::select! {
                             item = event_stream.next() => match item {
-                                Some(item) => item,
+                                Some((block, prefetched)) => LiveItem::Block(block, prefetched),
                                 None => break,
                             },
-                            read = snapshot_rx.next() => {
-                                match read {
-                                    Some(read) => store_safe_owner_snapshot(&db, &indexer_state, read).await,
-                                    // The supervisor only ends when it gave up restarting the task. Without the
-                                    // refresh, Safes would silently keep missing owners: fail like any other
-                                    // unrecoverable indexer failure.
-                                    None => {
-                                        error!("Safe owner refresh task has stopped");
-                                        break 'stream_refresh Some("the Safe owner refresh task has stopped".into());
-                                    }
+                            read = snapshot_rx.next() => match read {
+                                Some(read) => LiveItem::Snapshot(read),
+                                // The supervisor only ends when it gave up restarting the task. Without the
+                                // refresh, Safes would silently keep missing owners: fail like any other
+                                // unrecoverable indexer failure.
+                                None => {
+                                    error!("Safe owner refresh task has stopped");
+                                    break 'stream_refresh Some("the Safe owner refresh task has stopped".into());
                                 }
+                            },
+                        };
+
+                        // The flag is checked before any item is written: a snapshot that is ready after a
+                        // mismatch must not be stored, and the refresh task has nothing left to do once
+                        // the loop parks. The flag is sticky, so the indexer never advances again; awaiting
+                        // forever keeps the process alive so the API keeps serving the already indexed data
+                        // until an operator restarts the daemon.
+                        if indexer_state.verification_failed() {
+                            let _ = owner_refresh_guard.take();
+                            halt_if_verification_failed(&indexer_state, item.block_id()).await;
+                        }
+
+                        let (block, prefetched) = match item {
+                            LiveItem::Block(block, prefetched) => (block, prefetched),
+                            LiveItem::Snapshot(read) => {
+                                store_safe_owner_snapshot(&db, &indexer_state, read).await;
                                 continue;
                             }
                         };
-                        if indexer_state.verification_failed() {
-                            error!(
-                                block_id = block.block_id,
-                                "post-finality verification failed, the indexer stops advancing until the daemon \
-                                 restarts"
-                            );
-                            // The flag is sticky, so the indexer never advances again. Awaiting forever
-                            // keeps the process alive: the API keeps serving the already indexed data
-                            // until an operator restarts the daemon.
-                            pending::<()>().await;
+
+                        match Self::replaces_an_applied_safe_registration(&db, &logs_handler, &block).await {
+                            Ok(true) => {
+                                indexer_state.mark_verification_failed();
+                                halt_if_verification_failed(&indexer_state, block.block_id).await;
+                            }
+                            Ok(false) => {}
+                            Err(error) => {
+                                break 'stream_refresh Some(format!(
+                                    "failed to check the applied Safe registrations of block {}: {error}",
+                                    block.block_id
+                                ));
+                            }
                         }
 
                         let store_started = Instant::now();
@@ -1186,6 +1250,32 @@ where
         Ok(result)
     }
 
+    /// Returns whether the block replaces a Safe registration that the index has already applied.
+    ///
+    /// A replayed block can carry a different log at the position of a Safe registration that was
+    /// applied before (a reorganisation). Applying the replacement adds the new Safe while the one
+    /// derived from the applied log stays, and replacing the stored row would hide the difference
+    /// from post-finality verification: the range would compare equal while the index still holds
+    /// the replaced Safe. The block is therefore not written and the replacement is treated as a
+    /// verification failure. A log with the same block hash is a replay of the applied log.
+    async fn replaces_an_applied_safe_registration(db: &Db, logs_handler: &U, block: &BlockWithLogs) -> Result<bool>
+    where
+        U: ChainLogHandler + 'static,
+        Db: BlokliDbLogOperations + 'static,
+    {
+        let registry = logs_handler.contract_addresses_map().node_safe_registry;
+        if !block.logs.iter().any(|log| log.address == registry) {
+            return Ok(false);
+        }
+
+        let applied = db.get_processed_log_identities(block.block_id).await?;
+        Ok(block.logs.iter().filter(|log| log.address == registry).any(|log| {
+            applied.iter().any(|(tx_index, log_index, block_hash)| {
+                *tx_index == log.tx_index && *log_index == log.log_index && *block_hash != log.block_hash
+            })
+        }))
+    }
+
     async fn store_block_logs(db: &Db, logs_handler: &U, block: &BlockWithLogs) -> Result<()>
     where
         U: ChainLogHandler + 'static,
@@ -1244,9 +1334,19 @@ where
                 break;
             }
 
+            halt_if_verification_failed(indexer_state, block.block_id).await;
+
+            if Self::replaces_an_applied_safe_registration(db, logs_handler, &block).await? {
+                indexer_state.mark_verification_failed();
+                halt_if_verification_failed(indexer_state, block.block_id).await;
+            }
+
             let store_started = Instant::now();
             Self::store_block_logs(db, logs_handler, &block).await?;
             record_block_step("store", store_started);
+
+            // Storing took a while, so the flag is checked again before the index writes start.
+            halt_if_verification_failed(indexer_state, block.block_id).await;
 
             let process_started = Instant::now();
             Self::process_block(
@@ -1955,7 +2055,7 @@ mod tests {
     };
     use mockall::{mock, predicate};
     use multiaddr::Multiaddr;
-    use tokio::sync::watch;
+    use tokio::sync::{Notify, watch};
 
     use super::*;
     use crate::{
@@ -2072,6 +2172,23 @@ mod tests {
         let mut rpc = MockHoprIndexerOps::new();
         rpc.expect_subscribe_tip().returning(|| None);
         rpc
+    }
+
+    /// Time a test gives the indexer to take one more step after it passed the halt check.
+    ///
+    /// Each test first waits for a mocked call that runs before the check, so this period elapses
+    /// only when the indexer has parked.
+    const HALT_QUIET_PERIOD: Duration = Duration::from_millis(500);
+
+    /// Asserts that the indexer does not take one more step after its halt check.
+    async fn assert_halts_without_progress<F>(progress: F, what: &str)
+    where
+        F: Future<Output = ()>,
+    {
+        assert!(
+            tokio::time::timeout(HALT_QUIET_PERIOD, progress).await.is_err(),
+            "{what}"
+        );
     }
 
     #[derive(Clone)]
@@ -3738,7 +3855,15 @@ mod tests {
         handlers
             .expect_contract_addresses_map()
             .return_const(ContractAddresses::default());
+        let processed = Arc::new(Notify::new());
+        let processed_for_handler = processed.clone();
+        handlers.expect_collect_log_event().returning(move |_, _| {
+            processed_for_handler.notify_one();
+            Ok(())
+        });
 
+        let stream_requested = Arc::new(Notify::new());
+        let requested_for_rpc = stream_requested.clone();
         let mut rpc = mock_rpc();
         rpc.expect_block_number().times(2).returning(move || Ok(head_block));
         rpc.expect_get_channel_closure_notice_period()
@@ -3746,7 +3871,10 @@ mod tests {
         rpc.expect_try_stream_logs()
             .times(1)
             .withf(move |start: &u64, _filters: &FilterSet, is_synced: &bool| *start == head_block + 1 && *is_synced)
-            .return_once(move |_, _, _| Ok(Box::pin(futures::stream::iter(vec![block]))));
+            .return_once(move |_, _, _| {
+                requested_for_rpc.notify_one();
+                Ok(Box::pin(futures::stream::iter(vec![block])))
+            });
 
         let indexer_state = IndexerState::default();
         indexer_state.mark_verification_failed();
@@ -3766,7 +3894,12 @@ mod tests {
 
         let abort_handle = indexer.start().await.expect("indexer should start successfully");
 
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        stream_requested.notified().await;
+        assert_halts_without_progress(
+            processed.notified(),
+            "the indexer must not process a block after the halt",
+        )
+        .await;
         abort_handle.abort();
 
         assert_eq!(
@@ -3774,6 +3907,462 @@ mod tests {
             0,
             "no block may be stored while post-finality verification has failed"
         );
+
+        Ok(())
+    }
+
+    /// A verification failure during the historical phase stops the loop before its next write and
+    /// before the historical head is committed.
+    #[tokio::test]
+    async fn test_historical_phase_halts_before_storing_the_next_block_when_verification_failed() -> anyhow::Result<()>
+    {
+        let db = BlokliDb::new_in_memory().await?;
+        let addr = Address::new(b"my address 123456789");
+        let topic = Hash::create(&[b"my topic"]);
+        db.ensure_logs_origin(vec![(addr, topic)]).await?;
+
+        let indexer_state = IndexerState::default();
+        let state_for_handler = indexer_state.clone();
+
+        let mut handlers = MockChainLogHandler::new();
+        handlers.expect_contract_addresses().return_const(vec![addr]);
+        handlers
+            .expect_contract_address_topics()
+            .withf(move |x| x == &addr)
+            .return_const(vec![B256::from_slice(topic.as_ref())]);
+        handlers
+            .expect_contract_addresses_map()
+            .return_const(ContractAddresses::default());
+        // The first historical block sets the flag while it is processed, as a mismatch found by
+        // the verification task would.
+        let first_processed = Arc::new(Notify::new());
+        let second_processed = Arc::new(Notify::new());
+        let first_for_handler = first_processed.clone();
+        let second_for_handler = second_processed.clone();
+        handlers.expect_collect_log_event().returning(move |log, _| {
+            match log.block_number {
+                1 => {
+                    state_for_handler.mark_verification_failed();
+                    first_for_handler.notify_one();
+                }
+                2 => second_for_handler.notify_one(),
+                _ => {}
+            }
+            Ok(())
+        });
+
+        let historical_head = 2;
+        let first_block = BlockWithLogs {
+            block_id: 1,
+            logs: build_announcement_logs(addr, 1, 1, 0)?.into_iter().collect(),
+        };
+        let second_block = BlockWithLogs {
+            block_id: 2,
+            logs: build_announcement_logs(addr, 1, 2, 0)?.into_iter().collect(),
+        };
+
+        let mut rpc = mock_rpc();
+        rpc.expect_block_number()
+            .times(2)
+            .returning(move || Ok(historical_head));
+        rpc.expect_get_channel_closure_notice_period()
+            .returning(|| Ok(Duration::from_secs(1)));
+        rpc.expect_try_stream_logs()
+            .times(1)
+            .withf(move |start: &u64, _filters: &FilterSet, is_synced: &bool| *start == 1 && !*is_synced)
+            .return_once(move |_, _, _| Ok(Box::pin(futures::stream::iter(vec![first_block, second_block]))));
+
+        let cfg = IndexerConfig::new(
+            1,
+            true,
+            false,
+            false,
+            None,
+            None,
+            "/tmp/test_data".to_string(),
+            1000,
+            10,
+        );
+        let indexer = Indexer::new(rpc, handlers, db.clone(), cfg, indexer_state.clone()).without_panic_on_completion();
+
+        // The historical phase never returns once it has parked, so `start` is driven by the test.
+        let task = tokio::spawn(async move { indexer.start().await });
+
+        first_processed.notified().await;
+        assert_halts_without_progress(
+            second_processed.notified(),
+            "the historical loop must not process the block after the failure",
+        )
+        .await;
+
+        assert!(indexer_state.verification_failed());
+        assert_eq!(
+            db.get_logs_count(None, None).await?,
+            1,
+            "only the block whose processing set the flag may be stored"
+        );
+        task.abort();
+
+        Ok(())
+    }
+
+    /// A changed identity at the position of an applied Safe registration is detected, while a
+    /// replay of the applied log and an unprocessed stored log are not.
+    #[tokio::test]
+    async fn test_a_replaced_applied_safe_registration_is_detected() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let registry = Address::new(b"safe registry 123456");
+        let mut logs = build_announcement_logs(registry, 1, 1, 0)?;
+        let applied = logs.remove(0);
+        db.store_logs(vec![applied.clone()]).await?;
+        db.set_log_processed(applied.clone()).await?;
+
+        let mut handler = MockChainLogHandler::new();
+        handler
+            .expect_contract_addresses_map()
+            .return_const(Arc::new(ContractAddresses {
+                node_safe_registry: registry,
+                ..Default::default()
+            }));
+
+        let replay = BlockWithLogs {
+            block_id: 1,
+            logs: BTreeSet::from([applied.clone()]),
+        };
+        assert!(
+            !Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::replaces_an_applied_safe_registration(
+                &db, &handler, &replay
+            )
+            .await?,
+            "a replay of the applied log is not a replacement"
+        );
+
+        let replacement = SerializableLog {
+            block_hash: Hash::create(&[b"canonical block"]).into(),
+            ..applied.clone()
+        };
+        let reorged = BlockWithLogs {
+            block_id: 1,
+            logs: BTreeSet::from([replacement]),
+        };
+        assert!(
+            Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::replaces_an_applied_safe_registration(
+                &db, &handler, &reorged
+            )
+            .await?,
+            "a different log at the position of the applied registration is a replacement"
+        );
+
+        let unprocessed_db = BlokliDb::new_in_memory().await?;
+        unprocessed_db.store_logs(vec![applied]).await?;
+        assert!(
+            !Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::replaces_an_applied_safe_registration(
+                &unprocessed_db,
+                &handler,
+                &reorged
+            )
+            .await?,
+            "a stored log that was never applied is replaced as usual"
+        );
+
+        Ok(())
+    }
+
+    /// A replayed block that replaces an applied Safe registration is a verification failure: the
+    /// replacement is neither stored nor applied, so the difference survives a restart.
+    #[tokio::test]
+    async fn test_historical_phase_halts_on_a_replaced_applied_safe_registration() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let registry = Address::new(b"safe registry 123456");
+        let topic = Hash::create(&[b"my topic"]);
+        db.ensure_logs_origin(vec![(registry, topic)]).await?;
+
+        let mut logs = build_announcement_logs(registry, 1, 1, 0)?;
+        let applied = logs.remove(0);
+        db.store_logs(vec![applied.clone()]).await?;
+        db.set_log_processed(applied.clone()).await?;
+
+        let replacement_block_hash: [u8; 32] = Hash::create(&[b"canonical block"]).into();
+        let replacement = SerializableLog {
+            block_hash: replacement_block_hash,
+            ..applied.clone()
+        };
+        let replayed_block = BlockWithLogs {
+            block_id: 1,
+            logs: BTreeSet::from([replacement]),
+        };
+        let replayed_block_id = replayed_block.block_id;
+
+        let mut handlers = MockChainLogHandler::new();
+        handlers.expect_contract_addresses().return_const(vec![registry]);
+        handlers
+            .expect_contract_address_topics()
+            .withf(move |x| x == &registry)
+            .return_const(vec![B256::from_slice(topic.as_ref())]);
+        handlers
+            .expect_contract_addresses_map()
+            .return_const(Arc::new(ContractAddresses {
+                node_safe_registry: registry,
+                ..Default::default()
+            }));
+        // Fast sync processes the stored log before the historical stream is built, so the signal is
+        // armed only once the replayed block can arrive.
+        let armed = Arc::new(StdAtomicBool::new(false));
+        let processed = Arc::new(Notify::new());
+        let armed_for_handler = armed.clone();
+        let processed_for_handler = processed.clone();
+        handlers.expect_collect_log_event().returning(move |_, _| {
+            if armed_for_handler.load(StdOrdering::SeqCst) {
+                processed_for_handler.notify_one();
+            }
+            Ok(())
+        });
+
+        let stream_requested = Arc::new(Notify::new());
+        let requested_for_rpc = stream_requested.clone();
+        let armed_for_rpc = armed.clone();
+        let historical_head = 2;
+        let mut rpc = mock_rpc();
+        rpc.expect_block_number()
+            .times(2)
+            .returning(move || Ok(historical_head));
+        rpc.expect_get_channel_closure_notice_period()
+            .returning(|| Ok(Duration::from_secs(1)));
+        rpc.expect_try_stream_logs()
+            .times(1)
+            .withf(move |start: &u64, _filters: &FilterSet, is_synced: &bool| *start == 1 && !*is_synced)
+            .return_once(move |_, _, _| {
+                armed_for_rpc.store(true, StdOrdering::SeqCst);
+                requested_for_rpc.notify_one();
+                Ok(Box::pin(futures::stream::iter(vec![replayed_block])))
+            });
+        rpc.expect_try_stream_logs()
+            .times(1)
+            .withf(move |start: &u64, _filters: &FilterSet, is_synced: &bool| {
+                *start == historical_head + 1 && *is_synced
+            })
+            .return_once(move |_, _, _| Ok(Box::pin(futures::stream::empty())));
+
+        let indexer_state = IndexerState::default();
+        let cfg = IndexerConfig::new(
+            1,
+            true,
+            false,
+            false,
+            None,
+            None,
+            "/tmp/test_data".to_string(),
+            1000,
+            10,
+        );
+        let indexer = Indexer::new(rpc, handlers, db.clone(), cfg, indexer_state.clone()).without_panic_on_completion();
+
+        // The historical phase never returns once it has parked, so `start` is driven by the test.
+        let task = tokio::spawn(async move { indexer.start().await });
+
+        stream_requested.notified().await;
+        assert_halts_without_progress(
+            processed.notified(),
+            "the replayed block must not be processed after the replacement was detected",
+        )
+        .await;
+
+        assert!(indexer_state.verification_failed());
+        assert_eq!(
+            db.get_log(replayed_block_id, 0, 0).await?.block_hash,
+            applied.block_hash,
+            "the applied identity is kept instead of being overwritten"
+        );
+        assert_ne!(applied.block_hash, replacement_block_hash);
+        assert_eq!(db.get_logs_count(None, None).await?, 1);
+        task.abort();
+
+        Ok(())
+    }
+
+    /// A verification failure in the last historical block keeps the historical head from being
+    /// committed.
+    #[tokio::test]
+    async fn test_historical_head_is_not_committed_when_the_last_block_fails_verification() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let addr = Address::new(b"my address 123456789");
+        let topic = Hash::create(&[b"my topic"]);
+        db.ensure_logs_origin(vec![(addr, topic)]).await?;
+
+        let indexer_state = IndexerState::default();
+        let state_for_handler = indexer_state.clone();
+
+        let mut handlers = MockChainLogHandler::new();
+        handlers.expect_contract_addresses().return_const(vec![addr]);
+        handlers
+            .expect_contract_address_topics()
+            .withf(move |x| x == &addr)
+            .return_const(vec![B256::from_slice(topic.as_ref())]);
+        handlers
+            .expect_contract_addresses_map()
+            .return_const(ContractAddresses::default());
+        // The last historical block sets the flag while it is processed.
+        let last_processed = Arc::new(Notify::new());
+        let last_for_handler = last_processed.clone();
+        handlers.expect_collect_log_event().returning(move |log, _| {
+            if log.block_number == 4 {
+                state_for_handler.mark_verification_failed();
+                last_for_handler.notify_one();
+            }
+            Ok(())
+        });
+
+        let first_block = BlockWithLogs {
+            block_id: 3,
+            logs: build_announcement_logs(addr, 1, 3, 0)?.into_iter().collect(),
+        };
+        let second_block = BlockWithLogs {
+            block_id: 4,
+            logs: build_announcement_logs(addr, 1, 4, 0)?.into_iter().collect(),
+        };
+
+        let stream_requested = Arc::new(Notify::new());
+        let requested_for_rpc = stream_requested.clone();
+        let mut rpc = mock_rpc();
+        rpc.expect_block_number().times(2).returning(move || Ok(4));
+        rpc.expect_get_channel_closure_notice_period()
+            .returning(|| Ok(Duration::from_secs(1)));
+        rpc.expect_try_stream_logs()
+            .times(1)
+            .withf(move |start: &u64, _filters: &FilterSet, is_synced: &bool| *start == 3 && !*is_synced)
+            .return_once(move |_, _, _| Ok(Box::pin(futures::stream::iter(vec![first_block, second_block]))));
+        // The continuous phase is only started after the historical head is committed.
+        rpc.expect_try_stream_logs()
+            .times(1)
+            .withf(move |start: &u64, _filters: &FilterSet, is_synced: &bool| *start == 5 && *is_synced)
+            .return_once(move |_, _, _| {
+                requested_for_rpc.notify_one();
+                Ok(Box::pin(futures::stream::empty()))
+            });
+
+        let cfg = IndexerConfig::new(
+            3,
+            true,
+            false,
+            false,
+            None,
+            None,
+            "/tmp/test_data".to_string(),
+            1000,
+            10,
+        );
+        let indexer = Indexer::new(rpc, handlers, db.clone(), cfg, indexer_state.clone()).without_panic_on_completion();
+
+        // The historical phase never returns once it has parked, so `start` is driven by the test.
+        let task = tokio::spawn(async move { indexer.start().await });
+
+        last_processed.notified().await;
+        assert_halts_without_progress(
+            stream_requested.notified(),
+            "the historical head must not be committed after the failure",
+        )
+        .await;
+
+        assert!(indexer_state.verification_failed());
+        assert_eq!(
+            db.get_logs_count(None, None).await?,
+            2,
+            "both historical blocks are stored before the commit"
+        );
+        assert_eq!(
+            db.get_indexer_state_info(None).await?.latest_block_number,
+            0,
+            "the historical head must not be committed after the failure"
+        );
+        task.abort();
+
+        Ok(())
+    }
+
+    /// A Safe owner snapshot that is ready after a verification failure must not be stored, and the
+    /// refresh task stops with the paused indexer.
+    #[tokio::test]
+    async fn test_snapshot_is_not_stored_when_verification_failed() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let addr = Address::new(b"my address 123456789");
+        let topic = Hash::create(&[b"my topic"]);
+        db.ensure_logs_origin(vec![(addr, topic)]).await?;
+
+        let safe = Address::from([0x33; 20]);
+        let owner = Address::from([0x41; 20]);
+        db.create_safe_contract(None, safe, Address::default(), safe, 1, 0, 0)
+            .await?;
+
+        let head_block = 10;
+        let mut handlers = MockChainLogHandler::new();
+        handlers.expect_contract_addresses().return_const(vec![addr]);
+        handlers
+            .expect_contract_address_topics()
+            .withf(move |x| x == &addr)
+            .return_const(vec![B256::from_slice(topic.as_ref())]);
+        handlers
+            .expect_contract_addresses_map()
+            .return_const(ContractAddresses::default());
+
+        let read_requested = Arc::new(Notify::new());
+        let read_requested_for_rpc = read_requested.clone();
+        let mut rpc = mock_rpc();
+        rpc.expect_block_number().times(2).returning(move || Ok(head_block));
+        rpc.expect_get_channel_closure_notice_period()
+            .returning(|| Ok(Duration::from_secs(1)));
+        // No block arrives, so only the snapshot write can happen while the loop waits.
+        rpc.expect_try_stream_logs()
+            .times(1)
+            .withf(move |start: &u64, _filters: &FilterSet, is_synced: &bool| *start == head_block + 1 && *is_synced)
+            .return_once(move |_, _, _| Ok(Box::pin(futures::stream::pending())));
+        rpc.expect_get_safe_owners_and_thresholds().returning(move |safes, _| {
+            read_requested_for_rpc.notify_one();
+            Ok(safes
+                .iter()
+                .map(|_| {
+                    Ok(SafeOwnersSnapshot {
+                        owners: vec![owner],
+                        threshold: 2,
+                    })
+                })
+                .collect())
+        });
+
+        let indexer_state = IndexerState::default();
+        indexer_state.mark_verification_failed();
+
+        let cfg = IndexerConfig::new(
+            head_block + 1,
+            true,
+            false,
+            false,
+            None,
+            None,
+            "/tmp/test_data".to_string(),
+            1000,
+            10,
+        );
+        let indexer = Indexer::new(rpc, handlers, db.clone(), cfg, indexer_state.clone()).without_panic_on_completion();
+
+        let abort_handle = indexer.start().await.expect("indexer should start successfully");
+
+        read_requested.notified().await;
+        // The pending marker is cleared when the snapshot is stored, so only a stored snapshot makes
+        // the wait complete.
+        let stored = tokio::time::timeout(HALT_QUIET_PERIOD, async {
+            while indexer_state.unsynced_safe_owner_snapshots() > 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(stored.is_err(), "a snapshot ready after the failure must not be stored");
+        abort_handle.abort();
+
+        assert!(
+            db.get_safe_owners(None, safe).await?.is_empty(),
+            "a snapshot ready after the failure must not be stored"
+        );
+        assert_eq!(db.get_safe_owners_synced_block(None, safe).await?, None);
 
         Ok(())
     }

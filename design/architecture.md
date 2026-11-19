@@ -1605,11 +1605,16 @@ effect.
 **Post-finality verification.** A background task of the indexer re-reads every indexed range once the tracker reports it as final. It
 compares the canonical logs with the stored ones on block number, block hash, transaction hash and log index. The task walks forward from a
 position stored in the index database, so a restart resumes above the blocks an earlier process checked and also covers the blocks that
-became final while the daemon was down. A difference sets a sticky flag: the indexer stops advancing and readiness reports the failure until
-an operator restarts the process. A failed read, or a failed write of the stored position, is retried on the next tip update instead of
-being reported. Because the set of Safe contract addresses grows while indexing, a canonical log of a Safe has to be in the store only when
-the block was indexed by the continuous phase of the same process and the Safe was discovered in an earlier block. Logs of the static
-contracts are always required.
+became final while the daemon was down. The first position starts at the lower of the first finalized block and the committed watermark the
+process had when it started, so blocks written before the provider returned a finalized block are checked later as well. A range that
+differs is compared a second time after a short delay, because a load-balanced or lagging backend can return an empty or partial result
+without an error; only a second difference sets the sticky flag. The indexer then stops advancing and readiness reports the failure until an
+operator restarts the process. A failed read, or a failed write of the stored position, is retried on the next tip update instead of being
+reported. A replayed block that puts a different log at the position of a Safe registration the index already applied is not written and is
+treated as a difference, because applying the replacement would leave the replaced Safe in the index while hiding the change from the
+comparison. Because the set of Safe contract addresses grows while indexing, a canonical log of a Safe has to be in the store only when the
+block was indexed by the continuous phase of the same process and the Safe was discovered in an earlier block. Logs of the static contracts
+are always required.
 
 ### Finality Handling in Readiness Checks
 
