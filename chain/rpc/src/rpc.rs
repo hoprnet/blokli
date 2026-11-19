@@ -5,6 +5,7 @@
 #[cfg(test)]
 use std::mem::replace;
 use std::{
+    fmt::{self, Formatter},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -53,7 +54,7 @@ use crate::{
     client::GasOracleFiller,
     confirmation::{ProviderReceiptLookup, wait_for_confirmed_tip},
     errors::{Result, RpcError},
-    head::{HeadSourceConfig, HeadSubscriber, WsHeadSubscriber},
+    head::{HeadSourceConfig, HeadSubscriber, WsHeadSubscriber, redact_ws_url},
     tip::{ChainTipTracker, ConfirmationConfig, ConfirmationMode, RpcTipSource},
     transport::HttpRequestor,
 };
@@ -136,7 +137,7 @@ pub const DEFAULT_AUTO_LOG_BLOCK_RANGE_CAP: u64 = 10_000;
 pub const DEFAULT_LOG_BLOCK_RANGE_REPROBE_INTERVAL: u64 = 100;
 
 /// Configuration of the RPC related parameters.
-#[derive(Clone, Debug, PartialEq, Eq, smart_default::SmartDefault, Serialize, Deserialize, Validate)]
+#[derive(Clone, PartialEq, Eq, smart_default::SmartDefault, Serialize, Deserialize, Validate)]
 pub struct RpcOperationsConfig {
     /// Blockchain id
     ///
@@ -252,6 +253,36 @@ pub struct RpcOperationsConfig {
     #[validate(range(min = 1, max = 200))]
     #[default = 50]
     pub max_indexer_past_blocks: usize,
+}
+
+impl fmt::Debug for RpcOperationsConfig {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RpcOperationsConfig")
+            .field("chain_id", &self.chain_id)
+            .field("contract_addrs", &self.contract_addrs)
+            .field("expected_block_time", &self.expected_block_time)
+            .field("max_block_range_fetch_size", &self.max_block_range_fetch_size)
+            .field(
+                "log_block_range_reprobe_interval",
+                &self.log_block_range_reprobe_interval,
+            )
+            .field("tx_polling_interval", &self.tx_polling_interval)
+            .field("finality", &self.finality)
+            .field("confirmation_mode", &self.confirmation_mode)
+            .field("max_safe_gap", &self.max_safe_gap)
+            .field("head_poll_interval", &self.head_poll_interval)
+            .field("head_ws_url", &self.head_ws_url.as_ref().map(redact_ws_url))
+            .field("head_ws_url_derived", &self.head_ws_url_derived)
+            .field("gas_oracle_url", &self.gas_oracle_url)
+            .field("gas_oracle_fallback_max_fee", &self.gas_oracle_fallback_max_fee)
+            .field(
+                "gas_oracle_fallback_priority_fee",
+                &self.gas_oracle_fallback_priority_fee,
+            )
+            .field("max_indexer_loop_failures", &self.max_indexer_loop_failures)
+            .field("max_indexer_past_blocks", &self.max_indexer_past_blocks)
+            .finish()
+    }
 }
 
 pub(crate) type HoprProvider<R> = FillProvider<
@@ -1341,12 +1372,30 @@ mod tests {
         transports::{RpcError as AlloyRpcError, TransportErrorKind},
     };
     use serde_json::value::RawValue;
+    use url::Url;
 
     use super::{
         DEFAULT_AUTO_LOG_BLOCK_RANGE_CAP, DEFAULT_LOG_BLOCK_RANGE_REPROBE_INTERVAL as REPROBE_INTERVAL,
-        LogBlockRangeLimit, is_curvy_token_not_registered, is_log_block_range_limit_error, snapshot_from_fee_history,
+        LogBlockRangeLimit, RpcOperationsConfig, is_curvy_token_not_registered, is_log_block_range_limit_error,
+        snapshot_from_fee_history,
     };
     use crate::errors::RpcError;
+
+    #[test]
+    fn rpc_operations_config_debug_redacts_the_websocket_url() {
+        let config = RpcOperationsConfig {
+            head_ws_url: Some(
+                Url::parse("wss://user:pass@rpc.example.com:8443/secret?token=xyz").expect("URL should parse"),
+            ),
+            ..RpcOperationsConfig::default()
+        };
+
+        let debug = format!("{config:?}");
+        assert!(debug.contains("wss://rpc.example.com:8443"), "{debug}");
+        for secret in ["user", "pass", "secret", "xyz"] {
+            assert!(!debug.contains(secret), "{debug}");
+        }
+    }
 
     fn history(base_fees: Vec<u128>, tips: Option<Vec<Vec<u128>>>) -> FeeHistory {
         FeeHistory {

@@ -136,5 +136,5 @@ If reconnects keep failing, the tracker stays on polling and keeps indexing. Res
 | `blokli_fcr_false_confirmations_total` | verified ranges whose stored logs differ from the canonical logs           |
 | `blokli_head_source`                   | head source: 0 polling, 1 websocket                                        |
 | `blokli_head_ws_reconnects_total`      | successful WebSocket reconnects                                            |
-| `blokli_indexer_head_lag_seconds`      | time between the confirmed block header timestamp and the end of a round   |
+| `blokli_indexer_head_lag_seconds`      | time between the committed block header timestamp and the commit           |
 | `blokli_health`                        | health status, including `verification_failed` after a failed verification |

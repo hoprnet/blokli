@@ -36,7 +36,7 @@ use tracing::{debug, info, warn};
 
 use crate::{
     errors::{Result, RpcError},
-    head::{HeadSourceConfig, HeadSubscriber, record_ws_reconnect_metric, run_head_driver},
+    head::{HeadSourceConfig, HeadSubscriber, record_ws_reconnect_metric, redact_ws_url, run_head_driver},
     rpc::HoprProvider,
     transport::HttpRequestor,
 };
@@ -195,6 +195,12 @@ impl Default for ConfirmationConfig {
 pub struct TipUpdate {
     /// New tip to publish.
     pub tip: ChainTip,
+    /// Whether the tip may be published on the watch channel.
+    ///
+    /// A mode that needs the safe or finalized tag publishes nothing until that tag has been
+    /// observed at least once, so a missing tag is never mistaken for a confirmation height of
+    /// zero. Once a tip exists, later observations without the tag keep the last height.
+    pub publish: bool,
     /// Whether the safe block moved backwards compared with the previous tip.
     pub safe_regressed: bool,
     /// Whether this update entered the safe-or-depth fallback from a non-fallback update.
@@ -275,6 +281,11 @@ pub fn next_tip(
         (previous.and_then(|tip| tip.safe), observation.safe),
         (Some(previous_safe), Some(safe)) if safe < previous_safe
     );
+    let publish = match cfg.mode {
+        ConfirmationMode::Depth | ConfirmationMode::SafeOrDepth => true,
+        ConfirmationMode::Safe => observation.safe.is_some() || previous.is_some(),
+        ConfirmationMode::Finalized => observation.finalized.is_some() || previous.is_some(),
+    };
 
     Ok(TipUpdate {
         tip: ChainTip {
@@ -286,6 +297,7 @@ pub fn next_tip(
             source,
             fcr,
         },
+        publish,
         safe_regressed,
         entered_fallback: uses_fallback && !previous_fallback,
     })
@@ -303,6 +315,14 @@ pub trait TipSource: Send + Sync {
     /// implement [`TipSource::observe`] keep working outside the WebSocket startup probe.
     async fn block_hash(&self, _block: u64) -> Result<B256> {
         Err(RpcError::Other("block hash lookup is not supported".to_string()))
+    }
+
+    /// Reads the header timestamp of the given block number from the underlying endpoint.
+    ///
+    /// The default implementation reports that the lookup is unavailable, so sources that only
+    /// implement [`TipSource::observe`] keep working outside the head lag sampling.
+    async fn header_timestamp(&self, _block: u64) -> Result<Option<u64>> {
+        Ok(None)
     }
 }
 
@@ -351,12 +371,20 @@ impl<R: HttpRequestor + 'static + Clone> TipSource for RpcTipSource<R> {
             .map_err(RpcError::from)?
             .ok_or_else(|| RpcError::Other("latest block is not available".to_string()))?;
 
-        let safe = safe_waiter.await.ok().flatten().map(|header| header.number.to::<u64>());
-        let finalized = finalized_waiter
-            .await
-            .ok()
-            .flatten()
-            .map(|header| header.number.to::<u64>());
+        let safe = match safe_waiter.await {
+            Ok(header) => header.map(|header| header.number.to::<u64>()),
+            Err(error) => {
+                debug!(%error, tag = "safe", "failed to read the chain tip block tag");
+                None
+            }
+        };
+        let finalized = match finalized_waiter.await {
+            Ok(header) => header.map(|header| header.number.to::<u64>()),
+            Err(error) => {
+                debug!(%error, tag = "finalized", "failed to read the chain tip block tag");
+                None
+            }
+        };
 
         Ok(TipObservation {
             latest: latest.number.to::<u64>(),
@@ -380,6 +408,21 @@ impl<R: HttpRequestor + 'static + Clone> TipSource for RpcTipSource<R> {
             .map_err(RpcError::from)?
             .and_then(|header| header.hash)
             .ok_or_else(|| RpcError::Other(format!("block {block} is not available")))
+    }
+
+    async fn header_timestamp(&self, block: u64) -> Result<Option<u64>> {
+        let mut batch = BatchRequest::new(self.provider.client());
+
+        let waiter = batch
+            .add_call::<_, Option<RpcBlockHeader>>("eth_getBlockByNumber", &(BlockNumberOrTag::Number(block), false))
+            .map_err(RpcError::from)?;
+
+        batch.send().await.map_err(RpcError::from)?;
+
+        Ok(waiter
+            .await
+            .map_err(RpcError::from)?
+            .map(|header| header.timestamp.to::<u64>()))
     }
 }
 
@@ -426,7 +469,7 @@ impl fmt::Debug for TrackerRuntime {
             .field("confirmation", &self.confirmation)
             .field("head_poll_interval", &self.head.poll_interval)
             .field("expected_block_time", &self.head.expected_block_time)
-            .field("head_ws_url", &self.head.ws_url)
+            .field("head_ws_url", &self.head.ws_url.as_ref().map(redact_ws_url))
             .finish()
     }
 }
@@ -451,6 +494,23 @@ impl TrackerRuntime {
 
     fn current(&self) -> Option<ChainTip> {
         *self.tip_tx.borrow()
+    }
+
+    /// Returns the confirmed block of a tip, requiring the tag selected by the mode.
+    fn confirmed_from_tip(&self, tip: ChainTip) -> Result<u64> {
+        let required_tag = match self.confirmation.mode {
+            ConfirmationMode::Depth | ConfirmationMode::SafeOrDepth => None,
+            ConfirmationMode::Safe => Some("safe"),
+            ConfirmationMode::Finalized => Some("finalized"),
+        };
+
+        match required_tag {
+            Some(tag) if tip.confirmation_height.is_none() => Err(RpcError::Other(format!(
+                "the endpoint reports no {tag} block, confirmation mode {} cannot confirm blocks",
+                self.confirmation.mode
+            ))),
+            _ => Ok(tip.confirmed),
+        }
     }
 
     fn header_timestamp(&self, block: u64) -> Option<u64> {
@@ -518,7 +578,9 @@ impl TrackerRuntime {
             *last_success = Some(Instant::now());
         }
 
-        self.tip_tx.send_replace(Some(update.tip));
+        if update.publish {
+            self.tip_tx.send_replace(Some(update.tip));
+        }
         Ok(update.tip)
     }
 
@@ -648,6 +710,17 @@ impl ChainTipTracker {
         self.runtime.header_timestamp(block)
     }
 
+    /// Reads the header timestamp for the given block from the underlying source.
+    pub async fn fetch_header_timestamp(&self, block: u64) -> Option<u64> {
+        match self.runtime.source.header_timestamp(block).await {
+            Ok(timestamp) => timestamp,
+            Err(error) => {
+                debug!(%error, block, "failed to read the block header timestamp");
+                None
+            }
+        }
+    }
+
     /// Returns the number of successful WebSocket reconnects since the tracker was created.
     pub fn ws_reconnect_count(&self) -> u64 {
         self.runtime.ws_reconnects.load(Ordering::SeqCst)
@@ -683,6 +756,10 @@ impl ChainTipTracker {
     /// Before the background task is started this refreshes on every call, matching a direct RPC
     /// read. Once [`ChainTipTracker::ensure_started`] has been called, a cached tip younger than the
     /// staleness limit is served directly.
+    ///
+    /// In safe and finalized mode the confirmed block is reported only while the tag required by
+    /// the mode is present. An endpoint that reports `latest` but no such tag therefore surfaces as
+    /// an error instead of a confirmed block of zero.
     pub async fn confirmed_block(&self) -> Result<u64> {
         if self.started.load(Ordering::SeqCst) {
             let max_age = self
@@ -701,12 +778,13 @@ impl ChainTipTracker {
 
             if is_fresh {
                 if let Some(tip) = self.current() {
-                    return Ok(tip.confirmed);
+                    return self.runtime.confirmed_from_tip(tip);
                 }
             }
         }
 
-        self.refresh().await.map(|tip| tip.confirmed)
+        let tip = self.refresh().await?;
+        self.runtime.confirmed_from_tip(tip)
     }
 }
 
@@ -830,6 +908,7 @@ mod tests {
 
     use async_trait::async_trait;
     use tokio::time::sleep;
+    use url::Url;
 
     use super::{
         ChainTip, ChainTipTracker, ConfirmationConfig, ConfirmationMode, FcrState, HeadSource, HeaderTimestamps,
@@ -993,9 +1072,47 @@ mod tests {
     }
 
     #[test]
-    fn test_next_tip_safe_mode_without_previous_starts_at_zero() {
-        let tip = update(None, &observation(100, None, None), &config(ConfirmationMode::Safe)).tip;
-        assert_eq!(tip.confirmed, 0);
+    fn test_next_tip_safe_mode_without_the_tag_publishes_nothing() {
+        let update = update(None, &observation(100, None, None), &config(ConfirmationMode::Safe));
+        assert_eq!(update.tip.confirmed, 0);
+        assert!(!update.publish, "a missing safe tag must not be published as height 0");
+    }
+
+    #[test]
+    fn test_next_tip_finalized_mode_without_the_tag_publishes_nothing() {
+        let update = update(
+            None,
+            &observation(100, Some(99), None),
+            &config(ConfirmationMode::Finalized),
+        );
+        assert_eq!(update.tip.confirmed, 0);
+        assert!(
+            !update.publish,
+            "a missing finalized tag must not be published as height 0"
+        );
+    }
+
+    #[test]
+    fn test_next_tip_safe_mode_publishes_a_valid_tag_at_genesis() {
+        let update = update(None, &observation(0, Some(0), Some(0)), &config(ConfirmationMode::Safe));
+        assert_eq!(update.tip.confirmed, 0);
+        assert_eq!(update.tip.confirmation_height, Some(0));
+        assert!(
+            update.publish,
+            "a tag at block 0 is a valid observation, not a missing tag"
+        );
+    }
+
+    #[test]
+    fn test_next_tip_keeps_publishing_after_the_required_tag_disappears() {
+        let cfg = config(ConfirmationMode::Safe);
+        let first = update(None, &observation(100, Some(95), Some(80)), &cfg);
+        assert!(first.publish);
+
+        let second = update(Some(&first.tip), &observation(110, None, Some(80)), &cfg);
+        assert!(second.publish);
+        assert_eq!(second.tip.confirmed, 95);
+        assert_eq!(second.tip.confirmation_height, None);
     }
 
     #[test]
@@ -1067,18 +1184,19 @@ mod tests {
 
     #[test]
     fn test_next_tip_confirmation_height_is_unknown_without_the_required_tag() {
-        let safe = update(None, &observation(100, None, Some(80)), &config(ConfirmationMode::Safe)).tip;
-        assert_eq!(safe.confirmed, 0);
-        assert_eq!(safe.confirmation_height, None);
+        let safe = update(None, &observation(100, None, Some(80)), &config(ConfirmationMode::Safe));
+        assert_eq!(safe.tip.confirmed, 0);
+        assert_eq!(safe.tip.confirmation_height, None);
+        assert!(!safe.publish);
 
         let finalized = update(
             None,
             &observation(100, Some(90), None),
             &config(ConfirmationMode::Finalized),
-        )
-        .tip;
-        assert_eq!(finalized.confirmed, 0);
-        assert_eq!(finalized.confirmation_height, None);
+        );
+        assert_eq!(finalized.tip.confirmed, 0);
+        assert_eq!(finalized.tip.confirmation_height, None);
+        assert!(!finalized.publish);
     }
 
     #[test]
@@ -1246,6 +1364,103 @@ mod tests {
         receiver.changed().await.expect("a tip should be published");
         assert_eq!(receiver.borrow().as_ref(), Some(&published));
         assert_eq!(tracker.current(), Some(published));
+    }
+
+    #[tokio::test]
+    async fn test_confirmed_block_waits_for_the_safe_tag() {
+        let source = MockTipSource::new(vec![
+            Ok(observation(100, None, Some(80))),
+            Ok(observation(100, Some(95), Some(80))),
+        ]);
+        let tracker = ChainTipTracker::new(
+            Arc::new(source),
+            config(ConfirmationMode::Safe),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        );
+
+        let error = tracker
+            .confirmed_block()
+            .await
+            .expect_err("a missing safe tag must surface as an error");
+        assert!(error.to_string().contains("safe"), "{error}");
+        assert_eq!(tracker.current(), None, "no tip is published without the safe tag");
+
+        assert_eq!(
+            tracker
+                .confirmed_block()
+                .await
+                .expect("the safe tag should confirm a block"),
+            95
+        );
+        assert!(tracker.current().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_confirmed_block_errors_when_the_safe_tag_disappears() {
+        let source = MockTipSource::new(vec![
+            Ok(observation(100, Some(95), Some(80))),
+            Ok(observation(110, None, Some(80))),
+        ]);
+        let tracker = ChainTipTracker::new(
+            Arc::new(source),
+            config(ConfirmationMode::Safe),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        );
+
+        assert_eq!(
+            tracker.confirmed_block().await.expect("the safe tag should confirm"),
+            95
+        );
+        let error = tracker
+            .confirmed_block()
+            .await
+            .expect_err("a disappeared safe tag must surface as an error");
+        assert!(error.to_string().contains("safe"), "{error}");
+        assert_eq!(
+            tracker.current().map(|tip| tip.confirmed),
+            Some(95),
+            "the last height stays published for diagnostics"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_confirmed_block_accepts_a_safe_tag_at_genesis() {
+        let source = MockTipSource::new(vec![Ok(observation(0, Some(0), Some(0)))]);
+        let tracker = ChainTipTracker::new(
+            Arc::new(source),
+            config(ConfirmationMode::Safe),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        );
+
+        assert_eq!(tracker.confirmed_block().await.expect("a genesis safe tag is valid"), 0);
+        assert_eq!(tracker.current().and_then(|tip| tip.confirmation_height), Some(0));
+    }
+
+    #[tokio::test]
+    async fn test_tracker_debug_redacts_the_websocket_url() {
+        let tracker = ChainTipTracker::with_head_source(
+            Arc::new(MockTipSource::new(vec![])),
+            config(ConfirmationMode::Depth),
+            crate::head::HeadSourceConfig {
+                chain_id: 100,
+                poll_interval: Duration::from_secs(1),
+                expected_block_time: Duration::from_secs(5),
+                ws_url: Some(
+                    Url::parse("wss://user:pass@rpc.example.com:8443/secret?token=xyz").expect("URL should parse"),
+                ),
+                ws_url_derived: true,
+            },
+            None,
+        );
+
+        let debug = format!("{:?}", tracker.runtime);
+        assert!(debug.contains("wss://rpc.example.com:8443"), "{debug}");
+        for secret in ["user", "pass", "secret", "xyz"] {
+            assert!(!debug.contains(secret), "{debug}");
+        }
     }
 
     #[tokio::test]

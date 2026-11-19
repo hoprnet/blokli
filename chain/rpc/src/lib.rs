@@ -448,6 +448,15 @@ pub trait HoprIndexerRpcOperations {
     /// Retrieves the latest block number.
     async fn block_number(&self) -> Result<u64>;
 
+    /// Returns the timestamp of the header of `block`, using the chain tip cache when possible.
+    ///
+    /// The indexer calls this for a block it has just committed, so the head lag sample is taken
+    /// after the database write. Implementations that do not track the chain tip return `None`.
+    async fn header_timestamp(&self, block: u64) -> Option<u64> {
+        let _ = block;
+        None
+    }
+
     /// Get transaction sender (from address) by transaction hash
     ///
     /// Used to determine the chain_key when processing

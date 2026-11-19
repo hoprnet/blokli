@@ -2,6 +2,8 @@
 use std::error::Error as StdError;
 #[cfg(test)]
 use std::sync::Mutex;
+#[cfg(all(feature = "telemetry", not(test)))]
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{
     collections::HashSet,
     fmt::Display as FmtDisplay,
@@ -66,6 +68,9 @@ use crate::{
 /// Only the read-only RPC lookups overlap: blocks are still stored, processed and committed
 /// strictly in canonical order, one database transaction per block.
 const BLOCK_PREFETCH_DEPTH: usize = 4;
+
+/// Number of blocks behind the confirmed tip that still sample the head lag.
+const HEAD_LAG_SAMPLE_WINDOW: u64 = BLOCK_PREFETCH_DEPTH as u64;
 
 /// Attempts made to mark a committed block's logs as processed before giving up.
 ///
@@ -200,6 +205,11 @@ lazy_static::lazy_static! {
             "Current data source of the Indexer",
             &["source"],
     ).inspect_err(|error| error!(%error, metric = "blokli_indexer_data_source", "failed to register telemetry metric")).ok();
+    static ref METRIC_INDEXER_HEAD_LAG_SECONDS: Option<SimpleGauge> =
+        SimpleGauge::new(
+            "blokli_indexer_head_lag_seconds",
+            "Seconds between the committed block header timestamp and the moment the indexer commits the block",
+    ).inspect_err(|error| error!(%error, metric = "blokli_indexer_head_lag_seconds", "failed to register telemetry metric")).ok();
 
 
     /// Wall-clock time the indexer spends in each per-block step.
@@ -226,6 +236,60 @@ pub struct ReorgInfo {
     pub affected_block_range: (u64, u64),
     /// Number of logs that were marked as removed
     pub removed_log_count: usize,
+}
+
+/// Returns whether a committed block is close enough to the confirmed tip to sample the head lag.
+///
+/// While the indexer works through a backlog the confirmed tip is far ahead of the committed
+/// block, so sampling every block would add a header lookup on a cache miss without measuring the
+/// live head lag. Only blocks within the prefetch window of the confirmed tip are sampled.
+fn is_near_confirmed_tip(confirmed: u64, block_id: u64) -> bool {
+    confirmed.saturating_sub(block_id) <= HEAD_LAG_SAMPLE_WINDOW
+}
+
+/// Samples the head lag of a commitment when the gauge is registered and the block is near the
+/// confirmed tip. Without telemetry there is no gauge, so no RPC call is made.
+#[cfg(feature = "telemetry")]
+async fn maybe_record_head_lag<T>(rpc: &T, block_id: u64)
+where
+    T: HoprIndexerRpcOperations + Sync,
+{
+    match rpc.block_number().await {
+        Ok(confirmed) if is_near_confirmed_tip(confirmed, block_id) => {
+            record_indexer_head_lag(rpc.header_timestamp(block_id).await);
+        }
+        Ok(_) => {}
+        Err(error) => debug!(
+            %error,
+            block_id,
+            "failed to read the confirmed tip for the head lag sample"
+        ),
+    }
+}
+
+/// Samples the head lag of a commitment when the gauge is registered. Without telemetry there is
+/// no gauge, so no RPC call is made.
+#[cfg(not(feature = "telemetry"))]
+async fn maybe_record_head_lag<T>(_rpc: &T, _block_id: u64)
+where
+    T: HoprIndexerRpcOperations + Sync,
+{
+}
+
+/// Records the head lag of a block that the indexer has just committed.
+///
+/// The sample is taken after the block's writes, so it includes the time the indexer spent on the
+/// block itself. It uses the block header's timestamp for the committed height.
+fn record_indexer_head_lag(_header_timestamp: Option<u64>) {
+    #[cfg(all(feature = "telemetry", not(test)))]
+    if let (Some(metric), Some(header_timestamp)) = (METRIC_INDEXER_HEAD_LAG_SECONDS.as_ref(), _header_timestamp) {
+        if let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) {
+            metric.set(now.as_secs().saturating_sub(header_timestamp) as f64);
+        }
+    }
+
+    #[cfg(not(all(feature = "telemetry", not(test))))]
+    let _ = _header_timestamp;
 }
 
 /// Records how long one per-block indexing step took.
@@ -819,7 +883,7 @@ where
                         record_block_step("store", store_started);
 
                         let process_started = Instant::now();
-                        Self::process_block(
+                        let processed = Self::process_block(
                             &db,
                             &logs_handler,
                             block.clone(),
@@ -831,6 +895,10 @@ where
                         )
                         .await;
                         record_block_step("process", process_started);
+
+                        if processed.is_some() {
+                            maybe_record_head_lag(rpc.as_ref(), block.block_id).await;
+                        }
 
                         stream_start_block = block.block_id.saturating_add(1);
                         latest_processed_block.store(block.block_id, Ordering::Relaxed);
@@ -1959,6 +2027,7 @@ mod tests {
         #[async_trait]
         impl HoprIndexerRpcOperations for HoprIndexerOps {
             async fn block_number(&self) -> blokli_chain_rpc::errors::Result<u64>;
+            async fn header_timestamp(&self, block: u64) -> Option<u64>;
             async fn get_transaction_sender(&self, tx_hash: hopr_types::crypto::types::Hash) -> blokli_chain_rpc::errors::Result<Address>;
             async fn get_transaction_bytes(&self, tx_hash: hopr_types::crypto::types::Hash) -> blokli_chain_rpc::errors::Result<Vec<u8>>;
             async fn get_transaction_bytes_batch(&self, tx_hashes: &[hopr_types::crypto::types::Hash]) -> Vec<blokli_chain_rpc::errors::Result<Vec<u8>>>;
@@ -3498,6 +3567,151 @@ mod tests {
         abort_handle.abort();
 
         Ok(())
+    }
+
+    /// The head lag sample must be taken after the indexer commits the block.
+    #[tokio::test]
+    async fn test_indexer_samples_head_lag_after_committing_a_block() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let addr = Address::new(b"my address 123456789");
+        let topic = Hash::create(&[b"my topic"]);
+        db.ensure_logs_origin(vec![(addr, topic)]).await?;
+
+        let mut handlers = MockChainLogHandler::new();
+        handlers.expect_contract_addresses().return_const(vec![addr]);
+        handlers
+            .expect_contract_address_topics()
+            .return_const(vec![B256::from_slice(topic.as_ref())]);
+        handlers
+            .expect_contract_addresses_map()
+            .return_const(ContractAddresses::default());
+
+        let head_block = 10;
+        let block_id = head_block + 1;
+        let block = BlockWithLogs {
+            block_id,
+            logs: BTreeSet::new(),
+        };
+        let samples = Arc::new(StdAtomicUsize::new(0));
+        let sampled = samples.clone();
+        let mut rpc = mock_rpc();
+        rpc.expect_block_number().returning(move || Ok(head_block));
+        rpc.expect_get_channel_closure_notice_period()
+            .returning(|| Ok(Duration::from_secs(1)));
+        rpc.expect_try_stream_logs()
+            .times(1)
+            .withf(move |start: &u64, _filters: &FilterSet, is_synced: &bool| *start == block_id && *is_synced)
+            .return_once(move |_, _, _| Ok(Box::pin(futures::stream::iter(vec![block]))));
+        rpc.expect_header_timestamp()
+            .times(usize::from(cfg!(feature = "telemetry")))
+            .returning(move |block| {
+                assert_eq!(block, block_id, "the sample must use the committed height");
+                sampled.fetch_add(1, StdOrdering::SeqCst);
+                Some(1_700_000_000)
+            });
+
+        let cfg = IndexerConfig::new(
+            head_block + 1,
+            true,
+            false,
+            false,
+            None,
+            None,
+            "/tmp/test_data".to_string(),
+            1000,
+            10,
+        );
+        let indexer = Indexer::new(rpc, handlers, db, cfg, IndexerState::default()).without_panic_on_completion();
+
+        let abort_handle = indexer.start().await.expect("indexer should start successfully");
+        for _ in 0..100 {
+            if samples.load(StdOrdering::SeqCst) > 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        abort_handle.abort();
+
+        assert_eq!(
+            samples.load(StdOrdering::SeqCst),
+            usize::from(cfg!(feature = "telemetry")),
+            "the head lag sample must only run when the gauge is registered"
+        );
+
+        Ok(())
+    }
+
+    /// A block far behind the confirmed tip must not cost a header lookup per block.
+    #[tokio::test]
+    async fn test_indexer_skips_head_lag_sampling_for_a_backlog_block() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let addr = Address::new(b"my address 123456789");
+        let topic = Hash::create(&[b"my topic"]);
+        db.ensure_logs_origin(vec![(addr, topic)]).await?;
+
+        let mut handlers = MockChainLogHandler::new();
+        handlers.expect_contract_addresses().return_const(vec![addr]);
+        handlers
+            .expect_contract_address_topics()
+            .return_const(vec![B256::from_slice(topic.as_ref())]);
+        handlers
+            .expect_contract_addresses_map()
+            .return_const(ContractAddresses::default());
+
+        let head_block = 10;
+        let block_id = head_block + 1;
+        let block = BlockWithLogs {
+            block_id,
+            logs: BTreeSet::new(),
+        };
+        let block_number_calls = Arc::new(StdAtomicUsize::new(0));
+        let observed_block_number_calls = block_number_calls.clone();
+        let mut rpc = mock_rpc();
+        rpc.expect_block_number().returning(move || {
+            // The first reads set the chain head for the historical decision; the head lag sample
+            // then sees a tip that is far ahead of the committed block.
+            if observed_block_number_calls.fetch_add(1, StdOrdering::SeqCst) < 2 {
+                Ok(head_block)
+            } else {
+                Ok(block_id + HEAD_LAG_SAMPLE_WINDOW + 1)
+            }
+        });
+        rpc.expect_get_channel_closure_notice_period()
+            .returning(|| Ok(Duration::from_secs(1)));
+        rpc.expect_try_stream_logs()
+            .times(1)
+            .withf(move |start: &u64, _filters: &FilterSet, is_synced: &bool| *start == block_id && *is_synced)
+            .return_once(move |_, _, _| Ok(Box::pin(futures::stream::iter(vec![block]))));
+        rpc.expect_header_timestamp().times(0).returning(|_| None);
+
+        let cfg = IndexerConfig::new(
+            head_block + 1,
+            true,
+            false,
+            false,
+            None,
+            None,
+            "/tmp/test_data".to_string(),
+            1000,
+            10,
+        );
+        let indexer = Indexer::new(rpc, handlers, db, cfg, IndexerState::default()).without_panic_on_completion();
+        let abort_handle = indexer.start().await.expect("indexer should start successfully");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        abort_handle.abort();
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_head_lag_sampling_stays_close_to_the_confirmed_tip() {
+        assert!(is_near_confirmed_tip(100, 100));
+        assert!(is_near_confirmed_tip(100, 100 - HEAD_LAG_SAMPLE_WINDOW));
+        assert!(!is_near_confirmed_tip(100, 100 - HEAD_LAG_SAMPLE_WINDOW - 1));
+        assert!(
+            is_near_confirmed_tip(10, 11),
+            "a block ahead of the confirmed tip is sampled"
+        );
     }
 
     #[tokio::test]

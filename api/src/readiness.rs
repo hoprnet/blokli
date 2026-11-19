@@ -307,6 +307,7 @@ mod tests {
     use blokli_chain_indexer::IndexerState;
     use blokli_chain_rpc::{
         rpc::{RpcOperations, RpcOperationsConfig},
+        tip::ConfirmationMode,
         transport::ReqwestClient,
     };
     use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
@@ -314,6 +315,41 @@ mod tests {
 
     use super::{ReadinessChecker, ReadinessState};
     use crate::{config::HealthConfig, metrics};
+
+    /// Answers the chain tip batch with a latest header and no safe or finalized tag.
+    fn mock_tip_without_confirmation_tags(server: &mut mockito::ServerGuard) -> mockito::Mock {
+        server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::Regex(
+                r#""method"\s*:\s*"eth_getBlockByNumber""#.to_string(),
+            ))
+            .with_body_from_request(|request| {
+                let body: serde_json::Value =
+                    serde_json::from_slice(request.body().expect("request body")).expect("valid JSON request body");
+                let responses = body
+                    .as_array()
+                    .expect("a batched block request is a JSON array")
+                    .iter()
+                    .map(|call| {
+                        let tag = call["params"][0].as_str().unwrap_or_default();
+                        let result = if tag == "latest" {
+                            serde_json::json!({"number": "0x64", "timestamp": "0x1"})
+                        } else {
+                            serde_json::Value::Null
+                        };
+                        serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": call["id"].clone(),
+                            "result": result
+                        })
+                    })
+                    .collect::<Vec<_>>();
+
+                serde_json::to_vec(&responses).expect("batch response should serialize")
+            })
+            .expect_at_least(1)
+            .create()
+    }
 
     fn test_rpc_operations() -> Arc<RpcOperations<ReqwestClient>> {
         let transport = ReqwestTransport::new("http://localhost:8545".parse().expect("valid transport URL"));
@@ -323,6 +359,46 @@ mod tests {
             RpcOperations::new(rpc_client, ReqwestClient::new(), RpcOperationsConfig::default(), None)
                 .expect("RPC operations should be constructible"),
         )
+    }
+
+    #[tokio::test]
+    async fn missing_safe_tag_reports_not_ready() -> anyhow::Result<()> {
+        let mut server = mockito::Server::new_async().await;
+        let tip = mock_tip_without_confirmation_tags(&mut server);
+
+        let transport = ReqwestTransport::new(server.url().parse()?);
+        let rpc_client = ClientBuilder::default().transport(transport.clone(), transport.guess_local());
+        let rpc = Arc::new(
+            RpcOperations::new(
+                rpc_client,
+                ReqwestClient::new(),
+                RpcOperationsConfig {
+                    confirmation_mode: ConfirmationMode::Safe,
+                    ..RpcOperationsConfig::default()
+                },
+                None,
+            )
+            .expect("RPC operations should be constructible"),
+        );
+
+        let db = BlokliDb::new_in_memory().await?;
+        let checker = ReadinessChecker::new(db.conn(TargetDb::Index).clone(), rpc, HealthConfig::default());
+
+        let report = checker.check_readiness().await;
+
+        tip.assert();
+        assert_eq!(report.state, ReadinessState::NotReady);
+        assert!(
+            report.rpc.error.as_deref().is_some_and(|error| error.contains("safe")),
+            "the RPC check must report the missing safe tag: {:?}",
+            report.rpc.error
+        );
+        assert!(
+            report.indexer.lag.is_none(),
+            "a confirmed block of zero must not produce a lag of zero"
+        );
+
+        Ok(())
     }
 
     #[tokio::test]

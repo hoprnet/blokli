@@ -639,6 +639,9 @@ pub struct HeadTrackingConfig {
     pub head_subscription: bool,
 
     /// Interval at which the chain tip is polled.
+    ///
+    /// Each poll is one batched JSON-RPC request with three `eth_getBlockByNumber` calls
+    /// (latest, safe, finalized).
     #[default(_code = "default_head_poll_interval()")]
     #[serde(default = "default_head_poll_interval", with = "humantime_serde")]
     pub head_poll_interval: Duration,

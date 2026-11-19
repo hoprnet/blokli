@@ -42,7 +42,7 @@ pub struct HeadHeader {
 }
 
 /// Configuration of the WebSocket head source and the polling fallback.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct HeadSourceConfig {
     /// Chain id the endpoint must serve.
     pub chain_id: u64,
@@ -56,21 +56,66 @@ pub struct HeadSourceConfig {
     pub ws_url_derived: bool,
 }
 
+impl fmt::Debug for HeadSourceConfig {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HeadSourceConfig")
+            .field("chain_id", &self.chain_id)
+            .field("poll_interval", &self.poll_interval)
+            .field("expected_block_time", &self.expected_block_time)
+            .field("ws_url", &self.ws_url.as_ref().map(redact_ws_url))
+            .field("ws_url_derived", &self.ws_url_derived)
+            .finish()
+    }
+}
+
 /// Errors produced while opening or reading a `newHeads` subscription.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum HeadError {
     /// The endpoint does not support `newHeads` subscriptions.
-    #[error("head subscription is not supported: {0}")]
-    Unsupported(String),
+    #[error("head subscription is not supported: {reason}")]
+    Unsupported {
+        /// Error text reported by the endpoint or the transport.
+        reason: String,
+        /// JSON-RPC error code, when the endpoint returned an error response.
+        code: Option<i64>,
+    },
     /// The connection failed or closed, or the endpoint stopped sending headers.
-    #[error("head subscription connection failed: {0}")]
-    Connection(String),
+    #[error("head subscription connection failed: {reason}")]
+    Connection {
+        /// Error text reported by the endpoint or the transport.
+        reason: String,
+        /// JSON-RPC error code, when the endpoint returned an error response.
+        code: Option<i64>,
+    },
 }
 
 impl HeadError {
+    /// Creates an unsupported-subscription error.
+    pub fn unsupported(reason: impl Into<String>, code: Option<i64>) -> Self {
+        Self::Unsupported {
+            reason: reason.into(),
+            code,
+        }
+    }
+
+    /// Creates a connection error.
+    pub fn connection(reason: impl Into<String>, code: Option<i64>) -> Self {
+        Self::Connection {
+            reason: reason.into(),
+            code,
+        }
+    }
+
     /// Returns `true` if the error means the endpoint cannot serve `newHeads` at all.
     pub fn is_unsupported(&self) -> bool {
-        matches!(self, Self::Unsupported(_))
+        matches!(self, Self::Unsupported { .. })
+    }
+
+    /// Returns the JSON-RPC error code, when the endpoint returned an error response.
+    pub fn code(&self) -> Option<i64> {
+        match self {
+            Self::Unsupported { code, .. } | Self::Connection { code, .. } => *code,
+        }
     }
 }
 
@@ -148,6 +193,9 @@ pub fn resolve_head_ws_url(
 /// classification only looks at the error code and message so it can be tested without a network.
 pub fn classify_head_error(is_error_response: bool, code: Option<i64>, message: &str) -> HeadError {
     let message = message.to_ascii_lowercase();
+    // Only an explicit statement that the notification method or subscriptions are missing is
+    // terminal. Generic availability wording such as "service is not available" describes a
+    // temporary endpoint failure and must stay retryable.
     let unsupported = is_error_response
         && (code == Some(-32601)
             || [
@@ -157,15 +205,14 @@ pub fn classify_head_error(is_error_response: bool, code: Option<i64>, message: 
                 "subscriptions not supported",
                 "subscription not supported",
                 "does not exist",
-                "is not available",
             ]
             .iter()
             .any(|phrase| message.contains(phrase)));
 
     if unsupported {
-        HeadError::Unsupported(message)
+        HeadError::unsupported(message, code)
     } else {
-        HeadError::Connection(message)
+        HeadError::connection(message, code)
     }
 }
 
@@ -230,12 +277,22 @@ impl HeadSubscriber for WsHeadSubscriber {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum ProbeFailure {
-    Unsupported(String),
-    Connection(String),
+    Unsupported { code: Option<i64> },
+    Connection { code: Option<i64> },
     ChainIdMismatch { expected: u64, actual: u64 },
     BlockHashMismatch { number: u64, expected: B256, actual: B256 },
+}
+
+impl From<HeadError> for ProbeFailure {
+    fn from(error: HeadError) -> Self {
+        let code = error.code();
+        match error {
+            HeadError::Unsupported { .. } => Self::Unsupported { code },
+            HeadError::Connection { .. } => Self::Connection { code },
+        }
+    }
 }
 
 struct ProbeSuccess {
@@ -253,12 +310,9 @@ async fn probe_head_source(
 
     let mut subscription = match timeout_at(deadline, subscriber.subscribe()).await {
         Err(_) => {
-            return Err(ProbeFailure::Connection(
-                "timed out opening the head subscription".to_string(),
-            ));
+            return Err(ProbeFailure::Connection { code: None });
         }
-        Ok(Err(HeadError::Unsupported(reason))) => return Err(ProbeFailure::Unsupported(reason)),
-        Ok(Err(HeadError::Connection(reason))) => return Err(ProbeFailure::Connection(reason)),
+        Ok(Err(error)) => return Err(error.into()),
         Ok(Ok(subscription)) => subscription,
     };
 
@@ -271,26 +325,19 @@ async fn probe_head_source(
 
     let first_header = match timeout_at(deadline, subscription.headers.next()).await {
         Err(_) => {
-            return Err(ProbeFailure::Connection(
-                "no header received before the probe timeout".to_string(),
-            ));
+            return Err(ProbeFailure::Connection { code: None });
         }
         Ok(None) => {
-            return Err(ProbeFailure::Connection(
-                "head subscription closed before the first header".to_string(),
-            ));
+            return Err(ProbeFailure::Connection { code: None });
         }
-        Ok(Some(Err(HeadError::Unsupported(reason)))) => return Err(ProbeFailure::Unsupported(reason)),
-        Ok(Some(Err(HeadError::Connection(reason)))) => return Err(ProbeFailure::Connection(reason)),
+        Ok(Some(Err(error))) => return Err(error.into()),
         Ok(Some(Ok(header))) => header,
     };
 
-    let expected_hash = source.block_hash(first_header.number).await.map_err(|error| {
-        ProbeFailure::Connection(format!(
-            "failed to read block {} over HTTP: {error}",
-            first_header.number
-        ))
-    })?;
+    let expected_hash = source
+        .block_hash(first_header.number)
+        .await
+        .map_err(|_| ProbeFailure::Connection { code: None })?;
 
     if expected_hash != first_header.hash {
         return Err(ProbeFailure::BlockHashMismatch {
@@ -319,11 +366,11 @@ fn log_probe_failure(failure: &ProbeFailure, ws_url: &Url, ws_url_derived: bool)
     };
 
     match failure {
-        ProbeFailure::Unsupported(reason) => {
-            warn!(url = %url, reason = %reason, "WebSocket head source is not supported, using polling{}", hint);
+        ProbeFailure::Unsupported { code } => {
+            warn!(url = %url, code = ?code, category = "unsupported", "WebSocket head source is not supported, using polling{}", hint);
         }
-        ProbeFailure::Connection(reason) => {
-            warn!(url = %url, reason = %reason, "WebSocket head source is unavailable, using polling{}", hint);
+        ProbeFailure::Connection { code } => {
+            warn!(url = %url, code = ?code, category = "connection", "WebSocket head source is unavailable, using polling{}", hint);
         }
         ProbeFailure::ChainIdMismatch { expected, actual } => {
             error!(url = %url, expected_chain_id = expected, actual_chain_id = actual, "WebSocket head source serves a different chain, using polling");
@@ -360,6 +407,15 @@ async fn leave_websocket(
     let reconnect_at = TokioInstant::now() + *backoff;
     *backoff = next_reconnect_backoff(*backoff);
     reconnect_at
+}
+
+async fn next_websocket_header(
+    headers: &mut Option<BoxStream<'static, StdResult<HeadHeader, HeadError>>>,
+) -> Option<StdResult<HeadHeader, HeadError>> {
+    match headers {
+        Some(headers) => headers.next().await,
+        None => pending().await,
+    }
 }
 
 async fn refresh_from_header(runtime: &TrackerRuntime, head: &HeadSourceConfig, header: HeadHeader) {
@@ -478,6 +534,7 @@ pub(crate) async fn run_head_driver(
                                 subscription,
                                 first_header,
                             }) => {
+                                let first_header_received = TokioInstant::now();
                                 runtime.set_active_source(HeadSource::WebSocket);
                                 refresh_from_header(&runtime, &head, first_header).await;
                                 if ever_connected {
@@ -490,11 +547,11 @@ pub(crate) async fn run_head_driver(
                                 }
                                 state = State::WebSocket {
                                     headers: subscription.headers,
-                                    last_header: TokioInstant::now(),
+                                    last_header: first_header_received,
                                 };
                             }
                             Err(failure) => {
-                                let is_unsupported = matches!(failure, ProbeFailure::Unsupported(_));
+                                let is_unsupported = matches!(failure, ProbeFailure::Unsupported { .. });
                                 let is_mismatch = matches!(
                                     failure,
                                     ProbeFailure::ChainIdMismatch { .. } | ProbeFailure::BlockHashMismatch { .. }
@@ -505,14 +562,16 @@ pub(crate) async fn run_head_driver(
 
                                 if is_mismatch || is_unsupported {
                                     state = State::Polling { reconnect_at: None };
-                                } else if ever_connected {
+                                } else {
+                                    // A connection failure is retried with backoff, including when the
+                                    // endpoint has never accepted a subscription. The HTTP side may be
+                                    // behind the WebSocket side, so the probe can fail before the first
+                                    // header's block is available over HTTP.
                                     let reconnect_at = TokioInstant::now() + backoff;
                                     backoff = next_reconnect_backoff(backoff);
                                     state = State::Polling {
                                         reconnect_at: Some(reconnect_at),
                                     };
-                                } else {
-                                    state = State::Polling { reconnect_at: None };
                                 }
                             }
                         }
@@ -520,20 +579,89 @@ pub(crate) async fn run_head_driver(
                 }
             }
             State::WebSocket {
-                mut headers,
+                headers: stream,
                 last_header,
             } => {
+                let mut headers = Some(stream);
                 let silent_deadline = last_header + probe_timeout;
 
                 tokio::select! {
-                    header = headers.next() => {
+                    header = next_websocket_header(&mut headers) => {
                         match header {
                             Some(Ok(header)) => {
-                                refresh_from_header(&runtime, &head, header).await;
-                                state = State::WebSocket {
-                                    headers,
-                                    last_header: TokioInstant::now(),
+                                // The silence deadline starts when the last header arrives. Headers
+                                // keep being read while a refresh is in flight, so a refresh that
+                                // retries for longer than the silence window does not look like a
+                                // silent socket. A header that arrives during the refresh moves the
+                                // deadline and becomes the next refresh; only the newest one runs.
+                                let mut last_header_received = TokioInstant::now();
+                                let mut next_refresh = Some(header);
+
+                                let next_state = 'refresh: loop {
+                                    let Some(header) = next_refresh.take() else {
+                                        break 'refresh State::WebSocket {
+                                            headers: headers
+                                                .take()
+                                                .unwrap_or_else(|| futures::stream::empty().boxed()),
+                                            last_header: last_header_received,
+                                        };
+                                    };
+
+                                    let refresh = refresh_from_header(&runtime, &head, header);
+                                    tokio::pin!(refresh);
+                                    let mut refreshed = false;
+
+                                    while !refreshed {
+                                        let silent_deadline = last_header_received + probe_timeout;
+
+                                        tokio::select! {
+                                            _ = &mut refresh => refreshed = true,
+                                            _ = sleep_until(silent_deadline) => {
+                                                let reconnect_at = leave_websocket(
+                                                    &runtime,
+                                                    &head,
+                                                    "no new head received on the WebSocket while refreshing, switching to polling",
+                                                    Some(probe_timeout.as_secs()),
+                                                    &mut backoff,
+                                                )
+                                                .await;
+                                                break 'refresh State::Polling { reconnect_at: Some(reconnect_at) };
+                                            }
+                                            header = next_websocket_header(&mut headers) => {
+                                                match header {
+                                                    Some(Ok(header)) => {
+                                                        last_header_received = TokioInstant::now();
+                                                        next_refresh = Some(header);
+                                                    }
+                                                    Some(Err(error)) => {
+                                                        let reconnect_at = leave_websocket(
+                                                            &runtime,
+                                                            &head,
+                                                            &format!("WebSocket head source failed, switching to polling: {error}"),
+                                                            None,
+                                                            &mut backoff,
+                                                        )
+                                                        .await;
+                                                        break 'refresh State::Polling { reconnect_at: Some(reconnect_at) };
+                                                    }
+                                                    None => {
+                                                        let reconnect_at = leave_websocket(
+                                                            &runtime,
+                                                            &head,
+                                                            "WebSocket head source closed, switching to polling",
+                                                            None,
+                                                            &mut backoff,
+                                                        )
+                                                        .await;
+                                                        break 'refresh State::Polling { reconnect_at: Some(reconnect_at) };
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 };
+
+                                state = next_state;
                             }
                             Some(Err(error)) => {
                                 let reconnect_at = leave_websocket(
@@ -693,7 +821,6 @@ mod tests {
             (None, "subscriptions not supported"),
             (None, "subscription not supported"),
             (Some(-32000), "method eth_subscribe does not exist"),
-            (Some(-32000), "the subscription is not available"),
         ] {
             assert!(
                 classify_head_error(true, code, message).is_unsupported(),
@@ -713,8 +840,66 @@ mod tests {
         ] {
             assert_eq!(
                 classify_head_error(false, Some(-32601), message),
-                HeadError::Connection(message.to_string())
+                HeadError::connection(message, Some(-32601))
             );
+        }
+    }
+
+    #[test]
+    fn test_classify_head_error_keeps_a_temporary_availability_error_retryable() {
+        for message in [
+            "service is not available",
+            "the subscription is not available",
+            "upstream not available",
+        ] {
+            let error = classify_head_error(true, Some(-32000), message);
+            assert_eq!(error, HeadError::connection(message, Some(-32000)));
+        }
+    }
+
+    #[test]
+    fn test_classify_head_error_preserves_the_json_rpc_code() {
+        let error = classify_head_error(true, Some(-32601), "Method not found");
+        assert_eq!(error.code(), Some(-32601));
+
+        let transport_error = classify_head_error(false, None, "socket closed");
+        assert_eq!(transport_error.code(), None);
+    }
+
+    #[test]
+    fn test_probe_failure_keeps_only_the_error_category_and_code() {
+        let failure = super::ProbeFailure::from(HeadError::connection(
+            "wss://rpc.example.com/?token=secret is not reachable",
+            Some(-32000),
+        ));
+
+        assert!(
+            !format!("{failure:?}").contains("secret"),
+            "the probe failure must not carry the endpoint's raw error text"
+        );
+        assert_eq!(
+            failure,
+            super::ProbeFailure::Connection { code: Some(-32000) },
+            "the JSON-RPC code must survive for the warning"
+        );
+    }
+
+    #[test]
+    fn test_head_source_config_debug_redacts_the_websocket_url() {
+        let config = HeadSourceConfig {
+            chain_id: 100,
+            poll_interval: Duration::from_secs(1),
+            expected_block_time: Duration::from_secs(5),
+            ws_url: Some(
+                Url::parse("wss://user:pass@rpc.example.com:8443/secret/path?token=xyz").expect("URL should parse"),
+            ),
+            ws_url_derived: true,
+        };
+
+        let debug = format!("{config:?}");
+        assert!(debug.contains("wss://rpc.example.com:8443"), "{debug}");
+        for secret in ["user", "pass", "secret", "xyz"] {
+            assert!(!debug.contains(secret), "{debug}");
         }
     }
 
@@ -730,7 +915,7 @@ mod tests {
             (None, "failed to send eth_subscribe: connection reset"),
         ] {
             let error = classify_head_error(true, code, message);
-            assert_eq!(error, HeadError::Connection(message.to_string()));
+            assert_eq!(error, HeadError::connection(message, code));
         }
     }
 
@@ -807,9 +992,7 @@ mod tests {
                 .lock()
                 .expect("scripts lock should not be poisoned")
                 .pop_front()
-                .unwrap_or_else(|| {
-                    MockSubscription::Error(HeadError::Connection("no subscription script left".to_string()))
-                });
+                .unwrap_or_else(|| MockSubscription::Error(HeadError::connection("no subscription script left", None)));
 
             match script {
                 MockSubscription::Error(error) => Err(error),
@@ -926,6 +1109,43 @@ mod tests {
         }
     }
 
+    /// Fails the first block hash lookup, as an HTTP backend that has not received the block yet.
+    #[derive(Clone)]
+    struct FailOnceHashTipSource {
+        hash: B256,
+        hash_calls: Arc<AtomicUsize>,
+        latest: Arc<AtomicU64>,
+    }
+
+    impl FailOnceHashTipSource {
+        fn new(hash: B256) -> Self {
+            Self {
+                hash,
+                hash_calls: Arc::new(AtomicUsize::new(0)),
+                latest: Arc::new(AtomicU64::new(100)),
+            }
+        }
+
+        fn hash_calls(&self) -> usize {
+            self.hash_calls.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl TipSource for FailOnceHashTipSource {
+        async fn observe(&self) -> Result<TipObservation> {
+            let latest = self.latest.fetch_add(1, Ordering::SeqCst) + 1;
+            Ok(observation(latest, None, None))
+        }
+
+        async fn block_hash(&self, _block: u64) -> Result<B256> {
+            if self.hash_calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err(RpcError::Other("block 50 is not available".to_string()));
+            }
+            Ok(self.hash)
+        }
+    }
+
     fn head_config(ws_url: Option<&str>, chain_id: u64) -> HeadSourceConfig {
         HeadSourceConfig {
             chain_id,
@@ -983,9 +1203,10 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn test_head_driver_disables_websocket_after_handshake_failure() {
-        let subscriber = MockHeadSubscriber::new(vec![MockSubscription::Error(HeadError::Connection(
-            "handshake failed".to_string(),
+    async fn test_head_driver_keeps_retrying_after_a_connection_failure() {
+        let subscriber = MockHeadSubscriber::new(vec![MockSubscription::Error(HeadError::connection(
+            "handshake failed",
+            None,
         ))]);
         let source = DriverTipSource::new(B256::ZERO);
         let tracker = driver_tracker(
@@ -997,18 +1218,73 @@ mod tests {
         tracker.ensure_started();
         advance(Duration::from_secs(5)).await;
 
-        assert_eq!(subscriber.calls(), 1);
+        assert!(subscriber.calls() >= 2, "a connection failure must be retried");
         assert!(source.calls() > 0, "polling must keep publishing tips");
         assert_eq!(tracker.current().map(|tip| tip.source), Some(HeadSource::Polling));
 
+        let calls = subscriber.calls();
         advance(Duration::from_secs(30)).await;
-        assert_eq!(subscriber.calls(), 1, "a disabled WebSocket source must not be retried");
+        assert!(subscriber.calls() > calls, "the retries must continue with backoff");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_head_driver_retries_the_probe_after_a_connection_failure_before_ever_connecting() {
+        let subscriber = MockHeadSubscriber::new(vec![
+            MockSubscription::Error(HeadError::connection("handshake failed", None)),
+            MockSubscription::Headers {
+                chain_id: 100,
+                headers: vec![header(50, 0x11)],
+                keep_open: true,
+            },
+        ]);
+        let source = DriverTipSource::new(B256::repeat_byte(0x11));
+        let tracker = driver_tracker(
+            source,
+            Some(subscriber.clone()),
+            head_config(Some("ws://localhost:8546"), 100),
+        );
+
+        tracker.ensure_started();
+        advance(Duration::from_millis(1_500)).await;
+
+        assert_eq!(subscriber.calls(), 2, "the startup probe must be retried");
+        assert_eq!(tracker.current().map(|tip| tip.source), Some(HeadSource::WebSocket));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_head_driver_retries_the_probe_when_the_block_hash_is_not_available_yet() {
+        let subscriber = MockHeadSubscriber::new(vec![
+            MockSubscription::Headers {
+                chain_id: 100,
+                headers: vec![header(50, 0x11)],
+                keep_open: true,
+            },
+            MockSubscription::Headers {
+                chain_id: 100,
+                headers: vec![header(51, 0x11)],
+                keep_open: true,
+            },
+        ]);
+        let source = FailOnceHashTipSource::new(B256::repeat_byte(0x11));
+        let tracker = ChainTipTracker::with_head_source(
+            Arc::new(source.clone()),
+            config(ConfirmationMode::Depth),
+            head_config(Some("ws://localhost:8546"), 100),
+            Some(Arc::new(subscriber)),
+        );
+
+        tracker.ensure_started();
+        advance(Duration::from_millis(1_500)).await;
+
+        assert_eq!(source.hash_calls(), 2, "the hash lookup must be retried");
+        assert_eq!(tracker.current().map(|tip| tip.source), Some(HeadSource::WebSocket));
     }
 
     #[tokio::test(start_paused = true)]
     async fn test_head_driver_disables_websocket_when_subscription_is_unsupported() {
-        let subscriber = MockHeadSubscriber::new(vec![MockSubscription::Error(HeadError::Unsupported(
-            "method not found".to_string(),
+        let subscriber = MockHeadSubscriber::new(vec![MockSubscription::Error(HeadError::unsupported(
+            "method not found",
+            Some(-32601),
         ))]);
         let source = DriverTipSource::new(B256::ZERO);
         let tracker = driver_tracker(
@@ -1029,7 +1305,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn test_head_driver_disables_websocket_when_no_header_arrives() {
+    async fn test_head_driver_retries_the_probe_when_no_header_arrives() {
         let subscriber = MockHeadSubscriber::new(vec![MockSubscription::Pending { chain_id: 100 }]);
         let source = DriverTipSource::new(B256::ZERO);
         let tracker = driver_tracker(
@@ -1039,14 +1315,11 @@ mod tests {
         );
 
         tracker.ensure_started();
-        advance(Duration::from_secs(4)).await;
+        advance(Duration::from_secs(6)).await;
 
-        assert_eq!(subscriber.calls(), 1);
+        assert!(subscriber.calls() >= 2, "a probe timeout must be retried");
         assert!(source.calls() > 1, "polling must run while the probe waits");
         assert_eq!(tracker.current().map(|tip| tip.source), Some(HeadSource::Polling));
-
-        advance(Duration::from_secs(30)).await;
-        assert_eq!(subscriber.calls(), 1);
     }
 
     #[tokio::test(start_paused = true)]
@@ -1122,6 +1395,38 @@ mod tests {
             source.calls() >= 2,
             "the first header and the following header must trigger HTTP refreshes without waiting for the poll \
              interval"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_head_driver_refreshes_for_a_second_header_without_a_poll_tick() {
+        let (tx, rx) = mpsc::unbounded_channel::<StdResult<HeadHeader, HeadError>>();
+        tx.send(Ok(header(50, 0x11)))
+            .expect("the probe header should be queued");
+        let subscriber = ChannelHeadSubscriber {
+            chain_id: 100,
+            receiver: Arc::new(Mutex::new(Some(rx))),
+        };
+        let source = DriverTipSource::new(B256::repeat_byte(0x11));
+        let tracker = driver_tracker(
+            source.clone(),
+            Some(subscriber),
+            head_config(Some("ws://localhost:8546"), 100),
+        );
+
+        tracker.ensure_started();
+        advance(Duration::from_millis(10)).await;
+        assert_eq!(tracker.current().map(|tip| tip.source), Some(HeadSource::WebSocket));
+
+        let calls_after_activation = source.calls();
+        tx.send(Ok(header(51, 0x12)))
+            .expect("the second header should be delivered");
+        advance(Duration::from_millis(10)).await;
+
+        assert_eq!(
+            source.calls(),
+            calls_after_activation + 1,
+            "the second header must trigger its own refresh before the next polling tick"
         );
     }
 
@@ -1276,6 +1581,77 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn test_head_driver_silence_timer_keeps_running_during_a_long_refresh() {
+        let (tx, rx) = mpsc::unbounded_channel::<StdResult<HeadHeader, HeadError>>();
+        tx.send(Ok(header(50, 0x11)))
+            .expect("the probe header should be queued");
+        let subscriber = ChannelHeadSubscriber {
+            chain_id: 100,
+            receiver: Arc::new(Mutex::new(Some(rx))),
+        };
+        let source = DriverTipSource::new(B256::repeat_byte(0x11));
+        let tracker = ChainTipTracker::with_head_source(
+            Arc::new(source),
+            config(ConfirmationMode::Depth),
+            HeadSourceConfig {
+                chain_id: 100,
+                poll_interval: Duration::from_secs(30),
+                expected_block_time: Duration::from_secs(1),
+                ws_url: Some(Url::parse("ws://localhost:8546").expect("test URL should parse")),
+                ws_url_derived: false,
+            },
+            Some(Arc::new(subscriber)),
+        );
+
+        tracker.ensure_started();
+        advance(Duration::from_millis(10)).await;
+        assert_eq!(tracker.current().map(|tip| tip.source), Some(HeadSource::WebSocket));
+
+        // A header far above the HTTP head makes the refresh sleep for the poll interval. The
+        // silence timer must still expire within the expected block time window.
+        tx.send(Ok(header(1_000_000, 0x12)))
+            .expect("the high header should be delivered");
+        advance(Duration::from_secs(4)).await;
+
+        assert_eq!(
+            tracker.current().map(|tip| tip.source),
+            Some(HeadSource::Polling),
+            "the silent socket must fall back while the refresh is still in flight"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_head_driver_stays_on_websocket_while_headers_arrive_during_a_long_refresh() {
+        let subscriber = MockHeadSubscriber::new(vec![MockSubscription::RepeatHeader {
+            chain_id: 100,
+            header: header(1_000_000, 0x11),
+            interval: Duration::from_secs(1),
+        }]);
+        let source = DriverTipSource::new(B256::repeat_byte(0x11));
+        let tracker = ChainTipTracker::with_head_source(
+            Arc::new(source),
+            config(ConfirmationMode::Depth),
+            HeadSourceConfig {
+                chain_id: 100,
+                poll_interval: Duration::from_secs(30),
+                expected_block_time: Duration::from_secs(1),
+                ws_url: Some(Url::parse("ws://localhost:8546").expect("test URL should parse")),
+                ws_url_derived: false,
+            },
+            Some(Arc::new(subscriber)),
+        );
+
+        tracker.ensure_started();
+        advance(Duration::from_secs(6)).await;
+
+        assert_eq!(
+            tracker.current().map(|tip| tip.source),
+            Some(HeadSource::WebSocket),
+            "a socket that keeps delivering headers must not look silent during a long refresh"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn test_head_driver_stops_reconnecting_when_subscription_becomes_unsupported() {
         let subscriber = MockHeadSubscriber::new(vec![
             MockSubscription::Headers {
@@ -1283,7 +1659,7 @@ mod tests {
                 headers: vec![header(50, 0x11)],
                 keep_open: false,
             },
-            MockSubscription::Error(HeadError::Unsupported("method not found".to_string())),
+            MockSubscription::Error(HeadError::unsupported("method not found", Some(-32601))),
         ]);
         let source = DriverTipSource::new(B256::repeat_byte(0x11));
         let tracker = driver_tracker(
@@ -1320,7 +1696,7 @@ mod tests {
         advance(Duration::from_millis(10)).await;
         assert_eq!(tracker.current().map(|tip| tip.source), Some(HeadSource::WebSocket));
 
-        tx.send(Err(HeadError::Connection("socket closed".to_string())))
+        tx.send(Err(HeadError::connection("socket closed", None)))
             .expect("header error should be delivered");
         advance(Duration::from_millis(10)).await;
 
@@ -1343,7 +1719,7 @@ mod tests {
                 .lock()
                 .expect("receiver lock should not be poisoned")
                 .take()
-                .ok_or_else(|| HeadError::Connection("subscription already opened".to_string()))?;
+                .ok_or_else(|| HeadError::connection("subscription already opened", None))?;
             let headers = futures::stream::unfold(receiver, |mut receiver| async move {
                 receiver.recv().await.map(|item| (item, receiver))
             })

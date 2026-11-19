@@ -2113,6 +2113,7 @@ dependencies = [
  "humantime-serde",
  "insta",
  "lazy_static",
+ "mockito",
  "moka",
  "multiaddr",
  "pem-rfc7468",

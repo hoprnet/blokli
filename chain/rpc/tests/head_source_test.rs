@@ -59,14 +59,17 @@ async fn test_websocket_head_source_advances_confirmed_tip() -> anyhow::Result<(
 
     tokio::time::timeout(Duration::from_secs(20), async {
         loop {
-            if tracker.current().is_some_and(|tip| tip.confirmed > initial_confirmed) {
+            if tracker
+                .current()
+                .is_some_and(|tip| tip.confirmed > initial_confirmed && tip.source == HeadSource::WebSocket)
+            {
                 break;
             }
             sleep(Duration::from_millis(100)).await;
         }
     })
     .await
-    .context("confirmed tip did not advance with new blocks")?;
+    .context("confirmed tip did not advance through the WebSocket head source")?;
 
     Ok(())
 }

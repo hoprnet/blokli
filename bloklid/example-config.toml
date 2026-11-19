@@ -149,7 +149,8 @@ enable_curvy_indexing = false
 [indexer.head_tracking]
 # Use newHeads (default). Falls back to polling when the RPC cannot serve it. false forces polling.
 head_subscription = true
-# Polling interval for the fallback (default: 1s).
+# Polling interval for the fallback (default: 1s). Each poll is one batched JSON-RPC request
+# with three eth_getBlockByNumber calls (latest, safe, finalized).
 head_poll_interval = "1s"
 
 # Rule used to derive the confirmed block from the observed chain tip.
