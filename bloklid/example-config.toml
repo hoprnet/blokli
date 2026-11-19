@@ -206,7 +206,7 @@ gas_multiplier = 1.0
 # be a finite number greater than or equal to 1.
 base_fee_headroom_factor = 8.0
 max_max_fee_per_gas      = 1000000000 # 1 gwei
-max_priority_fee_per_gas = 50000000   # 0.05 gwei
+max_priority_fee_per_gas = 1000000000 # 1 gwei
 min_max_fee_per_gas      = 500000000  # 0.5 gwei
 min_priority_fee_per_gas = 10000000   # 0.01 gwei
 
@@ -259,7 +259,7 @@ max_queued_trace_jobs     = 128
 
 # Limits for the background receipt monitor. Durations accept humantime strings ("30s", "1m").
 # unmined_timeout:         how long a submitted transaction may stay unmined before it is marked as
-#                          timed out and diagnosed (default: "300s")
+#                          timed out and diagnosed (default: "45s")
 # request_timeout:         maximum time for one transaction receipt RPC request (default: "30s")
 # safe_inspection_timeout: maximum time to determine the inner outcome of a confirmed Safe
 #                          transaction; on timeout the transaction stays submitted and is retried
@@ -272,7 +272,7 @@ max_concurrent_checks   = 16
 request_timeout         = "30s"
 revert_reason_timeout   = "30s"
 safe_inspection_timeout = "30s"
-unmined_timeout         = "300s"
+unmined_timeout         = "45s"
 
 # Set false for RPC providers that do not expose debug_traceTransaction.
 # Safe success/failure status remains available from the transaction receipt.

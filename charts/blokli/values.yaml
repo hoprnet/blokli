@@ -523,7 +523,7 @@ config:
     minPriorityFeePerGas: 10000000
     ## @param config.api.maxPriorityFeePerGas Upper bound, in wei, for the maxPriorityFeePerGas exposed by chainInfo, applied after gasMultiplier so it always wins. Bounds the tip a transaction pays. Must be >= minPriorityFeePerGas
     ##
-    maxPriorityFeePerGas: 50000000
+    maxPriorityFeePerGas: 1000000000
     ## @param config.api.baseFeeHeadroomFactor Multiple of the (gasMultiplier-scaled) next-block base fee included in the maxFeePerGas exposed by chainInfo. It applies to the base fee from eth_feeHistory and, when that method is unavailable, to the latest block's base fee. Must be >= 1
     ##
     baseFeeHeadroomFactor: 8
@@ -558,7 +558,7 @@ config:
       terminalTransactionTtl: "24h"
       ## @param config.api.transactions.unminedTimeout How long a submitted transaction may stay unmined before it is marked as timed out and diagnosed
       ##
-      unminedTimeout: "300s"
+      unminedTimeout: "45s"
       ## @param config.api.transactions.maxConcurrentTraceJobs Concurrent debug_traceTransaction jobs for failed Safe executions (0 = unbounded)
       ##
       maxConcurrentTraceJobs: 2
