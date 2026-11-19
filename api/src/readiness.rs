@@ -142,11 +142,33 @@ impl ReadinessChecker {
     }
 
     /// Perform a full readiness check and update the cached state
-    /// This is used by /readyz endpoint and indexer completion signals
+    ///
+    /// This is used by /readyz endpoint and indexer completion signals. A post-finality
+    /// verification mismatch is published before the database and RPC reads, so a cached `Ready`
+    /// state is replaced even while a check still waits for them, and the flag is read again when
+    /// the result is stored so a check that started before the mismatch cannot restore readiness.
     pub async fn check_and_update(&self) -> ReadinessReport {
-        let report = self.check_readiness().await;
-        let new_state = report.state;
-        let health_status = report.health_status;
+        if self.verification_status.failed() {
+            self.store_state(ReadinessState::NotReady, metrics::HEALTH_STATUS_VERIFICATION_FAILED)
+                .await;
+        }
+
+        let mut report = self.check_readiness().await;
+
+        if self.verification_status.failed() {
+            report.state = ReadinessState::NotReady;
+            report.health_status = metrics::HEALTH_STATUS_VERIFICATION_FAILED;
+            report.verification.failed = true;
+        }
+
+        self.store_state(report.state, report.health_status).await;
+
+        report
+    }
+
+    /// Stores a readiness decision, updates the health metric and notifies subscribers when the
+    /// state changes.
+    async fn store_state(&self, new_state: ReadinessState, health_status: &'static str) {
         let mut cached = self.cached_state.write().await;
         let old_state = *cached;
         *cached = new_state;
@@ -166,8 +188,6 @@ impl ReadinessChecker {
                 }
             }
         }
-
-        report
     }
 
     /// Trigger an out-of-band readiness check (used by indexer completion signal)
@@ -302,7 +322,13 @@ impl ReadinessChecker {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::{Duration, Instant},
+    };
 
     use blokli_chain_indexer::IndexerState;
     use blokli_chain_rpc::{
@@ -316,6 +342,42 @@ mod tests {
     use super::{ReadinessChecker, ReadinessState};
     use crate::{config::HealthConfig, metrics};
 
+    /// Answers a batched block request with a header for every tag that has a block number.
+    fn tip_batch_response(
+        request: &mockito::Request,
+        latest: u64,
+        safe: Option<u64>,
+        finalized: Option<u64>,
+    ) -> Vec<u8> {
+        let body: serde_json::Value =
+            serde_json::from_slice(request.body().expect("request body")).expect("valid JSON request body");
+        let responses = body
+            .as_array()
+            .expect("a batched block request is a JSON array")
+            .iter()
+            .map(|call| {
+                let tag = call["params"][0].as_str().unwrap_or_default();
+                let number = match tag {
+                    "latest" => Some(latest),
+                    "safe" => safe,
+                    "finalized" => finalized,
+                    _ => None,
+                };
+                let result = number.map_or(
+                    serde_json::Value::Null,
+                    |number| serde_json::json!({"number": format!("0x{number:x}"), "timestamp": "0x1"}),
+                );
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": call["id"].clone(),
+                    "result": result
+                })
+            })
+            .collect::<Vec<_>>();
+
+        serde_json::to_vec(&responses).expect("batch response should serialize")
+    }
+
     /// Answers the chain tip batch with a latest header and no safe or finalized tag.
     fn mock_tip_without_confirmation_tags(server: &mut mockito::ServerGuard) -> mockito::Mock {
         server
@@ -323,42 +385,62 @@ mod tests {
             .match_body(mockito::Matcher::Regex(
                 r#""method"\s*:\s*"eth_getBlockByNumber""#.to_string(),
             ))
-            .with_body_from_request(|request| {
-                let body: serde_json::Value =
-                    serde_json::from_slice(request.body().expect("request body")).expect("valid JSON request body");
-                let responses = body
-                    .as_array()
-                    .expect("a batched block request is a JSON array")
-                    .iter()
-                    .map(|call| {
-                        let tag = call["params"][0].as_str().unwrap_or_default();
-                        let result = if tag == "latest" {
-                            serde_json::json!({"number": "0x64", "timestamp": "0x1"})
-                        } else {
-                            serde_json::Value::Null
-                        };
-                        serde_json::json!({
-                            "jsonrpc": "2.0",
-                            "id": call["id"].clone(),
-                            "result": result
-                        })
-                    })
-                    .collect::<Vec<_>>();
+            .with_body_from_request(|request| tip_batch_response(request, 100, None, None))
+            .expect_at_least(1)
+            .create()
+    }
 
-                serde_json::to_vec(&responses).expect("batch response should serialize")
+    /// Answers the chain tip batch once the test sets `release`, and reports the arrived request.
+    fn mock_tip_released_by_test(
+        server: &mut mockito::ServerGuard,
+        arrived: Arc<AtomicBool>,
+        release: Arc<AtomicBool>,
+    ) -> mockito::Mock {
+        server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::Regex(
+                r#""method"\s*:\s*"eth_getBlockByNumber""#.to_string(),
+            ))
+            .with_body_from_request(move |request| {
+                arrived.store(true, Ordering::SeqCst);
+
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while !release.load(Ordering::SeqCst) && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+
+                tip_batch_response(request, 100, None, None)
             })
             .expect_at_least(1)
             .create()
     }
 
-    fn test_rpc_operations() -> Arc<RpcOperations<ReqwestClient>> {
-        let transport = ReqwestTransport::new("http://localhost:8545".parse().expect("valid transport URL"));
+    fn rpc_operations_for(
+        server: &mockito::ServerGuard,
+        config: RpcOperationsConfig,
+    ) -> anyhow::Result<Arc<RpcOperations<ReqwestClient>>> {
+        let transport = ReqwestTransport::new(server.url().parse()?);
         let rpc_client = ClientBuilder::default().transport(transport.clone(), transport.guess_local());
 
-        Arc::new(
-            RpcOperations::new(rpc_client, ReqwestClient::new(), RpcOperationsConfig::default(), None)
-                .expect("RPC operations should be constructible"),
-        )
+        Ok(Arc::new(RpcOperations::new(
+            rpc_client,
+            ReqwestClient::new(),
+            config,
+            None,
+        )?))
+    }
+
+    async fn wait_for_tip_request(arrived: &AtomicBool) -> anyhow::Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+
+        while !arrived.load(Ordering::SeqCst) {
+            if Instant::now() >= deadline {
+                anyhow::bail!("the RPC stub did not receive the chain tip request");
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+
+        Ok(())
     }
 
     #[tokio::test]
@@ -403,25 +485,115 @@ mod tests {
 
     #[tokio::test]
     async fn verification_failure_reports_not_ready() -> anyhow::Result<()> {
+        let mut server = mockito::Server::new_async().await;
+        let tip = mock_tip_without_confirmation_tags(&mut server);
+
         let db = BlokliDb::new_in_memory().await?;
         let indexer_state = IndexerState::default();
         indexer_state.mark_verification_failed();
 
         let checker = ReadinessChecker::new(
             db.conn(TargetDb::Index).clone(),
-            test_rpc_operations(),
+            rpc_operations_for(&server, RpcOperationsConfig::default())?,
             HealthConfig::default(),
         )
         .with_verification_status(indexer_state.verification_status());
 
         let report = checker.check_readiness().await;
 
+        tip.assert();
         assert_eq!(report.state, ReadinessState::NotReady);
         assert_eq!(report.health_status, metrics::HEALTH_STATUS_VERIFICATION_FAILED);
         assert!(report.verification.failed);
         assert!(
-            report.rpc.error.is_some(),
-            "the RPC check must still run when verification failed"
+            report.rpc.error.is_none(),
+            "the RPC check must still run when verification failed: {:?}",
+            report.rpc.error
+        );
+        assert!(
+            report.rpc.block_number.is_some(),
+            "the RPC stub must answer the chain tip request"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn verification_failure_is_published_before_the_rpc_check_completes() -> anyhow::Result<()> {
+        let mut server = mockito::Server::new_async().await;
+        let arrived = Arc::new(AtomicBool::new(false));
+        let release = Arc::new(AtomicBool::new(false));
+        let tip = mock_tip_released_by_test(&mut server, arrived.clone(), release.clone());
+
+        let db = BlokliDb::new_in_memory().await?;
+        let indexer_state = IndexerState::default();
+        let checker = ReadinessChecker::new(
+            db.conn(TargetDb::Index).clone(),
+            rpc_operations_for(&server, RpcOperationsConfig::default())?,
+            HealthConfig::default(),
+        )
+        .with_verification_status(indexer_state.verification_status());
+        checker.force_ready().await;
+        indexer_state.mark_verification_failed();
+
+        let running = tokio::spawn({
+            let checker = checker.clone();
+            async move { checker.check_and_update().await }
+        });
+
+        wait_for_tip_request(&arrived).await?;
+        assert_eq!(
+            checker.get().await,
+            ReadinessState::NotReady,
+            "a known verification failure must be published before the database and RPC reads finish"
+        );
+
+        release.store(true, Ordering::SeqCst);
+        let report = running.await?;
+
+        tip.assert();
+        assert_eq!(report.state, ReadinessState::NotReady);
+        assert_eq!(report.health_status, metrics::HEALTH_STATUS_VERIFICATION_FAILED);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn check_started_before_a_verification_failure_cannot_restore_readiness() -> anyhow::Result<()> {
+        let mut server = mockito::Server::new_async().await;
+        let arrived = Arc::new(AtomicBool::new(false));
+        let release = Arc::new(AtomicBool::new(false));
+        let tip = mock_tip_released_by_test(&mut server, arrived.clone(), release.clone());
+
+        let db = BlokliDb::new_in_memory().await?;
+        let indexer_state = IndexerState::default();
+        let checker = ReadinessChecker::new(
+            db.conn(TargetDb::Index).clone(),
+            rpc_operations_for(&server, RpcOperationsConfig::default())?,
+            HealthConfig::default(),
+        )
+        .with_verification_status(indexer_state.verification_status());
+        checker.force_ready().await;
+
+        let running = tokio::spawn({
+            let checker = checker.clone();
+            async move { checker.check_and_update().await }
+        });
+
+        wait_for_tip_request(&arrived).await?;
+        indexer_state.mark_verification_failed();
+        release.store(true, Ordering::SeqCst);
+
+        let report = running.await?;
+
+        tip.assert();
+        assert_eq!(report.state, ReadinessState::NotReady);
+        assert_eq!(report.health_status, metrics::HEALTH_STATUS_VERIFICATION_FAILED);
+        assert!(report.verification.failed);
+        assert_eq!(
+            checker.get().await,
+            ReadinessState::NotReady,
+            "a check that started before the mismatch must not store Ready"
         );
 
         Ok(())

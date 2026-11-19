@@ -159,15 +159,17 @@ impl MutationRoot {
     /// Validates the pre-signed raw transaction data, submits it to the chain, and waits for the
     /// block that included it to be confirmed before returning. When `confirmations` is omitted,
     /// the wait follows the node's confirmation rule reported by `chainInfo.confirmationMode`;
-    /// when it is given, the wait covers that many blocks (max: 64). Transaction is persisted to
-    /// store and can be queried later.
+    /// when it is given, the endpoint counts that many confirmations including the inclusion
+    /// block (max: 64). Transaction is persisted to store and can be queried later.
     #[graphql(name = "sendTransactionSync")]
     async fn send_transaction_sync(
         &self,
         ctx: &Context<'_>,
-        input: TransactionInput,
-        #[graphql(desc = "Blocks to wait for. Omitted: wait until the node's confirmation rule \
-                          (chainInfo.confirmationMode) confirms the block")]
+        #[graphql(desc = "Pre-signed raw transaction to submit")] input: TransactionInput,
+        #[graphql(
+            desc = "Confirmations to wait for, counting the inclusion block as the first one. Omitted: wait until the \
+                    node's confirmation rule (chainInfo.confirmationMode) confirms the block"
+        )]
         confirmations: Option<i32>,
     ) -> Result<SendTransactionSyncResult> {
         let executor = ctx

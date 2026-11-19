@@ -113,7 +113,7 @@ type ChainInfo {
 	"""
 	expectedBlockTime: UInt64!
 	"""
-	Number of block confirmations required for finality
+	Configured block depth for depth-based confirmation, not a distance to a safe or finalized tip
 	"""
 	finality: UInt64!
 	"""
@@ -912,7 +912,7 @@ Health of the Fast Confirmation Rule as observed through the safe block tag
 """
 enum FcrStatus {
 	"""
-	The endpoint does not expose a safe block
+	No safe block observation exists yet
 	"""
 	UNAVAILABLE
 	"""
@@ -1107,12 +1107,16 @@ type MutationRoot {
 	Validates the pre-signed raw transaction data, submits it to the chain, and waits for the
 	block that included it to be confirmed before returning. When `confirmations` is omitted,
 	the wait follows the node's confirmation rule reported by `chainInfo.confirmationMode`;
-	when it is given, the wait covers that many blocks (max: 64). Transaction is persisted to
-	store and can be queried later.
+	when it is given, the endpoint counts that many confirmations including the inclusion
+	block (max: 64). Transaction is persisted to store and can be queried later.
 	"""
-	sendTransactionSync(		input: TransactionInput!,
+	sendTransactionSync(
 		"""
-		Blocks to wait for. Omitted: wait until the node's confirmation rule (chainInfo.confirmationMode) confirms the block
+		Pre-signed raw transaction to submit
+		"""
+		input: TransactionInput!,
+		"""
+		Confirmations to wait for, counting the inclusion block as the first one. Omitted: wait until the node's confirmation rule (chainInfo.confirmationMode) confirms the block
 		"""
 		confirmations: Int
 	): SendTransactionSyncResult!
@@ -1881,8 +1885,8 @@ type QueryRoot {
 	When `api.max_max_fee_per_gas` is below the scaled next-block base fee, the capped max fee could not be
 	included in the next block, so `maxFeePerGas` and `maxPriorityFeePerGas` are null instead,
 	minimum incoming ticket winning probability, optional 32-byte domain separator hashes
-	for channels/ledger/safe registry as `Hex32`, a map of contract addresses, an optional
-	channel closure grace period in seconds, the configured confirmation rule, and the live
+	for channels/ledger/safe registry as `Hex32`, a map of contract addresses, a channel
+	closure grace period in seconds, the configured confirmation rule, and the live
 	health of the Fast Confirmation Rule.
 	
 	# Examples

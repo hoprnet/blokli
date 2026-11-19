@@ -434,9 +434,11 @@ selectors against permitted operations. Prevents submission of malicious or unin
    Suitable for most applications needing status tracking.
 
 3. **Sync Mode**: Submits transaction and waits until the chain tip tracker's current confirmation height reaches the receipt block, or for
-   a requested number of blocks, before returning. Without an explicit depth it follows the same confirmation rule as the indexer, so
-   callers see the same latency gain and the same reorg guarantee. A height that drops after the receipt was read keeps the call waiting.
-   Highest certainty, suitable for critical operations requiring immediate confirmation.
+   a requested number of blocks counting the inclusion block as the first one, before returning. Without an explicit depth it follows the
+   same confirmation rule as the indexer, so callers see the same latency gain and the same reorg guarantee. A height that drops after the
+   receipt was read keeps the call waiting. The wait re-reads the receipt on every poll interval, so a reorg that moves the transaction to
+   another block follows the new inclusion block, and a transient receipt lookup error is retried until the confirmation deadline instead of
+   reporting the accepted transaction as failed. Highest certainty, suitable for critical operations requiring immediate confirmation.
 
 **TransactionStore**: In-memory storage using concurrent hash map (DashMap) for thread-safe access. Tracks transaction records with UUID
 identifiers, maintains status lifecycle, and provides query interface for GraphQL resolvers.

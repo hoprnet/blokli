@@ -264,7 +264,7 @@ pub struct ChainInfo {
     /// Expected block time in seconds
     #[graphql(name = "expectedBlockTime")]
     pub expected_block_time: UInt64,
-    /// Number of block confirmations required for finality
+    /// Configured block depth for depth-based confirmation, not a distance to a safe or finalized tip
     #[graphql(name = "finality")]
     pub finality: UInt64,
     /// Confirmation rule applied to the chain tip
@@ -295,7 +295,7 @@ pub enum ConfirmationMode {
 /// Health of the Fast Confirmation Rule as observed through the safe block tag
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum FcrStatus {
-    /// The endpoint does not expose a safe block
+    /// No safe block observation exists yet
     #[graphql(name = "UNAVAILABLE")]
     Unavailable,
     /// The safe block is too far behind the latest block

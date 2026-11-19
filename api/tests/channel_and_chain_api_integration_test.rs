@@ -20,15 +20,27 @@ use anyhow::Result;
 use async_trait::async_trait;
 use blokli_api::{
     cache::ChannelStatsCache,
+    config::HealthConfig,
     loader::channels_by_safe_loader,
     query::QueryRoot,
+    readiness::ReadinessChecker,
     schema::{
-        ChainId, ChainTipTrackerContext, ConfirmationRule, ExpectedBlockTime, Finality, GasMultiplier, NetworkName,
+        ChainId, ChainTipTrackerContext, ConfirmationRule, ExpectedBlockTime, Finality, GasFeePolicy, GasMultiplier,
+        NetworkName, build_schema,
     },
+    snapshot::SubscriptionSnapshots,
+};
+use blokli_chain_api::{
+    rpc_adapter::RpcAdapter,
+    transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
+    transaction_store::TransactionStore,
+    transaction_validator::TransactionValidator,
 };
 use blokli_chain_indexer::IndexerState;
-use blokli_chain_rpc::tip::{
-    ChainTipTracker, ConfirmationConfig, ConfirmationMode as ChainConfirmationMode, TipObservation, TipSource,
+use blokli_chain_rpc::{
+    rpc::{RpcOperations, RpcOperationsConfig},
+    tip::{ChainTipTracker, ConfirmationConfig, ConfirmationMode as ChainConfirmationMode, TipObservation, TipSource},
+    transport::ReqwestClient,
 };
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{
@@ -36,6 +48,7 @@ use blokli_db::{
     db::BlokliDb,
 };
 use blokli_db_entity::chain_info;
+use hopr_bindings::exports::alloy::{rpc::client::ClientBuilder, transports::http::ReqwestTransport};
 use hopr_types::{
     crypto::prelude::{ChainKeypair, Keypair, OffchainKeypair},
     internal::channels::{ChannelEntry, ChannelStatus},
@@ -198,6 +211,63 @@ async fn chain_info_schema(
     .data(ChainTipTrackerContext(tracker))
     .data(GasMultiplier(1.0))
     .finish()
+}
+
+/// Answers block requests with a latest and a safe header and a missing finalized tag.
+///
+/// Both the batched chain tip request and single block requests from the fee estimate arrive here.
+fn mock_tip_without_finalized_tag(server: &mut mockito::ServerGuard) -> mockito::Mock {
+    server
+        .mock("POST", "/")
+        .match_body(mockito::Matcher::Regex(
+            r#""method"\s*:\s*"eth_getBlockByNumber""#.to_string(),
+        ))
+        .with_body_from_request(|request| {
+            let body: serde_json::Value =
+                serde_json::from_slice(request.body().expect("request body")).expect("valid JSON request body");
+            let calls = match body {
+                serde_json::Value::Array(calls) => calls,
+                single => vec![single],
+            };
+            let responses = calls
+                .iter()
+                .map(|call| {
+                    let tag = call["params"][0].as_str().unwrap_or_default();
+                    let result = match tag {
+                        "latest" => serde_json::json!({"number": "0x3e8", "timestamp": "0x1"}),
+                        "safe" => serde_json::json!({"number": "0x3e7", "timestamp": "0x1"}),
+                        _ => serde_json::Value::Null,
+                    };
+                    serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": call["id"].clone(),
+                        "result": result
+                    })
+                })
+                .collect::<Vec<_>>();
+
+            serde_json::to_vec(&responses).expect("batch response should serialize")
+        })
+        .expect_at_least(1)
+        .create()
+}
+
+fn rpc_operations(
+    server: &mockito::ServerGuard,
+    confirmation_mode: ChainConfirmationMode,
+) -> Result<RpcOperations<ReqwestClient>> {
+    let transport = ReqwestTransport::new(server.url().parse()?);
+    let rpc_client = ClientBuilder::default().transport(transport.clone(), transport.guess_local());
+
+    Ok(RpcOperations::new(
+        rpc_client,
+        ReqwestClient::new(),
+        RpcOperationsConfig {
+            confirmation_mode,
+            ..RpcOperationsConfig::default()
+        },
+        None,
+    )?)
 }
 
 /// Helper to setup test database with chain_info
@@ -860,6 +930,86 @@ async fn test_chain_info_reports_confirmation_mode_and_fcr_status() -> Result<()
     let chain_info = extract_chain_info_from_result(&data)?;
     assert_eq!(chain_info["confirmationMode"], "FINALIZED");
     assert_eq!(chain_info["fcrStatus"], "DEGRADED");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_chain_info_through_build_schema_reports_the_configured_confirmation_mode() -> Result<()> {
+    let mut server = mockito::Server::new_async().await;
+    let tip = mock_tip_without_finalized_tag(&mut server);
+
+    let db = BlokliDb::new_in_memory().await?;
+    setup_chain_info(&db).await?;
+
+    let schema_rpc_operations = Arc::new(rpc_operations(&server, ChainConfirmationMode::Finalized)?);
+    let transaction_store = Arc::new(TransactionStore::new());
+    let transaction_executor = Arc::new(RawTransactionExecutor::with_shared_dependencies(
+        Arc::new(RpcAdapter::new(rpc_operations(&server, ChainConfirmationMode::Depth)?)),
+        transaction_store.clone(),
+        Arc::new(TransactionValidator::new()),
+        RawTransactionExecutorConfig::default(),
+    ));
+    let readiness_checker = ReadinessChecker::new(
+        db.conn(TargetDb::Index).clone(),
+        schema_rpc_operations.clone(),
+        HealthConfig::default(),
+    );
+
+    let schema = build_schema(
+        db.conn(TargetDb::Index).clone(),
+        db.conn(TargetDb::Logs).clone(),
+        100,
+        "anvil-localhost".to_string(),
+        "0.0.0-test".to_string(),
+        ContractAddresses::default(),
+        1,
+        3,
+        ChainConfirmationMode::Finalized,
+        1.0,
+        GasFeePolicy::default(),
+        IndexerState::default(),
+        transaction_executor,
+        transaction_store,
+        schema_rpc_operations.clone(),
+        readiness_checker,
+        SubscriptionSnapshots::default(),
+        None,
+    );
+
+    let query = r#"
+        query {
+            chainInfo {
+                __typename
+                ... on ChainInfo {
+                    confirmationMode
+                    fcrStatus
+                }
+                ... on QueryFailedError {
+                    code
+                    message
+                }
+            }
+        }
+    "#;
+
+    let response = schema.execute(query).await;
+    assert!(response.errors.is_empty(), "GraphQL errors: {:?}", response.errors);
+    let data = response.data.into_json()?;
+    let chain_info = extract_chain_info_from_result(&data)?;
+    assert_eq!(chain_info["confirmationMode"], "FINALIZED");
+
+    // The tracker is the one the schema was built with: in finalized mode a missing finalized
+    // tag publishes no tip, while a depth-based tracker would report a healthy safe gap.
+    schema_rpc_operations.tip_tracker().refresh().await?;
+    let response = schema.execute(query).await;
+    assert!(response.errors.is_empty(), "GraphQL errors: {:?}", response.errors);
+    let data = response.data.into_json()?;
+    let chain_info = extract_chain_info_from_result(&data)?;
+    assert_eq!(chain_info["confirmationMode"], "FINALIZED");
+    assert_eq!(chain_info["fcrStatus"], "UNAVAILABLE");
+
+    tip.assert();
 
     Ok(())
 }

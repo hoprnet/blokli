@@ -2653,8 +2653,8 @@ impl QueryRoot {
     /// When `api.max_max_fee_per_gas` is below the scaled next-block base fee, the capped max fee could not be
     /// included in the next block, so `maxFeePerGas` and `maxPriorityFeePerGas` are null instead,
     /// minimum incoming ticket winning probability, optional 32-byte domain separator hashes
-    /// for channels/ledger/safe registry as `Hex32`, a map of contract addresses, an optional
-    /// channel closure grace period in seconds, the configured confirmation rule, and the live
+    /// for channels/ledger/safe registry as `Hex32`, a map of contract addresses, a channel
+    /// closure grace period in seconds, the configured confirmation rule, and the live
     /// health of the Fast Confirmation Rule.
     ///
     /// # Examples
