@@ -308,7 +308,7 @@ fields. SQLite uses separate index and raw-log databases.
 | `api.bind_address`                    | `127.0.0.1:8080` | `BLOKLI_API_BIND_ADDRESS`                    | API listen address                            |
 | `api.playground_enabled`              | `false`          | `BLOKLI_API_PLAYGROUND_ENABLED`              | Enables GraphQL Playground                    |
 | `api.gas_multiplier`                  | `1.0`            | `BLOKLI_API_GAS_MULTIPLIER`                  | Finite EIP-1559 fee multiplier, minimum `1.0` |
-| `api.min_priority_fee_per_gas`        | `10000000`       | `BLOKLI_API_MIN_PRIORITY_FEE_PER_GAS`        | Minimum priority fee in wei (0.01 gwei)       |
+| `api.min_priority_fee_per_gas`        | `100`            | `BLOKLI_API_MIN_PRIORITY_FEE_PER_GAS`        | Minimum priority fee in wei                   |
 | `api.max_priority_fee_per_gas`        | `1000000000`     | `BLOKLI_API_MAX_PRIORITY_FEE_PER_GAS`        | Maximum priority fee in wei (1 gwei)          |
 | `api.min_max_fee_per_gas`             | `500000000`      | `BLOKLI_API_MIN_MAX_FEE_PER_GAS`             | Minimum max fee in wei (0.5 gwei)             |
 | `api.max_max_fee_per_gas`             | `1000000000`     | `BLOKLI_API_MAX_MAX_FEE_PER_GAS`             | Maximum max fee in wei (1 gwei)               |
@@ -339,6 +339,10 @@ bounds. The cap and ceiling are applied after the multiplier and always win. If 
 base fee, the capped max fee could not be included in the next block, so `chainInfo` returns no `maxFeePerGas` and `maxPriorityFeePerGas`
 (null) until the base fee drops. Nodes pay base fee plus tip, not the max fee; the balance they reserve is gas limit times max fee, which
 `api.max_max_fee_per_gas` bounds.
+
+The tip floor `api.min_priority_fee_per_gas` is paid in full on every transaction, so it should stay near the real minimum (default `100`
+wei); the max fee floor and ceiling, the headroom factor and the tip cap are caps that are paid only when the base fee or market tip
+actually reaches them.
 
 Upgrading: the tip cap and the max fee ceiling both default to `1000000000` wei (the tip cap was `50000000` before), and startup fails when
 a floor is above its ceiling. A configuration that sets `api.min_priority_fee_per_gas` or `api.min_max_fee_per_gas` above `1000000000` (for

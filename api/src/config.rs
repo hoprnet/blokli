@@ -287,9 +287,10 @@ fn default_gas_multiplier() -> f64 {
     1.0
 }
 
-/// 0.01 gwei: Gnosis median tips are around 0.1 gwei but idle blocks often carry none, so a small floor keeps
-/// transactions attractive to block builders while a 300k gas transaction pays at most 0.000003 xDAI of tip.
-pub const DEFAULT_MIN_PRIORITY_FEE_PER_GAS: u64 = 10_000_000;
+/// 100 wei: the tip is paid in full on every transaction, not just when the base fee spikes, so the floor must stay
+/// near the real minimum. Only the max fee floor and the headroom protect against a spike, and those are caps that
+/// cost nothing unless the base fee actually rises.
+pub const DEFAULT_MIN_PRIORITY_FEE_PER_GAS: u64 = 100;
 
 /// 1 gwei: Gnosis market tips reach 0.6-0.76 gwei at the median when blocks fill up, so a lower cap leaves the
 /// transaction behind them. The tip is paid only on gas used: a 300k gas transaction pays at most 0.0003 xDAI of it.
@@ -396,13 +397,24 @@ mod tests {
         assert_eq!(
             config.gas_fee_policy(),
             GasFeePolicy {
-                min_priority_fee_per_gas: 10_000_000,
+                min_priority_fee_per_gas: 100,
                 max_priority_fee_per_gas: 1_000_000_000,
                 min_max_fee_per_gas: 500_000_000,
                 max_max_fee_per_gas: 1_000_000_000,
                 base_fee_headroom_factor: 8.0,
             }
         );
+    }
+
+    #[test]
+    fn test_default_min_priority_fee_stays_near_the_real_minimum() {
+        // The tip is paid in full on every transaction, so a high floor makes each one cost more even when the base
+        // fee is calm. Only the max fee floor and headroom guard against a spike, and they are caps that cost nothing
+        // unless the base fee rises.
+        assert_eq!(DEFAULT_MIN_PRIORITY_FEE_PER_GAS, 100);
+        let policy = ApiConfig::default().gas_fee_policy();
+        assert!(policy.min_priority_fee_per_gas <= policy.max_priority_fee_per_gas);
+        assert!(policy.min_priority_fee_per_gas <= policy.min_max_fee_per_gas);
     }
 
     #[test]

@@ -3169,7 +3169,7 @@ mod tests {
 
     /// The defaults shipped in the example config
     const DEFAULT_POLICY: GasFeePolicy = GasFeePolicy {
-        min_priority_fee_per_gas: 10_000_000,
+        min_priority_fee_per_gas: 100,
         max_priority_fee_per_gas: 50_000_000,
         min_max_fee_per_gas: 500_000_000,
         max_max_fee_per_gas: 1_000_000_000,
@@ -3381,7 +3381,7 @@ mod tests {
         // Ceiling equal to the base fee still leaves a usable pair, capped at the ceiling
         assert_eq!(
             fees_from_fee_history(snapshot(1_000_000_000, 1), 1.0, policy),
-            Some((1_000_000_000, 10_000_000))
+            Some((1_000_000_000, 100))
         );
     }
 
