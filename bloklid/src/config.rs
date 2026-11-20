@@ -898,7 +898,7 @@ pub struct TransactionConfig {
 
     /// How long a submitted transaction may stay unmined before it is marked as timed out and
     /// diagnosed. Must be greater than `0s`.
-    #[default(_code = "Duration::from_secs(300)")]
+    #[default(_code = "Duration::from_secs(45)")]
     #[serde(default = "default_unmined_timeout", with = "humantime_serde")]
     pub unmined_timeout: Duration,
 
@@ -1072,7 +1072,7 @@ fn default_max_submitted_transactions_per_identity() -> usize {
 }
 
 fn default_unmined_timeout() -> Duration {
-    Duration::from_secs(300)
+    Duration::from_secs(45)
 }
 
 fn default_transaction_request_timeout() -> Duration {
@@ -1476,7 +1476,7 @@ mod tests {
         assert_eq!(config.api.max_query_complexity, 500);
 
         // Transaction monitor limits documented in the example
-        assert_eq!(config.api.transactions.unmined_timeout, Duration::from_secs(300));
+        assert_eq!(config.api.transactions.unmined_timeout, Duration::from_secs(45));
         assert_eq!(config.api.transactions.request_timeout, Duration::from_secs(30));
         assert_eq!(config.api.transactions.safe_inspection_timeout, Duration::from_secs(30));
         assert_eq!(config.api.transactions.revert_reason_timeout, Duration::from_secs(30));
@@ -1498,7 +1498,7 @@ mod tests {
     fn test_transaction_monitor_limits_default_when_absent() {
         let config: Config = toml::from_str(MONITOR_LIMITS_DB).expect("config parses");
         let tx = &config.api.transactions;
-        assert_eq!(tx.unmined_timeout, Duration::from_secs(300));
+        assert_eq!(tx.unmined_timeout, Duration::from_secs(45));
         assert_eq!(TransactionConfig::default().unmined_timeout, tx.unmined_timeout);
         let observed = (
             tx.request_timeout,
@@ -1751,8 +1751,8 @@ mod tests {
         assert!(!cfg.api.playground_enabled); // Default
         assert_eq!(cfg.api.bind_address.to_string(), "127.0.0.1:8080"); // Default
         assert_eq!(cfg.api.gas_multiplier, 1.0); // Default
-        assert_eq!(cfg.api.min_priority_fee_per_gas, 10_000_000); // Default
-        assert_eq!(cfg.api.max_priority_fee_per_gas, 50_000_000); // Default
+        assert_eq!(cfg.api.min_priority_fee_per_gas, 100); // Default
+        assert_eq!(cfg.api.max_priority_fee_per_gas, 1_000_000_000); // Default
         assert_eq!(cfg.api.min_max_fee_per_gas, 500_000_000); // Default
         assert_eq!(cfg.api.max_max_fee_per_gas, 1_000_000_000); // Default
         assert_eq!(cfg.api.base_fee_headroom_factor, 8.0); // Default

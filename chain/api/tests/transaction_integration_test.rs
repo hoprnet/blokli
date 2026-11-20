@@ -114,7 +114,7 @@ async fn setup_test_environment(
 
     let monitor_config = TransactionMonitorConfig {
         poll_interval: Duration::from_millis(200),
-        unmined_timeout: Duration::from_secs(300),
+        unmined_timeout: Duration::from_secs(45),
         terminal_transaction_ttl: Duration::from_secs(24 * 60 * 60),
         max_terminal_transactions: 10_000,
         request_timeout: Duration::from_secs(30),
