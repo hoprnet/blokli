@@ -202,8 +202,8 @@ The command removes all the Kubernetes components associated with the chart and 
 | `config.api.gasMultiplier` | Multiplier for the base fee and tip estimates to provide a safety margin (e.g., 1.2 for 20% extra). The base fee headroom factor is applied on top, so the effective headroom is gasMultiplier x baseFeeHeadroomFactor | `1.2` |
 | `config.api.minMaxFeePerGas` | Lower bound, in wei, for the maxFeePerGas exposed by chainInfo. It only caps the price paid; transactions pay base fee plus tip. Must be >= minPriorityFeePerGas | `500000000` |
 | `config.api.maxMaxFeePerGas` | Upper bound, in wei, for the maxFeePerGas exposed by chainInfo, applied after gasMultiplier so it always wins. Bounds the balance reserved upfront (gas limit x maxFeePerGas). Must be >= minMaxFeePerGas and >= maxPriorityFeePerGas. Existing releases with floors above the defaults must lower the floors or set this and maxPriorityFeePerGas. When it is below the next-block base fee, chainInfo returns null EIP-1559 fees | `1000000000` |
-| `config.api.minPriorityFeePerGas` | Lower bound, in wei, for the maxPriorityFeePerGas exposed by chainInfo | `10000000` |
-| `config.api.maxPriorityFeePerGas` | Upper bound, in wei, for the maxPriorityFeePerGas exposed by chainInfo, applied after gasMultiplier so it always wins. Bounds the tip a transaction pays. Must be >= minPriorityFeePerGas | `50000000` |
+| `config.api.minPriorityFeePerGas` | Lower bound, in wei, for the maxPriorityFeePerGas exposed by chainInfo | `100` |
+| `config.api.maxPriorityFeePerGas` | Upper bound, in wei, for the maxPriorityFeePerGas exposed by chainInfo, applied after gasMultiplier so it always wins. Bounds the tip a transaction pays. Must be >= minPriorityFeePerGas | `1000000000` |
 | `config.api.baseFeeHeadroomFactor` | Multiple of the (gasMultiplier-scaled) next-block base fee included in the maxFeePerGas exposed by chainInfo. It applies to the base fee from eth_feeHistory and, when that method is unavailable, to the latest block's base fee. Must be >= 1 | `8` |
 | `config.api.maxQueryDepth` | Maximum allowed GraphQL query nesting depth | `8` |
 | `config.api.maxQueryComplexity`                      | Maximum allowed GraphQL query complexity; queries above this are rejected                                     | `500`               |
@@ -214,7 +214,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | `config.api.transactions.maxSubmittedTransactionsPerIdentity` | Per-signer limit of transactions awaiting receipt monitoring (0 = unbounded) | `64` |
 | `config.api.transactions.maxTerminalTransactions` | Maximum completed transaction records retained (0 = no cap) | `10000` |
 | `config.api.transactions.terminalTransactionTtl` | How long completed transaction records stay queryable ("0s" = no TTL eviction) | `24h` |
-| `config.api.transactions.unminedTimeout` | How long a submitted transaction may stay unmined before it is marked as timed out and diagnosed | `300s` |
+| `config.api.transactions.unminedTimeout` | How long a submitted transaction may stay unmined before it is marked as timed out and diagnosed | `45s` |
 | `config.api.transactions.maxConcurrentTraceJobs` | Concurrent revert-reason trace jobs (0 = unbounded) | `2` |
 | `config.api.transactions.maxQueuedTraceJobs` | Trace jobs waiting for a worker (0 = unbounded) | `128` |
 | `config.api.transactions.enableRevertReasonTracing` | Fetch revert reasons with debug_traceTransaction; disable for RPC providers without it | `true` |

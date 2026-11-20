@@ -374,7 +374,7 @@ impl Default for TransactionMonitorConfig {
     fn default() -> Self {
         Self {
             poll_interval: Duration::from_secs(5),
-            unmined_timeout: Duration::from_secs(300), // 5 minutes
+            unmined_timeout: Duration::from_secs(45), // 9 blocks on Gnosis
             terminal_transaction_ttl: Duration::from_secs(24 * 60 * 60),
             max_terminal_transactions: 10_000,
             request_timeout: Duration::from_secs(30),
@@ -1721,6 +1721,14 @@ mod tests {
         assert!(updated.error_message.is_some());
     }
 
+    #[test]
+    fn test_default_unmined_timeout_is_nine_gnosis_blocks() {
+        assert_eq!(
+            TransactionMonitorConfig::default().unmined_timeout,
+            Duration::from_secs(45)
+        );
+    }
+
     #[tokio::test]
     async fn test_monitor_uses_configured_unmined_timeout() {
         let store = Arc::new(TransactionStore::new());
@@ -1741,7 +1749,7 @@ mod tests {
         let id = record.id;
         store.insert(record).unwrap();
 
-        // Ten seconds old is well inside the 300s default, so the transaction stays submitted.
+        // Ten seconds old is well inside the 45s default, so the transaction stays submitted.
         let monitor = create_monitor(store.clone(), MockReceiptProvider::new());
         monitor.poll_once().await.unwrap();
         assert_eq!(store.get(id).unwrap().status, TransactionStatus::Submitted);
