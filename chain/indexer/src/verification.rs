@@ -1393,6 +1393,83 @@ mod tests {
         Ok(())
     }
 
+    /// Conflicting partial responses from consecutive fetches do not halt the indexer and leave the cursor unchanged
+    /// until a matching response arrives.
+    #[tokio::test]
+    async fn conflicting_partial_responses_do_not_halt_and_keep_the_cursor() -> anyhow::Result<()> {
+        let stored = vec![sample_log(11, 0, 1, 2), sample_log(12, 0, 3, 4)];
+        let db = prepare_db(12, stored.clone()).await?;
+        let observed = db.clone();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_for_rpc = calls.clone();
+
+        let mut rpc = MockVerificationRpc::new();
+        rpc.expect_get_logs_for_block_range()
+            .withf(|_, from: &u64, to: &u64| *from == 11 && *to == 12)
+            .returning(move |_, _, _| {
+                let attempt = calls_for_rpc.fetch_add(1, AtomicOrdering::SeqCst);
+                match attempt {
+                    0 => Ok(vec![sample_log(11, 0, 1, 2)]),
+                    1 => Ok(vec![sample_log(12, 0, 3, 4)]),
+                    _ => Ok(stored.clone()),
+                }
+            });
+
+        let indexer_state = IndexerState::default();
+        let (tip_tx, tip_rx) = watch::channel(Some(sample_tip(Some(10))));
+        let (round_tx, mut round_rx) = watch::channel(0);
+        let task = spawn_verification(
+            Arc::new(rpc),
+            db,
+            log_handler(Vec::new()),
+            indexer_state.clone(),
+            tip_rx,
+            None,
+            round_tx,
+        );
+
+        wait_for_round(&mut round_rx, 1).await;
+        tip_tx.send_replace(Some(sample_tip(Some(12))));
+        wait_for_round(&mut round_rx, 2).await;
+
+        assert_eq!(
+            calls.load(AtomicOrdering::SeqCst),
+            2,
+            "conflicting partial responses should be fetched exactly twice"
+        );
+        assert!(
+            !indexer_state.verification_failed(),
+            "conflicting partial responses should not halt the indexer"
+        );
+        assert_eq!(
+            observed.get_last_verified_block(None).await?,
+            Some(10),
+            "conflicting partial responses should keep the stored cursor"
+        );
+
+        tip_tx.send_replace(Some(sample_tip(Some(12))));
+        wait_for_round(&mut round_rx, 3).await;
+
+        assert_eq!(
+            calls.load(AtomicOrdering::SeqCst),
+            3,
+            "a matching response should be fetched after the conflicting re-check"
+        );
+        assert!(
+            !indexer_state.verification_failed(),
+            "a matching response should not halt the indexer"
+        );
+        assert_eq!(
+            observed.get_last_verified_block(None).await?,
+            Some(12),
+            "a matching response should advance the stored cursor"
+        );
+
+        drop(tip_tx);
+        task.await?;
+        Ok(())
+    }
+
     #[tokio::test]
     async fn rpc_error_keeps_the_cursor_and_the_range_is_retried() -> anyhow::Result<()> {
         let logs = vec![sample_log(11, 0, 1, 2)];

@@ -4079,7 +4079,8 @@ mod tests {
         );
         let indexer = Indexer::new(rpc, handlers, db.clone(), cfg, indexer_state.clone()).without_panic_on_completion();
 
-        // The historical phase never returns once it has parked, so `start` is driven by the test.
+        // `start` runs on its own task so the test can observe the halt while `start` is still running.
+        // `start` returns once the historical phase has parked.
         let task = tokio::spawn(async move { indexer.start().await });
 
         wait_for_setup(&first_processed, "the indexer should reach the step `first_processed`").await;
@@ -4095,7 +4096,12 @@ mod tests {
             1,
             "only the block whose processing set the flag may be stored"
         );
-        task.abort();
+        let abort_handle = tokio::time::timeout(HALT_SETUP_TIMEOUT, task)
+            .await
+            .expect("start should return after the historical phase has parked")
+            .expect("start task should not panic")
+            .expect("start should not return an error");
+        abort_handle.abort();
 
         Ok(())
     }
@@ -4251,7 +4257,8 @@ mod tests {
         );
         let indexer = Indexer::new(rpc, handlers, db.clone(), cfg, indexer_state.clone()).without_panic_on_completion();
 
-        // The historical phase never returns once it has parked, so `start` is driven by the test.
+        // `start` runs on its own task so the test can observe the halt while `start` is still running.
+        // `start` returns once the historical phase has parked.
         let task = tokio::spawn(async move { indexer.start().await });
 
         wait_for_setup(
@@ -4273,7 +4280,12 @@ mod tests {
         );
         assert_ne!(applied.block_hash, replacement_block_hash);
         assert_eq!(db.get_logs_count(None, None).await?, 1);
-        task.abort();
+        let abort_handle = tokio::time::timeout(HALT_SETUP_TIMEOUT, task)
+            .await
+            .expect("start should return after the historical phase has parked")
+            .expect("start task should not panic")
+            .expect("start should not return an error");
+        abort_handle.abort();
 
         Ok(())
     }
@@ -4351,7 +4363,8 @@ mod tests {
         );
         let indexer = Indexer::new(rpc, handlers, db.clone(), cfg, indexer_state.clone()).without_panic_on_completion();
 
-        // The historical phase never returns once it has parked, so `start` is driven by the test.
+        // `start` runs on its own task so the test can observe the halt while `start` is still running.
+        // `start` returns once the historical phase has parked.
         let task = tokio::spawn(async move { indexer.start().await });
 
         wait_for_setup(&last_processed, "the indexer should reach the step `last_processed`").await;
@@ -4372,7 +4385,12 @@ mod tests {
             0,
             "the historical head must not be committed after the failure"
         );
-        task.abort();
+        let abort_handle = tokio::time::timeout(HALT_SETUP_TIMEOUT, task)
+            .await
+            .expect("start should return after the historical phase has parked")
+            .expect("start task should not panic")
+            .expect("start should not return an error");
+        abort_handle.abort();
 
         Ok(())
     }
