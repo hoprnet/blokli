@@ -19,7 +19,10 @@ use blokli_chain_api::{
     transaction_store::TransactionStore,
 };
 use blokli_chain_indexer::IndexerState;
-use blokli_chain_rpc::{FeeHistorySnapshot, HoprIndexerRpcOperations, HoprRpcOperations, rpc::RpcOperations};
+use blokli_chain_rpc::{
+    FeeHistorySnapshot, HoprIndexerRpcOperations, HoprRpcOperations, rpc::RpcOperations,
+    tip::ConfirmationMode as ChainConfirmationMode,
+};
 use blokli_chain_types::ContractAddresses;
 use blokli_db_entity::{
     account, chain_info,
@@ -66,7 +69,7 @@ use crate::{
     curvy, errors,
     loader::{AccountsByChainKeyLoader, ChannelsBySafeLoader},
     mutation::TransactionResult,
-    schema::{ChainTipTrackerContext, ConfirmationRule, RpcOperationsContext},
+    schema::{ChainTipTrackerContext, RpcOperationsContext},
     validation::{parse_service_type, validate_eth_address},
 };
 
@@ -2704,14 +2707,11 @@ impl QueryRoot {
                 return ChainInfoResult::QueryFailed(errors::context_error("finality", format!("{:?}", e)));
             }
         };
-        let confirmation_mode = match ctx.data::<ConfirmationRule>() {
-            Ok(rule) => convert_confirmation_mode(rule.0),
-            Err(e) => {
-                return ChainInfoResult::QueryFailed(errors::context_error("confirmation mode", format!("{:?}", e)));
-            }
-        };
-        let fcr_status = ctx
-            .data_opt::<ChainTipTrackerContext>()
+        let tracker = ctx.data_opt::<ChainTipTrackerContext>();
+        let confirmation_mode = convert_confirmation_mode(
+            tracker.map_or(ChainConfirmationMode::Depth, |tracker| tracker.0.confirmation_mode()),
+        );
+        let fcr_status = tracker
             .and_then(|tracker| tracker.0.current())
             .map_or(FcrStatus::Unavailable, |tip| convert_fcr_status(tip.fcr));
         let gas_multiplier = match ctx.data::<crate::schema::GasMultiplier>() {

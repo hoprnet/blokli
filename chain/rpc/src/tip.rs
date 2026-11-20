@@ -111,8 +111,12 @@ pub struct TipObservation {
     pub latest_timestamp: Option<u64>,
     /// Safe block number, when the endpoint reports one.
     pub safe: Option<u64>,
+    /// Timestamp of the safe block header in seconds since the Unix epoch.
+    pub safe_timestamp: Option<u64>,
     /// Finalized block number, when the endpoint reports one.
     pub finalized: Option<u64>,
+    /// Timestamp of the finalized block header in seconds since the Unix epoch.
+    pub finalized_timestamp: Option<u64>,
 }
 
 const HEADER_TIMESTAMP_CAPACITY: usize = 256;
@@ -345,18 +349,20 @@ impl<R: HttpRequestor + 'static + Clone> TipSource for RpcTipSource<R> {
             .map_err(RpcError::from)?
             .ok_or_else(|| RpcError::Other("latest block is not available".to_string()))?;
 
-        let safe = match safe_waiter.await {
-            Ok(header) => header.map(|header| header.number.to::<u64>()),
+        let (safe, safe_timestamp) = match safe_waiter.await {
+            Ok(Some(header)) => (Some(header.number.to::<u64>()), Some(header.timestamp.to::<u64>())),
+            Ok(None) => (None, None),
             Err(error) => {
                 debug!(%error, tag = "safe", "failed to read the chain tip block tag");
-                None
+                (None, None)
             }
         };
-        let finalized = match finalized_waiter.await {
-            Ok(header) => header.map(|header| header.number.to::<u64>()),
+        let (finalized, finalized_timestamp) = match finalized_waiter.await {
+            Ok(Some(header)) => (Some(header.number.to::<u64>()), Some(header.timestamp.to::<u64>())),
+            Ok(None) => (None, None),
             Err(error) => {
                 debug!(%error, tag = "finalized", "failed to read the chain tip block tag");
-                None
+                (None, None)
             }
         };
 
@@ -364,7 +370,9 @@ impl<R: HttpRequestor + 'static + Clone> TipSource for RpcTipSource<R> {
             latest: latest.number.to::<u64>(),
             latest_timestamp: Some(latest.timestamp.to::<u64>()),
             safe,
+            safe_timestamp,
             finalized,
+            finalized_timestamp,
         })
     }
 
@@ -523,9 +531,15 @@ impl TrackerRuntime {
             }
         };
 
-        if let Some(timestamp) = observation.latest_timestamp {
-            if let Ok(mut state) = self.state.lock() {
-                state.header_timestamps.insert(observation.latest, timestamp);
+        if let Ok(mut state) = self.state.lock() {
+            for (block, timestamp) in [
+                (Some(observation.latest), observation.latest_timestamp),
+                (observation.safe, observation.safe_timestamp),
+                (observation.finalized, observation.finalized_timestamp),
+            ] {
+                if let (Some(block), Some(timestamp)) = (block, timestamp) {
+                    state.header_timestamps.insert(block, timestamp);
+                }
             }
         }
 
@@ -662,6 +676,11 @@ impl ChainTipTracker {
     /// Returns the most recently published tip.
     pub fn current(&self) -> Option<ChainTip> {
         self.runtime.current()
+    }
+
+    /// Returns the confirmation mode configured for this tracker.
+    pub fn confirmation_mode(&self) -> ConfirmationMode {
+        self.runtime.confirmation.mode
     }
 
     /// Returns the remembered header timestamp for the given block, if it was observed recently.
@@ -864,7 +883,9 @@ mod tests {
             latest,
             latest_timestamp: Some(1_700_000_000 + latest),
             safe,
+            safe_timestamp: safe.map(|block| 1_700_000_000 + block),
             finalized,
+            finalized_timestamp: finalized.map(|block| 1_700_000_000 + block),
         }
     }
 
@@ -1098,6 +1119,10 @@ mod tests {
         let first = tracker.refresh().await.unwrap();
         rx.changed().await.unwrap();
         assert_eq!(rx.borrow().as_ref(), Some(&first));
+        assert_eq!(tracker.confirmation_mode(), ConfirmationMode::Depth);
+        assert_eq!(tracker.header_timestamp(100), Some(1_700_000_100));
+        assert_eq!(tracker.header_timestamp(99), Some(1_700_000_099));
+        assert_eq!(tracker.header_timestamp(80), Some(1_700_000_080));
         assert!(tracker.refresh().await.unwrap_err().to_string().contains("safe block"));
         assert!(tracker.refresh().await.unwrap_err().to_string().contains("rpc failed"));
         assert_eq!(tracker.current(), Some(first));

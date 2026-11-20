@@ -1,7 +1,6 @@
 use sea_orm_migration::prelude::*;
 
-/// Adds post-finality verification state columns to `chain_info`:
-/// - `last_verified_block`: last block whose stored logs matched canonical finalized logs
+/// Adds post-finality verification halt marker column to `chain_info`:
 /// - `verification_failed_at`: first block of a corroborated mismatching range (NULL when clear)
 #[derive(DeriveMigrationName)]
 pub struct Migration;
@@ -9,15 +8,6 @@ pub struct Migration;
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager
-            .alter_table(
-                Table::alter()
-                    .table(ChainInfo::Table)
-                    .add_column(ColumnDef::new(ChainInfo::LastVerifiedBlock).big_integer().null())
-                    .to_owned(),
-            )
-            .await?;
-
         manager
             .alter_table(
                 Table::alter()
@@ -36,15 +26,6 @@ impl MigrationTrait for Migration {
                     .drop_column(ChainInfo::VerificationFailedAt)
                     .to_owned(),
             )
-            .await?;
-
-        manager
-            .alter_table(
-                Table::alter()
-                    .table(ChainInfo::Table)
-                    .drop_column(ChainInfo::LastVerifiedBlock)
-                    .to_owned(),
-            )
             .await
     }
 }
@@ -52,6 +33,5 @@ impl MigrationTrait for Migration {
 #[derive(DeriveIden)]
 enum ChainInfo {
     Table,
-    LastVerifiedBlock,
     VerificationFailedAt,
 }

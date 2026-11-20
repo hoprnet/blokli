@@ -162,7 +162,7 @@ mod tests {
         assert!(result.is_ok(), "Migrations should run without errors");
     }
 
-    /// Verification position and halt marker are optional, so a fresh or cleared index starts unset.
+    /// Verification halt marker is optional, so a fresh or cleared index starts unset.
     #[tokio::test]
     async fn test_post_finality_verification_migration_up_and_down() {
         for (db, use_index_only) in [(setup_test_db().await, false), (setup_test_db().await, true)] {
@@ -171,36 +171,30 @@ mod tests {
             } else {
                 Migrator::up(&db, None).await.unwrap();
             }
-            for col in ["last_verified_block", "verification_failed_at"] {
-                let row = db
-                    .query_one_raw(Statement::from_string(
-                        DbBackend::Sqlite,
-                        format!(
-                            "SELECT type, \"notnull\" AS is_not_null FROM pragma_table_info('chain_info') WHERE name \
-                             = '{col}'"
-                        ),
-                    ))
-                    .await
-                    .unwrap()
-                    .unwrap_or_else(|| panic!("{col} column should exist"));
-                assert_eq!(row.try_get::<String>("", "type").unwrap(), "INTEGER");
-                assert_eq!(row.try_get::<i64>("", "is_not_null").unwrap(), 0);
-            }
+            let row = db
+                .query_one_raw(Statement::from_string(
+                    DbBackend::Sqlite,
+                    "SELECT type, \"notnull\" AS is_not_null FROM pragma_table_info('chain_info') WHERE name = \
+                     'verification_failed_at'",
+                ))
+                .await
+                .unwrap()
+                .expect("verification_failed_at column should exist");
+            assert_eq!(row.try_get::<String>("", "type").unwrap(), "INTEGER");
+            assert_eq!(row.try_get::<i64>("", "is_not_null").unwrap(), 0);
         }
 
         let db = setup_test_db().await;
         Migrator::up(&db, None).await.unwrap();
         Migrator::down(&db, Some(1)).await.unwrap();
-        for col in ["last_verified_block", "verification_failed_at"] {
-            let column = db
-                .query_one_raw(Statement::from_string(
-                    DbBackend::Sqlite,
-                    format!("SELECT name FROM pragma_table_info('chain_info') WHERE name = '{col}'"),
-                ))
-                .await
-                .unwrap();
-            assert!(column.is_none(), "reverting m015 drops {col}");
-        }
+        let column = db
+            .query_one_raw(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT name FROM pragma_table_info('chain_info') WHERE name = 'verification_failed_at'",
+            ))
+            .await
+            .unwrap();
+        assert!(column.is_none(), "reverting m015 drops verification_failed_at");
     }
 
     #[tokio::test]

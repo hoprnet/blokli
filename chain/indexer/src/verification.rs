@@ -1,21 +1,22 @@
 //! Post-finality verification of indexed logs.
 //!
-//! A background task re-checks every block that was indexed before it was final once the chain tip
-//! tracker publishes that the block is final. It re-runs `eth_getLogs` with the same filter set the
-//! indexer uses and compares the result with the logs stored in the logs database on block number,
-//! block hash, transaction hash and log index. Any difference means that the logs were indexed from
-//! a chain that the canonical chain does not confirm, or that the canonical chain has logs that were
-//! never indexed.
+//! A background task re-checks indexed blocks once the chain tip tracker publishes that they are
+//! final. It re-runs `eth_getLogs` with the same filter set the indexer uses and compares the
+//! result with the logs stored in the logs database on block number, block hash, transaction hash
+//! and log index. Any difference means that the logs were indexed from a chain that the canonical
+//! chain does not confirm, or that the canonical chain has logs that were never indexed.
 //!
-//! A range that does not match is compared a second time after a short delay, because a backend
-//! can return an empty or partial `eth_getLogs` response without an error. A confirmed mismatch is
-//! counted in `blokli_fcr_false_confirmations_total` and recorded in the shared
-//! [`VerificationStatus`] flag. The flag is sticky: the indexer stops advancing and readiness
-//! reports not ready until an operator restores or rebuilds the index. A failing RPC or database read is not
-//! a mismatch: the same range is retried on the next tip update.
+//! A range that does not match is re-checked on the next tip update, because a backend can return
+//! an empty or partial `eth_getLogs` response without an error. A corroborated mismatch is counted
+//! in `blokli_fcr_false_confirmations_total`, persisted in `chain_info.verification_failed_at` and
+//! recorded in the shared [`VerificationStatus`] flag. The flag is sticky: the indexer stops
+//! advancing and readiness reports not ready until an operator restores or rebuilds the index. A
+//! failing RPC or database read is not a mismatch: the same range is retried on the next tip
+//! update.
 //!
-//! The position the task reached is stored in the index database, so a restart resumes where the
-//! previous process stopped instead of skipping the blocks that became final while it was down.
+//! On startup with an existing index, the in-memory cursor starts [`STARTUP_LOOKBACK_BLOCKS`]
+//! blocks behind the committed watermark so blocks indexed right before a clean restart that
+//! finalized while the daemon was down are verified in one range fetch.
 //!
 //! The set of Safe contract addresses grows at runtime, while the stored logs of a block only
 //! contain the addresses known when that block was indexed. Stored Safe logs are still compared
@@ -28,14 +29,15 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
 };
 
-use blokli_chain_rpc::{HoprIndexerRpcOperations, tip::ChainTip};
+use async_trait::async_trait;
+use blokli_chain_rpc::{HoprIndexerRpcOperations, errors::Result as RpcResult, tip::ChainTip};
 use blokli_db::{
     BlokliDbGeneralModelOperations, api::logs::BlokliDbLogOperations, info::BlokliDbInfoOperations,
     safe_contracts::BlokliDbSafeContractOperations, safe_history::BlokliDbSafeHistoryOperations,
 };
+use hopr_bindings::exports::alloy::rpc::types::Filter;
 #[cfg(all(feature = "telemetry", not(test)))]
 use hopr_types::telemetry::SimpleCounter;
 use hopr_types::{
@@ -43,12 +45,12 @@ use hopr_types::{
     primitive::prelude::{Address, SerializableLog, ToHex},
 };
 use serde::Serialize;
-use tokio::{sync::watch, time::sleep};
+use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
 use crate::{
     IndexerState,
-    block::{Indexer, LogFilterPhase},
+    block::{LogFilterPhase, generate_log_filters},
     errors::Result,
     traits::ChainLogHandler,
 };
@@ -62,16 +64,35 @@ const MAX_MISMATCH_EXAMPLES: usize = 10;
 /// amount of logs from the RPC endpoint.
 const MAX_VERIFICATION_RANGE: u64 = 1000;
 
-/// Wait before a mismatching range is compared with the canonical chain a second time.
+/// Blocks behind the startup watermark re-checked when resuming an existing index.
 ///
-/// A load-balanced or lagging backend can answer `eth_getLogs` with an empty or partial result
-/// without an error, so a single response does not decide that the stored logs are wrong.
-#[cfg(not(test))]
-const MISMATCH_RECHECK_DELAY: Duration = Duration::from_secs(3);
+/// Covers blocks indexed shortly before a clean restart that finalized while the daemon was down,
+/// without persisting a moving verification cursor on every epoch.
+const STARTUP_LOOKBACK_BLOCKS: u64 = 256;
 
-/// Test builds re-check a mismatching range without a real wait.
-#[cfg(test)]
-const MISMATCH_RECHECK_DELAY: Duration = Duration::from_millis(1);
+/// Minimal RPC surface needed by post-finality verification.
+#[async_trait]
+pub(crate) trait CanonicalLogFetcher: Send + Sync {
+    /// Fetches canonical logs matching `filters` in the inclusive block range `[from_block, to_block]`.
+    async fn get_logs_for_block_range(
+        &self,
+        filters: Vec<Filter>,
+        from_block: u64,
+        to_block: u64,
+    ) -> RpcResult<Vec<SerializableLog>>;
+}
+
+#[async_trait]
+impl<T: HoprIndexerRpcOperations + Send + Sync> CanonicalLogFetcher for T {
+    async fn get_logs_for_block_range(
+        &self,
+        filters: Vec<Filter>,
+        from_block: u64,
+        to_block: u64,
+    ) -> RpcResult<Vec<SerializableLog>> {
+        HoprIndexerRpcOperations::get_logs_for_block_range(self, filters, from_block, to_block).await
+    }
+}
 
 /// Shared, sticky flag recording whether post-finality verification found a mismatch.
 ///
@@ -226,29 +247,24 @@ pub enum CursorStep {
     },
 }
 
-/// Inputs that decide where an unset verification cursor starts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CursorStart {
-    /// Last block the indexer had committed when the process started, or the block below the first
-    /// one this run indexes when the index was empty and no finalized block was known.
-    pub baseline: Option<u64>,
-    /// Block right below the configured indexing start. Blocks below the start are never indexed,
-    /// so the cursor never starts below this block.
-    pub floor: u64,
-}
-
-/// Chooses the block at which an unset cursor starts once a finalized block is known.
+/// Chooses the block at which the in-memory cursor starts once a finalized block is known.
 ///
-/// `baseline` is the last block the indexer had committed when the process started. Everything
-/// above it may have been indexed while finality was still unknown, so the cursor starts at its
-/// minimum with the first finalized block and those blocks are re-checked once they become final.
-/// `floor` is the block right below the configured indexing start; the returned cursor is raised to
-/// at least `floor`. Returns `None` while the finalized block is unknown.
-pub fn initial_cursor(baseline: Option<u64>, finalized: Option<u64>, floor: u64) -> Option<u64> {
+/// When resuming an existing index (`last_indexed_at_startup > 0`), the cursor starts
+/// [`STARTUP_LOOKBACK_BLOCKS`] blocks behind the committed watermark (capped at `finalized`, and
+/// raised to at least `floor`), so blocks indexed right before a restart that finalized while the
+/// daemon was down are verified in one range fetch. On an empty index (`last_indexed_at_startup ==
+/// 0`), the cursor starts at `finalized.max(floor)` without walking older history. Returns `None`
+/// while the finalized block is unknown.
+pub fn initial_cursor(last_indexed_at_startup: u64, finalized: Option<u64>, floor: u64) -> Option<u64> {
     finalized.map(|finalized| {
-        baseline
-            .map_or(finalized, |last_indexed| last_indexed.min(finalized))
-            .max(floor)
+        if last_indexed_at_startup > 0 {
+            last_indexed_at_startup
+                .saturating_sub(STARTUP_LOOKBACK_BLOCKS)
+                .min(finalized)
+                .max(floor)
+        } else {
+            finalized.max(floor)
+        }
     })
 }
 
@@ -388,7 +404,7 @@ async fn verify_range<T, U, Db>(
     to: u64,
 ) -> Result<VerificationMismatch>
 where
-    T: HoprIndexerRpcOperations + Sync + Send + 'static,
+    T: CanonicalLogFetcher,
     U: ChainLogHandler + Send + Sync + 'static,
     Db: BlokliDbGeneralModelOperations
         + BlokliDbInfoOperations
@@ -400,7 +416,7 @@ where
         + Sync
         + 'static,
 {
-    let filters = Indexer::<T, U, Db>::generate_log_filters(db, logs_handler, LogFilterPhase::Continuous).await?;
+    let filters = generate_log_filters(db, logs_handler.as_ref(), LogFilterPhase::Continuous).await?;
 
     // The canonical fetch uses every currently known filter, which is a superset of the filters the
     // block was indexed with: the set only grows. Token approvals are fetched by the indexer but
@@ -424,22 +440,23 @@ where
 
 /// Verifies indexed ranges once the chain tip tracker reports them as final.
 ///
-/// The task runs until the tip publisher is dropped, the indexer shuts down or a mismatch is found.
-/// `cursor_start` holds the committed block at the moment the indexer started, captured before the
-/// indexing loop could write a block that the first finalized response would no longer cover, and
-/// the floor below which the cursor never starts.
-/// `round_updates` publishes the number of completed rounds so tests can wait for a round instead
-/// of sleeping; production passes `None`.
+/// The task runs until the tip publisher is dropped, the indexer shuts down or a corroborated
+/// mismatch is found. `last_indexed_at_startup` is the committed watermark before live indexing
+/// starts, and `floor` is the block below the configured start block. `round_updates` publishes the
+/// number of completed rounds so tests can wait for a round instead of sleeping; production passes
+/// `None`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_verification<T, U, Db>(
     mut tip_updates: watch::Receiver<Option<ChainTip>>,
     rpc: &T,
     db: Db,
     logs_handler: Arc<U>,
     indexer_state: IndexerState,
-    cursor_start: CursorStart,
+    last_indexed_at_startup: u64,
+    floor: u64,
     round_updates: Option<watch::Sender<u32>>,
 ) where
-    T: HoprIndexerRpcOperations + Sync + Send + 'static,
+    T: CanonicalLogFetcher,
     U: ChainLogHandler + Send + Sync + 'static,
     Db: BlokliDbGeneralModelOperations
         + BlokliDbInfoOperations
@@ -452,7 +469,7 @@ pub(crate) async fn run_verification<T, U, Db>(
         + 'static,
 {
     let mut cursor: Option<u64> = None;
-    let mut cursor_loaded = false;
+    let mut pending_mismatch: Option<((u64, u64), VerificationMismatch)> = None;
     let mut failure_streak: u32 = 0;
     let mut rounds: u32 = 0;
 
@@ -469,151 +486,96 @@ pub(crate) async fn run_verification<T, U, Db>(
         };
 
         if let Some(last_indexed) = last_indexed {
-            // The persisted position is read once. A failed read retries the round, because starting
-            // over from the finalized block would skip the blocks below the stored position.
-            if !cursor_loaded {
-                match db.get_last_verified_block(None).await {
-                    Ok(persisted) => {
-                        cursor = persisted;
-                        cursor_loaded = true;
-                        failure_streak = 0;
-                        if let Some(cursor) = cursor {
-                            info!(
-                                verified_up_to = cursor,
-                                "resuming post-finality verification from the stored position"
-                            );
-                        }
-                    }
-                    Err(error) => record_failure(&mut failure_streak, None, &error.to_string()),
+            let finalized = tip_updates.borrow().and_then(|tip| tip.finalized);
+
+            if cursor.is_none() {
+                if let Some(start) = initial_cursor(last_indexed_at_startup, finalized, floor) {
+                    cursor = Some(start);
+                    info!(
+                        verified_up_to = start,
+                        "post-finality verification started, blocks above the cursor are re-checked once they become \
+                         final"
+                    );
                 }
             }
 
-            if cursor_loaded {
-                let finalized = tip_updates.borrow().and_then(|tip| tip.finalized);
+            let range = if let Some((pending_range, _)) = &pending_mismatch {
+                Some(*pending_range)
+            } else {
+                cursor.and_then(|current| match next_cursor_step(current, finalized, last_indexed) {
+                    CursorStep::Idle => None,
+                    CursorStep::Verify { from, to } => Some((from, to)),
+                })
+            };
 
-                match cursor {
-                    None => {
-                        // The baseline is unset when nothing was indexed at process start, so no
-                        // block is owed a check. Recording it would start the cursor at the genesis
-                        // block and walk the whole chain below the first indexed block.
-                        if let Some(start) = initial_cursor(cursor_start.baseline, finalized, cursor_start.floor) {
-                            match db.set_last_verified_block(None, start).await {
-                                Ok(()) => {
-                                    cursor = Some(start);
-                                    failure_streak = 0;
-                                    info!(
-                                        verified_up_to = start,
-                                        "post-finality verification started, blocks above the cursor are re-checked \
-                                         once they become final"
-                                    );
-                                }
-                                Err(error) => record_failure(&mut failure_streak, None, &error.to_string()),
-                            }
+            if let Some((from, to)) = range {
+                match verify_range(rpc, &db, &logs_handler, from, to).await {
+                    Ok(mismatch) if mismatch.is_empty() => {
+                        if pending_mismatch.take().is_some() {
+                            debug!(from_block = from, to_block = to, "the re-check matched the stored logs");
                         }
+                        cursor = Some(to);
+                        failure_streak = 0;
+                        debug!(
+                            from_block = from,
+                            to_block = to,
+                            "post-finality verification matched the stored logs"
+                        );
                     }
-                    Some(current) => match next_cursor_step(current, finalized, last_indexed) {
-                        CursorStep::Idle => {}
-                        CursorStep::Verify { from, to } => {
-                            // A mismatching range is compared a second time after a short delay:
-                            // a load-balanced or lagging backend can return an empty or partial
-                            // response without an error, and only a second mismatch means that the
-                            // canonical chain really differs.
-                            let mut matched = true;
-
-                            match verify_range(rpc, &db, &logs_handler, from, to).await {
-                                Ok(mismatch) if mismatch.is_empty() => {}
-                                Ok(mismatch) => {
-                                    warn!(
+                    Ok(mismatch) => match pending_mismatch.take() {
+                        None => {
+                            // A load-balanced or lagging backend can return an empty or partial
+                            // response without an error; keep the cursor unchanged and re-check
+                            // the same range on the next tip update.
+                            warn!(
+                                from_block = from,
+                                to_block = to,
+                                missing_from_chain = mismatch.missing_from_chain.len(),
+                                missing_from_store = mismatch.missing_from_store.len(),
+                                changed = mismatch.changed.len(),
+                                examples = ?describe_mismatch(&mismatch),
+                                "post-finality verification found logs that the canonical chain does not confirm, \
+                                 re-checking on the next tip update"
+                            );
+                            pending_mismatch = Some(((from, to), mismatch));
+                        }
+                        Some((_, previous)) => {
+                            let confirmed = corroborated_mismatch(&previous, &mismatch);
+                            if confirmed.is_empty() {
+                                record_failure(
+                                    &mut failure_streak,
+                                    Some((from, to)),
+                                    "the two comparisons of the range report different differences",
+                                );
+                            } else {
+                                error!(
+                                    from_block = from,
+                                    to_block = to,
+                                    missing_from_chain = confirmed.missing_from_chain.len(),
+                                    missing_from_store = confirmed.missing_from_store.len(),
+                                    changed = confirmed.changed.len(),
+                                    examples = ?describe_mismatch(&confirmed),
+                                    "post-finality verification found logs that the canonical chain does not confirm, \
+                                     halting the indexer"
+                                );
+                                if let Err(error) = db.set_verification_failed_at(Some(from)).await {
+                                    error!(
                                         from_block = from,
                                         to_block = to,
-                                        missing_from_chain = mismatch.missing_from_chain.len(),
-                                        missing_from_store = mismatch.missing_from_store.len(),
-                                        changed = mismatch.changed.len(),
-                                        examples = ?describe_mismatch(&mismatch),
-                                        "post-finality verification found logs that the canonical chain does not \
-                                         confirm, re-checking the range"
+                                        %error,
+                                        "failed to persist post-finality verification halt marker"
                                     );
-
-                                    sleep(MISMATCH_RECHECK_DELAY).await;
-
-                                    match verify_range(rpc, &db, &logs_handler, from, to).await {
-                                        Ok(recheck) if recheck.is_empty() => {
-                                            debug!(
-                                                from_block = from,
-                                                to_block = to,
-                                                "the re-check matched the stored logs"
-                                            );
-                                        }
-                                        Ok(recheck) => {
-                                            let confirmed = corroborated_mismatch(&mismatch, &recheck);
-                                            if confirmed.is_empty() {
-                                                // A partial backend answer can make one comparison
-                                                // report differences that the other does not. Only a
-                                                // difference both comparisons report is decided;
-                                                // otherwise re-check the same range on the next tip
-                                                // update instead of halting.
-                                                record_failure(
-                                                    &mut failure_streak,
-                                                    Some((from, to)),
-                                                    "the two comparisons of the range report different differences",
-                                                );
-                                                matched = false;
-                                            } else {
-                                                error!(
-                                                    from_block = from,
-                                                    to_block = to,
-                                                    missing_from_chain = confirmed.missing_from_chain.len(),
-                                                    missing_from_store = confirmed.missing_from_store.len(),
-                                                    changed = confirmed.changed.len(),
-                                                    examples = ?describe_mismatch(&confirmed),
-                                                    "post-finality verification found logs that the canonical chain does \
-                                                     not confirm, halting the indexer"
-                                                );
-                                                if let Err(error) = db.set_verification_failed_at(Some(from)).await {
-                                                    error!(
-                                                        from_block = from,
-                                                        to_block = to,
-                                                        %error,
-                                                        "failed to persist post-finality verification halt marker"
-                                                    );
-                                                }
-                                                record_false_confirmation();
-                                                indexer_state.mark_verification_failed();
-                                                return;
-                                            }
-                                        }
-                                        Err(error) => {
-                                            record_failure(&mut failure_streak, Some((from, to)), &error.to_string());
-                                            matched = false;
-                                        }
-                                    }
                                 }
-                                Err(error) => {
-                                    record_failure(&mut failure_streak, Some((from, to)), &error.to_string());
-                                    matched = false;
-                                }
-                            }
-
-                            if matched {
-                                // The cursor only moves once its new value is stored: a failed write
-                                // re-verifies the same range instead of leaving it unchecked.
-                                match db.set_last_verified_block(None, to).await {
-                                    Ok(()) => {
-                                        cursor = Some(to);
-                                        failure_streak = 0;
-                                        debug!(
-                                            from_block = from,
-                                            to_block = to,
-                                            "post-finality verification matched the stored logs"
-                                        );
-                                    }
-                                    Err(error) => {
-                                        record_failure(&mut failure_streak, Some((from, to)), &error.to_string())
-                                    }
-                                }
+                                record_false_confirmation();
+                                indexer_state.mark_verification_failed();
+                                return;
                             }
                         }
                     },
+                    Err(error) => {
+                        pending_mismatch = None;
+                        record_failure(&mut failure_streak, Some((from, to)), &error.to_string());
+                    }
                 }
             }
         }
@@ -634,7 +596,6 @@ pub(crate) async fn run_verification<T, U, Db>(
 mod tests {
     use std::{
         collections::BTreeSet,
-        pin::Pin,
         sync::{
             Arc,
             atomic::{AtomicUsize, Ordering as AtomicOrdering},
@@ -644,30 +605,24 @@ mod tests {
 
     use async_trait::async_trait;
     use blokli_chain_rpc::{
-        BlockWithLogs, FilterSet, Log as RpcLog, SafeOwnersSnapshot,
         errors::{Result as RpcResult, RpcError},
         tip::{ChainTip, FcrState, HeadSource},
     };
     use blokli_chain_types::ContractAddresses;
     use blokli_db::{
-        BlokliDbGeneralModelOperations, TargetDb, api::logs::BlokliDbLogOperations, db::BlokliDb,
-        info::BlokliDbInfoOperations, safe_contracts::BlokliDbSafeContractOperations,
+        api::logs::BlokliDbLogOperations, db::BlokliDb, info::BlokliDbInfoOperations,
+        safe_contracts::BlokliDbSafeContractOperations,
     };
-    use futures::Stream;
-    use hopr_bindings::exports::alloy::{primitives::B256, rpc::types::Filter};
-    use hopr_types::{
-        crypto::types::Hash,
-        primitive::prelude::{Address, HoprBalance, SerializableLog, XDaiBalance, XHoprBalance},
-    };
+    use hopr_bindings::exports::alloy::rpc::types::Filter;
+    use hopr_types::primitive::prelude::{Address, SerializableLog};
     use mockall::mock;
-    use sea_orm::ConnectionTrait;
     use tokio::sync::watch;
 
     use super::{
-        ChangedLog, CursorStart, CursorStep, LogIdentity, VerificationMismatch, compare_logs, corroborated_mismatch,
-        initial_cursor, next_cursor_step, run_verification,
+        CanonicalLogFetcher, ChangedLog, CursorStep, LogIdentity, STARTUP_LOOKBACK_BLOCKS, VerificationMismatch,
+        compare_logs, corroborated_mismatch, initial_cursor, next_cursor_step, run_verification,
     };
-    use crate::{IndexerConfig, IndexerState, block::Indexer, traits::MockChainLogHandler};
+    use crate::{IndexerState, traits::MockChainLogHandler};
 
     fn static_addr() -> Address {
         Address::from([0x11; 20])
@@ -762,17 +717,18 @@ mod tests {
 
     #[test]
     fn initial_cursor_and_next_cursor_step_cases() {
-        for (baseline, finalized, floor, expected) in [
-            (None, None, 0, None),
-            (Some(100), None, 0, None),
-            (None, Some(42), 0, Some(42)),
-            (Some(100), Some(42), 0, Some(42)),
-            (Some(100), Some(110), 0, Some(100)),
-            (Some(110), Some(110), 0, Some(110)),
-            (None, Some(50), 99, Some(99)),
-            (Some(100), Some(110), 99, Some(100)),
+        let lookback = STARTUP_LOOKBACK_BLOCKS;
+        for (last_indexed, finalized, floor, expected) in [
+            (0, None, 0, None),
+            (500, None, 0, None),
+            (0, Some(42), 0, Some(42)),
+            (0, Some(50), 99, Some(99)),
+            (500, Some(600), 0, Some(500 - lookback)),
+            (500, Some(100), 0, Some(100)),
+            (100, Some(200), 50, Some(50)),
+            (500, Some(600), 400, Some(400)),
         ] {
-            assert_eq!(initial_cursor(baseline, finalized, floor), expected);
+            assert_eq!(initial_cursor(last_indexed, finalized, floor), expected);
         }
 
         for (cursor, finalized, last_indexed, expected) in [
@@ -845,39 +801,10 @@ mod tests {
     }
 
     mock! {
-        VerificationRpc {}
+        CanonicalLogs {}
 
         #[async_trait]
-        impl blokli_chain_rpc::HoprIndexerRpcOperations for VerificationRpc {
-            async fn block_number(&self) -> RpcResult<u64>;
-            async fn get_transaction_sender(&self, tx_hash: Hash) -> RpcResult<Address>;
-            async fn get_transaction_bytes(&self, tx_hash: Hash) -> RpcResult<Vec<u8>>;
-            fn try_stream_logs<'a>(
-                &'a self,
-                start_block_number: u64,
-                filters: FilterSet,
-                is_synced: bool,
-            ) -> RpcResult<Pin<Box<dyn Stream<Item = BlockWithLogs> + Send + 'a>>>;
-            async fn get_logs_for_address(
-                &self,
-                address: Address,
-                topics: Vec<B256>,
-                from_block: u64,
-                to_block: u64,
-            ) -> RpcResult<Vec<RpcLog>>;
-            async fn get_safe_owners_and_threshold(
-                &self,
-                safe_address: Address,
-                block: u64,
-            ) -> RpcResult<SafeOwnersSnapshot>;
-            async fn get_xdai_balance(&self, address: Address) -> RpcResult<XDaiBalance>;
-            async fn get_hopr_balance(&self, address: Address) -> RpcResult<HoprBalance>;
-            async fn get_xhopr_balance(&self, address: Address) -> RpcResult<XHoprBalance>;
-            async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> RpcResult<HoprBalance>;
-            async fn get_transaction_count(&self, address: Address) -> RpcResult<u64>;
-            async fn get_channel_closure_notice_period(&self) -> RpcResult<Duration>;
-            async fn get_hopr_module_from_safe(&self, safe_address: Address) -> RpcResult<Option<Address>>;
-            fn subscribe_tip(&self) -> Option<watch::Receiver<Option<ChainTip>>>;
+        impl CanonicalLogFetcher for CanonicalLogs {
             async fn get_logs_for_block_range(
                 &self,
                 filters: Vec<Filter>,
@@ -908,10 +835,11 @@ mod tests {
     impl VerificationHarness {
         async fn spawn(
             db: BlokliDb,
-            rpc: MockVerificationRpc,
+            rpc: MockCanonicalLogs,
             contracts: Vec<Address>,
             initial_finalized: Option<u64>,
-            baseline: Option<u64>,
+            last_indexed_at_startup: u64,
+            floor: u64,
         ) -> Self {
             let state = IndexerState::default();
             let (tip_tx, tip_rx) = watch::channel(Some(sample_tip(initial_finalized)));
@@ -927,7 +855,8 @@ mod tests {
                         db,
                         Arc::new(log_handler(contracts)),
                         state,
-                        CursorStart { baseline, floor: 0 },
+                        last_indexed_at_startup,
+                        floor,
                         Some(round_tx),
                     )
                     .await;
@@ -971,13 +900,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn clean_range_advances_and_persists_cursor() -> anyhow::Result<()> {
+    async fn clean_range_advances_cursor_without_rechecking() -> anyhow::Result<()> {
         let logs = vec![sample_log(11, 0, 1, 2), sample_log(12, 0, 3, 4)];
         let db = prepare_db(12, logs.clone()).await?;
         let calls = Arc::new(AtomicUsize::new(0));
         let counted = calls.clone();
 
-        let mut rpc = MockVerificationRpc::new();
+        let mut rpc = MockCanonicalLogs::new();
         rpc.expect_get_logs_for_block_range()
             .withf(|_, from: &u64, to: &u64| *from == 11 && *to == 12)
             .returning(move |_, _, _| {
@@ -985,7 +914,7 @@ mod tests {
                 Ok(logs.clone())
             });
 
-        let mut h = VerificationHarness::spawn(db, rpc, Vec::new(), Some(10), None).await;
+        let mut h = VerificationHarness::spawn(db, rpc, Vec::new(), Some(10), 0, 0).await;
         h.wait_round(1).await;
         h.send_finalized(Some(12));
         h.wait_round(2).await;
@@ -993,68 +922,58 @@ mod tests {
         h.wait_round(3).await;
 
         assert_eq!(calls.load(AtomicOrdering::SeqCst), 1);
-        assert_eq!(h.db.get_last_verified_block(None).await?, Some(12));
         assert_eq!(h.db.verification_failed_at().await?, None);
         assert!(!h.state.verification_failed());
         h.finish().await
     }
 
     #[tokio::test]
-    async fn corroborated_mismatch_persists_halt_keeps_cursor_and_survives_restart() -> anyhow::Result<()> {
+    async fn corroborated_mismatch_persists_halt_on_second_tip() -> anyhow::Result<()> {
         let stored = vec![sample_log(11, 0, 1, 2), sample_log(12, 0, 3, 4)];
         let db = prepare_db(12, stored).await?;
         let calls = Arc::new(AtomicUsize::new(0));
         let counted = calls.clone();
 
-        let mut rpc = MockVerificationRpc::new();
-        rpc.expect_get_logs_for_block_range().returning(move |_, _, _| {
-            counted.fetch_add(1, AtomicOrdering::SeqCst);
-            Ok(vec![sample_log(11, 0, 1, 2)])
-        });
+        let mut rpc = MockCanonicalLogs::new();
+        rpc.expect_get_logs_for_block_range()
+            .withf(|_, from: &u64, to: &u64| *from == 11 && *to == 12)
+            .returning(move |_, _, _| {
+                counted.fetch_add(1, AtomicOrdering::SeqCst);
+                Ok(vec![sample_log(11, 0, 1, 2)])
+            });
 
-        let mut h = VerificationHarness::spawn(db.clone(), rpc, vec![static_addr()], Some(10), None).await;
+        let mut h = VerificationHarness::spawn(db.clone(), rpc, vec![static_addr()], Some(10), 0, 0).await;
         h.wait_round(1).await;
+
+        // First mismatch records pending state without halting yet.
         h.send_finalized(Some(12));
+        h.wait_round(2).await;
+        assert_eq!(calls.load(AtomicOrdering::SeqCst), 1);
+        assert!(!h.state.verification_failed());
+        assert_eq!(db.verification_failed_at().await?, None);
+
+        // Next tip update corroborates the same range, persists the halt marker, and stops the task.
+        h.send_finalized(Some(13));
         tokio::time::timeout(Duration::from_secs(1), h.task)
             .await
             .expect("task should stop after corroborated mismatch")?;
 
         assert_eq!(calls.load(AtomicOrdering::SeqCst), 2);
         assert!(h.state.verification_failed());
-        assert_eq!(db.get_last_verified_block(None).await?, Some(10));
         assert_eq!(db.verification_failed_at().await?, Some(11));
-
-        // Restarting keeps the persisted halt regardless of verify_finalized and makes zero RPC calls.
-        for verify_finalized in [true, false] {
-            let fresh = IndexerState::default();
-            let indexer = Indexer::new(
-                MockVerificationRpc::new(),
-                log_handler(vec![static_addr()]),
-                db.clone(),
-                IndexerConfig {
-                    verify_finalized,
-                    ..Default::default()
-                },
-                fresh.clone(),
-            );
-            let handle = tokio::time::timeout(Duration::from_secs(1), indexer.start()).await??;
-            assert!(fresh.verification_failed());
-            assert_eq!(db.get_last_verified_block(None).await?, Some(10));
-            handle.abort();
-        }
         Ok(())
     }
 
     #[tokio::test]
-    async fn transient_empty_and_conflicting_rechecks_do_not_halt_or_persist_marker() -> anyhow::Result<()> {
+    async fn transient_empty_and_conflicting_rechecks_do_not_halt() -> anyhow::Result<()> {
         let logs = vec![sample_log(11, 0, 1, 2), sample_log(12, 0, 3, 4)];
 
-        // Case 1: transient empty first response, clean recheck.
+        // Case 1: transient empty first response, clean recheck on next tip update.
         let db = prepare_db(12, logs.clone()).await?;
         let calls = Arc::new(AtomicUsize::new(0));
         let counted = calls.clone();
         let expected = logs.clone();
-        let mut rpc = MockVerificationRpc::new();
+        let mut rpc = MockCanonicalLogs::new();
         rpc.expect_get_logs_for_block_range().returning(move |_, _, _| {
             if counted.fetch_add(1, AtomicOrdering::SeqCst) == 0 {
                 Ok(Vec::new())
@@ -1062,13 +981,16 @@ mod tests {
                 Ok(expected.clone())
             }
         });
-        let mut h = VerificationHarness::spawn(db, rpc, Vec::new(), Some(10), None).await;
+        let mut h = VerificationHarness::spawn(db, rpc, Vec::new(), Some(10), 0, 0).await;
         h.wait_round(1).await;
         h.send_finalized(Some(12));
         h.wait_round(2).await;
+        h.send_finalized(Some(12));
+        h.wait_round(3).await;
+        h.send_finalized(Some(12));
+        h.wait_round(4).await;
         assert_eq!(calls.load(AtomicOrdering::SeqCst), 2);
         assert!(!h.state.verification_failed());
-        assert_eq!(h.db.get_last_verified_block(None).await?, Some(12));
         assert_eq!(h.db.verification_failed_at().await?, None);
         h.finish().await?;
 
@@ -1076,7 +998,7 @@ mod tests {
         let db = prepare_db(12, logs.clone()).await?;
         let calls = Arc::new(AtomicUsize::new(0));
         let counted = calls.clone();
-        let mut rpc = MockVerificationRpc::new();
+        let mut rpc = MockCanonicalLogs::new();
         rpc.expect_get_logs_for_block_range().returning(move |_, _, _| {
             match counted.fetch_add(1, AtomicOrdering::SeqCst) {
                 0 => Ok(vec![sample_log(11, 0, 1, 2)]),
@@ -1084,20 +1006,22 @@ mod tests {
                 _ => Ok(logs.clone()),
             }
         });
-        let mut h = VerificationHarness::spawn(db, rpc, Vec::new(), Some(10), None).await;
+        let mut h = VerificationHarness::spawn(db, rpc, Vec::new(), Some(10), 0, 0).await;
         h.wait_round(1).await;
         h.send_finalized(Some(12));
         h.wait_round(2).await;
+        h.send_finalized(Some(12));
+        h.wait_round(3).await;
         assert_eq!(calls.load(AtomicOrdering::SeqCst), 2);
         assert!(!h.state.verification_failed());
-        assert_eq!(h.db.get_last_verified_block(None).await?, Some(10));
         assert_eq!(h.db.verification_failed_at().await?, None);
 
         h.send_finalized(Some(12));
-        h.wait_round(3).await;
+        h.wait_round(4).await;
+        h.send_finalized(Some(12));
+        h.wait_round(5).await;
         assert_eq!(calls.load(AtomicOrdering::SeqCst), 3);
         assert!(!h.state.verification_failed());
-        assert_eq!(h.db.get_last_verified_block(None).await?, Some(12));
         h.finish().await
     }
 
@@ -1109,7 +1033,7 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let counted = calls.clone();
         let expected = logs.clone();
-        let mut rpc = MockVerificationRpc::new();
+        let mut rpc = MockCanonicalLogs::new();
         rpc.expect_get_logs_for_block_range().returning(move |_, _, _| {
             if counted.fetch_add(1, AtomicOrdering::SeqCst) == 0 {
                 Err(RpcError::Other("rpc is down".to_string()))
@@ -1117,7 +1041,7 @@ mod tests {
                 Ok(expected.clone())
             }
         });
-        let mut h = VerificationHarness::spawn(db, rpc, Vec::new(), Some(10), None).await;
+        let mut h = VerificationHarness::spawn(db, rpc, Vec::new(), Some(10), 0, 0).await;
         h.wait_round(1).await;
         h.send_finalized(Some(11));
         h.wait_round(2).await;
@@ -1135,94 +1059,46 @@ mod tests {
         db.create_safe_contract(None, safe_addr(), Address::default(), Address::default(), 11, 0, 1)
             .await?;
         let canonical = vec![base_log, sample_safe_log(11)];
-        let mut rpc = MockVerificationRpc::new();
+        let mut rpc = MockCanonicalLogs::new();
         rpc.expect_get_logs_for_block_range()
             .withf(|_, from: &u64, to: &u64| *from == 11 && *to == 11)
             .returning(move |_, _, _| Ok(canonical.clone()));
-        let mut h = VerificationHarness::spawn(db, rpc, vec![static_addr()], Some(10), None).await;
+        let mut h = VerificationHarness::spawn(db, rpc, vec![static_addr()], Some(10), 0, 0).await;
         h.wait_round(1).await;
         h.send_finalized(Some(11));
         h.wait_round(2).await;
         assert!(!h.state.verification_failed());
-        assert_eq!(h.db.get_last_verified_block(None).await?, Some(11));
         h.finish().await
     }
 
     #[tokio::test]
-    async fn cursor_resume_baseline_and_empty_index_initialization() -> anyhow::Result<()> {
-        // Resuming from a persisted cursor verifies the gap immediately.
-        let logs = vec![sample_log(101, 0, 1, 2), sample_log(110, 0, 3, 4)];
-        let db = prepare_db(110, logs.clone()).await?;
-        db.set_last_verified_block(None, 100).await?;
+    async fn startup_lookback_and_empty_index_initialization() -> anyhow::Result<()> {
+        // Resuming an existing index verifies the last STARTUP_LOOKBACK_BLOCKS blocks in one fetch.
+        let expected_from = 300 - STARTUP_LOOKBACK_BLOCKS + 1;
+        let logs = vec![sample_log(expected_from, 0, 1, 2), sample_log(300, 0, 3, 4)];
+        let db = prepare_db(300, logs.clone()).await?;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = calls.clone();
         let expected = logs.clone();
-        let mut rpc = MockVerificationRpc::new();
+        let mut rpc = MockCanonicalLogs::new();
         rpc.expect_get_logs_for_block_range()
-            .withf(|_, from: &u64, to: &u64| *from == 101 && *to == 110)
-            .returning(move |_, _, _| Ok(expected.clone()));
-        let mut h = VerificationHarness::spawn(db, rpc, Vec::new(), Some(110), None).await;
+            .withf(move |_, from: &u64, to: &u64| *from == expected_from && *to == 300)
+            .returning(move |_, _, _| {
+                counted.fetch_add(1, AtomicOrdering::SeqCst);
+                Ok(expected.clone())
+            });
+        let mut h = VerificationHarness::spawn(db, rpc, Vec::new(), Some(310), 300, 0).await;
         h.wait_round(1).await;
-        assert_eq!(h.db.get_last_verified_block(None).await?, Some(110));
+        assert_eq!(calls.load(AtomicOrdering::SeqCst), 1);
+        assert!(!h.state.verification_failed());
         h.finish().await?;
 
-        // Blocks indexed while finality was unknown are verified from the startup baseline.
-        let db = prepare_db(100, logs.clone()).await?;
-        let mut rpc = MockVerificationRpc::new();
-        rpc.expect_get_logs_for_block_range()
-            .withf(|_, from: &u64, to: &u64| *from == 101 && *to == 110)
-            .returning(move |_, _, _| Ok(logs.clone()));
-        let mut h = VerificationHarness::spawn(db, rpc, Vec::new(), None, Some(100)).await;
-        h.wait_round(1).await;
-        assert_eq!(h.db.get_last_verified_block(None).await?, None);
-        h.db.set_indexer_state_info(None, 110).await?;
-        h.send_finalized(Some(110));
-        h.wait_round(2).await;
-        assert_eq!(h.db.get_last_verified_block(None).await?, Some(100));
-        h.send_finalized(Some(110));
-        h.wait_round(3).await;
-        assert_eq!(h.db.get_last_verified_block(None).await?, Some(110));
-        h.finish().await?;
-
-        // Empty index without finality starts at the first finalized block without fetching history.
+        // Empty index starts at the first finalized block without fetching older history.
         let db = prepare_db(0, Vec::new()).await?;
-        let mut h = VerificationHarness::spawn(db, MockVerificationRpc::new(), Vec::new(), None, None).await;
+        let mut h = VerificationHarness::spawn(db, MockCanonicalLogs::new(), Vec::new(), None, 0, 0).await;
         h.wait_round(1).await;
         h.send_finalized(Some(50));
         h.wait_round(2).await;
-        assert_eq!(h.db.get_last_verified_block(None).await?, Some(50));
-        h.finish().await
-    }
-
-    #[tokio::test]
-    async fn cursor_write_failure_retries_and_stored_logs_are_range_bounded() -> anyhow::Result<()> {
-        let logs = vec![sample_log(11, 0, 1, 2)];
-        let db = prepare_db(11, logs.clone()).await?;
-        db.set_last_verified_block(None, 10).await?;
-        db.conn(TargetDb::Index)
-            .execute_unprepared(
-                "CREATE TRIGGER fail_last_verified_block_write BEFORE UPDATE OF last_verified_block ON chain_info \
-                 BEGIN SELECT RAISE(ABORT, 'injected cursor write failure'); END",
-            )
-            .await?;
-
-        let calls = Arc::new(AtomicUsize::new(0));
-        let counted = calls.clone();
-        let mut rpc = MockVerificationRpc::new();
-        rpc.expect_get_logs_for_block_range()
-            .withf(|_, from: &u64, to: &u64| *from == 11 && *to == 11)
-            .returning(move |_, _, _| {
-                counted.fetch_add(1, AtomicOrdering::SeqCst);
-                Ok(logs.clone())
-            });
-
-        let mut h = VerificationHarness::spawn(db, rpc, Vec::new(), Some(10), None).await;
-        h.wait_round(1).await;
-        h.send_finalized(Some(11));
-        h.wait_round(2).await;
-        assert_eq!(calls.load(AtomicOrdering::SeqCst), 1);
-        assert_eq!(h.db.get_last_verified_block(None).await?, Some(10));
-        h.send_finalized(Some(11));
-        h.wait_round(3).await;
-        assert_eq!(calls.load(AtomicOrdering::SeqCst), 2);
         assert!(!h.state.verification_failed());
         h.finish().await?;
 

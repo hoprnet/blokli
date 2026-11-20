@@ -174,22 +174,11 @@ impl ReadinessChecker {
         self.updates.new_receiver()
     }
 
-    /// Perform a full readiness check and update the cached state
+    /// Perform a full readiness check and update the cached state.
     ///
-    /// This is used by /readyz endpoint and indexer completion signals. A post-finality
-    /// verification mismatch is published before the database and RPC reads, so a cached `Ready`
-    /// state is replaced even while a check still waits for them, and the flag is read again when
-    /// the result is stored so a check that started before the mismatch cannot restore readiness.
+    /// This is used by `/readyz` and indexer completion signals. Verification status is re-read
+    /// under the publication lock so a check that started before a mismatch cannot restore readiness.
     pub async fn check_and_update(&self) -> ReadinessReport {
-        if self.verification_status.failed() {
-            let mut cached = self.cached_state.write().await;
-            self.store_state(
-                &mut cached,
-                ReadinessState::NotReady,
-                metrics::HEALTH_STATUS_VERIFICATION_FAILED,
-            );
-        }
-
         let mut report = self.check_readiness().await;
         let mut cached = self.cached_state.write().await;
         if self.verification_status.failed() {
@@ -236,9 +225,11 @@ impl ReadinessChecker {
         *self.cached_state.write().await = ReadinessState::Ready;
     }
 
-    /// Start a background task that periodically updates the readiness state
-    /// This ensures the cached state is refreshed even if /readyz is not called
+    /// Start a background task that periodically updates the readiness state.
+    /// Also ensures the chain tip tracker background driver is started so API-only pods and
+    /// halted processes still serve cached tips and live `fcrStatus`.
     pub fn start_periodic_updates(self) {
+        self.rpc_operations.tip_tracker().ensure_started();
         let interval = self.health_config.readiness_check_interval;
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(interval);
@@ -254,7 +245,12 @@ impl ReadinessChecker {
     async fn check_readiness(&self) -> ReadinessReport {
         // 1. Check database connectivity by querying chain_info
         let (last_indexed_block, database, database_health_status) = match ChainInfo::find().one(&self.db).await {
-            Ok(Some(info)) => (Some(info.last_indexed_block), CheckStatus::healthy(), None),
+            Ok(Some(info)) => {
+                if info.verification_failed_at.is_some() {
+                    self.verification_status.mark_failed();
+                }
+                (Some(info.last_indexed_block), CheckStatus::healthy(), None)
+            }
             Ok(None) => (
                 None,
                 CheckStatus::unhealthy("No chain info found - indexer may not have started"),
@@ -366,7 +362,7 @@ mod tests {
         tip::ConfirmationMode,
         transport::ReqwestClient,
     };
-    use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
+    use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb, info::BlokliDbInfoOperations};
     use hopr_bindings::exports::alloy::{rpc::client::ClientBuilder, transports::http::ReqwestTransport};
 
     use super::{ReadinessChecker, ReadinessState};
@@ -524,42 +520,60 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn verification_failure_is_published_before_the_rpc_check_completes() -> anyhow::Result<()> {
+    async fn persisted_verification_failure_in_db_reports_not_ready() -> anyhow::Result<()> {
         let mut server = mockito::Server::new_async().await;
-        let arrived = Arc::new(AtomicBool::new(false));
-        let release = Arc::new(AtomicBool::new(false));
-        let tip = mock_tip_released_by_test(&mut server, arrived.clone(), release.clone());
+        let tip = mock_tip_without_confirmation_tags(&mut server);
 
         let db = BlokliDb::new_in_memory().await?;
-        let indexer_state = IndexerState::default();
+        db.set_indexer_state_info(None, 100).await?;
+        db.set_verification_failed_at(Some(95)).await?;
+
+        // Standalone API replicas have a fresh in-memory VerificationStatus and must honor
+        // the persisted chain_info.verification_failed_at halt marker.
         let checker = ReadinessChecker::new(
             db.conn(TargetDb::Index).clone(),
             rpc_operations_for(&server, RpcOperationsConfig::default())?,
             HealthConfig::default(),
-        )
-        .with_verification_status(indexer_state.verification_status());
-        checker.force_ready().await;
-        indexer_state.mark_verification_failed();
-
-        let running = tokio::spawn({
-            let checker = checker.clone();
-            async move { checker.check_and_update().await }
-        });
-
-        wait_for_tip_request(&arrived).await?;
-        assert_eq!(
-            checker.get().await,
-            ReadinessState::NotReady,
-            "a known verification failure must be published before the database and RPC reads finish"
         );
 
-        release.store(true, Ordering::SeqCst);
-        let report = running.await?;
+        let report = checker.check_and_update().await;
 
         tip.assert();
         assert_eq!(report.state, ReadinessState::NotReady);
         assert_eq!(report.health_status, metrics::HEALTH_STATUS_VERIFICATION_FAILED);
+        assert_eq!(report.checks.verification.status, "unhealthy");
+        assert_eq!(checker.get().await, ReadinessState::NotReady);
+        Ok(())
+    }
 
+    #[tokio::test]
+    async fn start_periodic_updates_starts_tip_tracker() -> anyhow::Result<()> {
+        let mut server = mockito::Server::new_async().await;
+        let tip = mock_tip_without_confirmation_tags(&mut server);
+
+        let db = BlokliDb::new_in_memory().await?;
+        let rpc = rpc_operations_for(&server, RpcOperationsConfig::default())?;
+        let checker = ReadinessChecker::new(
+            db.conn(TargetDb::Index).clone(),
+            rpc.clone(),
+            HealthConfig {
+                readiness_check_interval: Duration::from_secs(3600),
+                ..HealthConfig::default()
+            },
+        );
+
+        assert!(rpc.tip_tracker().current().is_none());
+        checker.start_periodic_updates();
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while rpc.tip_tracker().current().is_none() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await?;
+
+        tip.assert();
+        assert!(rpc.tip_tracker().current().is_some());
         Ok(())
     }
 

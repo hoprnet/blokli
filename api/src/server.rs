@@ -23,7 +23,7 @@ use blokli_chain_api::{
     transaction_store::TransactionStore,
 };
 use blokli_chain_indexer::IndexerState;
-use blokli_chain_rpc::{rpc::RpcOperations, tip::ConfirmationMode as ChainConfirmationMode, transport::ReqwestClient};
+use blokli_chain_rpc::{rpc::RpcOperations, transport::ReqwestClient};
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
 use futures::stream::{Stream, StreamExt};
 #[cfg(feature = "telemetry")]
@@ -284,7 +284,6 @@ pub async fn build_app(
     config: ApiConfig,
     expected_block_time: u64,
     finality: u16,
-    confirmation_mode: ChainConfirmationMode,
     indexer_state: IndexerState,
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
@@ -308,7 +307,6 @@ pub async fn build_app(
         config.contract_addresses,
         expected_block_time,
         finality,
-        confirmation_mode,
         config.gas_multiplier,
         config.gas_fee_policy(),
         indexer_state.clone(),
@@ -329,7 +327,6 @@ pub async fn build_app(
         config.contract_addresses,
         expected_block_time,
         finality,
-        confirmation_mode,
         config.gas_multiplier,
         config.gas_fee_policy(),
         indexer_state,

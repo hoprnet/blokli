@@ -1599,7 +1599,9 @@ mod tests {
             latest: 8,
             latest_timestamp: Some(1),
             safe: None,
+            safe_timestamp: None,
             finalized: None,
+            finalized_timestamp: None,
         }));
         let tracker = ChainTipTracker::new(
             Arc::new(SharedTipSource(observation.clone())),
@@ -1645,7 +1647,9 @@ mod tests {
             latest: 9,
             latest_timestamp: Some(2),
             safe: None,
+            safe_timestamp: None,
             finalized: None,
+            finalized_timestamp: None,
         };
         rpc.tip_tracker().refresh().await?;
 

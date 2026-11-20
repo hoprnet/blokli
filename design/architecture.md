@@ -1605,19 +1605,16 @@ that block. Readiness and the GraphQL server read the same cached confirmed bloc
 additional RPC call. The `chainInfo` GraphQL field reports the configured mode and the live FCR status so clients can see which rule is in
 effect.
 
-**Post-finality verification.** A background task of the indexer re-reads every indexed range once the tracker reports it as final. It
-compares the canonical logs with the stored ones on block number, block hash, transaction hash and log index. The task walks forward from a
-position stored in the index database, so a restart resumes above the blocks an earlier process checked and also covers the blocks that
-became final while the daemon was down. The first position starts at the lower of the first finalized block and the committed watermark the
-process had when it started, so blocks written before the provider returned a finalized block are checked later as well. A range that
-differs is compared a second time after a short delay, because a load-balanced or lagging backend can return an empty or partial result
-without an error. If both comparisons find the same difference, the indexer persists the failure in the index database and stops advancing.
-Readiness reports the failure across restarts until an operator restores or rebuilds the index. A failed read or cursor write causes a retry
-on the next tip update. A replayed block that puts a different log at the position of a Safe registration the index already applied is not
-written and is treated as a difference, because applying the replacement would leave the replaced Safe in the index while hiding the change
-from the comparison. Because the set of Safe contract addresses grows while indexing, canonical Safe logs are exempt from the
-missing-from-store check, while all stored logs (including Safe logs) are checked strictly against the canonical chain and logs of static
-contracts are checked in both directions.
+**Post-finality verification.** A background task of the indexer re-reads indexed ranges once the tracker reports them as final. It compares
+the canonical logs with the stored ones on block number, block hash, transaction hash and log index. On startup with an existing index, the
+in-memory cursor starts a short lookback behind the committed watermark so blocks indexed shortly before a clean restart that finalized
+while the daemon was down are re-checked in one range fetch; on an empty index it starts at the first finalized block. A range that differs
+is re-checked on the next tip update, because a load-balanced or lagging backend can return an empty or partial result without an error. If
+both comparisons find the same difference, the indexer persists the failure marker in the index database and stops advancing. Readiness
+reads both the in-memory flag and the persisted database marker, so single-process daemons and standalone API replicas alike report the
+failure across restarts until an operator restores or rebuilds the index. A failed read causes a retry on the next tip update. Because the
+set of Safe contract addresses grows while indexing, canonical Safe logs are exempt from the missing-from-store check, while all stored logs
+(including Safe logs) are checked strictly against the canonical chain and logs of static contracts are checked in both directions.
 
 ### Finality Handling in Readiness Checks
 

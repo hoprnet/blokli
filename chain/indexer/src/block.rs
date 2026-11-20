@@ -28,7 +28,7 @@ use blokli_db::{
 use blokli_db_entity::{channel_state, prelude::ChannelState};
 use futures::{
     Stream, StreamExt,
-    channel::mpsc::{Sender, channel},
+    channel::mpsc::channel,
     future::{AbortHandle, abortable},
 };
 use hopr_bindings::{
@@ -60,7 +60,7 @@ use crate::{
     snapshot::{SnapshotInfo, SnapshotManager},
     traits::{ChainLogHandler, PrefetchedLogData},
     utils::AbortOnDrop,
-    verification::{CursorStart, run_verification},
+    verification::run_verification,
 };
 
 /// Number of not-yet-committed blocks whose chain data the indexer fetches ahead of time.
@@ -171,42 +171,94 @@ async fn halt_if_verification_failed(indexer_state: &IndexerState, at_block: u64
     pending::<()>().await;
 }
 
-/// Completes the startup handshake before parking once post-finality verification failed.
-///
-/// `Indexer::start()` returns its abort handle only after the first `()` was sent on the startup
-/// channel (or the sender was dropped). Parking before the handshake would make startup wait
-/// forever even though readiness stays failed; sending first lets `start()` return while this task
-/// parks until an operator restarts the daemon.
-async fn halt_startup_if_verification_failed(indexer_state: &IndexerState, at_block: u64, startup: &mut Sender<()>) {
-    if !indexer_state.verification_failed() {
-        return;
-    }
-
-    let _ = startup.try_send(());
-    halt_if_verification_failed(indexer_state, at_block).await;
-}
-
-/// One item the continuous indexing loop waits for between blocks.
-enum LiveItem {
-    /// A block of the continuous log stream together with its pre-fetched chain data.
-    Block(BlockWithLogs, PrefetchedLogData),
-    /// An owner snapshot read by the Safe owner refresh task.
-    Snapshot(SafeSnapshotRead),
-}
-
-impl LiveItem {
-    /// Block the item belongs to: the block itself, or the block a snapshot was pinned at.
-    fn block_id(&self) -> u64 {
-        match self {
-            Self::Block(block, _) => block.block_id,
-            Self::Snapshot(read) => read.block,
-        }
-    }
-}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Display)]
 pub(crate) enum LogFilterPhase {
     HistoricalDiscovery,
     Continuous,
+}
+
+/// Builds the RPC log filter set for the given indexing phase.
+pub(crate) async fn generate_log_filters<U, Db>(db: &Db, logs_handler: &U, phase: LogFilterPhase) -> Result<FilterSet>
+where
+    U: ChainLogHandler,
+    Db: BlokliDbSafeContractOperations,
+{
+    let static_addresses = logs_handler.contract_addresses();
+    let addresses_no_token = static_addresses
+        .iter()
+        .copied()
+        .filter(|a| *a != logs_handler.contract_addresses_map().token)
+        .collect::<Vec<_>>();
+
+    let mut filter_base_addresses = vec![];
+    let mut filter_base_topics = vec![];
+
+    addresses_no_token.iter().for_each(|address| {
+        let topics = logs_handler.contract_address_topics(*address);
+        if !topics.is_empty() {
+            filter_base_addresses.push(AlloyAddress::from_hopr_address(*address));
+            filter_base_topics.extend(topics);
+        }
+    });
+
+    let filter_base = Filter::new()
+        .address(filter_base_addresses)
+        .event_signature(filter_base_topics);
+    let safe_addresses = db.get_safe_contract_addresses(None).await?;
+    let safe_filter = (!safe_addresses.is_empty()).then(|| {
+        Filter::new()
+            .address(
+                safe_addresses
+                    .iter()
+                    .copied()
+                    .map(AlloyAddress::from_hopr_address)
+                    .collect::<Vec<_>>(),
+            )
+            .event_signature(crate::constants::topics::safe_contract())
+    });
+    let filter_token_approval = (!safe_addresses.is_empty()).then(|| {
+        Filter::new()
+            .address(AlloyAddress::from_hopr_address(
+                logs_handler.contract_addresses_map().token,
+            ))
+            .event_signature(Approval::SIGNATURE_HASH)
+            .topic1(
+                safe_addresses
+                    .iter()
+                    .copied()
+                    .map(AlloyAddress::from_hopr_address)
+                    .map(|address| address.into_word())
+                    .collect::<Vec<_>>(),
+            )
+    });
+
+    match phase {
+        LogFilterPhase::HistoricalDiscovery => Ok(FilterSet {
+            all: vec![filter_base.clone()],
+            token: vec![],
+            no_token: vec![filter_base],
+        }),
+        LogFilterPhase::Continuous => {
+            let mut all_filters = vec![filter_base.clone()];
+            if let Some(filter_safe_contract) = safe_filter.clone() {
+                all_filters.push(filter_safe_contract);
+            }
+            if let Some(filter_token_approval) = filter_token_approval.clone() {
+                all_filters.push(filter_token_approval);
+            }
+
+            let mut no_token_filters = vec![filter_base];
+            if let Some(filter_safe_contract) = safe_filter {
+                no_token_filters.push(filter_safe_contract);
+            }
+
+            Ok(FilterSet {
+                all: all_filters,
+                token: filter_token_approval.into_iter().collect(),
+                no_token: no_token_filters,
+            })
+        }
+    }
 }
 
 #[cfg(all(feature = "telemetry", not(test)))]
@@ -706,13 +758,7 @@ where
 
         info!(next_block_to_process, "Indexer start point");
 
-        // The committed watermark is captured before the indexing loop runs. The first finalized
-        // response from the provider can arrive only after that loop has written blocks, and those
-        // blocks must still be covered by the verification cursor that starts from this value.
-        let verification_watermark = match self.db.get_indexer_state_info(None).await?.latest_block_number {
-            0 => None,
-            last_indexed => Some(u64::from(last_indexed)),
-        };
+        let last_indexed_at_startup = u64::from(self.db.get_indexer_state_info(None).await?.latest_block_number);
 
         let indexer_state = self.indexer_state.clone();
         let tip_updates = if self.cfg.verify_finalized {
@@ -721,18 +767,6 @@ where
             info!("post-finality verification is disabled by configuration");
             None
         };
-        // An empty index has no watermark. When the endpoint reports no finalized block at this point
-        // either, the block below the first one this run indexes bounds the cursor, so blocks written
-        // before the first finalized response are still checked. With a finalized block known, an
-        // empty index starts at that block and does not walk the history below it.
-        let finalized_at_start = tip_updates
-            .as_ref()
-            .and_then(|tips| tips.borrow().and_then(|tip| tip.finalized));
-        let verification_baseline = verification_watermark.or_else(|| {
-            finalized_at_start
-                .is_none()
-                .then(|| next_block_to_process.saturating_sub(1))
-        });
         // Blocks below the configured start are never indexed, so they are never verified.
         let verification_floor = self.cfg.start_block_number.saturating_sub(1);
         let verification_db = db.clone();
@@ -750,10 +784,8 @@ where
                         verification_db,
                         verification_handler,
                         verification_state,
-                        CursorStart {
-                            baseline: verification_baseline,
-                            floor: verification_floor,
-                        },
+                        last_indexed_at_startup,
+                        verification_floor,
                         None,
                     )
                     .await;
@@ -815,9 +847,10 @@ where
                     return;
                 }
 
-                // The last historical block can be the one whose processing set the flag, so the
-                // historical head is only committed once verification still agrees.
-                halt_startup_if_verification_failed(&indexer_state, historical_sync_head, &mut tx).await;
+                if indexer_state.verification_failed() {
+                    let _ = tx.try_send(());
+                    halt_if_verification_failed(&indexer_state, historical_sync_head).await;
+                }
 
                 let checksum = match db.update_logs_checksums().await {
                     Ok(checksum) => checksum,
@@ -826,8 +859,6 @@ where
                         return;
                     }
                 };
-                // The flag can be set while the checksum update is pending.
-                halt_startup_if_verification_failed(&indexer_state, historical_sync_head, &mut tx).await;
                 if let Err(error) = db.set_indexer_state_info(None, historical_sync_head_u32).await {
                     error!(%error, "historical sync state finalization failed");
                     return;
@@ -915,62 +946,30 @@ where
                 let mut event_stream = Box::pin(Self::prefetch_block_data(&logs_handler, block_stream, true));
 
                 loop {
-                    let item = tokio::select! {
-                        item = event_stream.next() => match item {
-                            Some((block, prefetched)) => LiveItem::Block(block, prefetched),
-                            None => break,
-                        },
-                        read = snapshot_rx.next() => match read {
-                            Some(read) => LiveItem::Snapshot(read),
-                            // The supervisor only ends when it gave up restarting the task. Without the
-                            // refresh, Safes would silently keep missing owners: fail like any other
-                            // unrecoverable indexer failure.
-                            None => {
-                                error!("Safe owner refresh task has stopped");
-                                break 'stream_refresh Some("the Safe owner refresh task has stopped".into());
-                            }
-                        },
-                    };
-
-                    // The flag is checked before any item is written: a snapshot that is ready after a
-                    // mismatch must not be stored, and the refresh task has nothing left to do once
-                    // the loop parks. The flag is sticky, so the indexer never advances again; awaiting
-                    // forever keeps the process alive so the API keeps serving the already indexed data
-                    // until an operator restarts the daemon.
                     if indexer_state.verification_failed() {
                         let _ = owner_refresh_guard.take();
-                        halt_if_verification_failed(&indexer_state, item.block_id()).await;
+                        halt_if_verification_failed(&indexer_state, stream_start_block).await;
                     }
 
-                    let (block, prefetched) = match item {
-                        LiveItem::Block(block, prefetched) => (block, prefetched),
-                        LiveItem::Snapshot(read) => {
-                            store_safe_owner_snapshot(&db, &indexer_state, read).await;
+                    let (block, prefetched) = tokio::select! {
+                        item = event_stream.next() => match item {
+                            Some(item) => item,
+                            None => break,
+                        },
+                        read = snapshot_rx.next() => {
+                            match read {
+                                Some(read) => store_safe_owner_snapshot(&db, &indexer_state, read).await,
+                                // The supervisor only ends when it gave up restarting the task. Without the
+                                // refresh, Safes would silently keep missing owners: fail like any other
+                                // unrecoverable indexer failure.
+                                None => {
+                                    error!("Safe owner refresh task has stopped");
+                                    break 'stream_refresh Some("the Safe owner refresh task has stopped".into());
+                                }
+                            }
                             continue;
                         }
                     };
-
-                    match Self::replaces_an_applied_safe_registration(&db, &logs_handler, &block).await {
-                        Ok(true) => {
-                            indexer_state.mark_verification_failed();
-                            // Drop the refresh worker before parking.
-                            let _ = owner_refresh_guard.take();
-                            halt_if_verification_failed(&indexer_state, block.block_id).await;
-                        }
-                        Ok(false) => {}
-                        Err(error) => {
-                            break 'stream_refresh Some(format!(
-                                "failed to check the applied Safe registrations of block {}: {error}",
-                                block.block_id
-                            ));
-                        }
-                    }
-
-                    // The flag can be set while the applied Safe registration lookup is pending.
-                    if indexer_state.verification_failed() {
-                        let _ = owner_refresh_guard.take();
-                        halt_if_verification_failed(&indexer_state, block.block_id).await;
-                    }
 
                     let store_started = Instant::now();
                     if let Err(error) = Self::store_block_logs(&db, &logs_handler, &block).await {
@@ -981,11 +980,6 @@ where
                     }
                     record_block_step("store", store_started);
 
-                    // The flag can be set while the logs are stored.
-                    if indexer_state.verification_failed() {
-                        let _ = owner_refresh_guard.take();
-                        halt_if_verification_failed(&indexer_state, block.block_id).await;
-                    }
                     let process_started = Instant::now();
                     let processed = Self::process_block(
                         &db,
@@ -1120,82 +1114,7 @@ where
     /// * `token` contains owner-filtered token Approval filters.
     /// * `no_token` contains non-token filters for historical discovery.
     pub(crate) async fn generate_log_filters(db: &Db, logs_handler: &U, phase: LogFilterPhase) -> Result<FilterSet> {
-        let static_addresses = logs_handler.contract_addresses();
-        let addresses_no_token = static_addresses
-            .iter()
-            .copied()
-            .filter(|a| *a != logs_handler.contract_addresses_map().token)
-            .collect::<Vec<_>>();
-
-        let mut filter_base_addresses = vec![];
-        let mut filter_base_topics = vec![];
-
-        addresses_no_token.iter().for_each(|address| {
-            let topics = logs_handler.contract_address_topics(*address);
-            if !topics.is_empty() {
-                filter_base_addresses.push(AlloyAddress::from_hopr_address(*address));
-                filter_base_topics.extend(topics);
-            }
-        });
-
-        let filter_base = Filter::new()
-            .address(filter_base_addresses)
-            .event_signature(filter_base_topics);
-        let safe_addresses = db.get_safe_contract_addresses(None).await?;
-        let safe_filter = (!safe_addresses.is_empty()).then(|| {
-            Filter::new()
-                .address(
-                    safe_addresses
-                        .iter()
-                        .copied()
-                        .map(AlloyAddress::from_hopr_address)
-                        .collect::<Vec<_>>(),
-                )
-                .event_signature(crate::constants::topics::safe_contract())
-        });
-        let filter_token_approval = (!safe_addresses.is_empty()).then(|| {
-            Filter::new()
-                .address(AlloyAddress::from_hopr_address(
-                    logs_handler.contract_addresses_map().token,
-                ))
-                .event_signature(Approval::SIGNATURE_HASH)
-                .topic1(
-                    safe_addresses
-                        .iter()
-                        .copied()
-                        .map(AlloyAddress::from_hopr_address)
-                        .map(|address| address.into_word())
-                        .collect::<Vec<_>>(),
-                )
-        });
-
-        match phase {
-            LogFilterPhase::HistoricalDiscovery => Ok(FilterSet {
-                all: vec![filter_base.clone()],
-                token: vec![],
-                no_token: vec![filter_base],
-            }),
-            LogFilterPhase::Continuous => {
-                let mut all_filters = vec![filter_base.clone()];
-                if let Some(filter_safe_contract) = safe_filter.clone() {
-                    all_filters.push(filter_safe_contract);
-                }
-                if let Some(filter_token_approval) = filter_token_approval.clone() {
-                    all_filters.push(filter_token_approval);
-                }
-
-                let mut no_token_filters = vec![filter_base];
-                if let Some(filter_safe_contract) = safe_filter {
-                    no_token_filters.push(filter_safe_contract);
-                }
-
-                Ok(FilterSet {
-                    all: all_filters,
-                    token: filter_token_approval.into_iter().collect(),
-                    no_token: no_token_filters,
-                })
-            }
-        }
+        generate_log_filters(db, logs_handler, phase).await
     }
 
     /// Wraps a stream of blocks so that each block's chain data is fetched ahead of its turn.
@@ -1287,35 +1206,6 @@ where
         Ok(result)
     }
 
-    /// Returns whether the block replaces a Safe registration that the index has already applied.
-    ///
-    /// A replayed block can carry a different log at the position of a Safe registration that was
-    /// applied before (a reorganisation). Applying the replacement adds the new Safe while the one
-    /// derived from the applied log stays, and replacing the stored row would hide the difference
-    /// from post-finality verification: the range would compare equal while the index still holds
-    /// the replaced Safe. The block is therefore not written and the replacement is treated as a
-    /// verification failure. A log with the same block hash is a replay of the applied log.
-    async fn replaces_an_applied_safe_registration(db: &Db, logs_handler: &U, block: &BlockWithLogs) -> Result<bool>
-    where
-        U: ChainLogHandler + 'static,
-        Db: BlokliDbLogOperations + 'static,
-    {
-        let registry = logs_handler.contract_addresses_map().node_safe_registry;
-        if !block.logs.iter().any(|log| log.address == registry) {
-            return Ok(false);
-        }
-
-        let applied = retry_with_backoff(PRE_WRITE_READ_ATTEMPTS, PRE_WRITE_READ_INITIAL_BACKOFF, || async {
-            db.get_processed_log_identities(block.block_id).await
-        })
-        .await?;
-        Ok(block.logs.iter().filter(|log| log.address == registry).any(|log| {
-            applied.iter().any(|(tx_index, log_index, block_hash)| {
-                *tx_index == log.tx_index && *log_index == log.log_index && *block_hash != log.block_hash
-            })
-        }))
-    }
-
     async fn store_block_logs(db: &Db, logs_handler: &U, block: &BlockWithLogs) -> Result<()>
     where
         U: ChainLogHandler + 'static,
@@ -1374,19 +1264,6 @@ where
                 break;
             }
 
-            // The historical caller completes the startup handshake and parks after this early return.
-            if indexer_state.verification_failed() {
-                return Ok(());
-            }
-
-            if Self::replaces_an_applied_safe_registration(db, logs_handler, &block).await? {
-                indexer_state.mark_verification_failed();
-                // The historical caller completes the startup handshake and parks after this early return.
-                return Ok(());
-            }
-
-            // The lookup can take a while, so the flag is checked again once it has returned false.
-            // The historical caller completes the startup handshake and parks after this early return.
             if indexer_state.verification_failed() {
                 return Ok(());
             }
@@ -1395,11 +1272,6 @@ where
             Self::store_block_logs(db, logs_handler, &block).await?;
             record_block_step("store", store_started);
 
-            // Storing took a while, so the flag is checked again before the index writes start.
-            // The historical caller completes the startup handshake and parks after this early return.
-            if indexer_state.verification_failed() {
-                return Ok(());
-            }
             let process_started = Instant::now();
             Self::process_block(
                 db,
@@ -4001,250 +3873,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_a_replaced_applied_safe_registration_is_detected() -> anyhow::Result<()> {
+    async fn test_persisted_verification_halt_skips_startup_without_rpc_calls() -> anyhow::Result<()> {
+        let addr = Address::new(b"my address 123456789");
         let db = BlokliDb::new_in_memory().await?;
-        let registry = Address::new(b"safe registry 123456");
-        let applied = build_announcement_logs(registry, 1, 1, 0)?.remove(0);
-        db.store_logs(vec![applied.clone()]).await?;
-        db.set_log_processed(applied.clone()).await?;
+        db.set_verification_failed_at(Some(11)).await?;
 
-        let mut handler = MockChainLogHandler::new();
-        handler
-            .expect_contract_addresses_map()
-            .return_const(Arc::new(ContractAddresses {
-                node_safe_registry: registry,
-                ..Default::default()
-            }));
+        for verify_finalized in [true, false] {
+            let fresh = IndexerState::default();
+            let mut handlers = MockChainLogHandler::new();
+            handlers.expect_contract_addresses().return_const(vec![addr]);
+            handlers
+                .expect_contract_addresses_map()
+                .return_const(ContractAddresses::default());
+            handlers.expect_contract_address_topics().return_const(Vec::new());
 
-        let replay = BlockWithLogs {
-            block_id: 1,
-            logs: BTreeSet::from([applied.clone()]),
-        };
-        assert!(
-            !Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::replaces_an_applied_safe_registration(
-                &db, &handler, &replay
-            )
-            .await?
-        );
-
-        let reorged = BlockWithLogs {
-            block_id: 1,
-            logs: BTreeSet::from([SerializableLog {
-                block_hash: Hash::create(&[b"canonical block"]).into(),
-                ..applied.clone()
-            }]),
-        };
-        assert!(
-            Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::replaces_an_applied_safe_registration(
-                &db, &handler, &reorged
-            )
-            .await?
-        );
-
-        let unprocessed_db = BlokliDb::new_in_memory().await?;
-        unprocessed_db.store_logs(vec![applied]).await?;
-        assert!(
-            !Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::replaces_an_applied_safe_registration(
-                &unprocessed_db,
-                &handler,
-                &reorged
-            )
-            .await?
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_historical_phase_halts_on_a_replaced_applied_safe_registration() -> anyhow::Result<()> {
-        let registry = Address::new(b"safe registry 123456");
-        let (db, mut handlers) = setup_single_contract_env(
-            registry,
-            ContractAddresses {
-                node_safe_registry: registry,
-                ..Default::default()
-            },
-        )
-        .await?;
-
-        let applied = build_announcement_logs(registry, 1, 1, 0)?.remove(0);
-        db.store_logs(vec![applied.clone()]).await?;
-        db.set_log_processed(applied.clone()).await?;
-
-        let replacement_block_hash: [u8; 32] = Hash::create(&[b"canonical block"]).into();
-        let replayed_block = BlockWithLogs {
-            block_id: 1,
-            logs: BTreeSet::from([SerializableLog {
-                block_hash: replacement_block_hash,
-                ..applied.clone()
-            }]),
-        };
-
-        let armed = Arc::new(StdAtomicBool::new(false));
-        let processed = Arc::new(Notify::new());
-        let armed_for_handler = armed.clone();
-        let processed_for_handler = processed.clone();
-        handlers.expect_collect_log_event().returning(move |_, _| {
-            if armed_for_handler.load(StdOrdering::SeqCst) {
-                processed_for_handler.notify_one();
-            }
-            Ok(())
-        });
-
-        let stream_requested = Arc::new(Notify::new());
-        let requested_for_rpc = stream_requested.clone();
-        let armed_for_rpc = armed.clone();
-        let mut rpc = mock_rpc();
-        rpc.expect_block_number().times(2).returning(|| Ok(2));
-        rpc.expect_get_channel_closure_notice_period()
-            .returning(|| Ok(Duration::from_secs(1)));
-        rpc.expect_try_stream_logs()
-            .times(1)
-            .withf(|start: &u64, _, is_synced: &bool| *start == 1 && !*is_synced)
-            .return_once(move |_, _, _| {
-                armed_for_rpc.store(true, StdOrdering::SeqCst);
-                requested_for_rpc.notify_one();
-                Ok(Box::pin(futures::stream::iter(vec![replayed_block])))
-            });
-        rpc.expect_try_stream_logs()
-            .times(1)
-            .withf(|start: &u64, _, is_synced: &bool| *start == 3 && *is_synced)
-            .return_once(|_, _, _| Ok(Box::pin(futures::stream::empty())));
-
-        let indexer_state = IndexerState::default();
-        let indexer = Indexer::new(rpc, handlers, db.clone(), test_indexer_config(1), indexer_state.clone())
-            .without_panic_on_completion();
-        let task = tokio::spawn(async move { indexer.start().await });
-
-        wait_for_setup(&stream_requested, "stream_requested").await;
-        assert_halts_without_progress(
-            processed.notified(),
-            "replayed block must not be processed after replacement detection",
-        )
-        .await;
-        assert!(indexer_state.verification_failed());
-        assert_eq!(db.get_log(1, 0, 0).await?.block_hash, applied.block_hash);
-        assert_eq!(db.get_logs_count(None, None).await?, 1);
-        tokio::time::timeout(HALT_SETUP_TIMEOUT, task).await???.abort();
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_historical_head_is_not_committed_when_the_last_block_fails_verification() -> anyhow::Result<()> {
-        let addr = Address::new(b"my address 123456789");
-        let (db, mut handlers) = setup_single_contract_env(addr, ContractAddresses::default()).await?;
-
-        let indexer_state = IndexerState::default();
-        let state_for_handler = indexer_state.clone();
-        let last_processed = Arc::new(Notify::new());
-        let last_for_handler = last_processed.clone();
-        handlers.expect_collect_log_event().returning(move |log, _| {
-            if log.block_number == 4 {
-                state_for_handler.mark_verification_failed();
-                last_for_handler.notify_one();
-            }
-            Ok(())
-        });
-
-        let first_block = BlockWithLogs {
-            block_id: 3,
-            logs: build_announcement_logs(addr, 1, 3, 0)?.into_iter().collect(),
-        };
-        let second_block = BlockWithLogs {
-            block_id: 4,
-            logs: build_announcement_logs(addr, 1, 4, 0)?.into_iter().collect(),
-        };
-        let stream_requested = Arc::new(Notify::new());
-        let requested_for_rpc = stream_requested.clone();
-        let mut rpc = mock_rpc();
-        rpc.expect_block_number().times(2).returning(|| Ok(4));
-        rpc.expect_get_channel_closure_notice_period()
-            .returning(|| Ok(Duration::from_secs(1)));
-        rpc.expect_try_stream_logs()
-            .times(1)
-            .withf(|start: &u64, _, is_synced: &bool| *start == 3 && !*is_synced)
-            .return_once(move |_, _, _| Ok(Box::pin(futures::stream::iter(vec![first_block, second_block]))));
-        rpc.expect_try_stream_logs()
-            .times(1)
-            .withf(|start: &u64, _, is_synced: &bool| *start == 5 && *is_synced)
-            .return_once(move |_, _, _| {
-                requested_for_rpc.notify_one();
-                Ok(Box::pin(futures::stream::empty()))
-            });
-
-        let indexer = Indexer::new(rpc, handlers, db.clone(), test_indexer_config(3), indexer_state.clone())
-            .without_panic_on_completion();
-        let task = tokio::spawn(async move { indexer.start().await });
-
-        wait_for_setup(&last_processed, "last_processed").await;
-        assert_halts_without_progress(
-            stream_requested.notified(),
-            "historical head must not be committed after failure",
-        )
-        .await;
-        assert!(indexer_state.verification_failed());
-        assert_eq!(db.get_logs_count(None, None).await?, 2);
-        assert_eq!(db.get_indexer_state_info(None).await?.latest_block_number, 0);
-        tokio::time::timeout(HALT_SETUP_TIMEOUT, task).await???.abort();
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_snapshot_is_not_stored_when_verification_failed() -> anyhow::Result<()> {
-        let addr = Address::new(b"my address 123456789");
-        let (db, handlers) = setup_single_contract_env(addr, ContractAddresses::default()).await?;
-
-        let safe = Address::from([0x33; 20]);
-        let owner = Address::from([0x41; 20]);
-        db.create_safe_contract(None, safe, Address::default(), safe, 1, 0, 0)
-            .await?;
-
-        let head_block = 10;
-        let read_requested = Arc::new(Notify::new());
-        let read_requested_for_rpc = read_requested.clone();
-        let mut rpc = mock_rpc();
-        rpc.expect_block_number().times(2).returning(move || Ok(head_block));
-        rpc.expect_get_channel_closure_notice_period()
-            .returning(|| Ok(Duration::from_secs(1)));
-        rpc.expect_try_stream_logs()
-            .times(1)
-            .withf(move |start: &u64, _, is_synced: &bool| *start == head_block + 1 && *is_synced)
-            .return_once(|_, _, _| Ok(Box::pin(futures::stream::pending())));
-        rpc.expect_get_safe_owners_and_thresholds().returning(move |safes, _| {
-            read_requested_for_rpc.notify_one();
-            Ok(safes
-                .iter()
-                .map(|_| {
-                    Ok(SafeOwnersSnapshot {
-                        owners: vec![owner],
-                        threshold: 2,
-                    })
-                })
-                .collect())
-        });
-
-        let indexer_state = IndexerState::default();
-        indexer_state.mark_verification_failed();
-        let indexer = Indexer::new(
-            rpc,
-            handlers,
-            db.clone(),
-            test_indexer_config(head_block + 1),
-            indexer_state.clone(),
-        )
-        .without_panic_on_completion();
-        let abort_handle = indexer.start().await?;
-
-        wait_for_setup(&read_requested, "read_requested").await;
-        let stored = tokio::time::timeout(HALT_QUIET_PERIOD, async {
-            while indexer_state.unsynced_safe_owner_snapshots() > 0 {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await;
-        assert!(stored.is_err());
-        abort_handle.abort();
-        assert!(db.get_safe_owners(None, safe).await?.is_empty());
-        assert_eq!(db.get_safe_owners_synced_block(None, safe).await?, None);
+            let indexer = Indexer::new(
+                MockHoprIndexerOps::new(),
+                handlers,
+                db.clone(),
+                IndexerConfig {
+                    verify_finalized,
+                    ..Default::default()
+                },
+                fresh.clone(),
+            );
+            let handle = tokio::time::timeout(Duration::from_secs(1), indexer.start()).await??;
+            assert!(fresh.verification_failed());
+            handle.abort();
+        }
         Ok(())
     }
 

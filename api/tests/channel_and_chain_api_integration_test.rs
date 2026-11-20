@@ -25,8 +25,8 @@ use blokli_api::{
     query::QueryRoot,
     readiness::ReadinessChecker,
     schema::{
-        ChainId, ChainTipTrackerContext, ConfirmationRule, ExpectedBlockTime, Finality, GasFeePolicy, GasMultiplier,
-        NetworkName, build_schema,
+        ChainId, ChainTipTrackerContext, ExpectedBlockTime, Finality, GasFeePolicy, GasMultiplier, NetworkName,
+        build_schema,
     },
     snapshot::SubscriptionSnapshots,
 };
@@ -173,10 +173,13 @@ impl TipSource for FixedTipSource {
     }
 }
 
-fn tip_tracker(observation: TipObservation) -> Arc<ChainTipTracker> {
+fn tip_tracker(observation: TipObservation, mode: ChainConfirmationMode) -> Arc<ChainTipTracker> {
     Arc::new(ChainTipTracker::new(
         Arc::new(FixedTipSource { observation }),
-        ConfirmationConfig::default(),
+        ConfirmationConfig {
+            mode,
+            ..ConfirmationConfig::default()
+        },
         Duration::from_secs(1),
         Duration::from_secs(1),
     ))
@@ -187,13 +190,14 @@ fn tip_observation(latest: u64, safe: Option<u64>, finalized: Option<u64>) -> Ti
         latest,
         latest_timestamp: Some(1_700_000_000 + latest),
         safe,
+        safe_timestamp: safe.map(|block| 1_700_000_000 + block),
         finalized,
+        finalized_timestamp: finalized.map(|block| 1_700_000_000 + block),
     }
 }
 
 async fn chain_info_schema(
     db: &BlokliDb,
-    mode: ChainConfirmationMode,
     tracker: Arc<ChainTipTracker>,
 ) -> async_graphql::Schema<QueryRoot, async_graphql::EmptyMutation, async_graphql::EmptySubscription> {
     async_graphql::Schema::build(
@@ -207,7 +211,6 @@ async fn chain_info_schema(
     .data(NetworkName("anvil-localhost".to_string()))
     .data(ExpectedBlockTime(1))
     .data(Finality(3))
-    .data(ConfirmationRule(mode))
     .data(ChainTipTrackerContext(tracker))
     .data(GasMultiplier(1.0))
     .finish()
@@ -762,7 +765,6 @@ async fn test_chain_info_query() -> Result<()> {
     .data(NetworkName("anvil-localhost".to_string()))
     .data(ExpectedBlockTime(1))
     .data(Finality(3))
-    .data(ConfirmationRule(ChainConfirmationMode::Depth))
     .data(GasMultiplier(1.0))
     .finish();
 
@@ -901,8 +903,11 @@ async fn test_chain_info_reports_confirmation_mode_and_fcr_status() -> Result<()
         }
     "#;
 
-    let tracker = tip_tracker(tip_observation(1000, Some(999), Some(980)));
-    let schema = chain_info_schema(&db, ChainConfirmationMode::SafeOrDepth, tracker.clone()).await;
+    let tracker = tip_tracker(
+        tip_observation(1000, Some(999), Some(980)),
+        ChainConfirmationMode::SafeOrDepth,
+    );
+    let schema = chain_info_schema(&db, tracker.clone()).await;
 
     // No tip has been published yet.
     let response = execute_graphql_query(&schema, query).await;
@@ -921,9 +926,12 @@ async fn test_chain_info_reports_confirmation_mode_and_fcr_status() -> Result<()
     assert_eq!(chain_info["confirmationMode"], "SAFE_OR_DEPTH");
     assert_eq!(chain_info["fcrStatus"], "HEALTHY");
 
-    let degraded_tracker = tip_tracker(tip_observation(1000, Some(960), Some(940)));
+    let degraded_tracker = tip_tracker(
+        tip_observation(1000, Some(960), Some(940)),
+        ChainConfirmationMode::Finalized,
+    );
     degraded_tracker.refresh().await?;
-    let degraded = chain_info_schema(&db, ChainConfirmationMode::Finalized, degraded_tracker).await;
+    let degraded = chain_info_schema(&db, degraded_tracker).await;
     let response = execute_graphql_query(&degraded, query).await;
     assert!(response.errors.is_empty(), "GraphQL errors: {:?}", response.errors);
     let data = response.data.into_json()?;
@@ -965,7 +973,6 @@ async fn test_chain_info_through_build_schema_reports_the_configured_confirmatio
         ContractAddresses::default(),
         1,
         3,
-        ChainConfirmationMode::Finalized,
         1.0,
         GasFeePolicy::default(),
         IndexerState::default(),
@@ -1037,7 +1044,6 @@ async fn test_chain_info_query_missing_data_returns_error() -> Result<()> {
     .data(NetworkName("anvil-localhost".to_string()))
     .data(ExpectedBlockTime(1))
     .data(Finality(3))
-    .data(ConfirmationRule(ChainConfirmationMode::Depth))
     .data(GasMultiplier(1.0))
     .finish();
 
@@ -1108,7 +1114,6 @@ async fn test_chain_info_query_with_null_optional_fields() -> Result<()> {
     .data(NetworkName("test-network".to_string()))
     .data(ExpectedBlockTime(5))
     .data(Finality(3))
-    .data(ConfirmationRule(ChainConfirmationMode::Depth))
     .data(GasMultiplier(1.0))
     .finish();
 

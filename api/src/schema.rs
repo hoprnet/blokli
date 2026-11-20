@@ -9,12 +9,7 @@ use blokli_chain_api::{
     transaction_store::TransactionStore,
 };
 use blokli_chain_indexer::IndexerState;
-use blokli_chain_rpc::{
-    HoprRpcOperations,
-    rpc::RpcOperations,
-    tip::{ChainTipTracker, ConfirmationMode as ChainConfirmationMode},
-    transport::HttpRequestor,
-};
+use blokli_chain_rpc::{HoprRpcOperations, rpc::RpcOperations, tip::ChainTipTracker, transport::HttpRequestor};
 use blokli_chain_types::ContractAddresses;
 use futures::Stream;
 use sea_orm::DatabaseConnection;
@@ -36,10 +31,6 @@ pub struct ExpectedBlockTime(pub u64);
 /// Wrapper type for finality (block confirmations) to avoid type confusion in context
 #[derive(Debug, Clone, Copy)]
 pub struct Finality(pub u16);
-
-/// Wrapper type for the configured confirmation rule to avoid type confusion in context
-#[derive(Debug, Clone, Copy)]
-pub struct ConfirmationRule(pub ChainConfirmationMode);
 
 /// Wrapper type for gas multiplier to avoid type confusion in context
 #[derive(Debug, Clone, Copy)]
@@ -84,7 +75,6 @@ pub fn build_version_registry<R: HttpRequestor + 'static + Clone>(
     contract_addresses: ContractAddresses,
     expected_block_time: u64,
     finality: u16,
-    confirmation_mode: ChainConfirmationMode,
     gas_multiplier: f64,
     gas_fee_policy: GasFeePolicy,
     indexer_state: IndexerState,
@@ -104,7 +94,6 @@ pub fn build_version_registry<R: HttpRequestor + 'static + Clone>(
         contract_addresses,
         expected_block_time,
         finality,
-        confirmation_mode,
         gas_multiplier,
         gas_fee_policy,
         indexer_state,
@@ -181,7 +170,7 @@ where
 /// - Contract addresses injected as context data
 /// - Expected block time injected as context data
 /// - Finality (block confirmations) injected as context data
-/// - Confirmation rule and chain tip tracker injected as context data (for chain info)
+/// - Chain tip tracker injected as context data (for chain info confirmation mode and FCR status)
 /// - IndexerState injected as context data (for subscription coordination)
 /// - Transaction executor and store injected as context data (for mutations and transaction queries)
 /// - RPC operations injected as context data (for passthrough balance queries)
@@ -201,7 +190,6 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
     contract_addresses: ContractAddresses,
     expected_block_time: u64,
     finality: u16,
-    confirmation_mode: ChainConfirmationMode,
     gas_multiplier: f64,
     gas_fee_policy: GasFeePolicy,
     indexer_state: IndexerState,
@@ -224,7 +212,6 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
         .data(contract_addresses)
         .data(ExpectedBlockTime(expected_block_time))
         .data(Finality(finality))
-        .data(ConfirmationRule(confirmation_mode))
         .data(GasMultiplier(gas_multiplier))
         .data(gas_fee_policy)
         .data(FeeEstimateCache::new(Duration::from_secs(expected_block_time)))
@@ -267,9 +254,8 @@ pub fn export_schema_sdl<R: HttpRequestor + 'static + Clone>(
         "PLACEHOLDER".to_string(),
         "PLACEHOLDER".to_string(),
         contract_addresses,
-        5, // Placeholder expected block time
-        8, // Placeholder finality
-        ChainConfirmationMode::Depth,
+        5,   // Placeholder expected block time
+        8,   // Placeholder finality
         1.0, // Placeholder gas multiplier
         GasFeePolicy::default(),
         indexer_state,

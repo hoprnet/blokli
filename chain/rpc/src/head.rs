@@ -8,8 +8,7 @@
 
 use std::{
     fmt::{self, Formatter},
-    future::{Future, pending},
-    pin::Pin,
+    future::pending,
     result::Result as StdResult,
     sync::{Arc, Weak},
     time::Duration,
@@ -26,7 +25,10 @@ use hopr_bindings::exports::alloy::{
 };
 #[cfg(all(feature = "telemetry", not(test)))]
 use hopr_types::telemetry::SimpleCounter;
-use tokio::time::{Instant as TokioInstant, MissedTickBehavior, sleep, sleep_until, timeout_at};
+use tokio::{
+    sync::watch,
+    time::{Instant as TokioInstant, MissedTickBehavior, sleep, sleep_until, timeout, timeout_at},
+};
 use tracing::{debug, error, info, warn};
 use url::Url;
 
@@ -385,100 +387,197 @@ fn log_probe_failure(failure: &ProbeFailure, ws_url: &Url, ws_url_derived: bool)
     }
 }
 
-async fn leave_websocket(
-    runtime: &TrackerRuntime,
-    head: &HeadSourceConfig,
-    reason: &str,
-    timeout_secs: Option<u64>,
-    backoff: &mut Duration,
-) -> TokioInstant {
-    if let Some(timeout_secs) = timeout_secs {
-        warn!(timeout_secs, "{reason}");
-    } else {
-        warn!("{reason}");
-    }
-
-    runtime.set_active_source(HeadSource::Polling);
-    if let Some(url) = head.ws_url.as_ref() {
-        info!(source = %HeadSource::Polling, url = %redact_ws_url(url), "chain head source switched");
-    }
-    let _ = runtime.refresh_from(HeadSource::Polling).await;
-
-    let reconnect_at = TokioInstant::now() + *backoff;
-    *backoff = next_reconnect_backoff(*backoff);
-    reconnect_at
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HeadWakeup {
+    source: HeadSource,
+    header_number: u64,
+    seq: u64,
 }
 
-async fn refresh_from_header(runtime: Arc<TrackerRuntime>, poll_interval: Duration, header: HeadHeader) {
-    let needs_follow_up = match runtime.refresh_from(HeadSource::WebSocket).await {
-        Ok(tip) => tip.latest < header.number,
-        Err(error) => {
-            debug!(%error, "background chain tip refresh failed");
-            true
+async fn wait_for_polling(wakeup_rx: &mut watch::Receiver<HeadWakeup>) {
+    loop {
+        if wakeup_rx.borrow().source == HeadSource::Polling {
+            return;
         }
-    };
-
-    if needs_follow_up {
-        sleep(poll_interval).await;
-        if let Err(error) = runtime.refresh_from(HeadSource::WebSocket).await {
-            debug!(%error, "background chain tip refresh retry failed");
+        if wakeup_rx.changed().await.is_err() {
+            pending::<()>().await;
         }
     }
 }
 
-async fn run_websocket_session(
-    runtime: &Arc<TrackerRuntime>,
-    poll_interval: Duration,
-    mut headers: BoxStream<'static, StdResult<HeadHeader, HeadError>>,
-    mut last_header: TokioInstant,
-    probe_timeout: Duration,
-) -> (String, Option<u64>) {
-    let mut refresh: Option<Pin<Box<dyn Future<Output = ()> + Send>>> = None;
-    let mut pending_header: Option<HeadHeader> = None;
+async fn run_ws_wakeup_loop(
+    runtime: Weak<TrackerRuntime>,
+    head: HeadSourceConfig,
+    subscriber: Arc<dyn HeadSubscriber>,
+    wakeup_tx: watch::Sender<HeadWakeup>,
+) {
+    let probe_timeout = head.expected_block_time.saturating_mul(3);
+    let mut backoff = Duration::from_secs(1);
+    let mut ever_connected = false;
+    let mut seq = 0u64;
 
     loop {
-        tokio::select! {
-            _ = async {
-                match refresh.as_mut() {
-                    Some(refresh) => refresh.await,
-                    None => pending::<()>().await,
+        let Some(rt) = runtime.upgrade() else {
+            return;
+        };
+        let tip_source = rt.tip_source();
+        drop(rt);
+
+        match probe_head_source(subscriber.clone(), tip_source, head.chain_id, probe_timeout).await {
+            Ok(ProbeSuccess {
+                mut subscription,
+                first_header,
+            }) => {
+                let Some(rt) = runtime.upgrade() else {
+                    return;
+                };
+                rt.set_active_source(HeadSource::WebSocket);
+                if ever_connected {
+                    rt.record_ws_reconnect();
                 }
-            } => {
-                refresh = None;
-                if let Some(header) = pending_header.take() {
-                    refresh = Some(Box::pin(refresh_from_header(Arc::clone(runtime), poll_interval, header)));
+                ever_connected = true;
+                backoff = Duration::from_secs(1);
+                if let Some(url) = head.ws_url.as_ref() {
+                    info!(source = %HeadSource::WebSocket, url = %redact_ws_url(url), "chain head source switched");
                 }
-            }
-            _ = sleep_until(last_header + probe_timeout) => {
-                return (
-                    "no new head received on the WebSocket, switching to polling".to_string(),
-                    Some(probe_timeout.as_secs()),
-                );
-            }
-            header = headers.next() => {
-                match header {
-                    Some(Ok(header)) => {
-                        // Headers keep being read while a refresh is in flight so a slow refresh
-                        // never looks like a silent socket; only the newest header queued runs next.
-                        last_header = TokioInstant::now();
-                        if refresh.is_none() {
-                            refresh = Some(Box::pin(refresh_from_header(Arc::clone(runtime), poll_interval, header)));
-                        } else {
-                            pending_header = Some(header);
+                drop(rt);
+
+                seq = seq.wrapping_add(1);
+                let _ = wakeup_tx.send(HeadWakeup {
+                    source: HeadSource::WebSocket,
+                    header_number: first_header.number,
+                    seq,
+                });
+
+                loop {
+                    match timeout(probe_timeout, subscription.headers.next()).await {
+                        Ok(Some(Ok(header))) => {
+                            seq = seq.wrapping_add(1);
+                            let _ = wakeup_tx.send(HeadWakeup {
+                                source: HeadSource::WebSocket,
+                                header_number: header.number,
+                                seq,
+                            });
+                        }
+                        Ok(Some(Err(error))) => {
+                            warn!("WebSocket head source failed, switching to polling: {error}");
+                            break;
+                        }
+                        Ok(None) => {
+                            warn!("WebSocket head source closed, switching to polling");
+                            break;
+                        }
+                        Err(_) => {
+                            warn!(
+                                timeout_secs = probe_timeout.as_secs(),
+                                "no new head received on the WebSocket, switching to polling"
+                            );
+                            break;
                         }
                     }
-                    Some(Err(error)) => {
-                        return (
-                            format!("WebSocket head source failed, switching to polling: {error}"),
-                            None,
-                        );
+                }
+
+                let Some(rt) = runtime.upgrade() else {
+                    return;
+                };
+                rt.set_active_source(HeadSource::Polling);
+                if let Some(url) = head.ws_url.as_ref() {
+                    info!(source = %HeadSource::Polling, url = %redact_ws_url(url), "chain head source switched");
+                }
+                drop(rt);
+
+                seq = seq.wrapping_add(1);
+                let _ = wakeup_tx.send(HeadWakeup {
+                    source: HeadSource::Polling,
+                    header_number: 0,
+                    seq,
+                });
+            }
+            Err(failure) => {
+                if let Some(url) = head.ws_url.as_ref() {
+                    log_probe_failure(&failure, url, head.ws_url_derived);
+                }
+                if matches!(
+                    failure,
+                    ProbeFailure::Unsupported { .. }
+                        | ProbeFailure::ChainIdMismatch { .. }
+                        | ProbeFailure::BlockHashMismatch { .. }
+                ) {
+                    return;
+                }
+            }
+        }
+
+        // A connection failure or socket drop retries with exponential backoff.
+        sleep(backoff).await;
+        backoff = next_reconnect_backoff(backoff);
+    }
+}
+
+async fn run_refresh_loop(
+    runtime: Weak<TrackerRuntime>,
+    poll_interval: Duration,
+    mut wakeup_rx: watch::Receiver<HeadWakeup>,
+) {
+    let mut interval = tokio::time::interval(poll_interval);
+    interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut retry_at: Option<TokioInstant> = None;
+
+    loop {
+        let Some(rt) = runtime.upgrade() else {
+            break;
+        };
+        let is_ws = wakeup_rx.borrow().source == HeadSource::WebSocket;
+
+        tokio::select! {
+            biased;
+            Ok(()) = wakeup_rx.changed() => {
+                let wakeup = *wakeup_rx.borrow_and_update();
+                retry_at = None;
+                match wakeup.source {
+                    HeadSource::Polling => {
+                        let _ = rt.refresh_from(HeadSource::Polling).await;
+                        interval.reset();
                     }
-                    None => {
-                        return (
-                            "WebSocket head source closed, switching to polling".to_string(),
-                            None,
-                        );
+                    HeadSource::WebSocket => {
+                        let mut fallback_rx = wakeup_rx.clone();
+                        let outcome = tokio::select! {
+                            res = rt.refresh_from(HeadSource::WebSocket) => Some(res),
+                            _ = wait_for_polling(&mut fallback_rx) => None,
+                        };
+                        match outcome {
+                            Some(Ok(tip)) if tip.latest < wakeup.header_number => {
+                                retry_at = Some(TokioInstant::now() + poll_interval);
+                            }
+                            Some(Err(error)) => {
+                                debug!(%error, "background chain tip refresh failed");
+                                retry_at = Some(TokioInstant::now() + poll_interval);
+                            }
+                            Some(Ok(_)) | None => {}
+                        }
                     }
+                }
+            }
+            _ = async {
+                match retry_at {
+                    Some(deadline) => sleep_until(deadline).await,
+                    None => pending::<()>().await,
+                }
+            }, if is_ws && retry_at.is_some() => {
+                retry_at = None;
+                let mut fallback_rx = wakeup_rx.clone();
+                tokio::select! {
+                    res = rt.refresh_from(HeadSource::WebSocket) => {
+                        if let Err(error) = res {
+                            debug!(%error, "background chain tip refresh retry failed");
+                        }
+                    }
+                    _ = wait_for_polling(&mut fallback_rx) => {}
+                }
+            }
+            _ = interval.tick(), if !is_ws => {
+                if let Err(error) = rt.refresh_from(HeadSource::Polling).await {
+                    debug!(%error, "background chain tip refresh failed");
                 }
             }
         }
@@ -490,20 +589,6 @@ pub(crate) async fn run_head_driver(
     head: HeadSourceConfig,
     subscriber: Option<Arc<dyn HeadSubscriber>>,
 ) {
-    enum State {
-        Polling {
-            reconnect_at: Option<TokioInstant>,
-        },
-        Probing {
-            future: Pin<Box<dyn Future<Output = StdResult<ProbeSuccess, ProbeFailure>> + Send>>,
-        },
-        WebSocket {
-            headers: BoxStream<'static, StdResult<HeadHeader, HeadError>>,
-            last_header: TokioInstant,
-        },
-    }
-
-    let probe_timeout = head.expected_block_time.saturating_mul(3);
     let ws_url_display = head.ws_url.as_ref().map(redact_ws_url);
     info!(
         source = %HeadSource::Polling,
@@ -515,128 +600,24 @@ pub(crate) async fn run_head_driver(
         return;
     };
     initial_runtime.set_active_source(HeadSource::Polling);
-
-    let mut state = match (subscriber.as_ref(), head.ws_url.as_ref()) {
-        (Some(subscriber), Some(_)) => State::Probing {
-            future: Box::pin(probe_head_source(
-                subscriber.clone(),
-                initial_runtime.tip_source(),
-                head.chain_id,
-                probe_timeout,
-            )),
-        },
-        _ => State::Polling { reconnect_at: None },
-    };
     drop(initial_runtime);
 
-    let mut interval = tokio::time::interval(head.poll_interval);
-    interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    let mut backoff = Duration::from_secs(1);
-    let mut ever_connected = false;
+    let (wakeup_tx, wakeup_rx) = watch::channel(HeadWakeup {
+        source: HeadSource::Polling,
+        header_number: 0,
+        seq: 0,
+    });
+    let poll_interval = head.poll_interval;
 
-    loop {
-        let Some(runtime) = runtime.upgrade() else {
-            break;
-        };
-
-        match state {
-            State::Polling { reconnect_at } => {
-                let reconnect = async {
-                    match reconnect_at {
-                        Some(deadline) => sleep_until(deadline).await,
-                        None => pending::<()>().await,
-                    }
-                };
-
-                tokio::select! {
-                    _ = interval.tick() => {
-                        if let Err(error) = runtime.refresh_from(HeadSource::Polling).await {
-                            debug!(%error, "background chain tip refresh failed");
-                        }
-                    }
-                    _ = reconnect => {
-                        if let (Some(subscriber), Some(_)) = (subscriber.as_ref(), head.ws_url.as_ref()) {
-                            state = State::Probing {
-                                future: Box::pin(probe_head_source(
-                                    subscriber.clone(),
-                                    runtime.tip_source(),
-                                    head.chain_id,
-                                    probe_timeout,
-                                )),
-                            };
-                        } else {
-                            state = State::Polling { reconnect_at: None };
-                        }
-                    }
-                }
+    tokio::select! {
+        _ = run_refresh_loop(runtime.clone(), poll_interval, wakeup_rx) => {}
+        _ = async {
+            if let (Some(subscriber), Some(_)) = (subscriber, head.ws_url.as_ref()) {
+                run_ws_wakeup_loop(runtime, head, subscriber, wakeup_tx).await;
             }
-            State::Probing { mut future } => {
-                tokio::select! {
-                    _ = interval.tick() => {
-                        if let Err(error) = runtime.refresh_from(HeadSource::Polling).await {
-                            debug!(%error, "background chain tip refresh failed");
-                        }
-                        state = State::Probing { future };
-                    }
-                    outcome = &mut future => {
-                        match outcome {
-                            Ok(ProbeSuccess {
-                                subscription,
-                                first_header,
-                            }) => {
-                                let first_header_received = TokioInstant::now();
-                                runtime.set_active_source(HeadSource::WebSocket);
-                                refresh_from_header(Arc::clone(&runtime), head.poll_interval, first_header).await;
-                                if ever_connected {
-                                    runtime.record_ws_reconnect();
-                                }
-                                ever_connected = true;
-                                backoff = Duration::from_secs(1);
-                                if let Some(url) = head.ws_url.as_ref() {
-                                    info!(source = %HeadSource::WebSocket, url = %redact_ws_url(url), "chain head source switched");
-                                }
-                                state = State::WebSocket {
-                                    headers: subscription.headers,
-                                    last_header: first_header_received,
-                                };
-                            }
-                            Err(failure) => {
-                                let is_unsupported = matches!(failure, ProbeFailure::Unsupported { .. });
-                                let is_mismatch = matches!(
-                                    failure,
-                                    ProbeFailure::ChainIdMismatch { .. } | ProbeFailure::BlockHashMismatch { .. }
-                                );
-                                if let Some(url) = head.ws_url.as_ref() {
-                                    log_probe_failure(&failure, url, head.ws_url_derived);
-                                }
-
-                                if is_mismatch || is_unsupported {
-                                    state = State::Polling { reconnect_at: None };
-                                } else {
-                                    // A connection failure is retried with backoff, including when the
-                                    // endpoint has never accepted a subscription. The HTTP side may be
-                                    // behind the WebSocket side, so the probe can fail before the first
-                                    // header's block is available over HTTP.
-                                    let reconnect_at = TokioInstant::now() + backoff;
-                                    backoff = next_reconnect_backoff(backoff);
-                                    state = State::Polling {
-                                        reconnect_at: Some(reconnect_at),
-                                    };
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            State::WebSocket { headers, last_header } => {
-                let (reason, timeout_secs) =
-                    run_websocket_session(&runtime, head.poll_interval, headers, last_header, probe_timeout).await;
-                let reconnect_at = leave_websocket(&runtime, &head, &reason, timeout_secs, &mut backoff).await;
-                state = State::Polling {
-                    reconnect_at: Some(reconnect_at),
-                };
-            }
-        }
+            // Keep the refresh loop polling until the tracker is dropped.
+            pending::<()>().await;
+        } => {}
     }
 }
 
@@ -688,7 +669,9 @@ mod tests {
             latest,
             latest_timestamp: Some(1_700_000_000 + latest),
             safe,
+            safe_timestamp: safe.map(|block| 1_700_000_000 + block),
             finalized,
+            finalized_timestamp: finalized.map(|block| 1_700_000_000 + block),
         }
     }
 

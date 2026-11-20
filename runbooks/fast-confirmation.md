@@ -92,17 +92,11 @@ reorged out or a canonical log was missed.
 6. Use the supported recovery: there is no in-place repair of indexed data. Reverting one log does not undo the state derived from it
    (channels, accounts, Safes). Restore the database from a backup taken before the affected range, or start from an empty index database
    against a trusted endpoint. Use only a trusted logs snapshot from before the affected range. See
-   [Blokli State Corrupted](blokli-state-corrupted.md). An empty index database resets the stored verification position. Restart the daemon
-   after the recovery.
+   [Blokli State Corrupted](blokli-state-corrupted.md). Restart the daemon after the recovery.
 
 Setting `verify_finalized = false` is the last resort. It disables the post-finality comparison, so false confirmations are no longer
 detected by that comparison. It does not bypass a recorded halt. Even when `verify_finalized` is true, verification stays idle when the
 endpoint reports no finalized block. Use it only with `depth` or `finalized` mode, or together with external verification.
-
-One halt stays active with `verify_finalized = false`. When a replayed block puts a different log at the position of a Safe registration
-that the index already applied, the indexer does not write the block, sets the same `verification_failed` status and stops. This guard
-protects the derived Safe state and has no switch. The recovery is the same as in step 6: rebuild the index, because the applied
-registration no longer matches the chain.
 
 ### Which logs are checked
 
