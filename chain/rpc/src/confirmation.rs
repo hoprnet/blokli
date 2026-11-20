@@ -14,7 +14,7 @@ use tokio::{
 };
 use tracing::debug;
 
-use crate::tip::ChainTip;
+use crate::tip::{ChainTip, ChainTipTracker};
 
 /// How long a sync-mode transaction waits before it is reported as confirmed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -66,6 +66,20 @@ pub trait ReceiptLookup {
     async fn receipt(&self) -> Result<Option<ConfirmedReceipt>, String>;
 }
 
+/// Reads a fresh chain tip observation for the confirmation wait.
+#[async_trait]
+pub trait TipRefresh {
+    /// Reads the chain tip from the endpoint, bypassing any cached or published observation.
+    async fn refresh(&self) -> Result<ChainTip, String>;
+}
+
+#[async_trait]
+impl TipRefresh for ChainTipTracker {
+    async fn refresh(&self) -> Result<ChainTip, String> {
+        ChainTipTracker::refresh(self).await.map_err(|error| error.to_string())
+    }
+}
+
 /// [`ReceiptLookup`] backed by an alloy provider.
 pub struct ProviderReceiptLookup<P: Provider> {
     provider: Arc<P>,
@@ -110,14 +124,17 @@ impl<P: Provider + Send + Sync> ReceiptLookup for ProviderReceiptLookup<P> {
 /// block, and the receipt is read again to detect a reorg. The receipt is also re-read on every
 /// poll interval while the tip is awaited, so a transaction that a reorg moved to another block,
 /// including one that is already confirmed, resumes the wait with the new inclusion block. A
-/// receipt lookup error is retried the same way instead of ending the wait. The caller bounds the
-/// whole wait with the confirmation timeout.
+/// receipt lookup error is retried the same way instead of ending the wait. Before the wait may
+/// return, the tracker is asked for a fresh observation, so a height cached before a reorganization
+/// cannot confirm a replacement block. A failed refresh is retried like a failed receipt lookup. The
+/// caller bounds the whole wait with the confirmation timeout.
 ///
 /// A tracker whose publisher is gone ends the wait with [`TipWaitError::TrackerStopped`], because
 /// the tip can no longer advance.
-pub async fn wait_for_confirmed_tip<L: ReceiptLookup>(
+pub async fn wait_for_confirmed_tip<L: ReceiptLookup, R: TipRefresh>(
     tips: &mut watch::Receiver<Option<ChainTip>>,
     lookup: &L,
+    refresh: &R,
     receipt_poll_interval: Duration,
 ) -> Result<ConfirmedReceipt, TipWaitError> {
     let mut receipt = wait_for_receipt(lookup, receipt_poll_interval).await?;
@@ -126,18 +143,40 @@ pub async fn wait_for_confirmed_tip<L: ReceiptLookup>(
         if confirmation_height(tips).is_some_and(|height| height >= receipt.block_number) {
             match lookup.receipt().await {
                 Ok(Some(current)) if is_same_block(&current, &receipt) => {
-                    if confirmation_height(tips).is_some_and(|height| height >= current.block_number) {
-                        debug!(
-                            block_number = current.block_number,
-                            "chain tip confirmed the transaction block"
-                        );
-                        return Ok(current);
-                    }
+                    // The receipt was read first, so the fresh observation is newer than the
+                    // inclusion it confirms.
+                    match refresh.refresh().await {
+                        Ok(tip) => {
+                            // A tracker publishes the fresh observation on the same channel this
+                            // wait listens to, so mark it seen instead of treating it as the next
+                            // change to wake up for.
+                            tips.borrow_and_update();
 
-                    debug!(
-                        block_number = receipt.block_number,
-                        "confirmation height dropped while reading the receipt, waiting for it to recover"
-                    );
+                            if tip
+                                .confirmation_height
+                                .is_some_and(|height| height >= current.block_number)
+                            {
+                                debug!(
+                                    block_number = current.block_number,
+                                    "chain tip confirmed the transaction block"
+                                );
+                                return Ok(current);
+                            }
+
+                            debug!(
+                                block_number = current.block_number,
+                                latest = tip.latest,
+                                "fresh chain tip observation does not confirm the transaction block yet"
+                            );
+                        }
+                        Err(error) => {
+                            debug!(
+                                %error,
+                                block_number = current.block_number,
+                                "chain tip refresh failed while confirming the transaction, retrying"
+                            );
+                        }
+                    }
                 }
                 Ok(Some(current)) => {
                     debug!(
@@ -227,7 +266,9 @@ mod tests {
         time::{Instant, sleep, timeout},
     };
 
-    use super::{ConfirmationTarget, ConfirmedReceipt, ReceiptLookup, TipWaitError, wait_for_confirmed_tip};
+    use super::{
+        ConfirmationTarget, ConfirmedReceipt, ReceiptLookup, TipRefresh, TipWaitError, wait_for_confirmed_tip,
+    };
     use crate::tip::{ChainTip, FcrState, HeadSource};
 
     const RECEIPT_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -258,6 +299,10 @@ mod tests {
 
     fn tip(confirmed: u64) -> Option<ChainTip> {
         tip_with_confirmation_height(confirmed, Some(confirmed))
+    }
+
+    fn observed_tip(latest: u64, confirmed: u64, confirmation_height: Option<u64>) -> ChainTip {
+        tip_at(latest, confirmed, confirmation_height).expect("tip should be present")
     }
 
     fn receipt(block_number: u64, hash_byte: u8) -> ConfirmedReceipt {
@@ -307,6 +352,69 @@ mod tests {
 
             if let Ok(Some(receipt)) = current {
                 *self.last.lock().expect("last receipt lock should not be poisoned") = Some(receipt);
+            }
+
+            current
+        }
+    }
+
+    struct PublishedTipRefresh {
+        tips: watch::Receiver<Option<ChainTip>>,
+    }
+
+    impl PublishedTipRefresh {
+        fn new(tips: watch::Receiver<Option<ChainTip>>) -> Self {
+            Self { tips }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl TipRefresh for PublishedTipRefresh {
+        async fn refresh(&self) -> Result<ChainTip, String> {
+            (*self.tips.borrow()).ok_or_else(|| "no chain tip observation".to_string())
+        }
+    }
+
+    struct ScriptedRefresh {
+        tips: Mutex<VecDeque<Result<ChainTip, String>>>,
+        last: Mutex<Option<ChainTip>>,
+    }
+
+    impl ScriptedRefresh {
+        fn new(tips: Vec<Result<ChainTip, String>>) -> Self {
+            Self {
+                tips: Mutex::new(tips.into()),
+                last: Mutex::new(None),
+            }
+        }
+
+        fn remaining(&self) -> usize {
+            self.tips.lock().expect("refresh lock should not be poisoned").len()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl TipRefresh for ScriptedRefresh {
+        async fn refresh(&self) -> Result<ChainTip, String> {
+            let scripted = self
+                .tips
+                .lock()
+                .expect("refresh lock should not be poisoned")
+                .pop_front();
+
+            let current = match scripted {
+                Some(scripted) => scripted,
+                None => {
+                    return self
+                        .last
+                        .lock()
+                        .expect("last refresh lock should not be poisoned")
+                        .ok_or_else(|| "no chain tip observation left".to_string());
+                }
+            };
+
+            if let Ok(tip) = &current {
+                *self.last.lock().expect("last refresh lock should not be poisoned") = Some(*tip);
             }
 
             current
@@ -383,11 +491,12 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_wait_returns_when_tip_already_confirmed_the_receipt() {
         let (_tips_tx, mut tips_rx) = watch::channel(tip(100));
+        let refresh = PublishedTipRefresh::new(tips_rx.clone());
         let lookup = ScriptedLookup::new(vec![Ok(Some(receipt(100, 1))), Ok(Some(receipt(100, 1)))]);
 
         let confirmed = timeout(
             Duration::from_secs(5),
-            wait_for_confirmed_tip(&mut tips_rx, &lookup, RECEIPT_POLL_INTERVAL),
+            wait_for_confirmed_tip(&mut tips_rx, &lookup, &refresh, RECEIPT_POLL_INTERVAL),
         )
         .await
         .expect("an already confirmed receipt should not wait")
@@ -400,6 +509,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_wait_uses_the_current_confirmation_height() {
         let (tips_tx, mut tips_rx) = watch::channel(tip_with_confirmation_height(100, Some(98)));
+        let refresh = PublishedTipRefresh::new(tips_rx.clone());
         let lookup = ScriptedLookup::new(vec![Ok(Some(receipt(99, 1))), Ok(Some(receipt(99, 1)))]);
 
         let publisher = tokio::spawn(async move {
@@ -410,7 +520,7 @@ mod tests {
         let started = Instant::now();
         let confirmed = timeout(
             Duration::from_secs(10),
-            wait_for_confirmed_tip(&mut tips_rx, &lookup, RECEIPT_POLL_INTERVAL),
+            wait_for_confirmed_tip(&mut tips_rx, &lookup, &refresh, RECEIPT_POLL_INTERVAL),
         )
         .await
         .expect("the confirmation height update should end the wait")
@@ -428,6 +538,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_wait_loops_when_the_confirmation_height_drops_after_the_receipt_matched() {
         let (tips_tx, mut tips_rx) = watch::channel(tip_with_confirmation_height(100, Some(99)));
+        let refresh = PublishedTipRefresh::new(tips_rx.clone());
         let lookup = RegressionOnSecondReadLookup::new(receipt(99, 1), tips_tx.clone());
 
         let publisher = tokio::spawn(async move {
@@ -438,7 +549,7 @@ mod tests {
         let started = Instant::now();
         let confirmed = timeout(
             Duration::from_secs(10),
-            wait_for_confirmed_tip(&mut tips_rx, &lookup, RECEIPT_POLL_INTERVAL),
+            wait_for_confirmed_tip(&mut tips_rx, &lookup, &refresh, RECEIPT_POLL_INTERVAL),
         )
         .await
         .expect("the recovered confirmation height should end the wait")
@@ -455,6 +566,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_wait_holds_while_the_confirmation_height_is_unknown() {
         let (tips_tx, mut tips_rx) = watch::channel(tip_with_confirmation_height(100, None));
+        let refresh = PublishedTipRefresh::new(tips_rx.clone());
         let lookup = ScriptedLookup::new(vec![Ok(Some(receipt(99, 1))), Ok(Some(receipt(99, 1)))]);
 
         let publisher = tokio::spawn(async move {
@@ -465,7 +577,7 @@ mod tests {
         let started = Instant::now();
         let confirmed = timeout(
             Duration::from_secs(10),
-            wait_for_confirmed_tip(&mut tips_rx, &lookup, RECEIPT_POLL_INTERVAL),
+            wait_for_confirmed_tip(&mut tips_rx, &lookup, &refresh, RECEIPT_POLL_INTERVAL),
         )
         .await
         .expect("the known confirmation height should end the wait")
@@ -483,6 +595,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_wait_returns_after_a_tip_update_confirms_the_receipt() {
         let (tips_tx, mut tips_rx) = watch::channel(tip(99));
+        let refresh = PublishedTipRefresh::new(tips_rx.clone());
         let lookup = ScriptedLookup::new(vec![Ok(Some(receipt(100, 1))), Ok(Some(receipt(100, 1)))]);
 
         let publisher = tokio::spawn(async move {
@@ -492,7 +605,7 @@ mod tests {
 
         let confirmed = timeout(
             Duration::from_secs(10),
-            wait_for_confirmed_tip(&mut tips_rx, &lookup, RECEIPT_POLL_INTERVAL),
+            wait_for_confirmed_tip(&mut tips_rx, &lookup, &refresh, RECEIPT_POLL_INTERVAL),
         )
         .await
         .expect("the tip update should end the wait")
@@ -510,6 +623,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_wait_follows_a_receipt_that_moved_to_another_block() {
         let (tips_tx, mut tips_rx) = watch::channel(tip(100));
+        let refresh = PublishedTipRefresh::new(tips_rx.clone());
         let lookup = ScriptedLookup::new(vec![
             Ok(Some(receipt(100, 1))),
             Ok(Some(receipt(101, 2))),
@@ -524,7 +638,7 @@ mod tests {
 
         let confirmed = timeout(
             Duration::from_secs(10),
-            wait_for_confirmed_tip(&mut tips_rx, &lookup, RECEIPT_POLL_INTERVAL),
+            wait_for_confirmed_tip(&mut tips_rx, &lookup, &refresh, RECEIPT_POLL_INTERVAL),
         )
         .await
         .expect("the second block should be awaited")
@@ -539,6 +653,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_wait_restarts_when_the_receipt_disappears_and_comes_back() {
         let (_tips_tx, mut tips_rx) = watch::channel(tip(100));
+        let refresh = PublishedTipRefresh::new(tips_rx.clone());
         let lookup = ScriptedLookup::new(vec![
             Ok(Some(receipt(100, 1))),
             Ok(None),
@@ -548,7 +663,7 @@ mod tests {
 
         let confirmed = timeout(
             Duration::from_secs(10),
-            wait_for_confirmed_tip(&mut tips_rx, &lookup, RECEIPT_POLL_INTERVAL),
+            wait_for_confirmed_tip(&mut tips_rx, &lookup, &refresh, RECEIPT_POLL_INTERVAL),
         )
         .await
         .expect("the republished receipt should end the wait")
@@ -561,11 +676,12 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_wait_times_out_while_the_tip_does_not_advance() {
         let (_tips_tx, mut tips_rx) = watch::channel(tip(99));
+        let refresh = PublishedTipRefresh::new(tips_rx.clone());
         let lookup = ScriptedLookup::new(vec![Ok(Some(receipt(100, 1)))]);
 
         let result = timeout(
             Duration::from_secs(3),
-            wait_for_confirmed_tip(&mut tips_rx, &lookup, RECEIPT_POLL_INTERVAL),
+            wait_for_confirmed_tip(&mut tips_rx, &lookup, &refresh, RECEIPT_POLL_INTERVAL),
         )
         .await;
 
@@ -575,10 +691,11 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_wait_ends_when_the_tip_publisher_is_gone() {
         let (tips_tx, mut tips_rx) = watch::channel(tip(99));
+        let refresh = PublishedTipRefresh::new(tips_rx.clone());
         drop(tips_tx);
         let lookup = ScriptedLookup::new(vec![Ok(Some(receipt(100, 1)))]);
 
-        let error = wait_for_confirmed_tip(&mut tips_rx, &lookup, RECEIPT_POLL_INTERVAL)
+        let error = wait_for_confirmed_tip(&mut tips_rx, &lookup, &refresh, RECEIPT_POLL_INTERVAL)
             .await
             .expect_err("a stopped tracker cannot confirm the receipt");
 
@@ -591,6 +708,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_wait_retries_a_receipt_lookup_error() {
         let (_tips_tx, mut tips_rx) = watch::channel(tip(100));
+        let refresh = PublishedTipRefresh::new(tips_rx.clone());
         let lookup = ScriptedLookup::new(vec![
             Err("receipt lookup timed out".to_string()),
             Ok(Some(receipt(100, 1))),
@@ -599,7 +717,7 @@ mod tests {
 
         let confirmed = timeout(
             Duration::from_secs(5),
-            wait_for_confirmed_tip(&mut tips_rx, &lookup, RECEIPT_POLL_INTERVAL),
+            wait_for_confirmed_tip(&mut tips_rx, &lookup, &refresh, RECEIPT_POLL_INTERVAL),
         )
         .await
         .expect("a transient receipt lookup error must not end the wait")
@@ -612,6 +730,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_wait_follows_a_receipt_that_moved_to_an_already_confirmed_block() {
         let (_tips_tx, mut tips_rx) = watch::channel(tip(99));
+        let refresh = PublishedTipRefresh::new(tips_rx.clone());
         let lookup = ScriptedLookup::new(vec![
             Ok(Some(receipt(100, 1))),
             Ok(Some(receipt(99, 2))),
@@ -620,7 +739,7 @@ mod tests {
 
         let confirmed = timeout(
             Duration::from_secs(5),
-            wait_for_confirmed_tip(&mut tips_rx, &lookup, RECEIPT_POLL_INTERVAL),
+            wait_for_confirmed_tip(&mut tips_rx, &lookup, &refresh, RECEIPT_POLL_INTERVAL),
         )
         .await
         .expect("the wait must re-read the receipt below the old inclusion height")
@@ -634,6 +753,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_wait_restarts_when_a_reorg_lowers_the_confirmation_height() {
         let (tips_tx, mut tips_rx) = watch::channel(tip_at(102, 100, Some(100)));
+        let refresh = PublishedTipRefresh::new(tips_rx.clone());
         let lookup = ReorgOnSecondReadLookup::new(
             tips_tx.clone(),
             receipt(100, 1),
@@ -656,7 +776,7 @@ mod tests {
         let started = Instant::now();
         let confirmed = timeout(
             Duration::from_secs(10),
-            wait_for_confirmed_tip(&mut tips_rx, &lookup, RECEIPT_POLL_INTERVAL),
+            wait_for_confirmed_tip(&mut tips_rx, &lookup, &refresh, RECEIPT_POLL_INTERVAL),
         )
         .await
         .expect("the recovered confirmation height should end the wait")
@@ -668,5 +788,70 @@ mod tests {
             "a reorg that lowers the confirmation height below the receipt block must restart the wait"
         );
         publisher.await.expect("the publisher should finish");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_wait_does_not_confirm_a_replacement_block_from_a_tip_before_the_reorg() {
+        // The published tip predates a reorg: it still reports head 103 and a depth-based height of
+        // 100. The transaction is included in block 100 of the new branch, which is only one block
+        // deep after the rollback to head 101.
+        let (_tips_tx, mut tips_rx) = watch::channel(tip_at(103, 100, Some(100)));
+        let lookup = ScriptedLookup::new(vec![
+            Ok(Some(receipt(100, 2))),
+            Ok(Some(receipt(100, 2))),
+            Ok(Some(receipt(100, 2))),
+        ]);
+        let refresh = ScriptedRefresh::new(vec![
+            Ok(observed_tip(101, 100, Some(98))),
+            Ok(observed_tip(101, 100, Some(98))),
+            Ok(observed_tip(103, 100, Some(100))),
+        ]);
+
+        let started = Instant::now();
+        let confirmed = timeout(
+            Duration::from_secs(5),
+            wait_for_confirmed_tip(&mut tips_rx, &lookup, &refresh, RECEIPT_POLL_INTERVAL),
+        )
+        .await
+        .expect("the advanced head should end the wait")
+        .expect("the wait should succeed");
+
+        assert_eq!(confirmed.block_number, 100);
+        assert_eq!(confirmed.block_hash, B256::from([2u8; 32]));
+        assert!(
+            started.elapsed() >= 2 * RECEIPT_POLL_INTERVAL,
+            "a tip from before the reorg must not confirm the replacement block"
+        );
+        assert_eq!(
+            refresh.remaining(),
+            0,
+            "the wait must ask for a fresh observation until one confirms the receipt"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_wait_retries_a_failed_tip_refresh() {
+        let (_tips_tx, mut tips_rx) = watch::channel(tip(100));
+        let lookup = ScriptedLookup::new(vec![Ok(Some(receipt(100, 1))), Ok(Some(receipt(100, 1)))]);
+        let refresh = ScriptedRefresh::new(vec![
+            Err("chain tip observation timed out".to_string()),
+            Ok(observed_tip(100, 100, Some(100))),
+        ]);
+
+        let started = Instant::now();
+        let confirmed = timeout(
+            Duration::from_secs(5),
+            wait_for_confirmed_tip(&mut tips_rx, &lookup, &refresh, RECEIPT_POLL_INTERVAL),
+        )
+        .await
+        .expect("the retried observation should end the wait")
+        .expect("the wait should succeed");
+
+        assert_eq!(confirmed.block_number, 100);
+        assert!(
+            started.elapsed() >= RECEIPT_POLL_INTERVAL,
+            "a failed tip refresh must not confirm the receipt"
+        );
+        assert_eq!(refresh.remaining(), 0);
     }
 }

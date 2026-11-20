@@ -220,7 +220,12 @@ impl<R: HttpRequestor + 'static + Clone> RpcClient for RpcAdapter<R> {
                         let mut tips = tracker.subscribe();
 
                         let lookup = ProviderReceiptLookup::new(self.rpc.provider.clone(), tx_hash);
-                        let receipt_future = wait_for_confirmed_tip(&mut tips, &lookup, self.rpc.tx_polling_interval());
+                        let receipt_future = wait_for_confirmed_tip(
+                            &mut tips,
+                            &lookup,
+                            tracker.as_ref(),
+                            self.rpc.tx_polling_interval(),
+                        );
 
                         match tokio::time::timeout_at(deadline, receipt_future).await {
                             Ok(Ok(receipt)) => Ok(receipt.success),

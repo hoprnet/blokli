@@ -27,13 +27,14 @@ Blokli supports four modes:
 gap at or above which FCR counts as degraded.
 
 The mode also applies to `sendTransactionSync` calls that omit `confirmations`: the call returns when the tracker's current confirmation
-height reaches the block that included the transaction and the re-read receipt still has the same block number and block hash. The wait uses
-the current height, not the monotonic confirmed block. The receipt is re-read at the poll interval, and a transaction moved by a reorg is
-followed to its new block. Receipt lookup errors are retried. The wait restarts only when the height falls below the receipt block or
-becomes unknown; a drop that stays at or above the receipt block does not restart it. The whole wait is limited to 60 seconds. On timeout
-the transaction is still submitted and the error names the accepted transaction hash. In `finalized` mode or with a stalled `safe` block,
-the call times out only if the height does not reach the receipt block within the limit. Clients that need a result in these modes must pass
-an explicit `confirmations` value.
+height reaches the block that included the transaction, a fresh tip observation still reports that height, and the re-read receipt still has
+the same block number and block hash. The fresh observation is read from the endpoint before the call may return, so a height cached before
+a reorganization cannot confirm a replacement block. The wait uses the current height, not the monotonic confirmed block. The receipt is
+re-read at the poll interval, and a transaction moved by a reorg is followed to its new block. Receipt lookup and tip observation errors are
+retried. The wait restarts only when the height falls below the receipt block or becomes unknown; a drop that stays at or above the receipt
+block does not restart it. The whole wait is limited to 60 seconds. On timeout the transaction is still submitted and the error names the
+accepted transaction hash. In `finalized` mode or with a stalled `safe` block, the call times out only if the height does not reach the
+receipt block within the limit. Clients that need a result in these modes must pass an explicit `confirmations` value.
 
 ## Switch the Mode
 

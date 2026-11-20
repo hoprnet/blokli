@@ -1345,9 +1345,14 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
         let mut tips = self.tip_tracker.subscribe();
         let lookup = ProviderReceiptLookup::new(self.provider.clone(), tx_hash);
 
-        let receipt = wait_for_confirmed_tip(&mut tips, &lookup, self.cfg.tx_polling_interval)
-            .await
-            .map_err(|error| RpcError::Other(format!("Confirmation error: {error}")))?;
+        let receipt = wait_for_confirmed_tip(
+            &mut tips,
+            &lookup,
+            self.tip_tracker.as_ref(),
+            self.cfg.tx_polling_interval,
+        )
+        .await
+        .map_err(|error| RpcError::Other(format!("Confirmation error: {error}")))?;
 
         let hopr_tx_hash = Hash::from(tx_hash.0);
 

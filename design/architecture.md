@@ -1605,8 +1605,8 @@ and counts the event, and post-finality verification decides whether anything al
 value is not clamped. It drops when the safe or finalized tag regresses, and it is unknown when the mode needs a tag that the endpoint does
 not report. Sync transaction waits read this value instead of the watermark, so a replacement block on a shorter fork is not treated as
 confirmed only because the watermark is higher. The wait restarts only when the height falls below the receipt block or becomes unknown; a
-drop that stays at or above the receipt block does not restart it. After the receipt re-read the wait checks the latest published height
-again under the same rule.
+drop that stays at or above the receipt block does not restart it. Before the wait returns, it reads a fresh tip observation and checks that
+height under the same rule, so a height cached before a reorganization cannot confirm a replacement block.
 
 **Consumers.** The indexer waits for the next published confirmed tip instead of sleeping for a fixed block time, then fetches logs up to
 that block. Readiness and the GraphQL server read the same cached confirmed block, so lag is measured against confirmed blocks without an
