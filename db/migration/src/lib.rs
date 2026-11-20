@@ -15,8 +15,7 @@ mod m011_account_state_safe_address_index;
 mod m012_safe_module_address_index;
 mod m013_account_unique_chain_key;
 mod m014_safe_owner_snapshot;
-mod m015_last_verified_block;
-mod m016_verification_halt;
+mod m015_post_finality_verification;
 
 /// This is a special block ID that even pre-dates the v3 contract deployment on Gnosis chain,
 /// and therefore could be safely used to mark data added via the migration.
@@ -53,8 +52,7 @@ impl MigratorTrait for Migrator {
             Box::new(m012_safe_module_address_index::Migration),
             Box::new(m013_account_unique_chain_key::Migration),
             Box::new(m014_safe_owner_snapshot::Migration),
-            Box::new(m015_last_verified_block::Migration),
-            Box::new(m016_verification_halt::Migration),
+            Box::new(m015_post_finality_verification::Migration),
         ]
     }
 }
@@ -82,8 +80,7 @@ impl MigratorTrait for MigratorIndex {
             Box::new(m012_safe_module_address_index::Migration),
             Box::new(m013_account_unique_chain_key::Migration),
             Box::new(m014_safe_owner_snapshot::Migration),
-            Box::new(m015_last_verified_block::Migration),
-            Box::new(m016_verification_halt::Migration),
+            Box::new(m015_post_finality_verification::Migration),
         ]
     }
 }
@@ -165,60 +162,45 @@ mod tests {
         assert!(result.is_ok(), "Migrations should run without errors");
     }
 
-    /// The verification position is optional, so a fresh index and a cleared index start unset.
+    /// Verification position and halt marker are optional, so a fresh or cleared index starts unset.
     #[tokio::test]
-    async fn test_last_verified_block_column_is_added_nullable() {
+    async fn test_post_finality_verification_migration_up_and_down() {
+        for (db, use_index_only) in [(setup_test_db().await, false), (setup_test_db().await, true)] {
+            if use_index_only {
+                MigratorIndex::up(&db, None).await.unwrap();
+            } else {
+                Migrator::up(&db, None).await.unwrap();
+            }
+            for col in ["last_verified_block", "verification_failed_at"] {
+                let row = db
+                    .query_one_raw(Statement::from_string(
+                        DbBackend::Sqlite,
+                        format!(
+                            "SELECT type, \"notnull\" AS is_not_null FROM pragma_table_info('chain_info') WHERE name \
+                             = '{col}'"
+                        ),
+                    ))
+                    .await
+                    .unwrap()
+                    .unwrap_or_else(|| panic!("{col} column should exist"));
+                assert_eq!(row.try_get::<String>("", "type").unwrap(), "INTEGER");
+                assert_eq!(row.try_get::<i64>("", "is_not_null").unwrap(), 0);
+            }
+        }
+
         let db = setup_test_db().await;
         Migrator::up(&db, None).await.unwrap();
-        assert_last_verified_block_is_nullable(&db).await;
-
-        let index_db = setup_test_db().await;
-        MigratorIndex::up(&index_db, None).await.unwrap();
-        assert_last_verified_block_is_nullable(&index_db).await;
-    }
-
-    #[tokio::test]
-    async fn test_last_verified_block_migration_can_be_reverted() {
-        let db = setup_test_db().await;
-        Migrator::up(&db, None).await.unwrap();
-
-        Migrator::down(&db, Some(2)).await.unwrap();
-
-        let column = db
-            .query_one_raw(Statement::from_string(
-                DbBackend::Sqlite,
-                "SELECT name FROM pragma_table_info('chain_info') WHERE name = 'last_verified_block'".to_string(),
-            ))
-            .await
-            .unwrap();
-        assert!(column.is_none(), "reverting the migration drops the column again");
-
-        Migrator::up(&db, None).await.unwrap();
-        assert_last_verified_block_is_nullable(&db).await;
-    }
-
-    async fn assert_last_verified_block_is_nullable(db: &DatabaseConnection) {
-        let row = db
-            .query_one_raw(Statement::from_string(
-                DbBackend::Sqlite,
-                "SELECT type, \"notnull\" AS is_not_null FROM pragma_table_info('chain_info') WHERE name = \
-                 'last_verified_block'"
-                    .to_string(),
-            ))
-            .await
-            .unwrap()
-            .expect("last_verified_block column should exist");
-
-        assert_eq!(
-            row.try_get::<String>("", "type").unwrap(),
-            "INTEGER",
-            "SQLite reports BIGINT columns as INTEGER"
-        );
-        assert_eq!(
-            row.try_get::<i64>("", "is_not_null").unwrap(),
-            0,
-            "last_verified_block must be nullable"
-        );
+        Migrator::down(&db, Some(1)).await.unwrap();
+        for col in ["last_verified_block", "verification_failed_at"] {
+            let column = db
+                .query_one_raw(Statement::from_string(
+                    DbBackend::Sqlite,
+                    format!("SELECT name FROM pragma_table_info('chain_info') WHERE name = '{col}'"),
+                ))
+                .await
+                .unwrap();
+            assert!(column.is_none(), "reverting m015 drops {col}");
+        }
     }
 
     #[tokio::test]

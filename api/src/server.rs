@@ -46,7 +46,7 @@ use crate::{
     config::{ApiConfig, HealthConfig},
     errors::ApiResult,
     metrics,
-    readiness::{ReadinessChecker, ReadinessReport, ReadinessState},
+    readiness::{ReadinessChecker, ReadinessChecks, ReadinessReport, ReadinessState},
     schema::{ErasedSchema, LATEST_SCHEMA_VERSION, build_version_registry},
     snapshot::SubscriptionSnapshots,
     sse_connection::{SseConnectionLog, subscription_events},
@@ -65,45 +65,6 @@ struct ReadinessResponse {
     status: String,
     version: String,
     checks: ReadinessChecks,
-}
-
-/// Individual readiness checks
-#[derive(Serialize)]
-struct ReadinessChecks {
-    database: CheckStatus,
-    rpc: RpcCheckStatus,
-    indexer: IndexerCheckStatus,
-    verification: CheckStatus,
-}
-
-/// Generic check status
-#[derive(Serialize)]
-struct CheckStatus {
-    status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-}
-
-/// RPC check status with block number
-#[derive(Serialize)]
-struct RpcCheckStatus {
-    status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    block_number: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-}
-
-/// Indexer check status with lag information
-#[derive(Serialize)]
-struct IndexerCheckStatus {
-    status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    last_indexed_block: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    lag: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
 }
 
 /// Predicate that excludes Server-Sent Events from compression
@@ -644,96 +605,24 @@ fn health_response(version: String) -> HealthResponse {
 async fn readyz_handler(State(state): State<AppState>) -> impl IntoResponse {
     // Perform an immediate out-of-band readiness check and update the cached state
     let report = state.readiness_checker.check_and_update().await;
-    let (status, response) = readiness_http_response(&report, state.health_config.max_indexer_lag, &state.app_version);
+    let (status, response) = readiness_http_response(report, &state.app_version);
 
     (status, Json(response)).into_response()
 }
 
 /// Renders a readiness report as the `/readyz` HTTP response.
-///
-/// The HTTP status and the `status` field follow the report decision only. The check details are
-/// copied from the same report, so a failing verification check does not hide the database, RPC
-/// and lag diagnostics.
-fn readiness_http_response(
-    report: &ReadinessReport,
-    max_indexer_lag: u64,
-    app_version: &str,
-) -> (StatusCode, ReadinessResponse) {
-    let database = CheckStatus {
-        status: if report.database.error.is_none() && report.database.last_indexed_block.is_some() {
-            "healthy"
-        } else {
-            "unhealthy"
-        }
-        .to_string(),
-        error: report.database.error.clone(),
-    };
-
-    let rpc = RpcCheckStatus {
-        status: if report.rpc.error.is_none() {
-            "healthy"
-        } else {
-            "unhealthy"
-        }
-        .to_string(),
-        block_number: report.rpc.block_number,
-        error: report.rpc.error.clone(),
-    };
-
-    let indexer = IndexerCheckStatus {
-        status: if report.indexer.lag_exceeded {
-            "unhealthy"
-        } else {
-            "healthy"
-        }
-        .to_string(),
-        last_indexed_block: report.indexer.last_indexed_block,
-        lag: report.indexer.lag,
-        error: if report.indexer.lag_exceeded {
-            report
-                .indexer
-                .lag
-                .map(|lag| format!("indexer lag exceeds threshold ({} > {} blocks)", lag, max_indexer_lag))
-        } else {
-            None
-        },
-    };
-
-    let verification = CheckStatus {
-        status: if report.verification.failed {
-            "unhealthy"
-        } else {
-            "healthy"
-        }
-        .to_string(),
-        error: report
-            .verification
-            .failed
-            .then(|| "Post-finality verification found a mismatch".to_string()),
-    };
-
-    let status = if report.state == ReadinessState::Ready {
+fn readiness_http_response(report: ReadinessReport, app_version: &str) -> (StatusCode, ReadinessResponse) {
+    let is_ready = report.state == ReadinessState::Ready;
+    let status = if is_ready {
         StatusCode::OK
     } else {
         StatusCode::SERVICE_UNAVAILABLE
     };
-
     let response = ReadinessResponse {
-        status: if report.state == ReadinessState::Ready {
-            "ready"
-        } else {
-            "not_ready"
-        }
-        .to_string(),
+        status: if is_ready { "ready" } else { "not_ready" }.to_string(),
         version: app_version.to_string(),
-        checks: ReadinessChecks {
-            database,
-            rpc,
-            indexer,
-            verification,
-        },
+        checks: report.checks,
     };
-
     (status, response)
 }
 
@@ -748,7 +637,7 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
-    use crate::readiness::{DatabaseCheck, IndexerCheck, RpcCheck, VerificationCheck};
+    use crate::readiness::{CheckStatus, IndexerCheckStatus, RpcCheckStatus};
 
     /// Helper to create a response with specific Content-Type header
     fn make_response(content_type: Option<&str>) -> Response<String> {
@@ -932,23 +821,24 @@ mod tests {
         let report = ReadinessReport {
             state: ReadinessState::NotReady,
             health_status: metrics::HEALTH_STATUS_VERIFICATION_FAILED,
-            database: DatabaseCheck {
-                last_indexed_block: Some(12340),
-                error: None,
+            checks: ReadinessChecks {
+                database: CheckStatus::healthy(),
+                rpc: RpcCheckStatus {
+                    status: "healthy".to_string(),
+                    block_number: Some(12340),
+                    error: None,
+                },
+                indexer: IndexerCheckStatus {
+                    status: "healthy".to_string(),
+                    last_indexed_block: Some(12340),
+                    lag: Some(0),
+                    error: None,
+                },
+                verification: CheckStatus::unhealthy("Post-finality verification found a mismatch"),
             },
-            rpc: RpcCheck {
-                block_number: Some(12340),
-                error: None,
-            },
-            indexer: IndexerCheck {
-                last_indexed_block: Some(12340),
-                lag: Some(0),
-                lag_exceeded: false,
-            },
-            verification: VerificationCheck { failed: true },
         };
 
-        let (status, response) = readiness_http_response(&report, 10, "0.0.0-test");
+        let (status, response) = readiness_http_response(report, "0.0.0-test");
         let json = serde_json::to_value(&response).unwrap();
 
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);

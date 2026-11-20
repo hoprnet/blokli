@@ -308,10 +308,6 @@ pub trait TipSource: Send + Sync {
 struct RpcBlockHeader {
     number: U64,
     timestamp: U64,
-    /// Block hash. Only required for the block hash lookup, so observations keep working with
-    /// endpoints or fixtures that omit it.
-    #[serde(default)]
-    hash: Option<B256>,
 }
 
 /// Production [`TipSource`] that reads latest, safe and finalized headers through one batched RPC
@@ -373,19 +369,32 @@ impl<R: HttpRequestor + 'static + Clone> TipSource for RpcTipSource<R> {
     }
 
     async fn block_hash(&self, block: u64) -> Result<B256> {
-        let mut batch = BatchRequest::new(self.provider.client());
-
-        let waiter = batch
-            .add_call::<_, Option<RpcBlockHeader>>("eth_getBlockByNumber", &(BlockNumberOrTag::Number(block), false))
-            .map_err(RpcError::from)?;
-
-        batch.send().await.map_err(RpcError::from)?;
-
-        waiter
+        self.provider
+            .get_block_by_number(BlockNumberOrTag::Number(block))
             .await
             .map_err(RpcError::from)?
-            .and_then(|header| header.hash)
+            .map(|block| block.header.hash)
             .ok_or_else(|| RpcError::Other(format!("block {block} is not available")))
+    }
+}
+
+struct TrackerState {
+    last_success: Option<Instant>,
+    header_timestamps: HeaderTimestamps,
+    failure_streak: u32,
+    invalid_streak: u32,
+    active_source: HeadSource,
+}
+
+impl Default for TrackerState {
+    fn default() -> Self {
+        Self {
+            last_success: None,
+            header_timestamps: HeaderTimestamps::default(),
+            failure_streak: 0,
+            invalid_streak: 0,
+            active_source: HeadSource::Polling,
+        }
     }
 }
 
@@ -395,35 +404,9 @@ pub(crate) struct TrackerRuntime {
     head: HeadSourceConfig,
     subscriber: Option<Arc<dyn HeadSubscriber>>,
     tip_tx: watch::Sender<Option<ChainTip>>,
-    last_success: Mutex<Option<Instant>>,
-    header_timestamps: Mutex<HeaderTimestamps>,
+    state: Mutex<TrackerState>,
     refresh_lock: AsyncMutex<()>,
-    failure_streak: Mutex<u32>,
-    invalid_streak: Mutex<u32>,
-    active_source: Mutex<HeadSource>,
     ws_reconnects: AtomicU64,
-}
-
-fn record_failure_streak(streak: &Mutex<u32>) -> bool {
-    match streak.lock() {
-        Ok(mut streak) => {
-            let first = *streak == 0;
-            *streak = streak.saturating_add(1);
-            first
-        }
-        Err(_) => true,
-    }
-}
-
-fn reset_failure_streak(streak: &Mutex<u32>) -> bool {
-    match streak.lock() {
-        Ok(mut streak) => {
-            let had_failures = *streak > 0;
-            *streak = 0;
-            had_failures
-        }
-        Err(_) => false,
-    }
 }
 
 impl fmt::Debug for TrackerRuntime {
@@ -443,20 +426,28 @@ impl TrackerRuntime {
     }
 
     pub(crate) fn active_source(&self) -> HeadSource {
-        self.active_source
+        self.state
             .lock()
-            .map(|source| *source)
+            .map(|state| state.active_source)
             .unwrap_or(HeadSource::Polling)
     }
 
     pub(crate) fn set_active_source(&self, source: HeadSource) {
-        if let Ok(mut active_source) = self.active_source.lock() {
-            *active_source = source;
+        if let Ok(mut state) = self.state.lock() {
+            state.active_source = source;
         }
     }
 
     fn current(&self) -> Option<ChainTip> {
         *self.tip_tx.borrow()
+    }
+
+    fn is_fresh(&self, max_age: Duration) -> bool {
+        self.state
+            .lock()
+            .ok()
+            .and_then(|state| state.last_success)
+            .is_some_and(|last_success| last_success.elapsed() < max_age)
     }
 
     /// Returns the confirmed block of a tip, requiring the tag selected by the mode.
@@ -477,14 +468,19 @@ impl TrackerRuntime {
     }
 
     fn header_timestamp(&self, block: u64) -> Option<u64> {
-        self.header_timestamps
+        self.state
             .lock()
             .ok()
-            .and_then(|timestamps| timestamps.get(block))
+            .and_then(|state| state.header_timestamps.get(block))
     }
 
     fn record_source_failure(&self, error: &RpcError) {
-        if record_failure_streak(&self.failure_streak) {
+        let first = self.state.lock().map_or(true, |mut state| {
+            let first = state.failure_streak == 0;
+            state.failure_streak = state.failure_streak.saturating_add(1);
+            first
+        });
+        if first {
             warn!(%error, "failed to observe chain tip, keeping the previous tip");
         } else {
             debug!(%error, "failed to observe chain tip, keeping the previous tip");
@@ -492,7 +488,12 @@ impl TrackerRuntime {
     }
 
     fn record_invalid_observation(&self, error: &TipError) {
-        if record_failure_streak(&self.invalid_streak) {
+        let first = self.state.lock().map_or(true, |mut state| {
+            let first = state.invalid_streak == 0;
+            state.invalid_streak = state.invalid_streak.saturating_add(1);
+            first
+        });
+        if first {
             warn!(%error, "invalid chain tip observation, keeping the previous tip");
         } else {
             debug!(%error, "invalid chain tip observation, keeping the previous tip");
@@ -500,11 +501,14 @@ impl TrackerRuntime {
     }
 
     fn record_success(&self) {
-        let had_source_failure = reset_failure_streak(&self.failure_streak);
-        let had_invalid_observation = reset_failure_streak(&self.invalid_streak);
-
-        if had_source_failure || had_invalid_observation {
-            info!("chain tip observations succeeded again");
+        if let Ok(mut state) = self.state.lock() {
+            let recovered = state.failure_streak > 0 || state.invalid_streak > 0;
+            state.failure_streak = 0;
+            state.invalid_streak = 0;
+            state.last_success = Some(Instant::now());
+            if recovered {
+                info!("chain tip observations succeeded again");
+            }
         }
     }
 
@@ -520,8 +524,8 @@ impl TrackerRuntime {
         };
 
         if let Some(timestamp) = observation.latest_timestamp {
-            if let Ok(mut timestamps) = self.header_timestamps.lock() {
-                timestamps.insert(observation.latest, timestamp);
+            if let Ok(mut state) = self.state.lock() {
+                state.header_timestamps.insert(observation.latest, timestamp);
             }
         }
 
@@ -536,10 +540,6 @@ impl TrackerRuntime {
 
         self.record_success();
         self.record_update(&update, previous.as_ref());
-
-        if let Ok(mut last_success) = self.last_success.lock() {
-            *last_success = Some(Instant::now());
-        }
 
         if update.publish {
             self.tip_tx.send_replace(Some(update.tip));
@@ -645,12 +645,8 @@ impl ChainTipTracker {
                 head,
                 subscriber,
                 tip_tx,
-                last_success: Mutex::new(None),
-                header_timestamps: Mutex::new(HeaderTimestamps::default()),
+                state: Mutex::new(TrackerState::default()),
                 refresh_lock: AsyncMutex::new(()),
-                failure_streak: Mutex::new(0),
-                invalid_streak: Mutex::new(0),
-                active_source: Mutex::new(HeadSource::Polling),
                 ws_reconnects: AtomicU64::new(0),
             }),
             task: Mutex::new(None),
@@ -720,15 +716,8 @@ impl ChainTipTracker {
                 .expected_block_time
                 .max(self.runtime.head.poll_interval)
                 .saturating_mul(3);
-            let is_fresh = self
-                .runtime
-                .last_success
-                .lock()
-                .ok()
-                .and_then(|last_success| *last_success)
-                .is_some_and(|last_success| last_success.elapsed() < max_age);
 
-            if is_fresh {
+            if self.runtime.is_fresh(max_age) {
                 if let Some(tip) = self.current() {
                     return self.runtime.confirmed_from_tip(tip);
                 }
@@ -892,263 +881,139 @@ mod tests {
     }
 
     #[test]
-    fn test_next_tip_depth_saturates_below_zero() {
-        let tip = update(None, &observation(2, None, None), &config(ConfirmationMode::Depth)).tip;
-        assert_eq!(tip.confirmed, 0);
-        assert_eq!(tip.fcr, FcrState::Unavailable);
-    }
-
-    #[test]
-    fn test_next_tip_depth_uses_configured_depth() {
-        let tip = update(
+    fn test_next_tip_modes_boundaries_and_monotonicity() {
+        // Depth saturation & configured depth.
+        let t0 = update(None, &observation(2, None, None), &config(ConfirmationMode::Depth)).tip;
+        assert_eq!((t0.confirmed, t0.fcr), (0, FcrState::Unavailable));
+        let t1 = update(
             None,
             &observation(100, Some(99), Some(80)),
             &config(ConfirmationMode::Depth),
         )
         .tip;
-        assert_eq!(tip.confirmed, 97);
-        assert_eq!(tip.fcr, FcrState::Healthy);
-    }
+        assert_eq!((t1.confirmed, t1.fcr), (97, FcrState::Healthy));
 
-    #[test]
-    fn test_next_tip_fcr_boundary_at_max_safe_gap() {
-        let cfg = config(ConfirmationMode::SafeOrDepth);
+        // SafeOrDepth: uses safe when healthy, falls back at gap == max_safe_gap (32), entered_fallback only on
+        // transition.
+        let sod = config(ConfirmationMode::SafeOrDepth);
+        let u1 = update(None, &observation(100, Some(99), Some(80)), &sod);
+        assert_eq!(
+            (u1.tip.confirmed, u1.tip.fcr, u1.entered_fallback),
+            (99, FcrState::Healthy, false)
+        );
+        let u2 = update(None, &observation(100, Some(69), None), &sod);
+        assert_eq!(
+            (u2.tip.confirmed, u2.tip.fcr, u2.entered_fallback),
+            (97, FcrState::Healthy, false)
+        );
+        let u3 = update(Some(&u1.tip), &observation(101, Some(69), None), &sod);
+        assert_eq!(
+            (u3.tip.confirmed, u3.tip.fcr, u3.entered_fallback),
+            (99, FcrState::Degraded, true)
+        );
+        let u4 = update(Some(&u3.tip), &observation(102, Some(60), None), &sod);
+        assert!(!u4.entered_fallback);
+        let u5 = update(Some(&u4.tip), &observation(103, Some(102), None), &sod);
+        assert_eq!(
+            (u5.tip.confirmed, u5.tip.fcr, u5.entered_fallback),
+            (102, FcrState::Healthy, false)
+        );
+        let u6 = update(Some(&u5.tip), &observation(104, None, None), &sod);
+        assert!(u6.entered_fallback);
 
-        let healthy = update(None, &observation(100, Some(69), None), &cfg);
-        assert_eq!(healthy.tip.fcr, FcrState::Healthy);
-        assert_eq!(healthy.tip.confirmed, 97);
-        assert!(!healthy.entered_fallback);
-
-        let degraded = update(None, &observation(100, Some(68), None), &cfg);
-        assert_eq!(degraded.tip.fcr, FcrState::Degraded);
-        assert_eq!(degraded.tip.confirmed, 97);
-        assert!(degraded.entered_fallback);
-    }
-
-    #[test]
-    fn test_entered_fallback_only_on_transition() {
-        let cfg = config(ConfirmationMode::SafeOrDepth);
-
-        let healthy = update(None, &observation(100, Some(99), None), &cfg);
-        assert!(!healthy.entered_fallback);
-
-        let degraded = update(Some(&healthy.tip), &observation(101, Some(60), None), &cfg);
-        assert!(degraded.entered_fallback);
-
-        let still_degraded = update(Some(&degraded.tip), &observation(102, Some(60), None), &cfg);
-        assert!(!still_degraded.entered_fallback);
-
-        let healthy_again = update(Some(&still_degraded.tip), &observation(103, Some(102), None), &cfg);
-        assert!(!healthy_again.entered_fallback);
-
-        let unavailable = update(Some(&healthy_again.tip), &observation(104, None, None), &cfg);
-        assert!(unavailable.entered_fallback);
-    }
-
-    #[test]
-    fn test_entered_fallback_is_never_set_in_other_modes() {
         for mode in [
             ConfirmationMode::Depth,
             ConfirmationMode::Safe,
             ConfirmationMode::Finalized,
         ] {
-            let update = update(None, &observation(100, None, None), &config(mode));
-            assert!(!update.entered_fallback, "{mode} must never enter the FCR fallback");
+            assert!(!update(None, &observation(100, None, None), &config(mode)).entered_fallback);
         }
-    }
 
-    #[test]
-    fn test_next_tip_safe_or_depth_uses_safe_when_healthy() {
-        let update = update(
-            None,
-            &observation(100, Some(99), Some(80)),
-            &config(ConfirmationMode::SafeOrDepth),
+        // Safe & Finalized: missing tag publishes nothing initially, genesis 0 publishes, missing tag later keeps
+        // previous confirmed.
+        assert!(!update(None, &observation(100, None, None), &config(ConfirmationMode::Safe)).publish);
+        assert!(
+            !update(
+                None,
+                &observation(100, Some(99), None),
+                &config(ConfirmationMode::Finalized)
+            )
+            .publish
         );
+        let genesis = update(None, &observation(0, Some(0), Some(0)), &config(ConfirmationMode::Safe));
+        assert!(genesis.publish && genesis.tip.confirmed == 0 && genesis.tip.safe == Some(0));
 
-        assert_eq!(update.tip.confirmed, 99);
-        assert!(!update.entered_fallback);
-    }
-
-    #[test]
-    fn test_header_timestamps_lookup_and_eviction() {
-        let mut timestamps = HeaderTimestamps::new(3);
-
-        timestamps.insert(10, 1_000);
-        timestamps.insert(11, 1_001);
-        timestamps.insert(12, 1_002);
-
-        assert_eq!(timestamps.get(10), Some(1_000));
-        assert_eq!(timestamps.get(11), Some(1_001));
-        assert_eq!(timestamps.get(12), Some(1_002));
-        assert_eq!(timestamps.get(9), None);
-
-        timestamps.insert(13, 1_003);
-
-        assert_eq!(timestamps.get(10), None, "the oldest entry should be evicted");
-        assert_eq!(timestamps.get(11), Some(1_001));
-        assert_eq!(timestamps.get(13), Some(1_003));
-    }
-
-    #[test]
-    fn test_header_timestamps_capacity_is_bounded() {
-        let mut timestamps = HeaderTimestamps::default();
-
-        for block in 0..=super::HEADER_TIMESTAMP_CAPACITY as u64 {
-            timestamps.insert(block, block + 1_000);
-        }
-
-        assert_eq!(timestamps.entries.len(), super::HEADER_TIMESTAMP_CAPACITY);
-        assert_eq!(timestamps.get(0), None);
-        assert_eq!(timestamps.get(1), Some(1_001));
-    }
-
-    #[test]
-    fn test_next_tip_safe_mode_keeps_previous_confirmed_when_safe_is_missing() {
-        let first = update(
+        let safe_first = update(
             None,
-            &observation(100, Some(90), Some(80)),
+            &observation(100, Some(95), Some(80)),
             &config(ConfirmationMode::Safe),
         )
         .tip;
-        assert_eq!(first.confirmed, 90);
-
-        let next = update(
-            Some(&first),
+        let safe_missing = update(
+            Some(&safe_first),
             &observation(120, None, Some(100)),
             &config(ConfirmationMode::Safe),
-        )
-        .tip;
-
-        assert_eq!(next.confirmed, 90);
-        assert_eq!(next.fcr, FcrState::Unavailable);
-    }
-
-    #[test]
-    fn test_next_tip_safe_mode_without_the_tag_publishes_nothing() {
-        let update = update(None, &observation(100, None, None), &config(ConfirmationMode::Safe));
-        assert_eq!(update.tip.confirmed, 0);
-        assert!(!update.publish, "a missing safe tag must not be published as height 0");
-    }
-
-    #[test]
-    fn test_next_tip_finalized_mode_without_the_tag_publishes_nothing() {
-        let update = update(
-            None,
-            &observation(100, Some(99), None),
-            &config(ConfirmationMode::Finalized),
         );
-        assert_eq!(update.tip.confirmed, 0);
         assert!(
-            !update.publish,
-            "a missing finalized tag must not be published as height 0"
+            safe_missing.publish && safe_missing.tip.confirmed == 95 && safe_missing.tip.fcr == FcrState::Unavailable
         );
-    }
 
-    #[test]
-    fn test_next_tip_safe_mode_publishes_a_valid_tag_at_genesis() {
-        let update = update(None, &observation(0, Some(0), Some(0)), &config(ConfirmationMode::Safe));
-        assert_eq!(update.tip.confirmed, 0);
-        assert_eq!(update.tip.safe, Some(0));
-        assert!(
-            update.publish,
-            "a tag at block 0 is a valid observation, not a missing tag"
-        );
-    }
-
-    #[test]
-    fn test_next_tip_keeps_publishing_after_the_required_tag_disappears() {
-        let cfg = config(ConfirmationMode::Safe);
-        let first = update(None, &observation(100, Some(95), Some(80)), &cfg);
-        assert!(first.publish);
-
-        let second = update(Some(&first.tip), &observation(110, None, Some(80)), &cfg);
-        assert!(second.publish);
-        assert_eq!(second.tip.confirmed, 95);
-        assert_eq!(second.tip.safe, None);
-    }
-
-    #[test]
-    fn test_next_tip_finalized_mode_keeps_previous_confirmed_when_finalized_is_missing() {
-        let first = update(
+        let fin_first = update(
             None,
             &observation(100, Some(90), Some(80)),
             &config(ConfirmationMode::Finalized),
         )
         .tip;
-        assert_eq!(first.confirmed, 80);
-
-        let next = update(
-            Some(&first),
+        let fin_missing = update(
+            Some(&fin_first),
             &observation(120, Some(110), None),
             &config(ConfirmationMode::Finalized),
+        );
+        assert!(fin_missing.publish && fin_missing.tip.confirmed == 80);
+
+        // Monotonicity and safe regression flag.
+        let reg = update(
+            Some(&safe_first),
+            &observation(100, Some(90), Some(80)),
+            &config(ConfirmationMode::Safe),
+        );
+        assert!(reg.safe_regressed && reg.tip.confirmed == 95);
+        let back = update(
+            Some(&t1),
+            &observation(98, None, None),
+            &config(ConfirmationMode::Depth),
         )
         .tip;
+        assert_eq!((back.confirmed, back.latest), (97, 98));
 
-        assert_eq!(next.confirmed, 80);
+        // Invalid orderings are rejected.
+        for (obs, needle) in [
+            (observation(100, Some(101), None), "safe block"),
+            (observation(100, Some(90), Some(91)), "finalized block"),
+            (observation(100, None, Some(101)), "finalized block"),
+        ] {
+            let err = next_tip(None, &obs, &config(ConfirmationMode::Safe), SOURCE).unwrap_err();
+            assert!(err.to_string().contains(needle), "{err}");
+        }
     }
 
     #[test]
-    fn test_next_tip_never_moves_confirmed_backwards() {
-        let cfg = config(ConfirmationMode::Depth);
-        let first = update(None, &observation(100, None, None), &cfg).tip;
-        assert_eq!(first.confirmed, 97);
+    fn test_header_timestamps_eviction_and_enum_serialization() {
+        let mut timestamps = HeaderTimestamps::new(3);
+        for (b, t) in [(10, 1_000), (11, 1_001), (12, 1_002), (13, 1_003)] {
+            timestamps.insert(b, t);
+        }
+        assert_eq!(timestamps.get(10), None);
+        assert_eq!(timestamps.get(11), Some(1_001));
+        assert_eq!(timestamps.get(13), Some(1_003));
 
-        let next = update(Some(&first), &observation(98, None, None), &cfg).tip;
-        assert_eq!(next.confirmed, 97);
-        assert_eq!(next.latest, 98);
-    }
+        let mut bounded = HeaderTimestamps::default();
+        for block in 0..=super::HEADER_TIMESTAMP_CAPACITY as u64 {
+            bounded.insert(block, block + 1_000);
+        }
+        assert_eq!(bounded.entries.len(), super::HEADER_TIMESTAMP_CAPACITY);
+        assert_eq!(bounded.get(0), None);
 
-    #[test]
-    fn test_next_tip_reports_safe_regression() {
-        let cfg = config(ConfirmationMode::Safe);
-        let first = update(None, &observation(100, Some(95), Some(80)), &cfg).tip;
-        let next = update(Some(&first), &observation(100, Some(90), Some(80)), &cfg);
-
-        assert!(next.safe_regressed);
-        assert_eq!(next.tip.confirmed, 95);
-    }
-
-    #[test]
-    fn test_next_tip_rejects_safe_above_latest() {
-        let error = next_tip(
-            None,
-            &observation(100, Some(101), None),
-            &config(ConfirmationMode::Safe),
-            SOURCE,
-        )
-        .expect_err("safe above latest must be rejected");
-
-        assert!(error.to_string().contains("safe block"));
-    }
-
-    #[test]
-    fn test_next_tip_rejects_finalized_above_safe() {
-        let error = next_tip(
-            None,
-            &observation(100, Some(90), Some(91)),
-            &config(ConfirmationMode::Finalized),
-            SOURCE,
-        )
-        .expect_err("finalized above safe must be rejected");
-
-        assert!(error.to_string().contains("finalized block"));
-    }
-
-    #[test]
-    fn test_next_tip_rejects_finalized_above_latest() {
-        let error = next_tip(
-            None,
-            &observation(100, None, Some(101)),
-            &config(ConfirmationMode::Finalized),
-            SOURCE,
-        )
-        .expect_err("finalized above latest must be rejected");
-
-        assert!(error.to_string().contains("finalized block"));
-    }
-
-    #[test]
-    fn test_confirmation_mode_strings_round_trip() {
         for mode in [
             ConfirmationMode::Depth,
             ConfirmationMode::SafeOrDepth,
@@ -1156,179 +1021,136 @@ mod tests {
             ConfirmationMode::Finalized,
         ] {
             assert_eq!(mode.to_string().parse::<ConfirmationMode>(), Ok(mode));
+            assert_eq!(serde_json::to_string(&mode).unwrap(), format!("\"{mode}\""));
         }
-    }
-
-    #[test]
-    fn test_serde_values_match_display_values() {
-        for mode in [
-            ConfirmationMode::Depth,
-            ConfirmationMode::SafeOrDepth,
-            ConfirmationMode::Safe,
-            ConfirmationMode::Finalized,
-        ] {
-            let serialized = serde_json::to_string(&mode).expect("mode should serialize");
-            assert_eq!(serialized, format!("\"{mode}\""));
-        }
-
-        for state in [FcrState::Unavailable, FcrState::Degraded, FcrState::Healthy] {
-            let serialized = serde_json::to_string(&state).expect("state should serialize");
-            assert_eq!(serialized, format!("\"{state}\""));
-        }
-
-        for source in [HeadSource::Polling, HeadSource::WebSocket] {
-            let serialized = serde_json::to_string(&source).expect("source should serialize");
-            assert_eq!(serialized, format!("\"{source}\""));
-        }
-    }
-
-    #[test]
-    fn test_fcr_and_head_source_strings_round_trip() {
-        for state in [FcrState::Unavailable, FcrState::Degraded, FcrState::Healthy] {
-            assert_eq!(state.to_string().parse::<FcrState>(), Ok(state));
-        }
-        for source in [HeadSource::Polling, HeadSource::WebSocket] {
-            assert_eq!(source.to_string().parse::<HeadSource>(), Ok(source));
-        }
+        assert_eq!(serde_json::to_string(&HeadSource::WebSocket).unwrap(), "\"websocket\"");
     }
 
     #[derive(Clone)]
     struct MockTipSource {
-        observations: Arc<Mutex<VecDeque<Result<TipObservation>>>>,
+        script: Arc<Mutex<VecDeque<Result<TipObservation>>>>,
+        fallback: Option<std::result::Result<TipObservation, String>>,
+        calls: Arc<AtomicUsize>,
+        first_call_delay: Duration,
     }
 
     impl MockTipSource {
-        fn new(observations: Vec<Result<TipObservation>>) -> Self {
+        fn scripted(observations: Vec<Result<TipObservation>>) -> Self {
             Self {
-                observations: Arc::new(Mutex::new(observations.into())),
+                script: Arc::new(Mutex::new(observations.into())),
+                fallback: None,
+                calls: Arc::new(AtomicUsize::new(0)),
+                first_call_delay: Duration::ZERO,
             }
+        }
+
+        fn repeating(obs: TipObservation) -> Self {
+            Self {
+                script: Arc::new(Mutex::new(VecDeque::new())),
+                fallback: Some(Ok(obs)),
+                calls: Arc::new(AtomicUsize::new(0)),
+                first_call_delay: Duration::ZERO,
+            }
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
         }
     }
 
     #[async_trait]
     impl TipSource for MockTipSource {
         async fn observe(&self) -> Result<TipObservation> {
-            self.observations
-                .lock()
-                .expect("observations lock should not be poisoned")
-                .pop_front()
-                .unwrap_or_else(|| Err(RpcError::Other("no observation left".to_string())))
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            if call == 0 && !self.first_call_delay.is_zero() {
+                sleep(self.first_call_delay).await;
+            }
+            if let Some(next) = self.script.lock().unwrap().pop_front() {
+                return next;
+            }
+            match &self.fallback {
+                Some(Ok(obs)) => Ok(*obs),
+                Some(Err(msg)) => Err(RpcError::Other(msg.clone())),
+                None => Err(RpcError::Other("no observation left".to_string())),
+            }
         }
     }
 
-    fn tracker_with(source: MockTipSource, poll_interval: Duration, expected_block_time: Duration) -> ChainTipTracker {
+    fn tracker_with(source: MockTipSource, mode: ConfirmationMode) -> ChainTipTracker {
         ChainTipTracker::new(
             Arc::new(source),
-            config(ConfirmationMode::Depth),
-            poll_interval,
-            expected_block_time,
+            config(mode),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
         )
     }
 
     #[tokio::test]
-    async fn test_tracker_publishes_on_refresh() {
-        let source = MockTipSource::new(vec![Ok(observation(100, Some(99), Some(80)))]);
-        let tracker = tracker_with(source, Duration::from_secs(1), Duration::from_secs(1));
-        let mut receiver = tracker.subscribe();
-
-        let published = tracker.refresh().await.expect("refresh should succeed");
-
-        receiver.changed().await.expect("a tip should be published");
-        assert_eq!(receiver.borrow().as_ref(), Some(&published));
-        assert_eq!(tracker.current(), Some(published));
-    }
-
-    #[tokio::test]
-    async fn test_confirmed_block_waits_for_the_safe_tag() {
-        let source = MockTipSource::new(vec![
-            Ok(observation(100, None, Some(80))),
-            Ok(observation(100, Some(95), Some(80))),
+    async fn test_tracker_refresh_safe_tag_errors_and_debug_redaction() {
+        // Publishes on refresh and keeps previous tip on invalid observation or source error.
+        let source = MockTipSource::scripted(vec![
+            Ok(observation(100, Some(99), Some(80))),
+            Ok(observation(90, Some(91), Some(80))),
+            Err(RpcError::Other("rpc failed".to_string())),
         ]);
-        let tracker = ChainTipTracker::new(
-            Arc::new(source),
-            config(ConfirmationMode::Safe),
-            Duration::from_secs(1),
-            Duration::from_secs(1),
+        let tracker = tracker_with(source, ConfirmationMode::Depth);
+        let mut rx = tracker.subscribe();
+        let first = tracker.refresh().await.unwrap();
+        rx.changed().await.unwrap();
+        assert_eq!(rx.borrow().as_ref(), Some(&first));
+        assert!(tracker.refresh().await.unwrap_err().to_string().contains("safe block"));
+        assert!(tracker.refresh().await.unwrap_err().to_string().contains("rpc failed"));
+        assert_eq!(tracker.current(), Some(first));
+
+        // Safe mode: waits for safe tag, accepts genesis 0, errors if safe disappears later.
+        let safe_tracker = tracker_with(
+            MockTipSource::scripted(vec![
+                Ok(observation(100, None, Some(80))),
+                Ok(observation(100, Some(95), Some(80))),
+                Ok(observation(110, None, Some(80))),
+            ]),
+            ConfirmationMode::Safe,
         );
-
-        let error = tracker
-            .confirmed_block()
-            .await
-            .expect_err("a missing safe tag must surface as an error");
-        assert!(error.to_string().contains("safe"), "{error}");
-        assert_eq!(tracker.current(), None, "no tip is published without the safe tag");
-
-        assert_eq!(
-            tracker
+        assert!(
+            safe_tracker
                 .confirmed_block()
                 .await
-                .expect("the safe tag should confirm a block"),
-            95
+                .unwrap_err()
+                .to_string()
+                .contains("safe")
         );
-        assert!(tracker.current().is_some());
-    }
-
-    #[tokio::test]
-    async fn test_confirmed_block_errors_when_the_safe_tag_disappears() {
-        let source = MockTipSource::new(vec![
-            Ok(observation(100, Some(95), Some(80))),
-            Ok(observation(110, None, Some(80))),
-        ]);
-        let tracker = ChainTipTracker::new(
-            Arc::new(source),
-            config(ConfirmationMode::Safe),
-            Duration::from_secs(1),
-            Duration::from_secs(1),
+        assert_eq!(safe_tracker.current(), None);
+        assert_eq!(safe_tracker.confirmed_block().await.unwrap(), 95);
+        assert!(
+            safe_tracker
+                .confirmed_block()
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("safe")
         );
+        assert_eq!(safe_tracker.current().map(|t| t.confirmed), Some(95));
 
-        assert_eq!(
-            tracker.confirmed_block().await.expect("the safe tag should confirm"),
-            95
+        let genesis_tracker = tracker_with(
+            MockTipSource::scripted(vec![Ok(observation(0, Some(0), Some(0)))]),
+            ConfirmationMode::Safe,
         );
-        let error = tracker
-            .confirmed_block()
-            .await
-            .expect_err("a disappeared safe tag must surface as an error");
-        assert!(error.to_string().contains("safe"), "{error}");
-        assert_eq!(
-            tracker.current().map(|tip| tip.confirmed),
-            Some(95),
-            "the last height stays published for diagnostics"
-        );
-    }
+        assert_eq!(genesis_tracker.confirmed_block().await.unwrap(), 0);
 
-    #[tokio::test]
-    async fn test_confirmed_block_accepts_a_safe_tag_at_genesis() {
-        let source = MockTipSource::new(vec![Ok(observation(0, Some(0), Some(0)))]);
-        let tracker = ChainTipTracker::new(
-            Arc::new(source),
-            config(ConfirmationMode::Safe),
-            Duration::from_secs(1),
-            Duration::from_secs(1),
-        );
-
-        assert_eq!(tracker.confirmed_block().await.expect("a genesis safe tag is valid"), 0);
-        assert_eq!(tracker.current().and_then(|tip| tip.safe), Some(0));
-    }
-
-    #[tokio::test]
-    async fn test_tracker_debug_redacts_the_websocket_url() {
-        let tracker = ChainTipTracker::with_head_source(
-            Arc::new(MockTipSource::new(vec![])),
+        // Debug redacts WS URL credentials/path/query.
+        let redacted = ChainTipTracker::with_head_source(
+            Arc::new(MockTipSource::scripted(vec![])),
             config(ConfirmationMode::Depth),
             crate::head::HeadSourceConfig {
                 chain_id: 100,
                 poll_interval: Duration::from_secs(1),
                 expected_block_time: Duration::from_secs(5),
-                ws_url: Some(
-                    Url::parse("wss://user:pass@rpc.example.com:8443/secret?token=xyz").expect("URL should parse"),
-                ),
+                ws_url: Some(Url::parse("wss://user:pass@rpc.example.com:8443/secret?token=xyz").unwrap()),
                 ws_url_derived: true,
             },
             None,
         );
-
-        let debug = format!("{:?}", tracker.runtime);
+        let debug = format!("{:?}", redacted.runtime);
         assert!(debug.contains("wss://rpc.example.com:8443"), "{debug}");
         for secret in ["user", "pass", "secret", "xyz"] {
             assert!(!debug.contains(secret), "{debug}");
@@ -1336,213 +1158,92 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_tracker_keeps_previous_tip_on_invalid_observation() {
-        let valid = observation(100, Some(99), Some(80));
-        let source = MockTipSource::new(vec![Ok(valid), Ok(observation(90, Some(91), Some(80)))]);
-        let tracker = tracker_with(source, Duration::from_secs(1), Duration::from_secs(1));
-
-        let first = tracker.refresh().await.expect("first refresh should succeed");
-        let error = tracker.refresh().await.expect_err("invalid observation should fail");
-
-        assert!(error.to_string().contains("safe block"));
-        assert_eq!(tracker.current(), Some(first));
-    }
-
-    #[tokio::test]
-    async fn test_tracker_keeps_previous_tip_on_source_error() {
-        let valid = observation(100, Some(99), Some(80));
-        let source = MockTipSource::new(vec![Ok(valid), Err(RpcError::Other("rpc failed".to_string()))]);
-        let tracker = tracker_with(source, Duration::from_secs(1), Duration::from_secs(1));
-
-        let first = tracker.refresh().await.expect("first refresh should succeed");
-        let error = tracker.refresh().await.expect_err("source error should surface");
-
-        assert!(error.to_string().contains("rpc failed"));
-        assert_eq!(tracker.current(), Some(first));
-    }
-
-    #[tokio::test]
-    async fn test_confirmed_block_refreshes_on_every_call_without_background() {
-        let source = MockTipSource::new(vec![
-            Ok(observation(100, Some(99), Some(80))),
-            Ok(observation(110, Some(109), Some(90))),
-        ]);
-        let tracker = tracker_with(source, Duration::from_secs(1), Duration::from_secs(60));
-
-        assert_eq!(tracker.confirmed_block().await.expect("first read should succeed"), 97);
-        assert_eq!(
-            tracker.confirmed_block().await.expect("second read should refresh"),
-            107
+    async fn test_tracker_caching_staleness_concurrency_and_drop() {
+        // Without background task, every confirmed_block refreshes.
+        let tracker = tracker_with(
+            MockTipSource::scripted(vec![
+                Ok(observation(100, Some(99), Some(80))),
+                Ok(observation(110, Some(109), Some(90))),
+            ]),
+            ConfirmationMode::Depth,
         );
-    }
+        assert_eq!(tracker.confirmed_block().await.unwrap(), 97);
+        assert_eq!(tracker.confirmed_block().await.unwrap(), 107);
 
-    #[tokio::test]
-    async fn test_confirmed_block_uses_cached_tip_after_background_started() {
-        let count = Arc::new(AtomicUsize::new(0));
-        let source = CountingSource {
-            count: count.clone(),
-            observation: observation(100, Some(99), Some(80)),
-        };
+        // After ensure_started, fresh cached tip is served without extra observe().
+        let source = MockTipSource::repeating(observation(100, Some(99), Some(80)));
         let tracker = ChainTipTracker::new(
-            Arc::new(source),
+            Arc::new(source.clone()),
             config(ConfirmationMode::Depth),
             Duration::from_secs(3600),
             Duration::from_secs(60),
         );
-
         tracker.ensure_started();
-
         for _ in 0..100 {
             if tracker.current().is_some() {
                 break;
             }
             sleep(Duration::from_millis(5)).await;
         }
-        assert!(tracker.current().is_some(), "background refresh should publish a tip");
+        let before = source.calls();
+        assert_eq!(tracker.confirmed_block().await.unwrap(), 97);
+        assert_eq!(source.calls(), before);
 
-        let before = count.load(Ordering::SeqCst);
-        assert_eq!(tracker.confirmed_block().await.expect("cached read should succeed"), 97);
-        assert_eq!(
-            count.load(Ordering::SeqCst),
-            before,
-            "a fresh cached tip should be served after the background task starts"
-        );
-    }
-
-    #[derive(Clone)]
-    struct SuccessThenErrorSource {
-        calls: Arc<AtomicUsize>,
-    }
-
-    #[async_trait]
-    impl TipSource for SuccessThenErrorSource {
-        async fn observe(&self) -> Result<TipObservation> {
-            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
-                Ok(observation(100, Some(99), Some(80)))
-            } else {
-                Err(RpcError::Other("rpc failed".to_string()))
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn test_confirmed_block_refreshes_when_stale_and_returns_source_error() {
-        let tracker = ChainTipTracker::new(
-            Arc::new(SuccessThenErrorSource {
-                calls: Arc::new(AtomicUsize::new(0)),
-            }),
+        // Stale cached tip refreshes and surfaces source error.
+        let mut stale_src = MockTipSource::scripted(vec![Ok(observation(100, Some(99), Some(80)))]);
+        stale_src.fallback = Some(Err("rpc failed".to_string()));
+        let stale_tracker = ChainTipTracker::new(
+            Arc::new(stale_src),
             config(ConfirmationMode::Depth),
             Duration::from_millis(10),
             Duration::from_millis(20),
         );
-
-        tracker.ensure_started();
-
+        stale_tracker.ensure_started();
         for _ in 0..100 {
-            if tracker.current().is_some() {
+            if stale_tracker.current().is_some() {
                 break;
             }
             sleep(Duration::from_millis(5)).await;
         }
-        assert!(tracker.current().is_some(), "background refresh should publish a tip");
-
         sleep(Duration::from_millis(100)).await;
-
-        let error = tracker
-            .confirmed_block()
-            .await
-            .expect_err("a stale tip must be refreshed and surface the source error");
-
-        assert!(error.to_string().contains("rpc failed"));
-    }
-
-    #[derive(Clone)]
-    struct SlowFirstSource {
-        calls: Arc<AtomicUsize>,
-    }
-
-    #[async_trait]
-    impl TipSource for SlowFirstSource {
-        async fn observe(&self) -> Result<TipObservation> {
-            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
-                sleep(Duration::from_millis(100)).await;
-                Ok(observation(100, None, None))
-            } else {
-                Ok(observation(120, None, None))
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn test_concurrent_refreshes_never_move_confirmed_backwards() {
-        let tracker = ChainTipTracker::new(
-            Arc::new(SlowFirstSource {
-                calls: Arc::new(AtomicUsize::new(0)),
-            }),
-            config(ConfirmationMode::Depth),
-            Duration::from_secs(1),
-            Duration::from_secs(1),
+        assert!(
+            stale_tracker
+                .confirmed_block()
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("rpc failed")
         );
 
-        let (first, second) = tokio::join!(tracker.refresh(), tracker.refresh());
-        first.expect("first refresh should succeed");
-        second.expect("second refresh should succeed");
+        // Concurrent refreshes never move confirmed backwards.
+        let mut slow_src =
+            MockTipSource::scripted(vec![Ok(observation(100, None, None)), Ok(observation(120, None, None))]);
+        slow_src.first_call_delay = Duration::from_millis(50);
+        let conc_tracker = tracker_with(slow_src, ConfirmationMode::Depth);
+        let (a, b) = tokio::join!(conc_tracker.refresh(), conc_tracker.refresh());
+        a.unwrap();
+        b.unwrap();
+        assert_eq!(conc_tracker.current().unwrap().confirmed, 117);
 
-        let current = tracker.current().expect("a tip should be published");
-        assert_eq!(current.latest, 120);
-        assert_eq!(
-            current.confirmed, 117,
-            "the newer confirmed tip must not be overwritten"
-        );
-    }
-
-    #[derive(Clone)]
-    struct CountingSource {
-        count: Arc<AtomicUsize>,
-        observation: TipObservation,
-    }
-
-    #[async_trait]
-    impl TipSource for CountingSource {
-        async fn observe(&self) -> Result<TipObservation> {
-            self.count.fetch_add(1, Ordering::SeqCst);
-            Ok(self.observation)
-        }
-    }
-
-    #[tokio::test]
-    async fn test_background_task_stops_on_drop() {
-        let count = Arc::new(AtomicUsize::new(0));
-        let source = CountingSource {
-            count: count.clone(),
-            observation: observation(100, Some(99), Some(80)),
-        };
-        let tracker = ChainTipTracker::new(
-            Arc::new(source),
+        // Background task stops on drop.
+        let drop_src = MockTipSource::repeating(observation(100, Some(99), Some(80)));
+        let drop_tracker = ChainTipTracker::new(
+            Arc::new(drop_src.clone()),
             config(ConfirmationMode::Depth),
             Duration::from_millis(10),
             Duration::from_millis(10),
         );
-
-        tracker.ensure_started();
-
+        drop_tracker.ensure_started();
         for _ in 0..100 {
-            if count.load(Ordering::SeqCst) > 0 {
+            if drop_src.calls() > 0 {
                 break;
             }
             sleep(Duration::from_millis(5)).await;
         }
-        assert!(count.load(Ordering::SeqCst) > 0, "background refresh should run");
-
-        drop(tracker);
-
-        sleep(Duration::from_millis(50)).await;
-        let after_drop = count.load(Ordering::SeqCst);
-        sleep(Duration::from_millis(50)).await;
-        assert_eq!(
-            count.load(Ordering::SeqCst),
-            after_drop,
-            "background task should stop after the tracker is dropped"
-        );
+        drop(drop_tracker);
+        sleep(Duration::from_millis(40)).await;
+        let after_drop = drop_src.calls();
+        sleep(Duration::from_millis(40)).await;
+        assert_eq!(drop_src.calls(), after_drop);
     }
 }

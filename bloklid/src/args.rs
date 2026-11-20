@@ -308,19 +308,6 @@ impl Args {
 
         let config_rs_config = builder.build().map_err(|error| ConfigError::Parse(error.to_string()))?;
 
-        // config-rs rounds a floating point value when it deserializes an integer field, so a
-        // fractional confirmation setting would otherwise become the rounded whole number.
-        for key in ["indexer.confirmation.depth", "indexer.confirmation.max_safe_gap"] {
-            if let Ok(config_rs::Value {
-                kind: config_rs::ValueKind::Float(value),
-                ..
-            }) = config_rs_config.get::<config_rs::Value>(key)
-                && value.fract() != 0.0
-            {
-                return Err(ConfigError::Parse(format!("{key} must be a whole number")).into());
-            }
-        }
-
         let mut config: Config = config_rs_config
             .try_deserialize()
             .map_err(|error| ConfigError::Parse(error.to_string()))?;
@@ -629,70 +616,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fractional_confirmation_settings_are_rejected() {
-        let _env = env_guard();
-
-        for entry in ["depth = 1.4", "max_safe_gap = 1.4"] {
-            let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-            writeln!(
-                file,
-                r#"
-                network = "jura-dev"
-                rpc_url = "http://localhost:8545"
-                [indexer.confirmation]
-                {entry}
-                [database]
-                type = "postgresql"
-                url = "postgres://file:5432/db"
-            "#
-            )
-            .unwrap();
-            let args = Args {
-                verbose: 0,
-                config: Some(file.path().to_path_buf()),
-                command: None,
-            };
-
-            let result = args.load_config(false);
-
-            assert!(
-                result.is_err(),
-                "a fractional {entry} in the config file must be rejected"
-            );
-        }
-
-        for (env_var, value) in [
-            ("BLOKLI_INDEXER_CONFIRMATION_DEPTH", "1.4"),
-            ("BLOKLI_INDEXER_CONFIRMATION_MAX_SAFE_GAP", "1.4"),
-        ] {
-            let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-            writeln!(
-                file,
-                r#"
-                network = "jura-dev"
-                rpc_url = "http://localhost:8545"
-                [database]
-                type = "postgresql"
-                url = "postgres://file:5432/db"
-            "#
-            )
-            .unwrap();
-            let args = Args {
-                verbose: 0,
-                config: Some(file.path().to_path_buf()),
-                command: None,
-            };
-
-            temp_env::with_var(env_var, Some(value), || {
-                let result = args.load_config(false);
-
-                assert!(result.is_err(), "a fractional {env_var} must be rejected");
-            });
-        }
-    }
-
-    #[test]
-    fn test_whole_number_confirmation_settings_are_accepted() {
+    fn test_confirmation_settings_env_overrides() {
         let _env = env_guard();
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(

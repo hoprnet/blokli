@@ -18,10 +18,9 @@
 //! previous process stopped instead of skipping the blocks that became final while it was down.
 //!
 //! The set of Safe contract addresses grows at runtime, while the stored logs of a block only
-//! contain the addresses known when that block was indexed. A canonical log of a Safe is therefore
-//! only reported as missing from the store when the continuous phase of this process indexed the
-//! block and the Safe was discovered in an earlier block; the canonical logs of the static
-//! contracts are always required.
+//! contain the addresses known when that block was indexed. Stored Safe logs are still compared
+//! strictly against the canonical chain (`missing_from_chain` and `changed`), while
+//! `missing_from_store` is checked only for the static contract addresses.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -162,42 +161,6 @@ fn log_position(log: &SerializableLog) -> (u64, u64) {
     (log.block_number, log.log_index)
 }
 
-/// Which canonical logs the store is expected to hold.
-///
-/// A canonical log can only be in the store when it was requested while its block was indexed. The
-/// static contracts are filtered from the first block on. A Safe is filtered only from the block
-/// after its discovery, and only once the continuous phase of this process began: the historical
-/// discovery phase indexes with no Safe filters at all.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct StoreCoverage {
-    /// Contract addresses that are configured at startup and never change.
-    pub static_addresses: BTreeSet<Address>,
-    /// Block in which each Safe first appeared, from the earliest state stored for it.
-    pub safe_discovery_blocks: BTreeMap<Address, u64>,
-    /// First block indexed by the continuous phase of this process.
-    pub continuous_start: Option<u64>,
-}
-
-impl StoreCoverage {
-    /// Returns whether a canonical log of `address` at `block` must be present in the store.
-    pub fn requires_log(&self, address: &Address, block: u64) -> bool {
-        if self.static_addresses.contains(address) {
-            return true;
-        }
-
-        let Some(continuous_start) = self.continuous_start else {
-            return false;
-        };
-
-        // A Safe discovered in block `d` is not in the filter for `d` itself: the filter is rebuilt for the
-        // next block once the discovery is processed, so a log of the Safe in its own discovery block was
-        // never requested.
-        self.safe_discovery_blocks
-            .get(address)
-            .is_some_and(|discovery_block| *discovery_block < block && block >= continuous_start)
-    }
-}
-
 /// Compares the stored logs of a range with the canonical logs of the same range.
 ///
 /// Logs are matched by their position within the chain, that is a block number and a log index.
@@ -205,12 +168,14 @@ impl StoreCoverage {
 /// which is what a reorganization produces. The event payload itself is not compared, because a
 /// matching position and block hash pin down the payload.
 ///
-/// `coverage` decides whether a canonical log that is absent from the store can be reported: only
-/// logs the store was able to hold when the block was indexed are compared that way.
+/// `static_addresses` are the contract addresses filtered from the start of indexing: canonical
+/// logs absent from the store are reported only for those addresses so runtime-discovered Safe
+/// contracts never trigger false missing-log halts, while all stored logs (including Safe logs)
+/// are still checked for `missing_from_chain` and `changed`.
 pub fn compare_logs(
     stored: &[SerializableLog],
     canonical: &[SerializableLog],
-    coverage: &StoreCoverage,
+    static_addresses: &BTreeSet<Address>,
 ) -> VerificationMismatch {
     let stored_by_position = stored
         .iter()
@@ -239,9 +204,7 @@ pub fn compare_logs(
     }
 
     for (position, canonical_log) in &canonical_by_position {
-        if !stored_by_position.contains_key(position)
-            && coverage.requires_log(&canonical_log.address, canonical_log.block_number)
-        {
+        if !stored_by_position.contains_key(position) && static_addresses.contains(&canonical_log.address) {
             mismatch.missing_from_store.push(LogIdentity::from_log(canonical_log));
         }
     }
@@ -421,7 +384,6 @@ async fn verify_range<T, U, Db>(
     rpc: &T,
     db: &Db,
     logs_handler: &Arc<U>,
-    indexer_state: &IndexerState,
     from: u64,
     to: u64,
 ) -> Result<VerificationMismatch>
@@ -448,21 +410,16 @@ where
     // Blocks `from..=to`; the offset counts the blocks stored after `from`.
     let stored = db.get_logs(Some(from), Some(to - from)).await?;
 
-    // Only the contracts that are configured from the start can be expected to be in the store of
-    // every block. Safe addresses appear while indexing, so their canonical logs are exempt from
-    // the missing-from-store direction wherever the filter could not have contained them yet.
+    // Only static contracts configured from startup are required in the missing-from-store
+    // direction; runtime-discovered Safe contracts are still checked strictly when stored.
     let token = logs_handler.contract_addresses_map().token;
-    let coverage = StoreCoverage {
-        static_addresses: logs_handler
-            .contract_addresses()
-            .into_iter()
-            .filter(|address| *address != token)
-            .collect::<BTreeSet<_>>(),
-        safe_discovery_blocks: db.get_safe_contract_discovery_blocks(None).await?,
-        continuous_start: indexer_state.continuous_start_block(),
-    };
+    let static_addresses = logs_handler
+        .contract_addresses()
+        .into_iter()
+        .filter(|address| *address != token)
+        .collect::<BTreeSet<_>>();
 
-    Ok(compare_logs(&stored, &canonical, &coverage))
+    Ok(compare_logs(&stored, &canonical, &static_addresses))
 }
 
 /// Verifies indexed ranges once the chain tip tracker reports them as final.
@@ -563,9 +520,9 @@ pub(crate) async fn run_verification<T, U, Db>(
                             // canonical chain really differs.
                             let mut matched = true;
 
-                            match verify_range(rpc, &db, &logs_handler, &indexer_state, from, to).await {
+                            match verify_range(rpc, &db, &logs_handler, from, to).await {
                                 Ok(mismatch) if mismatch.is_empty() => {}
-                                Ok(mismatch) => 'recheck: {
+                                Ok(mismatch) => {
                                     warn!(
                                         from_block = from,
                                         to_block = to,
@@ -577,17 +534,9 @@ pub(crate) async fn run_verification<T, U, Db>(
                                          confirm, re-checking the range"
                                     );
 
-                                    // A restart loses the Safe filter coverage used by this comparison.
-                                    // Record the unresolved range before corroborating it. If interrupted,
-                                    // fail closed instead of accepting it with weaker coverage on restart.
-                                    if let Err(error) = db.set_verification_failed_at(Some(from)).await {
-                                        record_failure(&mut failure_streak, Some((from, to)), &error.to_string());
-                                        matched = false;
-                                        break 'recheck;
-                                    }
                                     sleep(MISMATCH_RECHECK_DELAY).await;
 
-                                    match verify_range(rpc, &db, &logs_handler, &indexer_state, from, to).await {
+                                    match verify_range(rpc, &db, &logs_handler, from, to).await {
                                         Ok(recheck) if recheck.is_empty() => {
                                             debug!(
                                                 from_block = from,
@@ -620,6 +569,14 @@ pub(crate) async fn run_verification<T, U, Db>(
                                                     "post-finality verification found logs that the canonical chain does \
                                                      not confirm, halting the indexer"
                                                 );
+                                                if let Err(error) = db.set_verification_failed_at(Some(from)).await {
+                                                    error!(
+                                                        from_block = from,
+                                                        to_block = to,
+                                                        %error,
+                                                        "failed to persist post-finality verification halt marker"
+                                                    );
+                                                }
                                                 record_false_confirmation();
                                                 indexer_state.mark_verification_failed();
                                                 return;
@@ -629,11 +586,6 @@ pub(crate) async fn run_verification<T, U, Db>(
                                             record_failure(&mut failure_streak, Some((from, to)), &error.to_string());
                                             matched = false;
                                         }
-                                    }
-                                    if let Err(error) = db.set_verification_failed_at(None).await {
-                                        error!(from, to, %error, "cannot clear the verification halt; stopping indexing");
-                                        indexer_state.mark_verification_failed();
-                                        return;
                                     }
                                 }
                                 Err(error) => {
@@ -681,7 +633,7 @@ pub(crate) async fn run_verification<T, U, Db>(
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::{BTreeMap, BTreeSet},
+        collections::BTreeSet,
         pin::Pin,
         sync::{
             Arc,
@@ -712,14 +664,22 @@ mod tests {
     use tokio::sync::watch;
 
     use super::{
-        ChangedLog, CursorStart, CursorStep, LogIdentity, StoreCoverage, VerificationMismatch, compare_logs,
-        corroborated_mismatch, initial_cursor, next_cursor_step, run_verification,
+        ChangedLog, CursorStart, CursorStep, LogIdentity, VerificationMismatch, compare_logs, corroborated_mismatch,
+        initial_cursor, next_cursor_step, run_verification,
     };
     use crate::{IndexerConfig, IndexerState, block::Indexer, traits::MockChainLogHandler};
 
+    fn static_addr() -> Address {
+        Address::from([0x11; 20])
+    }
+
+    fn safe_addr() -> Address {
+        Address::from([0x33; 20])
+    }
+
     fn sample_log(block_number: u64, log_index: u64, block_hash: u8, tx_hash: u8) -> SerializableLog {
         SerializableLog {
-            address: Address::from([0x11; 20]),
+            address: static_addr(),
             topics: vec![[0x22; 32]],
             data: vec![1, 2, 3],
             tx_index: 0,
@@ -731,375 +691,145 @@ mod tests {
         }
     }
 
-    fn static_addresses(addresses: &[Address]) -> BTreeSet<Address> {
-        addresses.iter().copied().collect()
-    }
-
-    /// Coverage of a chain whose only static contract emitted the sample logs.
-    fn sample_coverage() -> StoreCoverage {
-        StoreCoverage {
-            static_addresses: static_addresses(&[Address::from([0x11; 20])]),
-            safe_discovery_blocks: BTreeMap::new(),
-            continuous_start: Some(0),
+    fn sample_safe_log(block_number: u64) -> SerializableLog {
+        SerializableLog {
+            address: safe_addr(),
+            ..sample_log(block_number, 1, 3, 4)
         }
     }
 
-    /// Coverage of a chain that also holds the given Safes, discovered in the given blocks.
-    fn coverage_with_safes(safes: &[(Address, u64)], continuous_start: Option<u64>) -> StoreCoverage {
-        StoreCoverage {
-            static_addresses: static_addresses(&[Address::from([0x11; 20])]),
-            safe_discovery_blocks: safes.iter().copied().collect(),
-            continuous_start,
-        }
+    fn static_set() -> BTreeSet<Address> {
+        BTreeSet::from([static_addr()])
     }
 
     #[test]
-    fn identical_log_sets_have_no_mismatch() {
+    fn compare_logs_identical_empty_and_safe_rules() {
+        let static_addrs = static_set();
         let logs = vec![sample_log(10, 0, 1, 2), sample_log(10, 1, 3, 4)];
+        assert!(compare_logs(&logs, &logs, &static_addrs).is_empty());
+        assert!(compare_logs(&[], &[], &static_addrs).is_empty());
 
-        let mismatch = compare_logs(&logs, &logs, &sample_coverage());
+        // Canonical Safe log missing from store is exempt.
+        let stored = vec![sample_log(20, 0, 1, 2)];
+        let canonical = vec![sample_log(20, 0, 1, 2), sample_safe_log(20)];
+        assert!(compare_logs(&stored, &canonical, &static_addrs).is_empty());
 
-        assert!(mismatch.is_empty());
-        assert_eq!(mismatch.len(), 0);
-    }
+        // Stored Safe logs are still checked strictly for missing_from_chain and changed.
+        let stored_safes = vec![sample_safe_log(20), sample_safe_log(21)];
+        let mismatch = compare_logs(&stored_safes, &[sample_safe_log(20)], &static_addrs);
+        assert_eq!(mismatch.missing_from_chain.len(), 1);
+        assert_eq!(mismatch.missing_from_chain[0].block_number, 21);
 
-    #[test]
-    fn empty_ranges_have_no_mismatch() {
-        let mismatch = compare_logs(&[], &[], &sample_coverage());
-
-        assert!(mismatch.is_empty());
+        let changed_safe = SerializableLog {
+            block_hash: [0x99; 32],
+            ..sample_safe_log(20)
+        };
+        let mismatch = compare_logs(&[sample_safe_log(20)], &[changed_safe], &static_addrs);
+        assert_eq!(mismatch.changed.len(), 1);
     }
 
     #[test]
     fn changed_block_hash_is_reported() {
-        let stored = vec![sample_log(10, 0, 1, 2)];
-        let canonical = vec![sample_log(10, 0, 9, 2)];
-
-        let mismatch = compare_logs(&stored, &canonical, &sample_coverage());
-
+        let mismatch = compare_logs(&[sample_log(10, 0, 1, 2)], &[sample_log(10, 0, 9, 2)], &static_set());
         insta::assert_yaml_snapshot!("changed_block_hash", mismatch);
     }
 
     #[test]
     fn changed_transaction_hash_is_reported() {
-        let stored = vec![sample_log(10, 0, 1, 2)];
-        let canonical = vec![sample_log(10, 0, 1, 9)];
-
-        let mismatch = compare_logs(&stored, &canonical, &sample_coverage());
-
+        let mismatch = compare_logs(&[sample_log(10, 0, 1, 2)], &[sample_log(10, 0, 1, 9)], &static_set());
         insta::assert_yaml_snapshot!("changed_transaction_hash", mismatch);
     }
 
     #[test]
     fn stored_log_missing_from_chain_is_reported() {
-        let stored = vec![sample_log(10, 0, 1, 2), sample_log(11, 0, 3, 4)];
-        let canonical = vec![sample_log(10, 0, 1, 2)];
-
-        let mismatch = compare_logs(&stored, &canonical, &sample_coverage());
-
+        let mismatch = compare_logs(
+            &[sample_log(10, 0, 1, 2), sample_log(11, 0, 3, 4)],
+            &[sample_log(10, 0, 1, 2)],
+            &static_set(),
+        );
         insta::assert_yaml_snapshot!("stored_log_missing_from_chain", mismatch);
     }
 
     #[test]
     fn canonical_log_missing_from_store_is_reported() {
-        let stored = vec![sample_log(10, 0, 1, 2)];
-        let canonical = vec![sample_log(10, 0, 1, 2), sample_log(11, 0, 3, 4)];
-
-        let mismatch = compare_logs(&stored, &canonical, &sample_coverage());
-
+        let mismatch = compare_logs(
+            &[sample_log(10, 0, 1, 2)],
+            &[sample_log(10, 0, 1, 2), sample_log(11, 0, 3, 4)],
+            &static_set(),
+        );
         insta::assert_yaml_snapshot!("canonical_log_missing_from_store", mismatch);
     }
 
-    fn sample_safe_log(address: Address, block_number: u64) -> SerializableLog {
-        SerializableLog {
-            address,
-            ..sample_log(block_number, 1, 3, 4)
+    #[test]
+    fn initial_cursor_and_next_cursor_step_cases() {
+        for (baseline, finalized, floor, expected) in [
+            (None, None, 0, None),
+            (Some(100), None, 0, None),
+            (None, Some(42), 0, Some(42)),
+            (Some(100), Some(42), 0, Some(42)),
+            (Some(100), Some(110), 0, Some(100)),
+            (Some(110), Some(110), 0, Some(110)),
+            (None, Some(50), 99, Some(99)),
+            (Some(100), Some(110), 99, Some(100)),
+        ] {
+            assert_eq!(initial_cursor(baseline, finalized, floor), expected);
+        }
+
+        for (cursor, finalized, last_indexed, expected) in [
+            (10, None, 100, CursorStep::Idle),
+            (10, Some(10), 100, CursorStep::Idle),
+            (10, Some(9), 100, CursorStep::Idle),
+            (10, Some(20), 10, CursorStep::Idle),
+            (10, Some(15), 100, CursorStep::Verify { from: 11, to: 15 }),
+            (10, Some(20), 15, CursorStep::Verify { from: 11, to: 15 }),
+            (10, Some(5_000), 5_000, CursorStep::Verify { from: 11, to: 1_010 }),
+            (1_010, Some(5_000), 5_000, CursorStep::Verify { from: 1_011, to: 2_010 }),
+        ] {
+            assert_eq!(next_cursor_step(cursor, finalized, last_indexed), expected);
         }
     }
 
-    /// A canonical log of a Safe that was in the filter for the block, in the continuous phase of
-    /// this process, is only accepted when it is stored.
     #[test]
-    fn canonical_log_of_a_known_safe_in_a_continuous_block_is_missing_from_store() {
-        let safe = Address::from([0x33; 20]);
-        let coverage = coverage_with_safes(&[(safe, 10)], Some(5));
-        let stored = vec![sample_log(20, 0, 1, 2)];
-        let canonical = vec![sample_log(20, 0, 1, 2), sample_safe_log(safe, 20)];
-
-        let mismatch = compare_logs(&stored, &canonical, &coverage);
-
-        assert_eq!(mismatch.missing_from_store.len(), 1);
-        assert_eq!(mismatch.missing_from_store[0].block_number, 20);
-        assert_eq!(mismatch.missing_from_store[0].log_index, 1);
-    }
-
-    #[test]
-    fn canonical_log_of_a_safe_discovered_after_the_block_is_exempt() {
-        let safe = Address::from([0x33; 20]);
-        let coverage = coverage_with_safes(&[(safe, 30)], Some(5));
-        let stored = vec![sample_log(20, 0, 1, 2)];
-        let canonical = vec![sample_log(20, 0, 1, 2), sample_safe_log(safe, 20)];
-
-        let mismatch = compare_logs(&stored, &canonical, &coverage);
-
-        assert!(
-            mismatch.is_empty(),
-            "a Safe discovered after indexing must not produce a missing-from-store mismatch: {mismatch:?}"
-        );
-    }
-
-    /// The filter is rebuilt for the block after the discovery, so the Safe was not requested in
-    /// its own discovery block.
-    #[test]
-    fn canonical_log_of_a_safe_in_its_discovery_block_is_exempt() {
-        let safe = Address::from([0x33; 20]);
-        let coverage = coverage_with_safes(&[(safe, 20)], Some(5));
-        let stored = vec![sample_log(20, 0, 1, 2)];
-        let canonical = vec![sample_log(20, 0, 1, 2), sample_safe_log(safe, 20)];
-
-        let in_discovery_block = compare_logs(&stored, &canonical, &coverage);
-        assert!(
-            in_discovery_block.is_empty(),
-            "the discovery block itself was indexed without the Safe filter: {in_discovery_block:?}"
-        );
-
-        let after_discovery = compare_logs(
-            &stored,
-            &[sample_log(20, 0, 1, 2), sample_safe_log(safe, 21)],
-            &coverage,
-        );
-        assert_eq!(after_discovery.missing_from_store.len(), 1);
-    }
-
-    #[test]
-    fn canonical_log_of_a_safe_below_the_continuous_start_is_exempt() {
-        let safe = Address::from([0x33; 20]);
-        let coverage = coverage_with_safes(&[(safe, 5)], Some(20));
-        let stored = vec![sample_log(10, 0, 1, 2)];
-        let canonical = vec![sample_log(10, 0, 1, 2), sample_safe_log(safe, 10)];
-
-        let mismatch = compare_logs(&stored, &canonical, &coverage);
-
-        assert!(
-            mismatch.is_empty(),
-            "a block the historical discovery phase indexed holds no Safe logs: {mismatch:?}"
-        );
-    }
-
-    #[test]
-    fn canonical_log_of_a_safe_is_exempt_before_the_continuous_phase_began() {
-        let safe = Address::from([0x33; 20]);
-        let coverage = coverage_with_safes(&[(safe, 5)], None);
-        let stored = vec![sample_log(10, 0, 1, 2)];
-        let canonical = vec![sample_log(10, 0, 1, 2), sample_safe_log(safe, 10)];
-
-        assert!(compare_logs(&stored, &canonical, &coverage).is_empty());
-    }
-
-    /// Static contract logs keep the strict rule, including before the continuous phase began.
-    #[test]
-    fn canonical_log_of_a_static_contract_is_missing_from_store_without_continuous_coverage() {
-        let coverage = coverage_with_safes(&[], None);
-        let stored = vec![sample_log(10, 0, 1, 2)];
-        let canonical = vec![sample_log(10, 0, 1, 2), sample_log(10, 1, 3, 4)];
-
-        let mismatch = compare_logs(&stored, &canonical, &coverage);
-
-        assert_eq!(mismatch.missing_from_store.len(), 1);
-    }
-
-    /// The Safe exemption only applies to the missing-from-store direction.
-    #[test]
-    fn stored_safe_logs_are_compared_strictly() {
-        let safe = Address::from([0x33; 20]);
-        let coverage = coverage_with_safes(&[(safe, 5)], Some(0));
-        let stored = vec![sample_safe_log(safe, 20), sample_safe_log(safe, 21)];
-        let canonical = vec![sample_safe_log(safe, 20)];
-
-        let mismatch = compare_logs(&stored, &canonical, &coverage);
-
-        assert_eq!(mismatch.missing_from_chain.len(), 1);
-        assert_eq!(mismatch.missing_from_chain[0].block_number, 21);
-    }
-
-    /// Blocks indexed between the process start and the first finalized response are verified from
-    /// the watermark captured at start, not from the watermark of the first round.
-    #[tokio::test]
-    async fn baseline_captured_at_start_bounds_the_initial_cursor() -> anyhow::Result<()> {
-        let logs = vec![sample_log(101, 0, 1, 2), sample_log(105, 0, 3, 4)];
-        // The indexer advanced to 110 before the verification task ran its first round.
-        let db = prepare_db(110, logs.clone()).await?;
-        let observed = db.clone();
-
-        // A range of 106..110 would be requested if the cursor started at the finalized block.
-        let mut rpc = MockVerificationRpc::new();
-        rpc.expect_get_logs_for_block_range()
-            .withf(|_, from: &u64, to: &u64| *from == 101 && *to == 105)
-            .returning(move |_, _, _| Ok(logs.clone()));
-
-        let indexer_state = IndexerState::default();
-        let (tip_tx, tip_rx) = watch::channel(Some(sample_tip(Some(105))));
-        let (round_tx, mut round_rx) = watch::channel(0);
-        let task = spawn_verification(
-            Arc::new(rpc),
-            db,
-            log_handler(Vec::new()),
-            indexer_state.clone(),
-            tip_rx,
-            Some(100),
-            round_tx,
-        );
-
-        // The first round sets the cursor to the baseline and the next tip update verifies the
-        // range between the baseline and the finalized block.
-        wait_for_round(&mut round_rx, 1).await;
-        tip_tx.send_replace(Some(sample_tip(Some(105))));
-        wait_for_round(&mut round_rx, 2).await;
-
-        assert_eq!(
-            observed.get_last_verified_block(None).await?,
-            Some(105),
-            "the range above the starting watermark is verified"
-        );
-        assert!(!indexer_state.verification_failed());
-        drop(tip_tx);
-        task.await?;
-
-        Ok(())
-    }
-
-    #[test]
-    fn initial_cursor_is_unset_while_finalized_is_unknown() {
-        assert_eq!(initial_cursor(None, None, 0), None);
-        assert_eq!(initial_cursor(Some(100), None, 0), None);
-    }
-
-    #[test]
-    fn initial_cursor_starts_at_the_first_finalized_block() {
-        assert_eq!(initial_cursor(None, Some(42), 0), Some(42));
-        assert_eq!(initial_cursor(Some(100), Some(42), 0), Some(42));
-    }
-
-    /// Blocks indexed after the starting watermark are re-checked from it.
-    #[test]
-    fn initial_cursor_starts_at_the_lower_of_the_baseline_and_the_finalized_block() {
-        assert_eq!(initial_cursor(Some(100), Some(110), 0), Some(100));
-        assert_eq!(initial_cursor(Some(110), Some(110), 0), Some(110));
-    }
-
-    #[test]
-    fn initial_cursor_uses_the_floor_when_no_baseline_exists() {
-        assert_eq!(initial_cursor(None, Some(50), 99), Some(99));
-    }
-
-    #[test]
-    fn initial_cursor_keeps_a_cursor_above_the_floor() {
-        assert_eq!(initial_cursor(Some(100), Some(110), 99), Some(100));
-    }
-
-    fn identity(block: u64, index: u64) -> LogIdentity {
-        LogIdentity {
+    fn corroborated_mismatch_keeps_only_shared_entries() {
+        let id = |block: u64, log_index: u64| LogIdentity {
             block_number: block,
-            block_hash: format!("0x{:02x}", block),
+            block_hash: format!("0x{block:02x}"),
             tx_hash: "0x02".to_string(),
-            log_index: index,
-        }
-    }
+            log_index,
+        };
+        let disjoint = corroborated_mismatch(
+            &VerificationMismatch {
+                missing_from_chain: vec![id(1, 0)],
+                ..Default::default()
+            },
+            &VerificationMismatch {
+                missing_from_chain: vec![id(2, 0)],
+                ..Default::default()
+            },
+        );
+        assert!(disjoint.is_empty());
 
-    #[test]
-    fn corroborated_mismatch_requires_both_comparisons() {
+        let shared_change = ChangedLog {
+            stored: id(3, 0),
+            canonical: id(4, 0),
+        };
         let first = VerificationMismatch {
-            missing_from_chain: vec![identity(1, 0)],
+            missing_from_chain: vec![id(1, 0)],
+            changed: vec![shared_change.clone()],
             ..Default::default()
         };
         let second = VerificationMismatch {
-            missing_from_chain: vec![identity(2, 0)],
-            ..Default::default()
+            missing_from_chain: vec![id(1, 0)],
+            missing_from_store: vec![id(5, 1)],
+            changed: vec![shared_change.clone()],
         };
-
-        assert_eq!(corroborated_mismatch(&first, &second), VerificationMismatch::default());
-    }
-
-    #[test]
-    fn corroborated_mismatch_keeps_differences_reported_by_both() {
-        let a = identity(1, 0);
-        let first = VerificationMismatch {
-            missing_from_chain: vec![a.clone()],
-            ..Default::default()
-        };
-        let second = VerificationMismatch {
-            missing_from_chain: vec![a.clone()],
-            ..Default::default()
-        };
-        let expected = VerificationMismatch {
-            missing_from_chain: vec![a],
-            ..Default::default()
-        };
-
-        assert_eq!(corroborated_mismatch(&first, &second), expected);
-    }
-
-    #[test]
-    fn corroborated_mismatch_keeps_only_corroborated_changed_entries() {
-        let changed = ChangedLog {
-            stored: identity(3, 0),
-            canonical: identity(4, 0),
-        };
-        let only_second = identity(5, 1);
-        let first = VerificationMismatch {
-            changed: vec![changed.clone()],
-            ..Default::default()
-        };
-        let second = VerificationMismatch {
-            changed: vec![changed.clone()],
-            missing_from_store: vec![only_second],
-            ..Default::default()
-        };
-        let expected = VerificationMismatch {
-            changed: vec![changed],
-            ..Default::default()
-        };
-
-        assert_eq!(corroborated_mismatch(&first, &second), expected);
-    }
-
-    #[test]
-    fn cursor_step_is_idle_while_finalized_is_unknown() {
-        assert_eq!(next_cursor_step(10, None, 100), CursorStep::Idle);
-    }
-
-    #[test]
-    fn cursor_step_verifies_above_the_cursor() {
         assert_eq!(
-            next_cursor_step(10, Some(15), 100),
-            CursorStep::Verify { from: 11, to: 15 }
-        );
-    }
-
-    #[test]
-    fn cursor_step_stays_idle_when_finalized_is_at_or_below_the_cursor() {
-        assert_eq!(next_cursor_step(10, Some(10), 100), CursorStep::Idle);
-        assert_eq!(next_cursor_step(10, Some(9), 100), CursorStep::Idle);
-    }
-
-    #[test]
-    fn cursor_step_is_bounded_by_the_last_indexed_block() {
-        assert_eq!(
-            next_cursor_step(10, Some(20), 15),
-            CursorStep::Verify { from: 11, to: 15 }
-        );
-        assert_eq!(next_cursor_step(10, Some(20), 10), CursorStep::Idle);
-    }
-
-    #[test]
-    fn cursor_step_caps_one_round_at_the_maximum_range() {
-        assert_eq!(
-            next_cursor_step(10, Some(5_000), 5_000),
-            CursorStep::Verify { from: 11, to: 1_010 }
-        );
-        assert_eq!(
-            next_cursor_step(1_010, Some(5_000), 5_000),
-            CursorStep::Verify { from: 1_011, to: 2_010 }
+            corroborated_mismatch(&first, &second),
+            VerificationMismatch {
+                missing_from_chain: vec![id(1, 0)],
+                missing_from_store: Vec::new(),
+                changed: vec![shared_change],
+            }
         );
     }
 
@@ -1167,487 +897,139 @@ mod tests {
         handler
     }
 
-    /// Waits for the verification task to complete the given round.
-    async fn wait_for_round(round_updates: &mut watch::Receiver<u32>, round: u32) {
-        tokio::time::timeout(
-            Duration::from_secs(1),
-            round_updates.wait_for(|completed| *completed >= round),
-        )
-        .await
-        .unwrap_or_else(|_| panic!("verification should reach round {round}"))
-        .expect("round updates should stay connected");
+    struct VerificationHarness {
+        db: BlokliDb,
+        state: IndexerState,
+        tip_tx: watch::Sender<Option<ChainTip>>,
+        round_rx: watch::Receiver<u32>,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    impl VerificationHarness {
+        async fn spawn(
+            db: BlokliDb,
+            rpc: MockVerificationRpc,
+            contracts: Vec<Address>,
+            initial_finalized: Option<u64>,
+            baseline: Option<u64>,
+        ) -> Self {
+            let state = IndexerState::default();
+            let (tip_tx, tip_rx) = watch::channel(Some(sample_tip(initial_finalized)));
+            let (round_tx, round_rx) = watch::channel(0);
+            let rpc = Arc::new(rpc);
+            let task = tokio::spawn({
+                let db = db.clone();
+                let state = state.clone();
+                async move {
+                    run_verification(
+                        tip_rx,
+                        rpc.as_ref(),
+                        db,
+                        Arc::new(log_handler(contracts)),
+                        state,
+                        CursorStart { baseline, floor: 0 },
+                        Some(round_tx),
+                    )
+                    .await;
+                }
+            });
+            Self {
+                db,
+                state,
+                tip_tx,
+                round_rx,
+                task,
+            }
+        }
+
+        async fn wait_round(&mut self, round: u32) {
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                self.round_rx.wait_for(|completed| *completed >= round),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("verification should reach round {round}"))
+            .expect("round updates should stay connected");
+        }
+
+        fn send_finalized(&self, finalized: Option<u64>) {
+            self.tip_tx.send_replace(Some(sample_tip(finalized)));
+        }
+
+        async fn finish(self) -> anyhow::Result<()> {
+            drop(self.tip_tx);
+            self.task.await?;
+            Ok(())
+        }
     }
 
     async fn prepare_db(last_indexed: u32, logs: Vec<SerializableLog>) -> anyhow::Result<BlokliDb> {
         let db = BlokliDb::new_in_memory().await?;
         db.set_indexer_state_info(None, last_indexed).await?;
         db.store_logs(logs).await?;
-        // The logs are stored unprocessed; processing is irrelevant to verification.
         Ok(db)
     }
 
-    fn spawn_verification(
-        rpc: Arc<MockVerificationRpc>,
-        db: BlokliDb,
-        handler: MockChainLogHandler,
-        indexer_state: IndexerState,
-        tip_updates: watch::Receiver<Option<ChainTip>>,
-        baseline: Option<u64>,
-        round_updates: watch::Sender<u32>,
-    ) -> tokio::task::JoinHandle<()> {
-        tokio::spawn(async move {
-            run_verification(
-                tip_updates,
-                rpc.as_ref(),
-                db,
-                Arc::new(handler),
-                indexer_state,
-                CursorStart { baseline, floor: 0 },
-                Some(round_updates),
-            )
-            .await;
-        })
-    }
-
     #[tokio::test]
-    async fn clean_range_advances_and_persists_the_cursor_and_leaves_the_flag_unset() -> anyhow::Result<()> {
+    async fn clean_range_advances_and_persists_cursor() -> anyhow::Result<()> {
         let logs = vec![sample_log(11, 0, 1, 2), sample_log(12, 0, 3, 4)];
         let db = prepare_db(12, logs.clone()).await?;
-        let observed = db.clone();
         let calls = Arc::new(AtomicUsize::new(0));
-        let calls_for_rpc = calls.clone();
+        let counted = calls.clone();
 
         let mut rpc = MockVerificationRpc::new();
         rpc.expect_get_logs_for_block_range()
             .withf(|_, from: &u64, to: &u64| *from == 11 && *to == 12)
             .returning(move |_, _, _| {
-                calls_for_rpc.fetch_add(1, AtomicOrdering::SeqCst);
+                counted.fetch_add(1, AtomicOrdering::SeqCst);
                 Ok(logs.clone())
             });
 
-        let indexer_state = IndexerState::default();
-        let (tip_tx, tip_rx) = watch::channel(Some(sample_tip(Some(10))));
-        let (round_tx, mut round_rx) = watch::channel(0);
-        let task = spawn_verification(
-            Arc::new(rpc),
-            db,
-            log_handler(Vec::new()),
-            indexer_state.clone(),
-            tip_rx,
-            None,
-            round_tx,
-        );
+        let mut h = VerificationHarness::spawn(db, rpc, Vec::new(), Some(10), None).await;
+        h.wait_round(1).await;
+        h.send_finalized(Some(12));
+        h.wait_round(2).await;
+        h.send_finalized(Some(12));
+        h.wait_round(3).await;
 
-        wait_for_round(&mut round_rx, 1).await;
-        tip_tx.send_replace(Some(sample_tip(Some(12))));
-        wait_for_round(&mut round_rx, 2).await;
-
-        tip_tx.send_replace(Some(sample_tip(Some(12))));
-        wait_for_round(&mut round_rx, 3).await;
-
-        assert_eq!(calls.load(AtomicOrdering::SeqCst), 1, "the cursor should have advanced");
-        assert_eq!(
-            observed.get_last_verified_block(None).await?,
-            Some(12),
-            "the advanced cursor is stored so a restart resumes from it"
-        );
-        assert!(!indexer_state.verification_failed());
-        drop(tip_tx);
-        task.await?;
-
-        Ok(())
+        assert_eq!(calls.load(AtomicOrdering::SeqCst), 1);
+        assert_eq!(h.db.get_last_verified_block(None).await?, Some(12));
+        assert_eq!(h.db.verification_failed_at().await?, None);
+        assert!(!h.state.verification_failed());
+        h.finish().await
     }
 
     #[tokio::test]
-    async fn mismatch_sets_the_flag_stops_the_task_and_keeps_the_cursor() -> anyhow::Result<()> {
+    async fn corroborated_mismatch_persists_halt_keeps_cursor_and_survives_restart() -> anyhow::Result<()> {
         let stored = vec![sample_log(11, 0, 1, 2), sample_log(12, 0, 3, 4)];
         let db = prepare_db(12, stored).await?;
-        let observed = db.clone();
         let calls = Arc::new(AtomicUsize::new(0));
-        let calls_for_rpc = calls.clone();
+        let counted = calls.clone();
 
         let mut rpc = MockVerificationRpc::new();
         rpc.expect_get_logs_for_block_range().returning(move |_, _, _| {
-            calls_for_rpc.fetch_add(1, AtomicOrdering::SeqCst);
+            counted.fetch_add(1, AtomicOrdering::SeqCst);
             Ok(vec![sample_log(11, 0, 1, 2)])
         });
 
-        let indexer_state = IndexerState::default();
-        let (tip_tx, tip_rx) = watch::channel(Some(sample_tip(Some(10))));
-        let (round_tx, mut round_rx) = watch::channel(0);
-        let task = spawn_verification(
-            Arc::new(rpc),
-            db,
-            log_handler(Vec::new()),
-            indexer_state.clone(),
-            tip_rx,
-            None,
-            round_tx,
-        );
-
-        wait_for_round(&mut round_rx, 1).await;
-        tip_tx.send_replace(Some(sample_tip(Some(12))));
-
-        tokio::time::timeout(Duration::from_secs(1), task)
+        let mut h = VerificationHarness::spawn(db.clone(), rpc, vec![static_addr()], Some(10), None).await;
+        h.wait_round(1).await;
+        h.send_finalized(Some(12));
+        tokio::time::timeout(Duration::from_secs(1), h.task)
             .await
-            .expect("the task should stop after a mismatch")?;
-
-        tip_tx.send_replace(Some(sample_tip(Some(13))));
-
-        assert_eq!(
-            calls.load(AtomicOrdering::SeqCst),
-            2,
-            "the range is compared again before the indexer stops"
-        );
-        assert!(indexer_state.verification_failed());
-        assert_eq!(
-            observed.get_last_verified_block(None).await?,
-            Some(10),
-            "a mismatching range does not advance the stored position"
-        );
-
-        Ok(())
-    }
-
-    /// A single empty response does not halt the indexer: the range is compared again.
-    #[tokio::test]
-    async fn a_transient_empty_response_is_confirmed_by_a_second_fetch() -> anyhow::Result<()> {
-        let logs = vec![sample_log(11, 0, 1, 2), sample_log(12, 0, 3, 4)];
-        let db = prepare_db(12, logs.clone()).await?;
-        let observed = db.clone();
-        let calls = Arc::new(AtomicUsize::new(0));
-        let calls_for_rpc = calls.clone();
-
-        let mut rpc = MockVerificationRpc::new();
-        rpc.expect_get_logs_for_block_range()
-            .withf(|_, from: &u64, to: &u64| *from == 11 && *to == 12)
-            .returning(move |_, _, _| {
-                let attempt = calls_for_rpc.fetch_add(1, AtomicOrdering::SeqCst);
-                if attempt == 0 { Ok(Vec::new()) } else { Ok(logs.clone()) }
-            });
-
-        let indexer_state = IndexerState::default();
-        let (tip_tx, tip_rx) = watch::channel(Some(sample_tip(Some(10))));
-        let (round_tx, mut round_rx) = watch::channel(0);
-        let task = spawn_verification(
-            Arc::new(rpc),
-            db,
-            log_handler(Vec::new()),
-            indexer_state.clone(),
-            tip_rx,
-            None,
-            round_tx,
-        );
-
-        wait_for_round(&mut round_rx, 1).await;
-        tip_tx.send_replace(Some(sample_tip(Some(12))));
-        wait_for_round(&mut round_rx, 2).await;
-
-        assert_eq!(calls.load(AtomicOrdering::SeqCst), 2, "the range is fetched twice");
-        assert!(
-            !indexer_state.verification_failed(),
-            "an empty first response is not a mismatch"
-        );
-        assert_eq!(
-            observed.get_last_verified_block(None).await?,
-            Some(12),
-            "the re-check matched, so the cursor advances"
-        );
-        assert_eq!(observed.verification_failed_at().await?, None);
-        drop(tip_tx);
-        task.await?;
-
-        Ok(())
-    }
-
-    /// A second comparison that also differs halts the indexer.
-    #[tokio::test]
-    async fn a_mismatch_confirmed_by_a_second_fetch_keeps_the_cursor() -> anyhow::Result<()> {
-        let stored = vec![sample_log(11, 0, 1, 2), sample_log(12, 0, 3, 4)];
-        let db = prepare_db(12, stored).await?;
-        let observed = db.clone();
-        let calls = Arc::new(AtomicUsize::new(0));
-        let calls_for_rpc = calls.clone();
-
-        let mut rpc = MockVerificationRpc::new();
-        rpc.expect_get_logs_for_block_range().returning(move |_, _, _| {
-            calls_for_rpc.fetch_add(1, AtomicOrdering::SeqCst);
-            Ok(vec![sample_log(11, 0, 1, 2)])
-        });
-
-        let indexer_state = IndexerState::default();
-        let (tip_tx, tip_rx) = watch::channel(Some(sample_tip(Some(10))));
-        let (round_tx, mut round_rx) = watch::channel(0);
-        let task = spawn_verification(
-            Arc::new(rpc),
-            db,
-            log_handler(Vec::new()),
-            indexer_state.clone(),
-            tip_rx,
-            None,
-            round_tx,
-        );
-
-        wait_for_round(&mut round_rx, 1).await;
-        tip_tx.send_replace(Some(sample_tip(Some(12))));
-
-        tokio::time::timeout(Duration::from_secs(1), task)
-            .await
-            .expect("the task should stop after the confirmed mismatch")?;
+            .expect("task should stop after corroborated mismatch")?;
 
         assert_eq!(calls.load(AtomicOrdering::SeqCst), 2);
-        assert!(indexer_state.verification_failed());
-        assert_eq!(
-            observed.get_last_verified_block(None).await?,
-            Some(10),
-            "a mismatching range does not advance the stored position"
-        );
+        assert!(h.state.verification_failed());
+        assert_eq!(db.get_last_verified_block(None).await?, Some(10));
+        assert_eq!(db.verification_failed_at().await?, Some(11));
 
-        Ok(())
-    }
-
-    /// Conflicting partial responses from consecutive fetches do not halt the indexer and leave the cursor unchanged
-    /// until a matching response arrives.
-    #[tokio::test]
-    async fn conflicting_partial_responses_do_not_halt_and_keep_the_cursor() -> anyhow::Result<()> {
-        let stored = vec![sample_log(11, 0, 1, 2), sample_log(12, 0, 3, 4)];
-        let db = prepare_db(12, stored.clone()).await?;
-        let observed = db.clone();
-        let calls = Arc::new(AtomicUsize::new(0));
-        let calls_for_rpc = calls.clone();
-
-        let mut rpc = MockVerificationRpc::new();
-        rpc.expect_get_logs_for_block_range()
-            .withf(|_, from: &u64, to: &u64| *from == 11 && *to == 12)
-            .returning(move |_, _, _| {
-                let attempt = calls_for_rpc.fetch_add(1, AtomicOrdering::SeqCst);
-                match attempt {
-                    0 => Ok(vec![sample_log(11, 0, 1, 2)]),
-                    1 => Ok(vec![sample_log(12, 0, 3, 4)]),
-                    _ => Ok(stored.clone()),
-                }
-            });
-
-        let indexer_state = IndexerState::default();
-        let (tip_tx, tip_rx) = watch::channel(Some(sample_tip(Some(10))));
-        let (round_tx, mut round_rx) = watch::channel(0);
-        let task = spawn_verification(
-            Arc::new(rpc),
-            db,
-            log_handler(Vec::new()),
-            indexer_state.clone(),
-            tip_rx,
-            None,
-            round_tx,
-        );
-
-        wait_for_round(&mut round_rx, 1).await;
-        tip_tx.send_replace(Some(sample_tip(Some(12))));
-        wait_for_round(&mut round_rx, 2).await;
-
-        assert_eq!(
-            calls.load(AtomicOrdering::SeqCst),
-            2,
-            "conflicting partial responses should be fetched exactly twice"
-        );
-        assert!(
-            !indexer_state.verification_failed(),
-            "conflicting partial responses should not halt the indexer"
-        );
-        assert_eq!(
-            observed.get_last_verified_block(None).await?,
-            Some(10),
-            "conflicting partial responses should keep the stored cursor"
-        );
-        assert_eq!(observed.verification_failed_at().await?, None);
-
-        tip_tx.send_replace(Some(sample_tip(Some(12))));
-        wait_for_round(&mut round_rx, 3).await;
-
-        assert_eq!(
-            calls.load(AtomicOrdering::SeqCst),
-            3,
-            "a matching response should be fetched after the conflicting re-check"
-        );
-        assert!(
-            !indexer_state.verification_failed(),
-            "a matching response should not halt the indexer"
-        );
-        assert_eq!(
-            observed.get_last_verified_block(None).await?,
-            Some(12),
-            "a matching response should advance the stored cursor"
-        );
-
-        drop(tip_tx);
-        task.await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn rpc_error_keeps_the_cursor_and_the_range_is_retried() -> anyhow::Result<()> {
-        let logs = vec![sample_log(11, 0, 1, 2)];
-        let db = prepare_db(11, logs.clone()).await?;
-        let calls = Arc::new(AtomicUsize::new(0));
-        let calls_for_rpc = calls.clone();
-
-        let mut rpc = MockVerificationRpc::new();
-        rpc.expect_get_logs_for_block_range()
-            .withf(|_, from: &u64, to: &u64| *from == 11 && *to == 11)
-            .returning(move |_, _, _| {
-                let attempt = calls_for_rpc.fetch_add(1, AtomicOrdering::SeqCst);
-                if attempt == 0 {
-                    Err(RpcError::Other("rpc is down".to_string()))
-                } else {
-                    Ok(logs.clone())
-                }
-            });
-
-        let indexer_state = IndexerState::default();
-        let (tip_tx, tip_rx) = watch::channel(Some(sample_tip(Some(10))));
-        let (round_tx, mut round_rx) = watch::channel(0);
-        let task = spawn_verification(
-            Arc::new(rpc),
-            db,
-            log_handler(Vec::new()),
-            indexer_state.clone(),
-            tip_rx,
-            None,
-            round_tx,
-        );
-
-        wait_for_round(&mut round_rx, 1).await;
-        tip_tx.send_replace(Some(sample_tip(Some(11))));
-        wait_for_round(&mut round_rx, 2).await;
-        assert_eq!(calls.load(AtomicOrdering::SeqCst), 1);
-        assert!(!indexer_state.verification_failed());
-
-        tip_tx.send_replace(Some(sample_tip(Some(11))));
-        wait_for_round(&mut round_rx, 3).await;
-
-        assert_eq!(
-            calls.load(AtomicOrdering::SeqCst),
-            2,
-            "the same range should be retried"
-        );
-        assert!(!indexer_state.verification_failed(), "an RPC error is not a mismatch");
-        drop(tip_tx);
-        task.await?;
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn canonical_logs_from_a_safe_discovered_in_the_verified_block_are_not_missing_from_store()
-    -> anyhow::Result<()> {
-        let base_address = Address::from([0x11; 20]);
-        let safe_address = Address::from([0x33; 20]);
-        let base_log = sample_log(11, 0, 1, 2);
-        let db = prepare_db(11, vec![base_log.clone()]).await?;
-        // The Safe becomes known only after the block's logs were stored, as the indexer does when
-        // it discovers a Safe in a live block.
-        db.create_safe_contract(None, safe_address, Address::default(), Address::default(), 11, 0, 1)
-            .await?;
-
-        let safe_log = SerializableLog {
-            address: safe_address,
-            ..sample_log(11, 1, 1, 2)
-        };
-        let canonical = vec![base_log, safe_log];
-        let calls = Arc::new(AtomicUsize::new(0));
-        let calls_for_rpc = calls.clone();
-
-        let mut rpc = MockVerificationRpc::new();
-        rpc.expect_get_logs_for_block_range()
-            .withf(|_, from: &u64, to: &u64| *from == 11 && *to == 11)
-            .returning(move |_, _, _| {
-                calls_for_rpc.fetch_add(1, AtomicOrdering::SeqCst);
-                Ok(canonical.clone())
-            });
-
-        let indexer_state = IndexerState::default();
-        // The block was indexed by the continuous phase, so only the discovery boundary exempts it.
-        indexer_state.set_continuous_start_block(1);
-        let (tip_tx, tip_rx) = watch::channel(Some(sample_tip(Some(10))));
-        let (round_tx, mut round_rx) = watch::channel(0);
-        let task = spawn_verification(
-            Arc::new(rpc),
-            db,
-            log_handler(vec![base_address]),
-            indexer_state.clone(),
-            tip_rx,
-            None,
-            round_tx,
-        );
-
-        wait_for_round(&mut round_rx, 1).await;
-        tip_tx.send_replace(Some(sample_tip(Some(11))));
-        wait_for_round(&mut round_rx, 2).await;
-
-        assert!(
-            !indexer_state.verification_failed(),
-            "a Safe discovered in the verified block must not halt the indexer"
-        );
-        assert_eq!(calls.load(AtomicOrdering::SeqCst), 1);
-        drop(tip_tx);
-        task.await?;
-
-        Ok(())
-    }
-
-    /// A canonical log of a Safe that was in the filter long before the block must be in the store.
-    #[tokio::test]
-    async fn canonical_log_of_a_known_safe_in_a_continuous_block_halts_the_indexer() -> anyhow::Result<()> {
-        let base_address = Address::from([0x11; 20]);
-        let safe_address = Address::from([0x33; 20]);
-        let base_log = sample_log(11, 0, 1, 2);
-        let db = prepare_db(11, vec![base_log.clone()]).await?;
-        db.create_safe_contract(None, safe_address, Address::default(), Address::default(), 10, 0, 0)
-            .await?;
-
-        let canonical = vec![
-            base_log,
-            SerializableLog {
-                address: safe_address,
-                ..sample_log(11, 1, 1, 2)
-            },
-        ];
-        let mut rpc = MockVerificationRpc::new();
-        rpc.expect_get_logs_for_block_range()
-            .withf(|_, from: &u64, to: &u64| *from == 11 && *to == 11)
-            .returning(move |_, _, _| Ok(canonical.clone()));
-
-        let indexer_state = IndexerState::default();
-        indexer_state.set_continuous_start_block(1);
-        let (tip_tx, tip_rx) = watch::channel(Some(sample_tip(Some(10))));
-        let (round_tx, mut round_rx) = watch::channel(0);
-        let task = spawn_verification(
-            Arc::new(rpc),
-            db.clone(),
-            log_handler(vec![base_address]),
-            indexer_state.clone(),
-            tip_rx,
-            None,
-            round_tx,
-        );
-
-        wait_for_round(&mut round_rx, 1).await;
-        tip_tx.send_replace(Some(sample_tip(Some(11))));
-
-        tokio::time::timeout(Duration::from_secs(1), task)
-            .await
-            .expect("the task should stop after a mismatch")?;
-
-        assert!(
-            indexer_state.verification_failed(),
-            "a missing log of a known Safe is a mismatch"
-        );
-
+        // Restarting keeps the persisted halt regardless of verify_finalized and makes zero RPC calls.
         for verify_finalized in [true, false] {
             let fresh = IndexerState::default();
             let indexer = Indexer::new(
-                MockVerificationRpc::new(), // No RPC calls are allowed before honoring the halt.
-                log_handler(vec![base_address]),
+                MockVerificationRpc::new(),
+                log_handler(vec![static_addr()]),
                 db.clone(),
                 IndexerConfig {
                     verify_finalized,
@@ -1656,245 +1038,165 @@ mod tests {
                 fresh.clone(),
             );
             let handle = tokio::time::timeout(Duration::from_secs(1), indexer.start()).await??;
-            assert!(
-                fresh.verification_failed(),
-                "readiness must remain failed after restart"
-            );
+            assert!(fresh.verification_failed());
             assert_eq!(db.get_last_verified_block(None).await?, Some(10));
             handle.abort();
         }
-
         Ok(())
     }
 
-    /// Blocks that the historical discovery phase indexed hold no Safe logs at all.
     #[tokio::test]
-    async fn canonical_logs_of_a_safe_below_the_continuous_start_are_not_missing_from_store() -> anyhow::Result<()> {
-        let base_address = Address::from([0x11; 20]);
-        let safe_address = Address::from([0x33; 20]);
-        let base_log = sample_log(11, 0, 1, 2);
-        let db = prepare_db(11, vec![base_log.clone()]).await?;
-        db.create_safe_contract(None, safe_address, Address::default(), Address::default(), 5, 0, 0)
-            .await?;
+    async fn transient_empty_and_conflicting_rechecks_do_not_halt_or_persist_marker() -> anyhow::Result<()> {
+        let logs = vec![sample_log(11, 0, 1, 2), sample_log(12, 0, 3, 4)];
 
-        let canonical = vec![
-            base_log,
-            SerializableLog {
-                address: safe_address,
-                ..sample_log(11, 1, 1, 2)
-            },
-        ];
+        // Case 1: transient empty first response, clean recheck.
+        let db = prepare_db(12, logs.clone()).await?;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = calls.clone();
+        let expected = logs.clone();
         let mut rpc = MockVerificationRpc::new();
-        rpc.expect_get_logs_for_block_range()
-            .withf(|_, from: &u64, to: &u64| *from == 11 && *to == 11)
-            .returning(move |_, _, _| Ok(canonical.clone()));
+        rpc.expect_get_logs_for_block_range().returning(move |_, _, _| {
+            if counted.fetch_add(1, AtomicOrdering::SeqCst) == 0 {
+                Ok(Vec::new())
+            } else {
+                Ok(expected.clone())
+            }
+        });
+        let mut h = VerificationHarness::spawn(db, rpc, Vec::new(), Some(10), None).await;
+        h.wait_round(1).await;
+        h.send_finalized(Some(12));
+        h.wait_round(2).await;
+        assert_eq!(calls.load(AtomicOrdering::SeqCst), 2);
+        assert!(!h.state.verification_failed());
+        assert_eq!(h.db.get_last_verified_block(None).await?, Some(12));
+        assert_eq!(h.db.verification_failed_at().await?, None);
+        h.finish().await?;
 
-        let indexer_state = IndexerState::default();
-        indexer_state.set_continuous_start_block(100);
-        let (tip_tx, tip_rx) = watch::channel(Some(sample_tip(Some(10))));
-        let (round_tx, mut round_rx) = watch::channel(0);
-        let task = spawn_verification(
-            Arc::new(rpc),
-            db,
-            log_handler(vec![base_address]),
-            indexer_state.clone(),
-            tip_rx,
-            None,
-            round_tx,
-        );
-
-        wait_for_round(&mut round_rx, 1).await;
-        tip_tx.send_replace(Some(sample_tip(Some(11))));
-        wait_for_round(&mut round_rx, 2).await;
-
-        assert!(!indexer_state.verification_failed());
-        drop(tip_tx);
-        task.await?;
-
-        Ok(())
-    }
-
-    /// A cursor stored by an earlier process resumes the blocks that became final while it was down.
-    #[tokio::test]
-    async fn stored_cursor_below_the_finalized_block_resumes_the_range_in_between() -> anyhow::Result<()> {
-        let logs = vec![sample_log(101, 0, 1, 2), sample_log(110, 0, 3, 4)];
-        let db = prepare_db(110, logs.clone()).await?;
-        db.set_last_verified_block(None, 100).await?;
-        let observed = db.clone();
-
-        let mut rpc = MockVerificationRpc::new();
-        rpc.expect_get_logs_for_block_range()
-            .withf(|_, from: &u64, to: &u64| *from == 101 && *to == 110)
-            .returning(move |_, _, _| Ok(logs.clone()));
-
-        let indexer_state = IndexerState::default();
-        let (tip_tx, tip_rx) = watch::channel(Some(sample_tip(Some(110))));
-        let (round_tx, mut round_rx) = watch::channel(0);
-        let task = spawn_verification(
-            Arc::new(rpc),
-            db,
-            log_handler(Vec::new()),
-            indexer_state.clone(),
-            tip_rx,
-            None,
-            round_tx,
-        );
-
-        wait_for_round(&mut round_rx, 1).await;
-
-        assert_eq!(
-            observed.get_last_verified_block(None).await?,
-            Some(110),
-            "the range between the stored cursor and the finalized block is verified and stored"
-        );
-        assert!(!indexer_state.verification_failed());
-        drop(tip_tx);
-        task.await?;
-
-        Ok(())
-    }
-
-    /// Blocks indexed while finality was unknown are verified once it appears.
-    #[tokio::test]
-    async fn blocks_indexed_while_finality_was_unknown_are_verified() -> anyhow::Result<()> {
-        let logs = vec![sample_log(101, 0, 1, 2), sample_log(110, 0, 3, 4)];
-        let db = prepare_db(100, logs.clone()).await?;
-        let observed = db.clone();
-
-        let mut rpc = MockVerificationRpc::new();
-        rpc.expect_get_logs_for_block_range()
-            .withf(|_, from: &u64, to: &u64| *from == 101 && *to == 110)
-            .returning(move |_, _, _| Ok(logs.clone()));
-
-        let indexer_state = IndexerState::default();
-        let (tip_tx, tip_rx) = watch::channel(Some(sample_tip(None)));
-        let (round_tx, mut round_rx) = watch::channel(0);
-        let task = spawn_verification(
-            Arc::new(rpc),
-            db,
-            log_handler(Vec::new()),
-            indexer_state.clone(),
-            tip_rx,
-            Some(100),
-            round_tx,
-        );
-
-        wait_for_round(&mut round_rx, 1).await;
-        assert_eq!(
-            observed.get_last_verified_block(None).await?,
-            None,
-            "nothing is stored while the cursor is unset"
-        );
-
-        // The indexer advances while finality stays unknown.
-        observed.set_indexer_state_info(None, 110).await?;
-        tip_tx.send_replace(Some(sample_tip(None)));
-        wait_for_round(&mut round_rx, 2).await;
-
-        // Finality appears above everything indexed meanwhile, so the cursor starts at the block
-        // the first round saw and the blocks above it are verified.
-        tip_tx.send_replace(Some(sample_tip(Some(110))));
-        wait_for_round(&mut round_rx, 3).await;
-        assert_eq!(observed.get_last_verified_block(None).await?, Some(100));
-
-        tip_tx.send_replace(Some(sample_tip(Some(110))));
-        wait_for_round(&mut round_rx, 4).await;
-
-        assert_eq!(observed.get_last_verified_block(None).await?, Some(110));
-        assert!(!indexer_state.verification_failed());
-        drop(tip_tx);
-        task.await?;
-
-        Ok(())
-    }
-
-    /// An empty index does not pull the cursor down to the genesis block.
-    #[tokio::test]
-    async fn empty_index_without_finality_starts_the_cursor_at_the_first_finalized_block() -> anyhow::Result<()> {
-        let db = prepare_db(0, Vec::new()).await?;
-        let observed = db.clone();
-
-        // No expectation is set: a fetched range would fail the test.
-        let rpc = MockVerificationRpc::new();
-
-        let indexer_state = IndexerState::default();
-        let (tip_tx, tip_rx) = watch::channel(Some(sample_tip(None)));
-        let (round_tx, mut round_rx) = watch::channel(0);
-        let task = spawn_verification(
-            Arc::new(rpc),
-            db,
-            log_handler(Vec::new()),
-            indexer_state.clone(),
-            tip_rx,
-            None,
-            round_tx,
-        );
-
-        wait_for_round(&mut round_rx, 1).await;
-
-        tip_tx.send_replace(Some(sample_tip(Some(50))));
-        wait_for_round(&mut round_rx, 2).await;
-        assert_eq!(observed.get_last_verified_block(None).await?, Some(50));
-
-        tip_tx.send_replace(Some(sample_tip(Some(50))));
-        wait_for_round(&mut round_rx, 3).await;
-
-        assert_eq!(observed.get_last_verified_block(None).await?, Some(50));
-        assert!(!indexer_state.verification_failed());
-        drop(tip_tx);
-        task.await?;
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn mismatch_recheck_waits_for_a_durable_range() -> anyhow::Result<()> {
-        let db = prepare_db(12, vec![sample_log(11, 0, 1, 2)]).await?;
-        db.set_last_verified_block(None, 10).await?;
-        let conn = db.conn(TargetDb::Index);
-        conn.execute_unprepared(
-            "CREATE TRIGGER reject_marker BEFORE UPDATE OF verification_failed_at ON chain_info BEGIN SELECT \
-             RAISE(ABORT, 'read only'); END",
-        )
-        .await?;
+        // Case 2: two conflicting partial responses retry without halting or writing a halt marker.
+        let db = prepare_db(12, logs.clone()).await?;
         let calls = Arc::new(AtomicUsize::new(0));
         let counted = calls.clone();
         let mut rpc = MockVerificationRpc::new();
         rpc.expect_get_logs_for_block_range().returning(move |_, _, _| {
-            counted.fetch_add(1, AtomicOrdering::SeqCst);
-            Ok(Vec::new())
+            match counted.fetch_add(1, AtomicOrdering::SeqCst) {
+                0 => Ok(vec![sample_log(11, 0, 1, 2)]),
+                1 => Ok(vec![sample_log(12, 0, 3, 4)]),
+                _ => Ok(logs.clone()),
+            }
         });
-        let state = IndexerState::default();
-        let (tips, receiver) = watch::channel(Some(sample_tip(Some(12))));
-        let (rounds, mut completed) = watch::channel(0);
-        let task = spawn_verification(
-            Arc::new(rpc),
-            db.clone(),
-            log_handler(Vec::new()),
-            state.clone(),
-            receiver,
-            None,
-            rounds,
-        );
-        wait_for_round(&mut completed, 1).await;
-        assert_eq!(calls.load(AtomicOrdering::SeqCst), 1);
-        assert_eq!(db.get_last_verified_block(None).await?, Some(10));
-        conn.execute_unprepared("DROP TRIGGER reject_marker").await?;
-        tips.send_replace(Some(sample_tip(Some(12))));
-        tokio::time::timeout(Duration::from_secs(1), task).await??;
-        assert!(state.verification_failed());
-        Ok(())
+        let mut h = VerificationHarness::spawn(db, rpc, Vec::new(), Some(10), None).await;
+        h.wait_round(1).await;
+        h.send_finalized(Some(12));
+        h.wait_round(2).await;
+        assert_eq!(calls.load(AtomicOrdering::SeqCst), 2);
+        assert!(!h.state.verification_failed());
+        assert_eq!(h.db.get_last_verified_block(None).await?, Some(10));
+        assert_eq!(h.db.verification_failed_at().await?, None);
+
+        h.send_finalized(Some(12));
+        h.wait_round(3).await;
+        assert_eq!(calls.load(AtomicOrdering::SeqCst), 3);
+        assert!(!h.state.verification_failed());
+        assert_eq!(h.db.get_last_verified_block(None).await?, Some(12));
+        h.finish().await
     }
 
-    /// A failed cursor write keeps the stored position and re-verifies the same range.
     #[tokio::test]
-    async fn cursor_is_not_advanced_when_the_store_write_fails() -> anyhow::Result<()> {
+    async fn rpc_error_and_safe_canonical_log_do_not_halt() -> anyhow::Result<()> {
+        // RPC error retries on the next tip update.
+        let logs = vec![sample_log(11, 0, 1, 2)];
+        let db = prepare_db(11, logs.clone()).await?;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = calls.clone();
+        let expected = logs.clone();
+        let mut rpc = MockVerificationRpc::new();
+        rpc.expect_get_logs_for_block_range().returning(move |_, _, _| {
+            if counted.fetch_add(1, AtomicOrdering::SeqCst) == 0 {
+                Err(RpcError::Other("rpc is down".to_string()))
+            } else {
+                Ok(expected.clone())
+            }
+        });
+        let mut h = VerificationHarness::spawn(db, rpc, Vec::new(), Some(10), None).await;
+        h.wait_round(1).await;
+        h.send_finalized(Some(11));
+        h.wait_round(2).await;
+        assert_eq!(calls.load(AtomicOrdering::SeqCst), 1);
+        assert!(!h.state.verification_failed());
+        h.send_finalized(Some(11));
+        h.wait_round(3).await;
+        assert_eq!(calls.load(AtomicOrdering::SeqCst), 2);
+        assert!(!h.state.verification_failed());
+        h.finish().await?;
+
+        // Canonical Safe log missing from store does not halt verification.
+        let base_log = sample_log(11, 0, 1, 2);
+        let db = prepare_db(11, vec![base_log.clone()]).await?;
+        db.create_safe_contract(None, safe_addr(), Address::default(), Address::default(), 11, 0, 1)
+            .await?;
+        let canonical = vec![base_log, sample_safe_log(11)];
+        let mut rpc = MockVerificationRpc::new();
+        rpc.expect_get_logs_for_block_range()
+            .withf(|_, from: &u64, to: &u64| *from == 11 && *to == 11)
+            .returning(move |_, _, _| Ok(canonical.clone()));
+        let mut h = VerificationHarness::spawn(db, rpc, vec![static_addr()], Some(10), None).await;
+        h.wait_round(1).await;
+        h.send_finalized(Some(11));
+        h.wait_round(2).await;
+        assert!(!h.state.verification_failed());
+        assert_eq!(h.db.get_last_verified_block(None).await?, Some(11));
+        h.finish().await
+    }
+
+    #[tokio::test]
+    async fn cursor_resume_baseline_and_empty_index_initialization() -> anyhow::Result<()> {
+        // Resuming from a persisted cursor verifies the gap immediately.
+        let logs = vec![sample_log(101, 0, 1, 2), sample_log(110, 0, 3, 4)];
+        let db = prepare_db(110, logs.clone()).await?;
+        db.set_last_verified_block(None, 100).await?;
+        let expected = logs.clone();
+        let mut rpc = MockVerificationRpc::new();
+        rpc.expect_get_logs_for_block_range()
+            .withf(|_, from: &u64, to: &u64| *from == 101 && *to == 110)
+            .returning(move |_, _, _| Ok(expected.clone()));
+        let mut h = VerificationHarness::spawn(db, rpc, Vec::new(), Some(110), None).await;
+        h.wait_round(1).await;
+        assert_eq!(h.db.get_last_verified_block(None).await?, Some(110));
+        h.finish().await?;
+
+        // Blocks indexed while finality was unknown are verified from the startup baseline.
+        let db = prepare_db(100, logs.clone()).await?;
+        let mut rpc = MockVerificationRpc::new();
+        rpc.expect_get_logs_for_block_range()
+            .withf(|_, from: &u64, to: &u64| *from == 101 && *to == 110)
+            .returning(move |_, _, _| Ok(logs.clone()));
+        let mut h = VerificationHarness::spawn(db, rpc, Vec::new(), None, Some(100)).await;
+        h.wait_round(1).await;
+        assert_eq!(h.db.get_last_verified_block(None).await?, None);
+        h.db.set_indexer_state_info(None, 110).await?;
+        h.send_finalized(Some(110));
+        h.wait_round(2).await;
+        assert_eq!(h.db.get_last_verified_block(None).await?, Some(100));
+        h.send_finalized(Some(110));
+        h.wait_round(3).await;
+        assert_eq!(h.db.get_last_verified_block(None).await?, Some(110));
+        h.finish().await?;
+
+        // Empty index without finality starts at the first finalized block without fetching history.
+        let db = prepare_db(0, Vec::new()).await?;
+        let mut h = VerificationHarness::spawn(db, MockVerificationRpc::new(), Vec::new(), None, None).await;
+        h.wait_round(1).await;
+        h.send_finalized(Some(50));
+        h.wait_round(2).await;
+        assert_eq!(h.db.get_last_verified_block(None).await?, Some(50));
+        h.finish().await
+    }
+
+    #[tokio::test]
+    async fn cursor_write_failure_retries_and_stored_logs_are_range_bounded() -> anyhow::Result<()> {
         let logs = vec![sample_log(11, 0, 1, 2)];
         let db = prepare_db(11, logs.clone()).await?;
         db.set_last_verified_block(None, 10).await?;
-        let observed = db.clone();
-
-        // A trigger fails only the cursor write, so the store stays readable.
         db.conn(TargetDb::Index)
             .execute_unprepared(
                 "CREATE TRIGGER fail_last_verified_block_write BEFORE UPDATE OF last_verified_block ON chain_info \
@@ -1903,57 +1205,28 @@ mod tests {
             .await?;
 
         let calls = Arc::new(AtomicUsize::new(0));
-        let calls_for_rpc = calls.clone();
-
+        let counted = calls.clone();
         let mut rpc = MockVerificationRpc::new();
         rpc.expect_get_logs_for_block_range()
             .withf(|_, from: &u64, to: &u64| *from == 11 && *to == 11)
             .returning(move |_, _, _| {
-                calls_for_rpc.fetch_add(1, AtomicOrdering::SeqCst);
+                counted.fetch_add(1, AtomicOrdering::SeqCst);
                 Ok(logs.clone())
             });
 
-        let indexer_state = IndexerState::default();
-        let (tip_tx, tip_rx) = watch::channel(Some(sample_tip(Some(10))));
-        let (round_tx, mut round_rx) = watch::channel(0);
-        let task = spawn_verification(
-            Arc::new(rpc),
-            db,
-            log_handler(Vec::new()),
-            indexer_state.clone(),
-            tip_rx,
-            None,
-            round_tx,
-        );
-
-        wait_for_round(&mut round_rx, 1).await;
-        tip_tx.send_replace(Some(sample_tip(Some(11))));
-        wait_for_round(&mut round_rx, 2).await;
-
+        let mut h = VerificationHarness::spawn(db, rpc, Vec::new(), Some(10), None).await;
+        h.wait_round(1).await;
+        h.send_finalized(Some(11));
+        h.wait_round(2).await;
         assert_eq!(calls.load(AtomicOrdering::SeqCst), 1);
-        assert_eq!(
-            observed.get_last_verified_block(None).await?,
-            Some(10),
-            "the stored position must not move past a failed write"
-        );
+        assert_eq!(h.db.get_last_verified_block(None).await?, Some(10));
+        h.send_finalized(Some(11));
+        h.wait_round(3).await;
+        assert_eq!(calls.load(AtomicOrdering::SeqCst), 2);
+        assert!(!h.state.verification_failed());
+        h.finish().await?;
 
-        tip_tx.send_replace(Some(sample_tip(Some(11))));
-        wait_for_round(&mut round_rx, 3).await;
-
-        assert_eq!(
-            calls.load(AtomicOrdering::SeqCst),
-            2,
-            "the same range is verified again"
-        );
-        assert!(!indexer_state.verification_failed(), "a failed write is not a mismatch");
-        drop(tip_tx);
-        task.await?;
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn stored_logs_are_compared_for_the_verified_range_only() -> anyhow::Result<()> {
+        // Range read only returns logs inside [from, to].
         let db = prepare_db(
             13,
             vec![
@@ -1964,27 +1237,16 @@ mod tests {
             ],
         )
         .await?;
-
-        // The range read that verification performs for `(10, 12]`.
         let stored = db.get_logs(Some(11), Some(12 - 11)).await?;
         assert_eq!(
             stored.iter().map(|log| log.block_number).collect::<Vec<_>>(),
-            vec![11, 12],
-            "the read must return exactly the verified range"
+            vec![11, 12]
         );
-
         let canonical = vec![sample_log(11, 0, 3, 4), sample_log(12, 0, 5, 6)];
-        let mismatch = compare_logs(&stored, &canonical, &sample_coverage());
-        assert!(
-            mismatch.is_empty(),
-            "the stored log outside the range must not be compared: {mismatch:?}"
-        );
-
-        let canonical_without_to = vec![sample_log(11, 0, 3, 4)];
-        let mismatch = compare_logs(&stored, &canonical_without_to, &sample_coverage());
+        assert!(compare_logs(&stored, &canonical, &static_set()).is_empty());
+        let mismatch = compare_logs(&stored, &[sample_log(11, 0, 3, 4)], &static_set());
         assert_eq!(mismatch.missing_from_chain.len(), 1);
         assert_eq!(mismatch.missing_from_chain[0].block_number, 12);
-
         Ok(())
     }
 }

@@ -190,8 +190,8 @@ RPC Endpoint
 - **Post-Finality Verification**: Re-checks every block that was indexed before it was final once the chain reports it final, by re-fetching
   the logs of the finalized range through the same endpoint and comparing them with the stored ones. A difference that a second comparison
   confirms halts the indexer, marks the service as not ready, and is counted in a metric, while a failed fetch is retried on the next tip
-  update. The check has limits: operators can disable it, it stays idle while the endpoint reports no finalized block, and a missing log of
-  a Safe is only detected in blocks that the continuous phase of the running process indexed after the Safe was discovered.
+  update. The check has limits: operators can disable it, it stays idle while the endpoint reports no finalized block, and canonical logs of
+  runtime-discovered Safe contracts are exempt from the missing-from-store check (stored Safe logs are still verified strictly).
 - **Watermark Tracking**: Maintains precise last processed position using (block, tx_index, log_index) triplet for exact resume capability
 - **Dual Database Support**: Separates logs (high write volume) from indexed state (frequent reads) to reduce contention
 
@@ -1611,13 +1611,13 @@ position stored in the index database, so a restart resumes above the blocks an 
 became final while the daemon was down. The first position starts at the lower of the first finalized block and the committed watermark the
 process had when it started, so blocks written before the provider returned a finalized block are checked later as well. A range that
 differs is compared a second time after a short delay, because a load-balanced or lagging backend can return an empty or partial result
-without an error. If both comparisons find the same difference, the indexer records the failure in the index database and stops advancing.
-Readiness reports the failure across restarts until an operator restores or rebuilds the index. The index also retains the unresolved range
-if the process stops during the second comparison. A failed read or cursor write causes a retry on the next tip update. A replayed block
-that puts a different log at the position of a Safe registration the index already applied is not written and is treated as a difference,
-because applying the replacement would leave the replaced Safe in the index while hiding the change from the comparison. Because the set of
-Safe contract addresses grows while indexing, a canonical log of a Safe has to be in the store only when the block was indexed by the
-continuous phase of the same process and the Safe was discovered in an earlier block. Logs of the static contracts are always required.
+without an error. If both comparisons find the same difference, the indexer persists the failure in the index database and stops advancing.
+Readiness reports the failure across restarts until an operator restores or rebuilds the index. A failed read or cursor write causes a retry
+on the next tip update. A replayed block that puts a different log at the position of a Safe registration the index already applied is not
+written and is treated as a difference, because applying the replacement would leave the replaced Safe in the index while hiding the change
+from the comparison. Because the set of Safe contract addresses grows while indexing, canonical Safe logs are exempt from the
+missing-from-store check, while all stored logs (including Safe logs) are checked strictly against the canonical chain and logs of static
+contracts are checked in both directions.
 
 ### Finality Handling in Readiness Checks
 

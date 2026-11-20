@@ -22,6 +22,7 @@ use blokli_chain_indexer::verification::VerificationStatus;
 use blokli_chain_rpc::rpc::RpcOperations;
 use blokli_db_entity::prelude::ChainInfo;
 use sea_orm::{DatabaseConnection, EntityTrait};
+use serde::Serialize;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
@@ -47,50 +48,78 @@ pub struct ReadinessReport {
     pub state: ReadinessState,
     /// Health status label for the `blokli_health` metric.
     pub health_status: &'static str,
-    /// Database check details.
-    pub database: DatabaseCheck,
-    /// RPC check details.
-    pub rpc: RpcCheck,
-    /// Indexer lag check details.
-    pub indexer: IndexerCheck,
-    /// Post-finality verification check details.
-    pub verification: VerificationCheck,
+    /// Per-subsystem diagnostic check statuses rendered by `/readyz`.
+    pub checks: ReadinessChecks,
 }
 
-/// Database check details reported by `/readyz`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct DatabaseCheck {
-    /// Last indexed block, when chain info exists.
-    pub last_indexed_block: Option<i64>,
-    /// Failure reason, when the database could not provide chain info.
+/// Individual readiness checks rendered by `/readyz`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReadinessChecks {
+    /// Database connectivity check.
+    pub database: CheckStatus,
+    /// RPC tip check.
+    pub rpc: RpcCheckStatus,
+    /// Indexer lag check.
+    pub indexer: IndexerCheckStatus,
+    /// Post-finality verification check.
+    pub verification: CheckStatus,
+}
+
+/// Generic check status.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CheckStatus {
+    /// `"healthy"` or `"unhealthy"`.
+    pub status: String,
+    /// Failure description when unhealthy.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
-/// RPC check details reported by `/readyz`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RpcCheck {
+impl CheckStatus {
+    /// Creates a healthy check status.
+    pub fn healthy() -> Self {
+        Self {
+            status: "healthy".to_string(),
+            error: None,
+        }
+    }
+
+    /// Creates an unhealthy check status with an error message.
+    pub fn unhealthy(error: impl Into<String>) -> Self {
+        Self {
+            status: "unhealthy".to_string(),
+            error: Some(error.into()),
+        }
+    }
+}
+
+/// RPC check status with confirmed block number.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RpcCheckStatus {
+    /// `"healthy"` or `"unhealthy"`.
+    pub status: String,
     /// Confirmed block reported by the chain tip tracker.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub block_number: Option<u64>,
-    /// Failure reason, when the confirmed block could not be read.
+    /// Failure description when unhealthy.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
-/// Indexer lag check details reported by `/readyz`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct IndexerCheck {
+/// Indexer check status with lag information.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct IndexerCheckStatus {
+    /// `"healthy"` or `"unhealthy"`.
+    pub status: String,
     /// Last indexed block, when chain info exists.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub last_indexed_block: Option<i64>,
     /// Lag between the confirmed block and the indexer watermark.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub lag: Option<u64>,
-    /// Whether the lag exceeds the configured threshold.
-    pub lag_exceeded: bool,
-}
-
-/// Post-finality verification check details reported by `/readyz`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct VerificationCheck {
-    /// Whether the verification task found a mismatch.
-    pub failed: bool,
+    /// Failure description when lag exceeds threshold.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// Shared readiness state tracker with caching and periodic updates
@@ -166,7 +195,7 @@ impl ReadinessChecker {
         if self.verification_status.failed() {
             report.state = ReadinessState::NotReady;
             report.health_status = metrics::HEALTH_STATUS_VERIFICATION_FAILED;
-            report.verification.failed = true;
+            report.checks.verification = CheckStatus::unhealthy("Post-finality verification found a mismatch");
         }
 
         self.store_state(&mut cached, report.state, report.health_status);
@@ -224,40 +253,49 @@ impl ReadinessChecker {
     /// `check_and_update` applies the verification status under that lock.
     async fn check_readiness(&self) -> ReadinessReport {
         // 1. Check database connectivity by querying chain_info
-        let mut database = DatabaseCheck::default();
-        let mut database_health_status = None;
-        match ChainInfo::find().one(&self.db).await {
-            Ok(Some(info)) => database.last_indexed_block = Some(info.last_indexed_block),
-            Ok(None) => {
-                // No chain info yet - indexer hasn't started
-                database.error = Some("No chain info found - indexer may not have started".to_string());
-                database_health_status = Some(metrics::HEALTH_STATUS_UNSYNCHED);
-            }
+        let (last_indexed_block, database, database_health_status) = match ChainInfo::find().one(&self.db).await {
+            Ok(Some(info)) => (Some(info.last_indexed_block), CheckStatus::healthy(), None),
+            Ok(None) => (
+                None,
+                CheckStatus::unhealthy("No chain info found - indexer may not have started"),
+                Some(metrics::HEALTH_STATUS_UNSYNCHED),
+            ),
             Err(e) => {
                 error!("Database check failed: {}", e);
-                database.error = Some(e.to_string());
-                database_health_status = Some(metrics::HEALTH_STATUS_CORRUPTED);
+                (
+                    None,
+                    CheckStatus::unhealthy(e.to_string()),
+                    Some(metrics::HEALTH_STATUS_CORRUPTED),
+                )
             }
-        }
+        };
 
         // 2. Check RPC connectivity and get the tracker's confirmed tip
-        // NOTE: get_block_number() returns the chain tip tracker's confirmed block
-        // This ensures we only compare lag against confirmed blocks, not unconfirmed chain head
-        let mut rpc = RpcCheck::default();
-        match self.rpc_operations.get_block_number().await {
-            Ok(block) => rpc.block_number = Some(block),
+        let rpc = match self.rpc_operations.get_block_number().await {
+            Ok(block) => RpcCheckStatus {
+                status: "healthy".to_string(),
+                block_number: Some(block),
+                error: None,
+            },
             Err(e) => {
                 error!("RPC check failed: {}", e);
-                rpc.error = Some(e.to_string());
+                RpcCheckStatus {
+                    status: "unhealthy".to_string(),
+                    block_number: None,
+                    error: Some(e.to_string()),
+                }
             }
-        }
+        };
 
         // 3. Check indexer lag
-        let mut indexer = IndexerCheck::default();
-        if let (Some(indexed), Some(rpc_block)) = (database.last_indexed_block, rpc.block_number) {
-            let indexed_u64 = u64::try_from(indexed).unwrap_or(0);
-            let lag = rpc_block.saturating_sub(indexed_u64);
-            indexer.last_indexed_block = Some(indexed);
+        let mut indexer = IndexerCheckStatus {
+            status: "healthy".to_string(),
+            last_indexed_block,
+            lag: None,
+            error: None,
+        };
+        if let (Some(indexed), Some(rpc_block)) = (last_indexed_block, rpc.block_number) {
+            let lag = rpc_block.saturating_sub(u64::try_from(indexed).unwrap_or(0));
             indexer.lag = Some(lag);
 
             if lag > self.health_config.max_indexer_lag {
@@ -268,9 +306,12 @@ impl ReadinessChecker {
                     max_lag = self.health_config.max_indexer_lag,
                     "Indexer lag exceeds threshold (lag compared against the tracker's confirmed tip)"
                 );
-                indexer.lag_exceeded = true;
+                indexer.status = "unhealthy".to_string();
+                indexer.error = Some(format!(
+                    "indexer lag exceeds threshold ({} > {} blocks)",
+                    lag, self.health_config.max_indexer_lag
+                ));
             } else {
-                // Log successful readiness check
                 debug!(
                     %lag,
                     confirmed_block = %rpc_block,
@@ -278,16 +319,13 @@ impl ReadinessChecker {
                     "Indexer within acceptable lag of confirmed blocks"
                 );
             }
-        } else if let Some(indexed) = database.last_indexed_block {
-            // We have indexed block but no RPC block - the RPC check already failed
-            indexer.last_indexed_block = Some(indexed);
         }
 
         let health_status = if let Some(status) = database_health_status {
             status
         } else if rpc.error.is_some() {
             metrics::HEALTH_STATUS_TIMEOUT
-        } else if indexer.lag_exceeded || indexer.lag.is_none() {
+        } else if indexer.error.is_some() || indexer.lag.is_none() {
             metrics::HEALTH_STATUS_UNSYNCHED
         } else {
             metrics::HEALTH_STATUS_OK
@@ -302,10 +340,12 @@ impl ReadinessChecker {
         ReadinessReport {
             state,
             health_status,
-            database,
-            rpc,
-            indexer,
-            verification: VerificationCheck::default(),
+            checks: ReadinessChecks {
+                database,
+                rpc,
+                indexer,
+                verification: CheckStatus::healthy(),
+            },
         }
     }
 }
@@ -437,22 +477,13 @@ mod tests {
     async fn missing_safe_tag_reports_not_ready() -> anyhow::Result<()> {
         let mut server = mockito::Server::new_async().await;
         let tip = mock_tip_without_confirmation_tags(&mut server);
-
-        let transport = ReqwestTransport::new(server.url().parse()?);
-        let rpc_client = ClientBuilder::default().transport(transport.clone(), transport.guess_local());
-        let rpc = Arc::new(
-            RpcOperations::new(
-                rpc_client,
-                ReqwestClient::new(),
-                RpcOperationsConfig {
-                    confirmation_mode: ConfirmationMode::Safe,
-                    ..RpcOperationsConfig::default()
-                },
-                None,
-            )
-            .expect("RPC operations should be constructible"),
-        );
-
+        let rpc = rpc_operations_for(
+            &server,
+            RpcOperationsConfig {
+                confirmation_mode: ConfirmationMode::Safe,
+                ..RpcOperationsConfig::default()
+            },
+        )?;
         let db = BlokliDb::new_in_memory().await?;
         let checker = ReadinessChecker::new(db.conn(TargetDb::Index).clone(), rpc, HealthConfig::default());
 
@@ -460,16 +491,8 @@ mod tests {
 
         tip.assert();
         assert_eq!(report.state, ReadinessState::NotReady);
-        assert!(
-            report.rpc.error.as_deref().is_some_and(|error| error.contains("safe")),
-            "the RPC check must report the missing safe tag: {:?}",
-            report.rpc.error
-        );
-        assert!(
-            report.indexer.lag.is_none(),
-            "a confirmed block of zero must not produce a lag of zero"
-        );
-
+        assert!(report.checks.rpc.error.as_deref().is_some_and(|e| e.contains("safe")));
+        assert!(report.checks.indexer.lag.is_none());
         Ok(())
     }
 
@@ -494,17 +517,9 @@ mod tests {
         tip.assert();
         assert_eq!(report.state, ReadinessState::NotReady);
         assert_eq!(report.health_status, metrics::HEALTH_STATUS_VERIFICATION_FAILED);
-        assert!(report.verification.failed);
-        assert!(
-            report.rpc.error.is_none(),
-            "the RPC check must still run when verification failed: {:?}",
-            report.rpc.error
-        );
-        assert!(
-            report.rpc.block_number.is_some(),
-            "the RPC stub must answer the chain tip request"
-        );
-
+        assert_eq!(report.checks.verification.status, "unhealthy");
+        assert!(report.checks.rpc.error.is_none());
+        assert!(report.checks.rpc.block_number.is_some());
         Ok(())
     }
 
@@ -592,7 +607,7 @@ mod tests {
         tip.assert();
         assert_eq!(report.state, ReadinessState::NotReady);
         assert_eq!(report.health_status, metrics::HEALTH_STATUS_VERIFICATION_FAILED);
-        assert!(report.verification.failed);
+        assert_eq!(report.checks.verification.status, "unhealthy");
         assert_eq!(updates.try_recv()?, report.state);
         assert_eq!(checker.get().await, report.state);
 

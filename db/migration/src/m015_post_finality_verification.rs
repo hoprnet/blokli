@@ -1,10 +1,8 @@
 use sea_orm_migration::prelude::*;
 
-/// Adds the last block that post-finality verification checked to `chain_info`.
-///
-/// The verification position has to outlive the process. Blocks indexed above finality before a
-/// restart can become final while the daemon is down; with an in-memory position a restarted
-/// process starts at the finalized block of that moment and never checks them.
+/// Adds post-finality verification state columns to `chain_info`:
+/// - `last_verified_block`: last block whose stored logs matched canonical finalized logs
+/// - `verification_failed_at`: first block of a corroborated mismatching range (NULL when clear)
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
@@ -18,10 +16,28 @@ impl MigrationTrait for Migration {
                     .add_column(ColumnDef::new(ChainInfo::LastVerifiedBlock).big_integer().null())
                     .to_owned(),
             )
+            .await?;
+
+        manager
+            .alter_table(
+                Table::alter()
+                    .table(ChainInfo::Table)
+                    .add_column(ColumnDef::new(ChainInfo::VerificationFailedAt).big_integer().null())
+                    .to_owned(),
+            )
             .await
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .alter_table(
+                Table::alter()
+                    .table(ChainInfo::Table)
+                    .drop_column(ChainInfo::VerificationFailedAt)
+                    .to_owned(),
+            )
+            .await?;
+
         manager
             .alter_table(
                 Table::alter()
@@ -37,4 +53,5 @@ impl MigrationTrait for Migration {
 enum ChainInfo {
     Table,
     LastVerifiedBlock,
+    VerificationFailedAt,
 }

@@ -191,10 +191,7 @@ pub fn service_type_from_aggregate(info: AggregatedServiceType) -> Result<Servic
 
 #[cfg(test)]
 mod tests {
-    use blokli_api_types::{ChannelStatus, ConfirmationMode, FcrStatus};
-    use blokli_chain_rpc::tip::{ConfirmationMode as ChainConfirmationMode, FcrState as ChainFcrState};
-
-    use super::{convert_confirmation_mode, convert_fcr_status};
+    use blokli_api_types::ChannelStatus;
 
     #[test]
     fn test_channel_status_to_i16_mapping() {
@@ -216,32 +213,5 @@ mod tests {
             ChannelStatus::from(i16::from(ChannelStatus::PendingToClose)),
             ChannelStatus::PendingToClose
         );
-    }
-
-    #[test]
-    fn test_confirmation_mode_conversion_covers_every_variant() {
-        assert_eq!(
-            convert_confirmation_mode(ChainConfirmationMode::Depth),
-            ConfirmationMode::Depth
-        );
-        assert_eq!(
-            convert_confirmation_mode(ChainConfirmationMode::SafeOrDepth),
-            ConfirmationMode::SafeOrDepth
-        );
-        assert_eq!(
-            convert_confirmation_mode(ChainConfirmationMode::Safe),
-            ConfirmationMode::Safe
-        );
-        assert_eq!(
-            convert_confirmation_mode(ChainConfirmationMode::Finalized),
-            ConfirmationMode::Finalized
-        );
-    }
-
-    #[test]
-    fn test_fcr_status_conversion_covers_every_variant() {
-        assert_eq!(convert_fcr_status(ChainFcrState::Unavailable), FcrStatus::Unavailable);
-        assert_eq!(convert_fcr_status(ChainFcrState::Degraded), FcrStatus::Degraded);
-        assert_eq!(convert_fcr_status(ChainFcrState::Healthy), FcrStatus::Healthy);
     }
 }

@@ -88,8 +88,7 @@ reorged out or a canonical log was missed.
    transaction hash and log index.
 3. Compare the same range against an independent node with the same filter set.
 4. Check whether the endpoint that served `safe` had FCR enabled and whether it switched clients or nodes.
-5. Record the affected range. The index database retains the failure across restarts. Disabling verification does not clear it. If the
-   daemon stopped during the second comparison, it also halts on restart. In that case, a second mismatch is not established.
+5. Record the affected range. The index database retains a corroborated failure across restarts. Disabling verification does not clear it.
 6. Use the supported recovery: there is no in-place repair of indexed data. Reverting one log does not undo the state derived from it
    (channels, accounts, Safes). Restore the database from a backup taken before the affected range, or start from an empty index database
    against a trusted endpoint. Use only a trusted logs snapshot from before the affected range. See
@@ -108,15 +107,9 @@ registration no longer matches the chain.
 ### Which logs are checked
 
 Three kinds of difference are reported: a stored log that the canonical chain does not have, a stored log whose block hash or transaction
-hash changed, and a canonical log that is missing from the store. The first two are checked for every contract address. The last one depends
-on the address and the block:
-
-- Logs of the static contracts are always expected in the store.
-- Logs of a Safe are expected only when the block was indexed by the continuous phase of the running process and the Safe was discovered in
-  an earlier block. The indexer filters Safes from the block after their discovery, and the historical discovery phase filters none.
-
-So a canonical Safe log is not reported as missing when it sits in a block that a previous process indexed, in a block that the historical
-discovery phase indexed, or in the block of the Safe's own discovery.
+hash changed, and a canonical log that is missing from the store. The first two are checked for every contract address (including Safe
+contracts). The last one (`missing_from_store`) is checked only for the static contracts configured at startup, because Safe contract
+addresses are discovered dynamically while indexing.
 
 ## WebSocket Head Source
 
