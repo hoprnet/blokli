@@ -470,6 +470,10 @@ impl Config {
             self.api.transactions.max_submitted_transactions_per_identity
         ));
         output.push_str(&format!(
+            "  api.transactions.max_replacements_per_nonce: {}\n",
+            self.api.transactions.max_replacements_per_nonce
+        ));
+        output.push_str(&format!(
             "  api.transactions.terminal_transaction_ttl: {:?}\n",
             self.api.transactions.terminal_transaction_ttl
         ));
@@ -755,6 +759,13 @@ pub struct TransactionConfig {
     #[serde(default = "default_max_submitted_transactions_per_identity")]
     pub max_submitted_transactions_per_identity: usize,
 
+    /// Fee-bumped replacements accepted per signer and nonce while a transaction of that nonce is
+    /// pending, the original not counted. The count restarts once no transaction of the nonce
+    /// is pending any more. `0` refuses every replacement.
+    #[default(3)]
+    #[serde(default = "default_max_replacements_per_nonce")]
+    pub max_replacements_per_nonce: usize,
+
     /// How long terminal transaction records remain queryable. `0s` disables TTL eviction.
     #[default(_code = "Duration::from_secs(24 * 60 * 60)")]
     #[serde(default = "default_terminal_transaction_ttl", with = "humantime_serde")]
@@ -948,6 +959,10 @@ fn default_max_submitted_transactions() -> usize {
 
 fn default_max_submitted_transactions_per_identity() -> usize {
     64
+}
+
+fn default_max_replacements_per_nonce() -> usize {
+    3
 }
 
 fn default_unmined_timeout() -> Duration {
@@ -1313,6 +1328,24 @@ mod tests {
 
         let cfg = res.unwrap();
         assert!(cfg.database.is_none(), "database should be None when not specified");
+    }
+
+    #[test]
+    fn test_replacement_cap_defaults_to_three_and_the_example_config_agrees() {
+        assert_eq!(TransactionConfig::default().max_replacements_per_nonce, 3);
+
+        let config_content = fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("example-config.toml"))
+            .expect("Failed to read example-config.toml");
+        let config: Config = toml::from_str(&config_content).expect("Failed to parse example-config.toml");
+        assert_eq!(
+            config.api.transactions.max_replacements_per_nonce,
+            TransactionConfig::default().max_replacements_per_nonce
+        );
+
+        let overridden: Config =
+            toml::from_str("network = \"jura-dev\"\n[api.transactions]\nmax_replacements_per_nonce = 0\n")
+                .expect("Failed to parse config");
+        assert_eq!(overridden.api.transactions.max_replacements_per_nonce, 0);
     }
 
     #[test]

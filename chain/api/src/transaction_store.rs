@@ -6,7 +6,10 @@
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    sync::{Arc, Mutex, MutexGuard, PoisonError},
+    sync::{
+        Arc, Mutex, MutexGuard, PoisonError,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -23,7 +26,7 @@ use crate::{
         STATUS_CONFIRMED, STATUS_REVERTED, STATUS_SUBMISSION_FAILED, STATUS_TIMEOUT, STATUS_VALIDATION_FAILED,
         record_transaction_status, set_transaction_store_size,
     },
-    safe_execution::decode_transaction_signer,
+    safe_execution::{decode_transaction_signer, decode_transaction_signer_and_nonce},
 };
 
 /// Errors that can occur when working with the transaction store
@@ -202,6 +205,88 @@ impl TransactionRecord {
 /// stream of undecodable envelopes cannot spread across unlimited buckets.
 type SubmissionIdentity = Option<[u8; 20]>;
 
+/// Signer and nonce of a transaction: the slot a fee-bumped replacement competes for.
+type NonceKey = ([u8; 20], u64);
+
+/// The `Submitted` transactions that share one signer and nonce, and the replacements made.
+///
+/// Only the node can mine one of them; the others are replacements of it. Entries exist
+/// exactly while at least one `Submitted` transaction occupies the slot, so a client cannot
+/// grow the index beyond the monitoring capacity.
+///
+/// The replacement cap therefore applies per pending period: the count lives while a `Submitted`
+/// transaction occupies the (signer, nonce) slot and resets once every transaction of that nonce
+/// has left `Submitted`.
+#[derive(Debug, Default)]
+struct NonceSlot {
+    /// `Submitted` transactions in the slot, oldest first. The last one is the newest, the one
+    /// a replacement targets.
+    ids: Vec<Uuid>,
+    /// Replacements committed in this slot during the current pending period. It lives in the
+    /// slot and not on a record, so evicting a terminal record never resets it; it resets only
+    /// when the slot empties.
+    replacements: usize,
+    /// A replacement holds a [`ReplacementTicket`] and is being broadcast.
+    replacing: bool,
+    /// Identifies this incarnation of the slot. A slot that emptied and was created again has a
+    /// new one, so a ticket granted before cannot touch it.
+    generation: u64,
+}
+
+/// Why [`TransactionStore::begin_replacement`] refused a replacement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplacementRefused {
+    /// The transaction the replacement was priced against is no longer the newest one in its
+    /// slot: it concluded, or another replacement was committed.
+    TargetMoved,
+    /// Another replacement of this slot is being broadcast.
+    InProgress,
+    /// The slot already holds the maximum number of replacements.
+    LimitReached { max: usize },
+}
+
+/// Exclusive right to broadcast one replacement in a (signer, nonce) slot.
+///
+/// Held from before the broadcast until [`TransactionStore::commit_replacement`] consumes it.
+/// Dropping it unused (a rejected or failed broadcast) frees the slot for another attempt.
+#[must_use = "dropping a ticket releases the replacement slot"]
+pub struct ReplacementTicket {
+    nonce_slots: Arc<DashMap<NonceKey, NonceSlot>>,
+    key: NonceKey,
+    /// Generation of the slot the ticket was granted in; it only acts on that slot.
+    generation: u64,
+    /// Newest transaction of the slot when the ticket was granted: the one being replaced.
+    target: Uuid,
+    held: bool,
+}
+
+impl ReplacementTicket {
+    /// The transaction this ticket replaces.
+    pub fn target(&self) -> Uuid {
+        self.target
+    }
+}
+
+impl Drop for ReplacementTicket {
+    fn drop(&mut self) {
+        if self.held {
+            if let Some(mut slot) = self.nonce_slots.get_mut(&self.key) {
+                if slot.generation == self.generation {
+                    slot.replacing = false;
+                }
+            }
+        }
+    }
+}
+
+/// The newest `Submitted` transaction of a slot, as a replacement sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplacementTarget {
+    pub id: Uuid,
+    pub transaction_hash: Hash,
+    pub raw_transaction: Vec<u8>,
+}
+
 /// Receipt-monitoring capacity in use: tracked `Submitted` records plus
 /// reservations whose transaction is still being broadcast.
 ///
@@ -296,8 +381,11 @@ pub enum TrackOutcome {
 
 /// Thread-safe in-memory store for transaction records
 ///
-/// Lock order, outermost first: `hash_index` entry, `transactions` record, `submitted_identities`,
-/// the capacity counts. Code holding an inner lock never takes an outer one.
+/// Lock order, outermost first: `hash_index` entry, `transactions` record, `submitted_nonces` and
+/// `nonce_slots` (never held together), `submitted_identities`, the capacity counts. Code holding
+/// an inner lock never takes an outer one. In particular, no code reads or writes `transactions`
+/// while holding a `nonce_slots` guard, and no code holds one `transactions` guard while
+/// inserting another record: two ids may share a shard, which would deadlock.
 #[derive(Clone)]
 pub struct TransactionStore {
     transactions: Arc<DashMap<Uuid, TransactionRecord>>,
@@ -318,6 +406,18 @@ pub struct TransactionStore {
     /// Maintained alongside `transactions` so admission control never has to
     /// scan the store or re-recover a signer.
     submitted_identities: Arc<DashMap<Uuid, SubmissionIdentity>>,
+    /// Signer and nonce of every `Submitted` transaction whose signer could be recovered.
+    ///
+    /// Lets a transaction leave its `nonce_slots` entry without re-reading the record, which
+    /// the caller may still hold. Lock order: after `transactions`, before `submitted_identities`.
+    submitted_nonces: Arc<DashMap<Uuid, NonceKey>>,
+    /// `Submitted` transactions per (signer, nonce), with the replacement count of that nonce.
+    ///
+    /// Lock order: after `transactions`, before `submitted_identities`. A guard on one entry is
+    /// never held across any other lock, so slot operations are single-step.
+    nonce_slots: Arc<DashMap<NonceKey, NonceSlot>>,
+    /// Source of [`NonceSlot::generation`] values.
+    next_slot_generation: Arc<AtomicU64>,
     /// Capacity in use, globally and per identity, for O(1) admission checks.
     submission_counts: Arc<Mutex<SubmissionCounts>>,
     /// Event bus sender for broadcasting transaction status updates
@@ -371,6 +471,9 @@ impl TransactionStore {
             hash_index: Arc::new(DashMap::new()),
             terminal_timestamps: Arc::new(DashMap::new()),
             submitted_identities: Arc::new(DashMap::new()),
+            submitted_nonces: Arc::new(DashMap::new()),
+            nonce_slots: Arc::new(DashMap::new()),
+            next_slot_generation: Arc::new(AtomicU64::new(0)),
             submission_counts: Arc::new(Mutex::new(SubmissionCounts::default())),
             event_bus,
             _inactive_event_bus_rx: Arc::new(inactive_event_bus_rx),
@@ -388,7 +491,7 @@ impl TransactionStore {
             Entry::Vacant(entry) => {
                 let submitted = record.status == TransactionStatus::Submitted;
                 let id = record.id;
-                let identity = submitted.then(|| transaction_identity(&record.raw_transaction));
+                let tracked = submitted.then(|| signer_and_nonce(&record.raw_transaction));
                 let hash = record.transaction_hash;
                 entry.insert(record);
                 if submitted {
@@ -396,8 +499,8 @@ impl TransactionStore {
                 } else {
                     self.mark_terminal(id);
                 }
-                if let Some(identity) = identity {
-                    self.track_submitted(id, identity);
+                if let Some((identity, nonce_key)) = tracked {
+                    self.track_submitted(id, identity, nonce_key);
                 }
                 self.index_hash(hash, id);
                 self.update_size_metric();
@@ -477,6 +580,7 @@ impl TransactionStore {
             Entry::Vacant(entry) => {
                 let id = record.id;
                 let submitted = record.status == TransactionStatus::Submitted;
+                let nonce_key = submitted.then(|| signer_and_nonce(&record.raw_transaction).1).flatten();
                 entry.insert(record);
                 if submitted {
                     self.clear_terminal_timestamp(id);
@@ -485,8 +589,11 @@ impl TransactionStore {
                 }
                 // The reservation already counted this record, so the index entry takes over
                 // that count instead of adding a second one.
-                if submitted && self.submitted_identities.insert(id, reservation.identity).is_none() {
-                    reservation.held = false;
+                if submitted {
+                    self.track_nonce(id, nonce_key);
+                    if self.submitted_identities.insert(id, reservation.identity).is_none() {
+                        reservation.held = false;
+                    }
                 }
                 self.update_size_metric();
                 Ok(())
@@ -500,7 +607,8 @@ impl TransactionStore {
     }
 
     /// Record a transaction as occupying receipt-monitoring capacity.
-    fn track_submitted(&self, id: Uuid, identity: SubmissionIdentity) {
+    fn track_submitted(&self, id: Uuid, identity: SubmissionIdentity, nonce_key: Option<NonceKey>) {
+        self.track_nonce(id, nonce_key);
         if self.submitted_identities.insert(id, identity).is_none() {
             self.counts().acquire(identity);
         }
@@ -508,8 +616,47 @@ impl TransactionStore {
 
     /// Release the receipt-monitoring capacity held by a transaction.
     fn untrack_submitted(&self, id: Uuid) {
+        self.untrack_nonce(id);
         if let Some((_, identity)) = self.submitted_identities.remove(&id) {
             self.counts().release(identity);
+        }
+    }
+
+    /// Place a `Submitted` transaction in its (signer, nonce) slot, moving it if its key changed.
+    ///
+    /// `None` (signer not recoverable) leaves the transaction out of every slot.
+    fn track_nonce(&self, id: Uuid, nonce_key: Option<NonceKey>) {
+        let Some(key) = nonce_key else {
+            self.untrack_nonce(id);
+            return;
+        };
+        match self.submitted_nonces.insert(id, key) {
+            Some(previous) if previous == key => return,
+            Some(previous) => self.leave_nonce_slot(id, previous),
+            None => {}
+        }
+        let mut slot = self.nonce_slots.entry(key).or_insert_with(|| NonceSlot {
+            generation: self.next_slot_generation.fetch_add(1, Ordering::Relaxed),
+            ..Default::default()
+        });
+        if !slot.ids.contains(&id) {
+            slot.ids.push(id);
+        }
+    }
+
+    /// Take a transaction out of its (signer, nonce) slot, dropping the slot once it is empty.
+    fn untrack_nonce(&self, id: Uuid) {
+        if let Some((_, key)) = self.submitted_nonces.remove(&id) {
+            self.leave_nonce_slot(id, key);
+        }
+    }
+
+    fn leave_nonce_slot(&self, id: Uuid, key: NonceKey) {
+        if let Entry::Occupied(mut slot) = self.nonce_slots.entry(key) {
+            slot.get_mut().ids.retain(|member| *member != id);
+            if slot.get().ids.is_empty() {
+                slot.remove();
+            }
         }
     }
 
@@ -539,11 +686,18 @@ impl TransactionStore {
     /// `identity` is supplied by the caller rather than read back from `transactions`: a
     /// caller may still hold that entry's guard, and re-reading it from here would deadlock
     /// on the same shard. It is only meaningful when `status` is `Submitted`.
-    fn sync_submitted_status(&self, id: Uuid, status: TransactionStatus, identity: SubmissionIdentity) {
+    fn sync_submitted_status(
+        &self,
+        id: Uuid,
+        status: TransactionStatus,
+        identity: SubmissionIdentity,
+        nonce_key: Option<NonceKey>,
+    ) {
         if status != TransactionStatus::Submitted {
             self.untrack_submitted(id);
             return;
         }
+        self.track_nonce(id, nonce_key);
 
         // Bind before matching so the read guard is released before the branches below
         // mutate the same map.
@@ -555,9 +709,9 @@ impl TransactionStore {
             // the count the old signer would stay charged and the new one would go free.
             Some(_) => {
                 self.untrack_submitted(id);
-                self.track_submitted(id, identity);
+                self.track_submitted(id, identity, nonce_key);
             }
-            None => self.track_submitted(id, identity),
+            None => self.track_submitted(id, identity, nonce_key),
         }
     }
 
@@ -636,6 +790,19 @@ impl TransactionStore {
             .then_some(id)
     }
 
+    /// Whether the store holds a record, in any status, for this transaction hash.
+    ///
+    /// A submission of such bytes belongs on the resubmission path, which resumes or reuses that
+    /// record, and never on the replacement path, so one hash never gets two records.
+    pub fn tracks_hash(&self, transaction_hash: Hash) -> bool {
+        let Some(id) = self.hash_index.get(&transaction_hash).map(|id| *id) else {
+            return false;
+        };
+        self.transactions
+            .get(&id)
+            .is_some_and(|record| record.transaction_hash == transaction_hash)
+    }
+
     /// Whether a record with this hash is `Submitted` and so already occupies a monitoring slot.
     ///
     /// A resubmission of it needs no new capacity; one of a timed-out record does.
@@ -695,8 +862,8 @@ impl TransactionStore {
             record.status = TransactionStatus::Submitted;
             record.error_message = None;
             let previous = record.diagnosis.take();
-            let identity = transaction_identity(&record.raw_transaction);
-            self.sync_submitted_status(id, TransactionStatus::Submitted, identity);
+            let (identity, nonce_key) = signer_and_nonce(&record.raw_transaction);
+            self.sync_submitted_status(id, TransactionStatus::Submitted, identity, nonce_key);
             previous
         };
         self.clear_terminal_timestamp(id);
@@ -720,15 +887,17 @@ impl TransactionStore {
                 let status = record.status;
                 // The replacement may carry a different raw transaction, so the identity is
                 // taken from it rather than from whatever was indexed before.
-                let identity = (status == TransactionStatus::Submitted)
-                    .then(|| transaction_identity(&record.raw_transaction))
-                    .flatten();
+                let (identity, nonce_key) = if status == TransactionStatus::Submitted {
+                    signer_and_nonce(&record.raw_transaction)
+                } else {
+                    (None, None)
+                };
                 let hash = record.transaction_hash;
                 let previous_hash = entry.get().transaction_hash;
                 entry.insert(record);
                 // Lock order is `transactions` then `submitted_identities`, with the index
                 // updated under the record guard.
-                self.sync_submitted_status(id, status, identity);
+                self.sync_submitted_status(id, status, identity, nonce_key);
                 drop(entry);
                 if previous_hash != hash {
                     self.hash_index.remove_if(&previous_hash, |_, indexed| *indexed == id);
@@ -833,12 +1002,14 @@ impl TransactionStore {
                 // Extract only fields needed for event (no cloning raw_transaction). The
                 // signer is recovered only when the record is entering `Submitted`, so
                 // terminal transitions stay free.
-                let identity = (status == TransactionStatus::Submitted)
-                    .then(|| transaction_identity(&record.raw_transaction))
-                    .flatten();
+                let (identity, nonce_key) = if status == TransactionStatus::Submitted {
+                    signer_and_nonce(&record.raw_transaction)
+                } else {
+                    (None, None)
+                };
                 // Reconcile the submitted index while the record guard is held, so a concurrent
                 // resume cannot interleave its own index update with this one.
-                self.sync_submitted_status(id, status, identity);
+                self.sync_submitted_status(id, status, identity, nonce_key);
                 Some((record.confirmed_at, record.error_message.clone()))
             })
             .ok_or(TransactionStoreError::NotFound(id))?
@@ -1020,6 +1191,99 @@ impl TransactionStore {
         })
     }
 
+    /// The newest `Submitted` transaction of a (signer, nonce) slot: the one a replacement
+    /// would replace. `None` when nothing is pending at that nonce.
+    pub fn replacement_target(&self, signer: [u8; 20], nonce: u64) -> Option<ReplacementTarget> {
+        // The slot guard is released before `transactions` is read (see the lock order).
+        let id = self.nonce_slots.get(&(signer, nonce))?.ids.last().copied()?;
+        let record = self.transactions.get(&id)?;
+        (record.status == TransactionStatus::Submitted).then(|| ReplacementTarget {
+            id,
+            transaction_hash: record.transaction_hash,
+            raw_transaction: record.raw_transaction.clone(),
+        })
+    }
+
+    /// Whether a replacement of `target` would be refused right now, without claiming anything.
+    ///
+    /// A cheap early answer for callers that would otherwise spend a node round trip first. It
+    /// can go stale at once: [`Self::begin_replacement`] is the authoritative check.
+    ///
+    /// # Errors
+    /// Returns the [`ReplacementRefused`] reason a ticket would be refused for.
+    pub fn check_replacement(
+        &self,
+        signer: [u8; 20],
+        nonce: u64,
+        target: Uuid,
+        max_replacements: usize,
+    ) -> Result<(), ReplacementRefused> {
+        let slot = self
+            .nonce_slots
+            .get(&(signer, nonce))
+            .ok_or(ReplacementRefused::TargetMoved)?;
+        replacement_refusal(&slot, target, max_replacements)
+    }
+
+    /// Claim the right to broadcast one replacement of `target`, the newest transaction of its
+    /// (signer, nonce) slot, as one step on the slot.
+    ///
+    /// Of several replacements racing for the same slot exactly one gets a ticket; the others are
+    /// refused before anything is broadcast. At most `max_replacements` replacements are made per
+    /// slot, the original not counted, for as long as the slot stays occupied by a `Submitted`
+    /// transaction; the count starts again once it empties.
+    ///
+    /// # Errors
+    /// Returns the [`ReplacementRefused`] reason when no ticket can be granted.
+    pub fn begin_replacement(
+        &self,
+        signer: [u8; 20],
+        nonce: u64,
+        target: Uuid,
+        max_replacements: usize,
+    ) -> Result<ReplacementTicket, ReplacementRefused> {
+        let key = (signer, nonce);
+        let mut slot = self.nonce_slots.get_mut(&key).ok_or(ReplacementRefused::TargetMoved)?;
+        replacement_refusal(&slot, target, max_replacements)?;
+        slot.replacing = true;
+        Ok(ReplacementTicket {
+            nonce_slots: self.nonce_slots.clone(),
+            key,
+            generation: slot.generation,
+            target,
+            held: true,
+        })
+    }
+
+    /// Track a broadcast replacement, handing the reserved capacity over to its record.
+    ///
+    /// The replaced transaction stays `Submitted` and monitored like any other record: either
+    /// one may still be mined. The ticket keeps every other replacement of the slot out until
+    /// this one is counted.
+    ///
+    /// # Errors
+    /// Returns `TransactionStoreError::AlreadyExists` if a transaction with the same ID already exists
+    pub fn commit_replacement(
+        &self,
+        mut ticket: ReplacementTicket,
+        record: TransactionRecord,
+        reservation: SubmissionReservation,
+    ) -> Result<(), TransactionStoreError> {
+        let (hash, id) = (record.transaction_hash, record.id);
+        self.insert_reserved_unindexed(record, reservation)?;
+        // Only the slot the ticket was granted in is counted: one that emptied and was created
+        // again since belongs to later transactions and holds its own ticket.
+        if let Some(mut slot) = self.nonce_slots.get_mut(&ticket.key) {
+            if slot.generation == ticket.generation {
+                slot.replacements += 1;
+                slot.replacing = false;
+            }
+        }
+        ticket.held = false;
+        self.index_hash(hash, id);
+        Ok(())
+    }
+
     /// Number of transactions currently awaiting receipt monitoring.
     pub fn submitted_count(&self) -> usize {
         self.submitted_identities.len()
@@ -1143,6 +1407,20 @@ impl TransactionStore {
     }
 }
 
+/// Why `slot` cannot take another replacement of `target` right now, if it cannot.
+fn replacement_refusal(slot: &NonceSlot, target: Uuid, max_replacements: usize) -> Result<(), ReplacementRefused> {
+    if slot.ids.last() != Some(&target) {
+        return Err(ReplacementRefused::TargetMoved);
+    }
+    if slot.replacing {
+        return Err(ReplacementRefused::InProgress);
+    }
+    if slot.replacements >= max_replacements {
+        return Err(ReplacementRefused::LimitReached { max: max_replacements });
+    }
+    Ok(())
+}
+
 /// Whether the RPC node can still be holding this tracked transaction.
 ///
 /// That is a transaction still awaiting confirmation, or one that timed out because it was
@@ -1173,6 +1451,12 @@ fn transaction_identity(raw_transaction: &[u8]) -> SubmissionIdentity {
     decode_transaction_signer(raw_transaction)
 }
 
+/// Capacity identity and (signer, nonce) slot key of a raw transaction, from one signer recovery.
+fn signer_and_nonce(raw_transaction: &[u8]) -> (SubmissionIdentity, Option<NonceKey>) {
+    let signer_and_nonce = decode_transaction_signer_and_nonce(raw_transaction);
+    (signer_and_nonce.map(|(signer, _)| signer), signer_and_nonce)
+}
+
 impl Default for TransactionStore {
     fn default() -> Self {
         Self::new()
@@ -1181,7 +1465,7 @@ impl Default for TransactionStore {
 
 #[cfg(test)]
 mod tests {
-    use std::thread;
+    use std::{sync::Barrier, thread};
 
     use chrono::Duration as ChronoDuration;
     use hopr_bindings::exports::alloy::{
@@ -1377,6 +1661,36 @@ mod tests {
         let listed: HashSet<Uuid> = store.list_submitted_fair().iter().map(|record| record.id).collect();
         assert_eq!(listed, submitted);
         assert_eq!(store.submitted_count(), submitted.len());
+        assert_nonce_slots_match(store, ids);
+    }
+
+    /// Assert the (signer, nonce) slots hold exactly the `Submitted` records among `ids` that
+    /// have a recoverable signer, and that the reverse index agrees.
+    fn assert_nonce_slots_match(store: &TransactionStore, ids: &[Uuid]) {
+        let mut expected: HashMap<NonceKey, HashSet<Uuid>> = HashMap::new();
+        for id in ids {
+            let record = store.get(*id).unwrap();
+            let key = decode_transaction_signer_and_nonce(&record.raw_transaction);
+            match (record.status, key) {
+                (TransactionStatus::Submitted, Some(key)) => {
+                    expected.entry(key).or_default().insert(*id);
+                    assert_eq!(store.submitted_nonces.get(id).map(|entry| *entry.value()), Some(key));
+                }
+                _ => assert!(store.submitted_nonces.get(id).is_none(), "{id} must not be in a slot"),
+            }
+        }
+        let actual: HashMap<NonceKey, HashSet<Uuid>> = store
+            .nonce_slots
+            .iter()
+            .map(|slot| (*slot.key(), slot.value().ids.iter().copied().collect()))
+            .collect();
+        assert_eq!(actual, expected);
+        for slot in store.nonce_slots.iter() {
+            assert_eq!(
+                slot.value().ids.len(),
+                slot.value().ids.iter().collect::<HashSet<_>>().len()
+            );
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -2389,5 +2703,395 @@ mod tests {
         // round, ahead of the busy signer's backlog.
         let quiet_position = fair.iter().position(|record| record.id == quiet_id).unwrap();
         assert!(quiet_position < 2);
+    }
+
+    /// Build a raw signed legacy transaction with an explicit gas price, so two of them at the
+    /// same nonce are distinct transactions.
+    async fn signed_raw_tx_priced(signer: &PrivateKeySigner, nonce: u64, gas_price: u128) -> Vec<u8> {
+        let tx = TxLegacy {
+            chain_id: Some(1),
+            nonce,
+            gas_price,
+            gas_limit: 21_000,
+            to: TxKind::Call(AlloyAddress::from_slice(&[0x11; 20])),
+            value: U256::ZERO,
+            input: Default::default(),
+        };
+        let signature = signer.sign_hash(&tx.signature_hash()).await.expect("signing failed");
+        let mut encoded = Vec::new();
+        tx.into_signed(signature).encode_2718(&mut encoded);
+        encoded
+    }
+
+    /// A `Submitted` record carrying the real hash of `raw_transaction`.
+    fn hashed_record(raw_transaction: Vec<u8>) -> TransactionRecord {
+        let hash = crate::safe_execution::decode_transaction_summary(&raw_transaction)
+            .expect("decodable")
+            .transaction_hash;
+        let mut record = submitted_record(Uuid::new_v4(), raw_transaction);
+        record.transaction_hash = hash;
+        record
+    }
+
+    fn signer_of(signer: &PrivateKeySigner) -> [u8; 20] {
+        signer.address().into_array()
+    }
+
+    /// Track `first` and replace it with `gas_price`, returning both ids.
+    async fn track_and_replace(
+        store: &TransactionStore,
+        signer: &PrivateKeySigner,
+        nonce: u64,
+        max: usize,
+    ) -> (Uuid, Uuid) {
+        let original = hashed_record(signed_raw_tx_priced(signer, nonce, 1_000).await);
+        let original_id = original.id;
+        store.insert(original).unwrap();
+        let target = store.replacement_target(signer_of(signer), nonce).expect("tracked");
+        assert_eq!(target.id, original_id);
+        let replacement = hashed_record(signed_raw_tx_priced(signer, nonce, 2_000).await);
+        let replacement_id = replacement.id;
+        let reservation = reserve(store, &replacement.raw_transaction);
+        let ticket = store
+            .begin_replacement(signer_of(signer), nonce, original_id, max)
+            .expect("ticket");
+        store.commit_replacement(ticket, replacement, reservation).unwrap();
+        (original_id, replacement_id)
+    }
+
+    #[tokio::test]
+    async fn test_replacement_target_is_the_newest_submitted_transaction_of_the_nonce() {
+        let store = TransactionStore::new();
+        let signer = PrivateKeySigner::random();
+        assert!(store.replacement_target(signer_of(&signer), 0).is_none());
+
+        let (original, replacement) = track_and_replace(&store, &signer, 0, 3).await;
+        assert_eq!(store.replacement_target(signer_of(&signer), 0).unwrap().id, replacement);
+        // Another nonce of the same signer is a different slot.
+        assert!(store.replacement_target(signer_of(&signer), 1).is_none());
+
+        // When the newest concludes, the older one that is still pending is the target again.
+        store
+            .update_status(replacement, TransactionStatus::Timeout, None)
+            .unwrap();
+        assert_eq!(store.replacement_target(signer_of(&signer), 0).unwrap().id, original);
+        store
+            .update_status(original, TransactionStatus::Confirmed, None)
+            .unwrap();
+        assert!(store.replacement_target(signer_of(&signer), 0).is_none());
+        assert!(store.nonce_slots.is_empty());
+        assert!(store.submitted_nonces.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_replacement_is_tracked_next_to_the_original() {
+        let store = TransactionStore::new();
+        let signer = PrivateKeySigner::random();
+        let (original, replacement) = track_and_replace(&store, &signer, 4, 3).await;
+
+        let old = store.get(original).unwrap();
+        let new = store.get(replacement).unwrap();
+        assert_eq!(old.status, TransactionStatus::Submitted);
+        assert_eq!(new.status, TransactionStatus::Submitted);
+        // Both are monitored and both hold capacity: the reservation became the new record's slot.
+        assert_eq!(store.submitted_count(), 2);
+        assert_eq!(store.counts().total, 2);
+        assert_submitted_listed_and_counted(&store, &[original, replacement]);
+        assert!(store.has_in_flight_hash(old.transaction_hash));
+        assert!(store.has_in_flight_hash(new.transaction_hash));
+    }
+
+    #[tokio::test]
+    async fn test_replacements_are_capped_per_nonce_and_the_cap_survives_eviction() {
+        let store = TransactionStore::new();
+        let signer = PrivateKeySigner::random();
+        let (original, first) = track_and_replace(&store, &signer, 0, 1).await;
+
+        assert_eq!(
+            store.begin_replacement(signer_of(&signer), 0, first, 1).err(),
+            Some(ReplacementRefused::LimitReached { max: 1 })
+        );
+        // Zero disables replacements outright.
+        assert_eq!(
+            store.begin_replacement(signer_of(&signer), 0, first, 0).err(),
+            Some(ReplacementRefused::LimitReached { max: 0 })
+        );
+
+        // The replacement times out and its terminal record is evicted: the original is the
+        // target again, and the count did not go back to zero with the record.
+        store.update_status(first, TransactionStatus::Timeout, None).unwrap();
+        assert_eq!(store.evict_terminal_records(Duration::ZERO, 1), 0);
+        assert_eq!(store.evict_terminal_records(Duration::from_nanos(1), 0), 1);
+        assert!(store.get(first).is_err());
+        assert_eq!(
+            store.begin_replacement(signer_of(&signer), 0, original, 1).err(),
+            Some(ReplacementRefused::LimitReached { max: 1 })
+        );
+        assert!(store.begin_replacement(signer_of(&signer), 0, original, 2).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_replacement_ticket_is_exclusive_until_dropped_or_committed() {
+        let store = TransactionStore::new();
+        let signer = PrivateKeySigner::random();
+        let original = hashed_record(signed_raw_tx_priced(&signer, 0, 1_000).await);
+        let original_id = original.id;
+        store.insert(original).unwrap();
+
+        let ticket = store.begin_replacement(signer_of(&signer), 0, original_id, 3).unwrap();
+        assert_eq!(ticket.target(), original_id);
+        assert_eq!(
+            store.begin_replacement(signer_of(&signer), 0, original_id, 3).err(),
+            Some(ReplacementRefused::InProgress)
+        );
+
+        // A rejected or failed broadcast drops the ticket, and nothing was counted.
+        drop(ticket);
+        let ticket = store.begin_replacement(signer_of(&signer), 0, original_id, 1).unwrap();
+        drop(ticket);
+
+        // A target that is not the newest of its slot, or not tracked at all, is refused.
+        assert_eq!(
+            store
+                .begin_replacement(signer_of(&signer), 0, Uuid::from_u128(7), 3)
+                .err(),
+            Some(ReplacementRefused::TargetMoved)
+        );
+        assert_eq!(
+            store.begin_replacement(signer_of(&signer), 5, original_id, 3).err(),
+            Some(ReplacementRefused::TargetMoved)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_a_failed_commit_gives_back_the_slot_and_the_capacity() {
+        let store = TransactionStore::new();
+        let signer = PrivateKeySigner::random();
+        let original = hashed_record(signed_raw_tx_priced(&signer, 0, 1_000).await);
+        let original_id = original.id;
+        store.insert(original).unwrap();
+
+        // A record that already exists makes the insert fail.
+        let clash = hashed_record(signed_raw_tx_priced(&signer, 0, 2_000).await);
+        let mut duplicate = clash.clone();
+        duplicate.id = original_id;
+        let reservation = reserve(&store, &duplicate.raw_transaction);
+        let ticket = store.begin_replacement(signer_of(&signer), 0, original_id, 3).unwrap();
+        assert!(store.commit_replacement(ticket, duplicate, reservation).is_err());
+
+        assert_eq!(store.counts().total, 1);
+        assert!(store.begin_replacement(signer_of(&signer), 0, original_id, 3).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_replacement_of_an_unrecoverable_signer_is_not_indexed() {
+        let store = TransactionStore::new();
+        store.insert(submitted_record(Uuid::new_v4(), vec![0xff])).unwrap();
+        assert!(store.nonce_slots.is_empty());
+        assert!(store.submitted_nonces.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_nonce_slot_follows_update_with_a_changed_nonce() {
+        let store = TransactionStore::new();
+        let signer = PrivateKeySigner::random();
+        let id = Uuid::from_u128(1);
+        store
+            .insert(submitted_record(id, signed_raw_tx(&signer, [0x11; 20], 0).await))
+            .unwrap();
+        store
+            .update(submitted_record(id, signed_raw_tx(&signer, [0x11; 20], 1).await))
+            .unwrap();
+
+        assert!(store.replacement_target(signer_of(&signer), 0).is_none());
+        assert_eq!(store.replacement_target(signer_of(&signer), 1).unwrap().id, id);
+        assert_nonce_slots_match(&store, &[id]);
+
+        store.update_status(id, TransactionStatus::Timeout, None).unwrap();
+        store.resume_tracking(id).unwrap();
+        assert_nonce_slots_match(&store, &[id]);
+    }
+
+    #[tokio::test]
+    async fn test_a_stale_ticket_does_not_touch_a_slot_created_after_it() {
+        let store = TransactionStore::new();
+        let signer = PrivateKeySigner::random();
+        let address = signer_of(&signer);
+        let slot_state = |store: &TransactionStore| {
+            let slot = store.nonce_slots.get(&(address, 0)).expect("slot exists");
+            (slot.replacing, slot.replacements)
+        };
+
+        for commit_first in [false, true] {
+            // Ticket A is granted, then its target concludes and the slot goes away.
+            let first = hashed_record(signed_raw_tx_priced(&signer, 0, 1_000).await);
+            let first_id = first.id;
+            store.insert(first).unwrap();
+            let stale = store.begin_replacement(address, 0, first_id, 3).unwrap();
+            store
+                .update_status(first_id, TransactionStatus::Confirmed, None)
+                .unwrap();
+            assert!(store.nonce_slots.is_empty());
+
+            // A fresh transaction recreates the slot and ticket B is granted in it.
+            let second = hashed_record(signed_raw_tx_priced(&signer, 0, 3_000).await);
+            let second_id = second.id;
+            store.insert(second).unwrap();
+            let current = store.begin_replacement(address, 0, second_id, 3).unwrap();
+            assert_eq!(slot_state(&store), (true, 0));
+
+            // Neither committing nor dropping A changes B's flag or the count.
+            if commit_first {
+                let late = hashed_record(signed_raw_tx_priced(&signer, 0, 4_000).await);
+                let reservation = reserve(&store, &late.raw_transaction);
+                store.commit_replacement(stale, late, reservation).unwrap();
+            } else {
+                drop(stale);
+            }
+            assert_eq!(slot_state(&store), (true, 0), "commit_first = {commit_first}");
+            let tip = store
+                .nonce_slots
+                .get(&(address, 0))
+                .unwrap()
+                .ids
+                .last()
+                .copied()
+                .unwrap();
+            if !commit_first {
+                assert_eq!(
+                    store.begin_replacement(address, 0, tip, 3).err(),
+                    Some(ReplacementRefused::InProgress),
+                    "a third replacement is refused while B is held"
+                );
+            }
+
+            // B still works and is the one counted.
+            let mine = hashed_record(signed_raw_tx_priced(&signer, 0, 5_000).await);
+            let reservation = reserve(&store, &mine.raw_transaction);
+            store.commit_replacement(current, mine, reservation).unwrap();
+            assert_eq!(slot_state(&store), (false, 1));
+
+            // Reset for the next round.
+            let ids: Vec<Uuid> = store.nonce_slots.get(&(address, 0)).unwrap().ids.clone();
+            for id in ids {
+                store.update_status(id, TransactionStatus::Confirmed, None).unwrap();
+            }
+            assert!(store.nonce_slots.is_empty());
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_racing_replacements_of_one_transaction_grant_exactly_one_ticket() {
+        for round in 0..20u64 {
+            let store = Arc::new(TransactionStore::new());
+            let signer = PrivateKeySigner::random();
+            let original = hashed_record(signed_raw_tx_priced(&signer, round, 1_000).await);
+            let original_id = original.id;
+            store.insert(original).unwrap();
+
+            let mut replacements = Vec::new();
+            for attempt in 0..8u128 {
+                let raw = signed_raw_tx_priced(&signer, round, 2_000 + attempt).await;
+                replacements.push(hashed_record(raw));
+            }
+            let barrier = Arc::new(Barrier::new(replacements.len()));
+            let signer_address = signer_of(&signer);
+            let handles: Vec<_> = replacements
+                .into_iter()
+                .map(|record| {
+                    let (store, barrier) = (store.clone(), barrier.clone());
+                    tokio::task::spawn_blocking(move || {
+                        let reservation = store.try_reserve_submission(&record.raw_transaction, 0, 0).unwrap();
+                        barrier.wait();
+                        match store.begin_replacement(signer_address, round, original_id, 3) {
+                            Ok(ticket) => {
+                                // Hold the ticket while the others race, as a broadcast would.
+                                std::thread::sleep(Duration::from_millis(5));
+                                let id = record.id;
+                                store.commit_replacement(ticket, record, reservation).unwrap();
+                                Some(id)
+                            }
+                            Err(reason) => {
+                                assert_eq!(
+                                    reason,
+                                    ReplacementRefused::InProgress,
+                                    "or TargetMoved after the commit"
+                                );
+                                None
+                            }
+                        }
+                    })
+                })
+                .collect();
+            let mut winners = Vec::new();
+            for handle in handles {
+                winners.extend(handle.await.unwrap());
+            }
+
+            assert_eq!(winners.len(), 1, "exactly one replacement wins");
+            assert_eq!(store.submitted_count(), 2);
+            assert_eq!(store.counts().total, 2, "losers released their capacity");
+            assert_nonce_slots_match(&store, &[original_id, winners[0]]);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_nonce_slots_stay_consistent_under_concurrent_writers() {
+        let store = Arc::new(TransactionStore::new());
+        let signer = PrivateKeySigner::random();
+        let (first, second) = track_and_replace(&store, &signer, 0, 8).await;
+        let third = hashed_record(signed_raw_tx_priced(&signer, 0, 3_000).await);
+        let third_id = third.id;
+        store.insert(third).unwrap();
+        let ids = vec![first, second, third_id];
+
+        let mut tasks = Vec::new();
+        {
+            let (store, signer_address) = (store.clone(), signer_of(&signer));
+            tasks.push(tokio::task::spawn_blocking(move || {
+                for _ in 0..300 {
+                    store.replacement_target(signer_address, 0);
+                    store.list_submitted_fair();
+                }
+            }));
+        }
+        for worker in 0..3usize {
+            let (store, ids) = (store.clone(), ids.clone());
+            tasks.push(tokio::task::spawn_blocking(move || {
+                for round in 0..300usize {
+                    for id in &ids {
+                        match worker {
+                            0 => {
+                                store.resume_tracking(*id).unwrap();
+                            }
+                            1 => {
+                                let status = if round % 2 == 0 {
+                                    TransactionStatus::Timeout
+                                } else {
+                                    TransactionStatus::Submitted
+                                };
+                                store.update_status(*id, status, None).unwrap();
+                            }
+                            _ => {
+                                let record = store.get(*id).unwrap();
+                                store
+                                    .mark_timeout_if_unchanged(*id, record.resume_generation, None, None)
+                                    .unwrap();
+                            }
+                        }
+                    }
+                }
+            }));
+        }
+
+        tokio::time::timeout(Duration::from_secs(60), async {
+            for task in tasks {
+                task.await.unwrap();
+            }
+        })
+        .await
+        .expect("concurrent store operations hung");
+
+        assert_submitted_listed_and_counted(&store, &ids);
     }
 }
