@@ -43,8 +43,8 @@ enable_logs_snapshot = false
 # logs_snapshot_sha256 = "<64 hex characters>"
 
 # Chain head tracking and confirmation rule
-# Omit these sections to use the daemon defaults: newHeads over WebSocket when the
-# endpoint supports it, polling otherwise, and depth confirmation on all networks.
+# If you omit these sections, the daemon uses its defaults. It uses newHeads over WebSocket
+# if the endpoint supports it, and polling if not. It uses depth confirmation on all networks.
 # [indexer.head_tracking]
 # head_subscription = true
 # head_poll_interval = "1s"

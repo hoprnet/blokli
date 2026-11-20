@@ -387,7 +387,7 @@ pub struct HttpTestContext {
     pub rpc_operations: Arc<RpcOperations<ReqwestClient>>,
     /// In-memory transaction store used by the HTTP API
     pub transaction_store: Arc<TransactionStore>,
-    /// Shared indexer state, including post-finality verification status
+    /// Shared indexer state, with the post-finality verification status
     pub indexer_state: IndexerState,
 }
 

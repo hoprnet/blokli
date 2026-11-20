@@ -218,7 +218,7 @@ async fn test_readyz_indexer_lag_exceeded() -> anyhow::Result<()> {
 async fn test_readyz_verification_failure_wins_over_zero_lag() -> anyhow::Result<()> {
     let ctx = common::setup_http_test_environment().await?;
 
-    // A watermark far above the RPC block makes the indexer lag zero, so only the
+    // A watermark far above the RPC block makes the indexer lag zero. Thus only the
     // verification status can keep the replica out of the ready state.
     update_chain_info(&ctx.db, 1_000_000_000).await?;
     ctx.indexer_state.mark_verification_failed();

@@ -38,6 +38,7 @@ use blokli_chain_api::{
 };
 use blokli_chain_indexer::IndexerState;
 use blokli_chain_rpc::{
+    errors::Result as RpcResult,
     rpc::{RpcOperations, RpcOperationsConfig},
     tip::{ChainTipTracker, ConfirmationConfig, ConfirmationMode as ChainConfirmationMode, TipObservation, TipSource},
     transport::ReqwestClient,
@@ -160,6 +161,26 @@ async fn execute_graphql_query(
     schema.execute(query).await
 }
 
+/// Unix timestamp of block 0 in the tip observations of the tests.
+const TIP_TIMESTAMP_BASE: u64 = 1_700_000_000;
+
+/// Query for the confirmation mode and the FCR status in `chainInfo`.
+const CHAIN_INFO_CONFIRMATION_QUERY: &str = r#"
+        query {
+            chainInfo {
+                __typename
+                ... on ChainInfo {
+                    confirmationMode
+                    fcrStatus
+                }
+                ... on QueryFailedError {
+                    code
+                    message
+                }
+            }
+        }
+    "#;
+
 /// Tip source that always returns the same observation.
 #[derive(Clone)]
 struct FixedTipSource {
@@ -168,7 +189,7 @@ struct FixedTipSource {
 
 #[async_trait]
 impl TipSource for FixedTipSource {
-    async fn observe(&self) -> blokli_chain_rpc::errors::Result<TipObservation> {
+    async fn observe(&self) -> RpcResult<TipObservation> {
         Ok(self.observation)
     }
 }
@@ -188,15 +209,15 @@ fn tip_tracker(observation: TipObservation, mode: ChainConfirmationMode) -> Arc<
 fn tip_observation(latest: u64, safe: Option<u64>, finalized: Option<u64>) -> TipObservation {
     TipObservation {
         latest,
-        latest_timestamp: Some(1_700_000_000 + latest),
+        latest_timestamp: Some(TIP_TIMESTAMP_BASE + latest),
         safe,
-        safe_timestamp: safe.map(|block| 1_700_000_000 + block),
+        safe_timestamp: safe.map(|block| TIP_TIMESTAMP_BASE + block),
         finalized,
-        finalized_timestamp: finalized.map(|block| 1_700_000_000 + block),
+        finalized_timestamp: finalized.map(|block| TIP_TIMESTAMP_BASE + block),
     }
 }
 
-async fn chain_info_schema(
+fn chain_info_schema(
     db: &BlokliDb,
     tracker: Arc<ChainTipTracker>,
 ) -> async_graphql::Schema<QueryRoot, async_graphql::EmptyMutation, async_graphql::EmptySubscription> {
@@ -218,7 +239,7 @@ async fn chain_info_schema(
 
 /// Answers block requests with a latest and a safe header and a missing finalized tag.
 ///
-/// Both the batched chain tip request and single block requests from the fee estimate arrive here.
+/// The batched chain tip request and the single block requests from the fee estimate both arrive here.
 fn mock_tip_without_finalized_tag(server: &mut mockito::ServerGuard) -> mockito::Mock {
     server
         .mock("POST", "/")
@@ -887,39 +908,23 @@ async fn test_chain_info_reports_confirmation_mode_and_fcr_status() -> Result<()
     let db = BlokliDb::new_in_memory().await?;
     setup_chain_info(&db).await?;
 
-    let query = r#"
-        query {
-            chainInfo {
-                __typename
-                ... on ChainInfo {
-                    confirmationMode
-                    fcrStatus
-                }
-                ... on QueryFailedError {
-                    code
-                    message
-                }
-            }
-        }
-    "#;
-
     let tracker = tip_tracker(
         tip_observation(1000, Some(999), Some(980)),
         ChainConfirmationMode::SafeOrDepth,
     );
-    let schema = chain_info_schema(&db, tracker.clone()).await;
+    let schema = chain_info_schema(&db, tracker.clone());
 
-    // No tip has been published yet.
-    let response = execute_graphql_query(&schema, query).await;
+    // The tracker did not publish a tip yet.
+    let response = execute_graphql_query(&schema, CHAIN_INFO_CONFIRMATION_QUERY).await;
     assert!(response.errors.is_empty(), "GraphQL errors: {:?}", response.errors);
     let data = response.data.into_json()?;
     let chain_info = extract_chain_info_from_result(&data)?;
     assert_eq!(chain_info["confirmationMode"], "SAFE_OR_DEPTH");
     assert_eq!(chain_info["fcrStatus"], "UNAVAILABLE");
 
-    // The status follows the tracker without being frozen by a cached chain info value.
+    // The status follows the tracker. A cached chain info value does not freeze it.
     tracker.refresh().await?;
-    let response = execute_graphql_query(&schema, query).await;
+    let response = execute_graphql_query(&schema, CHAIN_INFO_CONFIRMATION_QUERY).await;
     assert!(response.errors.is_empty(), "GraphQL errors: {:?}", response.errors);
     let data = response.data.into_json()?;
     let chain_info = extract_chain_info_from_result(&data)?;
@@ -931,8 +936,8 @@ async fn test_chain_info_reports_confirmation_mode_and_fcr_status() -> Result<()
         ChainConfirmationMode::Finalized,
     );
     degraded_tracker.refresh().await?;
-    let degraded = chain_info_schema(&db, degraded_tracker).await;
-    let response = execute_graphql_query(&degraded, query).await;
+    let degraded = chain_info_schema(&db, degraded_tracker);
+    let response = execute_graphql_query(&degraded, CHAIN_INFO_CONFIRMATION_QUERY).await;
     assert!(response.errors.is_empty(), "GraphQL errors: {:?}", response.errors);
     let data = response.data.into_json()?;
     let chain_info = extract_chain_info_from_result(&data)?;
@@ -984,32 +989,16 @@ async fn test_chain_info_through_build_schema_reports_the_configured_confirmatio
         None,
     );
 
-    let query = r#"
-        query {
-            chainInfo {
-                __typename
-                ... on ChainInfo {
-                    confirmationMode
-                    fcrStatus
-                }
-                ... on QueryFailedError {
-                    code
-                    message
-                }
-            }
-        }
-    "#;
-
-    let response = schema.execute(query).await;
+    let response = schema.execute(CHAIN_INFO_CONFIRMATION_QUERY).await;
     assert!(response.errors.is_empty(), "GraphQL errors: {:?}", response.errors);
     let data = response.data.into_json()?;
     let chain_info = extract_chain_info_from_result(&data)?;
     assert_eq!(chain_info["confirmationMode"], "FINALIZED");
 
-    // The tracker is the one the schema was built with: in finalized mode a missing finalized
-    // tag publishes no tip, while a depth-based tracker would report a healthy safe gap.
+    // The schema uses the tracker that it was built with. In finalized mode, a missing finalized
+    // tag publishes no tip. A depth-based tracker reports a healthy safe gap instead.
     schema_rpc_operations.tip_tracker().refresh().await?;
-    let response = schema.execute(query).await;
+    let response = schema.execute(CHAIN_INFO_CONFIRMATION_QUERY).await;
     assert!(response.errors.is_empty(), "GraphQL errors: {:?}", response.errors);
     let data = response.data.into_json()?;
     let chain_info = extract_chain_info_from_result(&data)?;

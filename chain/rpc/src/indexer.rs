@@ -32,7 +32,10 @@ use hopr_bindings::exports::alloy::{
 use hopr_types::telemetry::SimpleGauge;
 use hopr_types::{crypto::types::Hash, primitive::prelude::*};
 use rust_stream_ext_concurrent::then_concurrent::StreamThenConcurrentExt;
-use tokio::sync::watch;
+use tokio::{
+    sync::watch,
+    time::{sleep, timeout},
+};
 use tracing::{debug, error, trace, warn};
 
 use crate::{
@@ -43,7 +46,7 @@ use crate::{
         SafeSingleton::{getOwnersCall, getThresholdCall},
         is_log_block_range_limit_error,
     },
-    tip::ChainTip,
+    tip::{ChainTip, TIP_STALENESS_INTERVALS},
     transport::HttpRequestor,
 };
 
@@ -56,16 +59,16 @@ const MULTICALL3_DETECTION_TTL: Duration = Duration::from_secs(600);
 /// Maximum number of concurrent reads when Multicall3 is not available.
 const SAFE_READ_CONCURRENCY: usize = 8;
 
-/// Waits for the confirmed tip to reach `from_block`.
+/// Waits until the confirmed tip reaches `from_block`.
 ///
-/// Returns `true` when the wait timed out. A head driver that stopped publishing leaves the watch
-/// sender alive, so the wait needs its own limit instead of relying on the channel to close.
+/// Returns `true` if the wait timed out. A head driver that stopped publishing keeps the watch sender
+/// open. Thus the wait needs its own limit, because the channel does not close.
 async fn wait_for_confirmed_tip(
     tip_rx: &mut watch::Receiver<Option<ChainTip>>,
     from_block: u64,
     wait_limit: Duration,
 ) -> bool {
-    tokio::time::timeout(
+    timeout(
         wait_limit,
         tip_rx.wait_for(|tip| tip.as_ref().is_some_and(|tip| tip.confirmed >= from_block)),
     )
@@ -449,11 +452,7 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
                                     .expected_block_time
                                     .saturating_mul(u32::try_from(past_diff).unwrap_or(u32::MAX))
                                     / 3;
-                                let _ = tokio::time::timeout(
-                                    wait_limit,
-                                    tip_rx.wait_for(|tip| tip.as_ref().is_some_and(|tip| tip.confirmed >= from_block)),
-                                )
-                                .await;
+                                let _ = wait_for_confirmed_tip(&mut tip_rx, from_block, wait_limit).await;
                                 continue;
                             } else {
                                 // This is a hard-failure on later iterations which is unrecoverable
@@ -536,7 +535,7 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
                             .cfg
                             .expected_block_time
                             .max(self.cfg.head_poll_interval)
-                            .saturating_mul(3);
+                            .saturating_mul(TIP_STALENESS_INTERVALS);
                         if wait_for_confirmed_tip(&mut tip_rx, from_block, wait_limit).await {
                             debug!(
                                 from_block,
@@ -548,7 +547,7 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
 
                     Err(e) => {
                         error!(error = %e, "failed to obtain current block number from chain");
-                        tokio::time::sleep(self.cfg.head_poll_interval).await;
+                        sleep(self.cfg.head_poll_interval).await;
                     }
                 }
             }
@@ -696,8 +695,9 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
     }
 
     fn subscribe_tip(&self) -> Option<watch::Receiver<Option<ChainTip>>> {
-        self.tip_tracker().ensure_started();
-        Some(self.tip_tracker().subscribe())
+        let tracker = self.tip_tracker();
+        tracker.ensure_started();
+        Some(tracker.subscribe())
     }
 
     async fn get_logs_for_block_range(
@@ -1588,8 +1588,8 @@ mod tests {
         assert!(!RpcError::Other("execution reverted".into()).is_state_pruned());
     }
 
-    /// The stream waits for the tracker to publish the next confirmed tip instead of sleeping for a
-    /// full expected block time.
+    /// The stream waits until the tracker publishes the next confirmed tip. It does not sleep for a full
+    /// expected block time.
     #[test_log::test(tokio::test)]
     async fn test_try_stream_logs_advances_on_tip_update() -> anyhow::Result<()> {
         let mut server = mockito::Server::new_async().await;
@@ -1632,8 +1632,8 @@ mod tests {
             .context("the stream should yield the first block")?;
         assert_eq!(first.block_id, 0);
 
-        // While the confirmed tip is still 5, the next item must wait for the watch channel instead
-        // of returning from a cache read.
+        // While the confirmed tip is 5, the next item must wait for the watch channel. It must not return
+        // from a cache read.
         let next_block = blocks.next();
         futures::pin_mut!(next_block);
         assert!(
@@ -1699,8 +1699,8 @@ mod tests {
         Ok(())
     }
 
-    /// The bounded tip wait leaves the stream again once it times out, and a tip update wakes it
-    /// before the limit is reached.
+    /// The bounded tip wait returns control to the stream after the timeout. A tip update ends the wait
+    /// before the limit.
     #[tokio::test]
     async fn test_confirmed_tip_wait_times_out_and_resumes_on_a_tip_update() {
         let tip = |latest: u64, confirmed: u64| ChainTip {

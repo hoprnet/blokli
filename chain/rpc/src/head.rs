@@ -1,10 +1,11 @@
 //! WebSocket `newHeads` head source, support detection and the background head driver.
 //!
-//! HTTP remains the transport for all RPC requests. The WebSocket connection is only used to
-//! receive `newHeads` notifications, each of which triggers a regular HTTP tip refresh. The
-//! subscription is optional: deployments without a usable WebSocket endpoint keep polling. The
-//! driver probes the subscription at startup, follows `newHeads` while it is healthy and falls
-//! back to polling with exponential-backoff reconnects.
+//! All RPC requests use HTTP. The WebSocket connection only receives `newHeads` notifications.
+//! Each notification starts a usual HTTP refresh of the chain tip.
+//!
+//! The subscription is optional. A deployment without a usable WebSocket endpoint continues to poll.
+//! At startup, the driver probes the subscription. It follows `newHeads` while the subscription is
+//! healthy. If the subscription fails, the driver polls and reconnects with exponential backoff.
 
 use std::{
     fmt::{self, Formatter},
@@ -25,14 +26,40 @@ use hopr_bindings::exports::alloy::{
 };
 #[cfg(all(feature = "telemetry", not(test)))]
 use hopr_types::telemetry::SimpleCounter;
+use thiserror::Error;
 use tokio::{
     sync::watch,
-    time::{Instant as TokioInstant, MissedTickBehavior, sleep, sleep_until, timeout, timeout_at},
+    time::{Instant as TokioInstant, MissedTickBehavior, interval, sleep, sleep_until, timeout, timeout_at},
 };
 use tracing::{debug, error, info, warn};
 use url::Url;
 
 use crate::tip::{HeadSource, TipSource, TrackerRuntime};
+
+/// JSON-RPC error code for a method that the endpoint does not know.
+const JSON_RPC_METHOD_NOT_FOUND: i64 = -32601;
+
+/// Phrases in a JSON-RPC error message that tell that the endpoint cannot serve `newHeads`.
+///
+/// Only an explicit statement that the notification method or subscriptions are missing is terminal.
+/// Generic wording such as "service is not available" tells of a temporary failure and must stay retryable.
+const UNSUPPORTED_PHRASES: [&str; 6] = [
+    "method not found",
+    "notifications not supported",
+    "subscriptions are not supported",
+    "subscriptions not supported",
+    "subscription not supported",
+    "does not exist",
+];
+
+/// Delay before the first reconnect, and after each successful connection.
+const INITIAL_RECONNECT_BACKOFF: Duration = Duration::from_secs(1);
+
+/// Upper limit of the exponential reconnect backoff.
+const MAX_RECONNECT_BACKOFF: Duration = Duration::from_secs(60);
+
+/// Number of expected block times that the probe and a silent socket can wait for a header.
+const HEADER_TIMEOUT_BLOCKS: u32 = 3;
 
 /// A header received through the `newHeads` subscription.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,15 +73,15 @@ pub struct HeadHeader {
 /// Configuration of the WebSocket head source and the polling fallback.
 #[derive(Clone)]
 pub struct HeadSourceConfig {
-    /// Chain id the endpoint must serve.
+    /// Chain id that the endpoint must serve.
     pub chain_id: u64,
-    /// Interval between polling refreshes.
+    /// Interval between two polling refreshes.
     pub poll_interval: Duration,
-    /// Expected block time, used for probe and silent-socket timeouts.
+    /// Expected block time. The probe timeout and the silent-socket timeout use it.
     pub expected_block_time: Duration,
-    /// Effective WebSocket URL, or `None` to poll only.
+    /// Effective WebSocket URL. `None` means polling only.
     pub ws_url: Option<Url>,
-    /// Whether [`HeadSourceConfig::ws_url`] was derived from the HTTP RPC URL.
+    /// `true` if the caller derived [`HeadSourceConfig::ws_url`] from the HTTP RPC URL.
     pub ws_url_derived: bool,
 }
 
@@ -70,23 +97,23 @@ impl fmt::Debug for HeadSourceConfig {
     }
 }
 
-/// Errors produced while opening or reading a `newHeads` subscription.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+/// Errors from opening or reading a `newHeads` subscription.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum HeadError {
     /// The endpoint does not support `newHeads` subscriptions.
     #[error("head subscription is not supported: {reason}")]
     Unsupported {
-        /// Error text reported by the endpoint or the transport.
+        /// Error text from the endpoint or the transport.
         reason: String,
-        /// JSON-RPC error code, when the endpoint returned an error response.
+        /// JSON-RPC error code, if the endpoint sent an error response.
         code: Option<i64>,
     },
     /// The connection failed or closed, or the endpoint stopped sending headers.
     #[error("head subscription connection failed: {reason}")]
     Connection {
-        /// Error text reported by the endpoint or the transport.
+        /// Error text from the endpoint or the transport.
         reason: String,
-        /// JSON-RPC error code, when the endpoint returned an error response.
+        /// JSON-RPC error code, if the endpoint sent an error response.
         code: Option<i64>,
     },
 }
@@ -108,12 +135,12 @@ impl HeadError {
         }
     }
 
-    /// Returns `true` if the error means the endpoint cannot serve `newHeads` at all.
+    /// Returns `true` if the error tells that the endpoint cannot serve `newHeads` at all.
     pub fn is_unsupported(&self) -> bool {
         matches!(self, Self::Unsupported { .. })
     }
 
-    /// Returns the JSON-RPC error code, when the endpoint returned an error response.
+    /// Returns the JSON-RPC error code, if the endpoint sent an error response.
     pub fn code(&self) -> Option<i64> {
         match self {
             Self::Unsupported { code, .. } | Self::Connection { code, .. } => *code,
@@ -123,9 +150,9 @@ impl HeadError {
 
 /// An open `newHeads` subscription.
 pub struct HeadSubscription {
-    /// Chain id reported by the WebSocket endpoint.
+    /// Chain id that the WebSocket endpoint reports.
     pub chain_id: u64,
-    /// Stream of subsequent headers.
+    /// Stream of the headers that follow.
     pub headers: BoxStream<'static, StdResult<HeadHeader, HeadError>>,
 }
 
@@ -141,20 +168,29 @@ impl fmt::Debug for HeadSubscription {
 #[async_trait]
 pub trait HeadSubscriber: Send + Sync {
     /// Connects to the endpoint and subscribes to `newHeads`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeadError::Unsupported`] if the endpoint cannot serve `newHeads`, and
+    /// [`HeadError::Connection`] for all other failures.
     async fn subscribe(&self) -> StdResult<HeadSubscription, HeadError>;
 }
 
-/// Errors produced when deriving a WebSocket URL from an HTTP RPC URL.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+/// Errors from deriving a WebSocket URL from an HTTP RPC URL.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum HeadUrlError {
     /// The source URL does not use the `http` or `https` scheme.
     #[error("cannot derive a WebSocket URL from scheme '{0}'")]
     UnsupportedScheme(String),
 }
 
-/// Derives the WebSocket URL corresponding to an HTTP RPC URL.
+/// Derives the WebSocket URL that matches an HTTP RPC URL.
 ///
-/// `http` becomes `ws` and `https` becomes `wss`. Host, port, path, query and userinfo are kept.
+/// `http` becomes `ws` and `https` becomes `wss`. The host, port, path, query and userinfo do not change.
+///
+/// # Errors
+///
+/// Returns [`HeadUrlError::UnsupportedScheme`] if `rpc_url` does not use `http` or `https`.
 pub fn derive_ws_url(rpc_url: &Url) -> StdResult<Url, HeadUrlError> {
     let scheme = match rpc_url.scheme() {
         "http" => "ws",
@@ -171,8 +207,14 @@ pub fn derive_ws_url(rpc_url: &Url) -> StdResult<Url, HeadUrlError> {
 
 /// Resolves the effective WebSocket URL for the head source.
 ///
-/// Returns the URL and whether it was derived from `rpc_url`. An explicit `rpc_ws_url` wins
-/// over the derived URL, and disabling the subscription forces polling.
+/// Returns the URL and a flag that is `true` if the URL comes from `rpc_url`. An explicit
+/// `rpc_ws_url` has priority over the derived URL. If `head_subscription` is `false`, the result
+/// is `None` and the head source polls.
+///
+/// # Errors
+///
+/// Returns [`HeadUrlError::UnsupportedScheme`] if the function must derive the URL and `rpc_url`
+/// does not use `http` or `https`.
 pub fn resolve_head_ws_url(
     rpc_url: &Url,
     rpc_ws_url: Option<&Url>,
@@ -188,28 +230,16 @@ pub fn resolve_head_ws_url(
     }
 }
 
-/// Classifies a JSON-RPC error as either unsupported or connection-related.
+/// Classifies a JSON-RPC error as an unsupported error or a connection error.
 ///
-/// Only a JSON-RPC error response can mean that the endpoint does not support `newHeads`.
-/// Transport-level failures, HTTP errors and socket events are always transient. The
-/// classification only looks at the error code and message so it can be tested without a network.
+/// Only a JSON-RPC error response can tell that the endpoint does not support `newHeads`.
+/// Transport failures, HTTP errors and socket events are always temporary. The classification
+/// looks only at the error code and the message, so tests do not need a network.
 pub fn classify_head_error(is_error_response: bool, code: Option<i64>, message: &str) -> HeadError {
     let message = message.to_ascii_lowercase();
-    // Only an explicit statement that the notification method or subscriptions are missing is
-    // terminal. Generic availability wording such as "service is not available" describes a
-    // temporary endpoint failure and must stay retryable.
     let unsupported = is_error_response
-        && (code == Some(-32601)
-            || [
-                "method not found",
-                "notifications not supported",
-                "subscriptions are not supported",
-                "subscriptions not supported",
-                "subscription not supported",
-                "does not exist",
-            ]
-            .iter()
-            .any(|phrase| message.contains(phrase)));
+        && (code == Some(JSON_RPC_METHOD_NOT_FOUND)
+            || UNSUPPORTED_PHRASES.iter().any(|phrase| message.contains(phrase)));
 
     if unsupported {
         HeadError::unsupported(message, code)
@@ -225,7 +255,7 @@ fn classify_alloy_error(error: &AlloyRpcError<TransportErrorKind>) -> HeadError 
     }
 }
 
-/// Formats a WebSocket URL for logs without userinfo, path or query.
+/// Formats a WebSocket URL for logs, without the userinfo, path and query.
 pub fn redact_ws_url(url: &Url) -> String {
     let host = url.host_str().unwrap_or("<unknown>");
     match url.port() {
@@ -234,7 +264,7 @@ pub fn redact_ws_url(url: &Url) -> String {
     }
 }
 
-/// Production [`HeadSubscriber`] backed by an alloy WebSocket connection.
+/// Production [`HeadSubscriber`] that uses an alloy WebSocket connection.
 #[derive(Debug, Clone)]
 pub struct WsHeadSubscriber {
     url: Url,
@@ -250,7 +280,7 @@ impl WsHeadSubscriber {
 #[async_trait]
 impl HeadSubscriber for WsHeadSubscriber {
     async fn subscribe(&self) -> StdResult<HeadSubscription, HeadError> {
-        let client = RpcClient::connect_pubsub(WsConnect::new(self.url.as_str().to_string()))
+        let client = RpcClient::connect_pubsub(WsConnect::new(self.url.as_str()))
             .await
             .map_err(|error| classify_alloy_error(&error))?;
         let provider = RootProvider::<Ethereum>::new(client);
@@ -266,7 +296,8 @@ impl HeadSubscriber for WsHeadSubscriber {
         let headers = subscription
             .into_stream()
             .map(move |header| {
-                // Keep the provider and its WebSocket client alive for as long as the stream is read.
+                // The closure holds the provider. Thus the provider and its WebSocket client stay open while
+                // a reader uses the stream.
                 let _provider = &provider;
                 Ok(HeadHeader {
                     number: header.inner.number,
@@ -311,9 +342,7 @@ async fn probe_head_source(
     let deadline = TokioInstant::now() + timeout;
 
     let mut subscription = match timeout_at(deadline, subscriber.subscribe()).await {
-        Err(_) => {
-            return Err(ProbeFailure::Connection { code: None });
-        }
+        Err(_) => return Err(ProbeFailure::Connection { code: None }),
         Ok(Err(error)) => return Err(error.into()),
         Ok(Ok(subscription)) => subscription,
     };
@@ -326,12 +355,7 @@ async fn probe_head_source(
     }
 
     let first_header = match timeout_at(deadline, subscription.headers.next()).await {
-        Err(_) => {
-            return Err(ProbeFailure::Connection { code: None });
-        }
-        Ok(None) => {
-            return Err(ProbeFailure::Connection { code: None });
-        }
+        Err(_) | Ok(None) => return Err(ProbeFailure::Connection { code: None }),
         Ok(Some(Err(error))) => return Err(error.into()),
         Ok(Some(Ok(header))) => header,
     };
@@ -356,7 +380,7 @@ async fn probe_head_source(
 }
 
 fn next_reconnect_backoff(current: Duration) -> Duration {
-    current.saturating_mul(2).min(Duration::from_secs(60))
+    current.saturating_mul(2).min(MAX_RECONNECT_BACKOFF)
 }
 
 fn log_probe_failure(failure: &ProbeFailure, ws_url: &Url, ws_url_derived: bool) {
@@ -411,8 +435,8 @@ async fn run_ws_wakeup_loop(
     subscriber: Arc<dyn HeadSubscriber>,
     wakeup_tx: watch::Sender<HeadWakeup>,
 ) {
-    let probe_timeout = head.expected_block_time.saturating_mul(3);
-    let mut backoff = Duration::from_secs(1);
+    let probe_timeout = head.expected_block_time.saturating_mul(HEADER_TIMEOUT_BLOCKS);
+    let mut backoff = INITIAL_RECONNECT_BACKOFF;
     let mut ever_connected = false;
     let mut seq = 0u64;
 
@@ -436,7 +460,7 @@ async fn run_ws_wakeup_loop(
                     rt.record_ws_reconnect();
                 }
                 ever_connected = true;
-                backoff = Duration::from_secs(1);
+                backoff = INITIAL_RECONNECT_BACKOFF;
                 if let Some(url) = head.ws_url.as_ref() {
                     info!(source = %HeadSource::WebSocket, url = %redact_ws_url(url), "chain head source switched");
                 }
@@ -508,7 +532,7 @@ async fn run_ws_wakeup_loop(
             }
         }
 
-        // A connection failure or socket drop retries with exponential backoff.
+        // After a connection failure or a socket drop, the loop retries with exponential backoff.
         sleep(backoff).await;
         backoff = next_reconnect_backoff(backoff);
     }
@@ -519,8 +543,8 @@ async fn run_refresh_loop(
     poll_interval: Duration,
     mut wakeup_rx: watch::Receiver<HeadWakeup>,
 ) {
-    let mut interval = tokio::time::interval(poll_interval);
-    interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut poll_timer = interval(poll_interval);
+    poll_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut retry_at: Option<TokioInstant> = None;
 
     loop {
@@ -537,7 +561,7 @@ async fn run_refresh_loop(
                 match wakeup.source {
                     HeadSource::Polling => {
                         let _ = rt.refresh_from(HeadSource::Polling).await;
-                        interval.reset();
+                        poll_timer.reset();
                     }
                     HeadSource::WebSocket => {
                         let mut fallback_rx = wakeup_rx.clone();
@@ -575,7 +599,7 @@ async fn run_refresh_loop(
                     _ = wait_for_polling(&mut fallback_rx) => {}
                 }
             }
-            _ = interval.tick(), if !is_ws => {
+            _ = poll_timer.tick(), if !is_ws => {
                 if let Err(error) = rt.refresh_from(HeadSource::Polling).await {
                     debug!(%error, "background chain tip refresh failed");
                 }
@@ -615,7 +639,7 @@ pub(crate) async fn run_head_driver(
             if let (Some(subscriber), Some(_)) = (subscriber, head.ws_url.as_ref()) {
                 run_ws_wakeup_loop(runtime, head, subscriber, wakeup_tx).await;
             }
-            // Keep the refresh loop polling until the tracker is dropped.
+            // The refresh loop continues to poll until the tracker is dropped.
             pending::<()>().await;
         } => {}
     }
@@ -656,8 +680,8 @@ mod tests {
     use url::Url;
 
     use super::{
-        HeadError, HeadHeader, HeadSourceConfig, HeadSubscriber, HeadSubscription, StdResult, classify_head_error,
-        derive_ws_url, next_reconnect_backoff, redact_ws_url, resolve_head_ws_url,
+        HeadError, HeadHeader, HeadSourceConfig, HeadSubscriber, HeadSubscription, ProbeFailure, StdResult,
+        classify_head_error, derive_ws_url, next_reconnect_backoff, redact_ws_url, resolve_head_ws_url,
     };
     use crate::{
         errors::{Result, RpcError},
@@ -751,12 +775,12 @@ mod tests {
             assert_eq!(err.code(), code);
         }
 
-        let failure = super::ProbeFailure::from(HeadError::connection(
+        let failure = ProbeFailure::from(HeadError::connection(
             "wss://rpc.example.com/?token=secret is not reachable",
             Some(-32000),
         ));
         assert!(!format!("{failure:?}").contains("secret"));
-        assert_eq!(failure, super::ProbeFailure::Connection { code: Some(-32000) });
+        assert_eq!(failure, ProbeFailure::Connection { code: Some(-32000) });
 
         assert_eq!(next_reconnect_backoff(Duration::from_secs(1)), Duration::from_secs(2));
         assert_eq!(next_reconnect_backoff(Duration::from_secs(30)), Duration::from_secs(60));
@@ -987,7 +1011,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn test_head_driver_probe_retries_and_terminal_failures() {
-        // Transient connection error / timeout retries and recovers when WS comes up.
+        // After a temporary connection error or a timeout, the driver retries. It recovers when the WebSocket is up.
         let subscriber = MockHeadSubscriber::new(vec![
             MockSubscription::Error(HeadError::connection("handshake failed", None)),
             MockSubscription::Headers {
@@ -1006,7 +1030,7 @@ mod tests {
         assert_eq!(subscriber.calls(), 2);
         assert_eq!(tracker.current().map(|tip| tip.source), Some(HeadSource::WebSocket));
 
-        // Probe timeout retries with backoff while polling keeps publishing.
+        // After a probe timeout, the driver retries with backoff. Polling continues to publish tips.
         let subscriber = MockHeadSubscriber::new(vec![MockSubscription::Pending { chain_id: 100 }]);
         let source = StubTipSource::new(B256::ZERO);
         let tracker = driver_tracker(
@@ -1020,7 +1044,7 @@ mod tests {
         assert!(source.calls() > 1);
         assert_eq!(tracker.current().map(|tip| tip.source), Some(HeadSource::Polling));
 
-        // Missing block hash on first probe retries and activates WS.
+        // If the block hash is missing at the first probe, the driver retries and activates the WebSocket.
         let subscriber = MockHeadSubscriber::new(vec![
             MockSubscription::Headers {
                 chain_id: 100,
@@ -1045,7 +1069,7 @@ mod tests {
         assert_eq!(source.hash_calls.load(Ordering::SeqCst), 2);
         assert_eq!(tracker.current().map(|tip| tip.source), Some(HeadSource::WebSocket));
 
-        // Terminal failures (unsupported, chain_id mismatch, block_hash mismatch) disable WS permanently.
+        // Terminal failures (unsupported, chain_id mismatch, block_hash mismatch) disable the WebSocket permanently.
         for (sub, hash) in [
             (
                 MockSubscription::Error(HeadError::unsupported("method not found", Some(-32601))),
@@ -1085,7 +1109,8 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn test_head_driver_websocket_refreshes_and_follow_up_retries() {
-        // Second header triggers an immediate refresh without waiting for a poll tick; manual refresh keeps WS.
+        // The second header starts a refresh at once, without a wait for a poll tick. A manual refresh keeps the
+        // WebSocket.
         let (tx, subscriber) = MockHeadSubscriber::channel(100, header(50, 0x11));
         let source = StubTipSource::new(B256::repeat_byte(0x11));
         let tracker = driver_tracker(
@@ -1103,7 +1128,7 @@ mod tests {
         advance(Duration::from_millis(10)).await;
         assert_eq!(source.calls(), before + 1);
 
-        // Header above HTTP head triggers exactly one follow-up refresh after poll_interval.
+        // A header above the HTTP head starts exactly one follow-up refresh after poll_interval.
         tx.send(Ok(header(1_000, 0x13))).unwrap();
         advance(Duration::from_millis(10)).await;
         let after_header = source.calls();
@@ -1112,7 +1137,7 @@ mod tests {
         advance(Duration::from_millis(500)).await;
         assert_eq!(source.calls(), after_header + 1);
 
-        // Failed WS refresh also triggers exactly one follow-up refresh.
+        // A failed WebSocket refresh also starts exactly one follow-up refresh.
         source.fail_observe.store(true, Ordering::SeqCst);
         tx.send(Ok(header(52, 0x14))).unwrap();
         advance(Duration::from_millis(10)).await;
@@ -1125,7 +1150,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn test_head_driver_reconnect_drop_error_and_unsupported() {
-        // Socket drop falls back to polling then reconnects and increments reconnect counter.
+        // After a socket drop, the driver polls. Then it reconnects and increments the reconnect counter.
         let subscriber = MockHeadSubscriber::new(vec![
             MockSubscription::Headers {
                 chain_id: 100,
@@ -1151,7 +1176,7 @@ mod tests {
         assert_eq!(tracker.ws_reconnect_count(), 1);
         assert_eq!(tracker.current().map(|tip| tip.source), Some(HeadSource::WebSocket));
 
-        // Becoming unsupported on reconnect stops retrying permanently.
+        // If the endpoint becomes unsupported at reconnect, the driver stops retrying permanently.
         let subscriber = MockHeadSubscriber::new(vec![
             MockSubscription::Headers {
                 chain_id: 100,
@@ -1171,7 +1196,7 @@ mod tests {
         advance(Duration::from_secs(120)).await;
         assert_eq!(subscriber.calls(), 2);
 
-        // Stream error falls back to polling immediately.
+        // After a stream error, the driver polls at once.
         let (tx, subscriber) = MockHeadSubscriber::channel(100, header(50, 0x11));
         let tracker = driver_tracker(
             StubTipSource::new(B256::repeat_byte(0x11)),
@@ -1196,7 +1221,7 @@ mod tests {
             ws_url_derived: false,
         };
 
-        // Silent socket falls back even while a retry refresh is sleeping.
+        // A silent socket falls back to polling, also while a retry refresh sleeps.
         let (tx, subscriber) = MockHeadSubscriber::channel(100, header(50, 0x11));
         let tracker = driver_tracker(StubTipSource::new(B256::repeat_byte(0x11)), subscriber, slow_cfg());
         tracker.ensure_started();
@@ -1206,7 +1231,7 @@ mod tests {
         advance(Duration::from_secs(4)).await;
         assert_eq!(tracker.current().map(|tip| tip.source), Some(HeadSource::Polling));
 
-        // Continuous headers keep WS alive during a slow refresh.
+        // Continuous headers keep the WebSocket active during a slow refresh.
         let subscriber = MockHeadSubscriber::new(vec![MockSubscription::RepeatHeader {
             chain_id: 100,
             header: header(1_000_000, 0x11),
@@ -1217,7 +1242,7 @@ mod tests {
         advance(Duration::from_secs(6)).await;
         assert_eq!(tracker.current().map(|tip| tip.source), Some(HeadSource::WebSocket));
 
-        // Pending observation still falls back on silence timeout and releases the refresh lock.
+        // A pending observation also falls back on the silence timeout and releases the refresh lock.
         let (tx, subscriber) = MockHeadSubscriber::channel(100, header(50, 0x11));
         let source = StubTipSource::new(B256::repeat_byte(0x11));
         let tracker = driver_tracker(source.clone(), subscriber, slow_cfg());

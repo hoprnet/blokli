@@ -103,10 +103,21 @@ pub trait BlokliDbInfoOperations {
     /// Updates the indexer state info.
     async fn set_indexer_state_info<'a>(&'a self, tx: OptTx<'a>, block_num: u32) -> Result<()>;
 
-    /// First block of a failed verification range, if the index is halted.
+    /// Gets the first block of a failed verification range, if the index is halted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails, if the `chain_info` row is missing, or if the
+    /// stored block is negative.
     async fn verification_failed_at(&self) -> Result<Option<u64>>;
 
     /// Records or clears an unresolved verification mismatch.
+    ///
+    /// `Some(block)` records the first block of the failed range. `None` clears the marker.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the block does not fit in an `i64`, or if the update fails.
     async fn set_verification_failed_at(&self, block: Option<u64>) -> Result<()>;
 }
 
@@ -116,7 +127,7 @@ impl BlokliDbInfoOperations for BlokliDb {
         chain_info::Entity::find_by_id(SINGULAR_TABLE_FIXED_ID)
             .one(self.conn(TargetDb::Index))
             .await?
-            .ok_or(MissingFixedTableEntry("chain_info".into()))?
+            .ok_or_else(|| MissingFixedTableEntry("chain_info".into()))?
             .verification_failed_at
             .map(|block| i64_to_u64(block, "verification_failed_at"))
             .transpose()

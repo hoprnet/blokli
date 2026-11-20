@@ -5,7 +5,7 @@
 //! 1. Database is connected and has chain info
 //! 2. RPC is reachable
 //! 3. Indexer lag is within acceptable limits
-//! 4. Post-finality verification has not found a mismatch
+//! 4. Post-finality verification found no mismatch
 //!
 //! The readiness state is cached and updated periodically, with out-of-band refreshes for fast transitions.
 //! Updates are triggered by:
@@ -37,22 +37,31 @@ pub enum ReadinessState {
     NotReady,
 }
 
+/// Status value of a check that passed.
+const STATUS_HEALTHY: &str = "healthy";
+
+/// Status value of a check that failed.
+const STATUS_UNHEALTHY: &str = "unhealthy";
+
+/// Error text of the verification check when post-finality verification found a mismatch.
+const VERIFICATION_MISMATCH_ERROR: &str = "Post-finality verification found a mismatch";
+
 /// Result of one readiness evaluation.
 ///
-/// The report gathers every check even when an earlier one already decided the state, so the
-/// `/readyz` body keeps its diagnostic details when verification failed or the database is
-/// unreachable.
+/// The report contains every check, also when an earlier check already decided the state.
+/// Thus the `/readyz` body keeps its diagnostic details when verification failed or the
+/// database is unreachable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadinessReport {
-    /// Readiness decision that feeds the cached state, the HTTP status and the health metric.
+    /// Readiness decision for the cached state, the HTTP status, and the health metric.
     pub state: ReadinessState,
     /// Health status label for the `blokli_health` metric.
     pub health_status: &'static str,
-    /// Per-subsystem diagnostic check statuses rendered by `/readyz`.
+    /// Diagnostic status of each subsystem, as `/readyz` shows it.
     pub checks: ReadinessChecks,
 }
 
-/// Individual readiness checks rendered by `/readyz`.
+/// Individual readiness checks that `/readyz` shows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReadinessChecks {
     /// Database connectivity check.
@@ -70,7 +79,7 @@ pub struct ReadinessChecks {
 pub struct CheckStatus {
     /// `"healthy"` or `"unhealthy"`.
     pub status: String,
-    /// Failure description when unhealthy.
+    /// Description of the failure when the check is unhealthy.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -79,7 +88,7 @@ impl CheckStatus {
     /// Creates a healthy check status.
     pub fn healthy() -> Self {
         Self {
-            status: "healthy".to_string(),
+            status: STATUS_HEALTHY.to_string(),
             error: None,
         }
     }
@@ -87,21 +96,21 @@ impl CheckStatus {
     /// Creates an unhealthy check status with an error message.
     pub fn unhealthy(error: impl Into<String>) -> Self {
         Self {
-            status: "unhealthy".to_string(),
+            status: STATUS_UNHEALTHY.to_string(),
             error: Some(error.into()),
         }
     }
 }
 
-/// RPC check status with confirmed block number.
+/// RPC check status with the confirmed block number.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RpcCheckStatus {
     /// `"healthy"` or `"unhealthy"`.
     pub status: String,
-    /// Confirmed block reported by the chain tip tracker.
+    /// Confirmed block from the chain tip tracker.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub block_number: Option<u64>,
-    /// Failure description when unhealthy.
+    /// Description of the failure when the check is unhealthy.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -114,10 +123,10 @@ pub struct IndexerCheckStatus {
     /// Last indexed block, when chain info exists.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_indexed_block: Option<i64>,
-    /// Lag between the confirmed block and the indexer watermark.
+    /// Number of blocks between the confirmed block and the indexer watermark.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lag: Option<u64>,
-    /// Failure description when lag exceeds threshold.
+    /// Description of the failure when the lag is more than the threshold.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -155,13 +164,14 @@ impl ReadinessChecker {
         }
     }
 
-    /// Attaches the post-finality verification status checked for readiness.
+    /// Attaches the post-finality verification status that the readiness check reads.
+    #[must_use]
     pub fn with_verification_status(mut self, verification_status: VerificationStatus) -> Self {
         self.verification_status = verification_status;
         self
     }
 
-    /// Get the current readiness state, returning `NotReady` when verification has failed.
+    /// Get the current readiness state. Returns `NotReady` when verification failed.
     pub async fn get(&self) -> ReadinessState {
         let cached = self.cached_state.read().await;
         if self.verification_status.failed() {
@@ -176,15 +186,16 @@ impl ReadinessChecker {
 
     /// Perform a full readiness check and update the cached state.
     ///
-    /// This is used by `/readyz` and indexer completion signals. Verification status is re-read
-    /// under the publication lock so a check that started before a mismatch cannot restore readiness.
+    /// `/readyz` and the indexer completion signals use this function. It reads the verification
+    /// status again under the publication lock. Thus a check that started before a mismatch
+    /// cannot restore readiness.
     pub async fn check_and_update(&self) -> ReadinessReport {
         let mut report = self.check_readiness().await;
         let mut cached = self.cached_state.write().await;
         if self.verification_status.failed() {
             report.state = ReadinessState::NotReady;
             report.health_status = metrics::HEALTH_STATUS_VERIFICATION_FAILED;
-            report.checks.verification = CheckStatus::unhealthy("Post-finality verification found a mismatch");
+            report.checks.verification = CheckStatus::unhealthy(VERIFICATION_MISMATCH_ERROR);
         }
 
         self.store_state(&mut cached, report.state, report.health_status);
@@ -192,8 +203,9 @@ impl ReadinessChecker {
         report
     }
 
-    /// Stores a readiness decision, updates the health metric and notifies subscribers when the
-    /// state changes.
+    /// Stores a readiness decision and updates the health metric.
+    ///
+    /// When the state changes, it also notifies the subscribers.
     fn store_state(&self, cached: &mut ReadinessState, new_state: ReadinessState, health_status: &'static str) {
         let old_state = *cached;
         *cached = new_state;
@@ -226,8 +238,9 @@ impl ReadinessChecker {
     }
 
     /// Start a background task that periodically updates the readiness state.
-    /// Also ensures the chain tip tracker background driver is started so API-only pods and
-    /// halted processes still serve cached tips and live `fcrStatus`.
+    ///
+    /// It also starts the background driver of the chain tip tracker, if it is not running.
+    /// Thus API-only pods and halted processes still serve cached tips and a live `fcrStatus`.
     pub fn start_periodic_updates(self) {
         self.rpc_operations.tip_tracker().ensure_started();
         let interval = self.health_config.readiness_check_interval;
@@ -240,8 +253,9 @@ impl ReadinessChecker {
         });
     }
 
-    /// Collect database, RPC and lag diagnostics before taking the publication lock.
-    /// `check_and_update` applies the verification status under that lock.
+    /// Collect the database, RPC, and lag diagnostics without the publication lock.
+    ///
+    /// `check_and_update` applies the verification status later, under that lock.
     async fn check_readiness(&self) -> ReadinessReport {
         // 1. Check database connectivity by querying chain_info
         let (last_indexed_block, database, database_health_status) = match ChainInfo::find().one(&self.db).await {
@@ -269,14 +283,14 @@ impl ReadinessChecker {
         // 2. Check RPC connectivity and get the tracker's confirmed tip
         let rpc = match self.rpc_operations.get_block_number().await {
             Ok(block) => RpcCheckStatus {
-                status: "healthy".to_string(),
+                status: STATUS_HEALTHY.to_string(),
                 block_number: Some(block),
                 error: None,
             },
             Err(e) => {
                 error!("RPC check failed: {}", e);
                 RpcCheckStatus {
-                    status: "unhealthy".to_string(),
+                    status: STATUS_UNHEALTHY.to_string(),
                     block_number: None,
                     error: Some(e.to_string()),
                 }
@@ -285,7 +299,7 @@ impl ReadinessChecker {
 
         // 3. Check indexer lag
         let mut indexer = IndexerCheckStatus {
-            status: "healthy".to_string(),
+            status: STATUS_HEALTHY.to_string(),
             last_indexed_block,
             lag: None,
             error: None,
@@ -302,7 +316,7 @@ impl ReadinessChecker {
                     max_lag = self.health_config.max_indexer_lag,
                     "Indexer lag exceeds threshold (lag compared against the tracker's confirmed tip)"
                 );
-                indexer.status = "unhealthy".to_string();
+                indexer.status = STATUS_UNHEALTHY.to_string();
                 indexer.error = Some(format!(
                     "indexer lag exceeds threshold ({} > {} blocks)",
                     lag, self.health_config.max_indexer_lag
@@ -353,9 +367,11 @@ mod tests {
             Arc,
             atomic::{AtomicBool, Ordering},
         },
+        thread,
         time::{Duration, Instant},
     };
 
+    use anyhow::{Result, bail};
     use blokli_chain_indexer::IndexerState;
     use blokli_chain_rpc::{
         rpc::{RpcOperations, RpcOperationsConfig},
@@ -364,18 +380,25 @@ mod tests {
     };
     use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb, info::BlokliDbInfoOperations};
     use hopr_bindings::exports::alloy::{rpc::client::ClientBuilder, transports::http::ReqwestTransport};
+    use mockito::{Matcher, Mock, Request, Server, ServerGuard};
+    use serde_json::{Value, json};
+    use tokio::{task, time};
 
     use super::{ReadinessChecker, ReadinessState};
     use crate::{config::HealthConfig, metrics};
 
+    /// Block number of the latest header in the RPC stub answers.
+    const LATEST_BLOCK: u64 = 100;
+
+    /// Longest time that a test waits for the RPC stub or for the checker.
+    const STUB_TIMEOUT: Duration = Duration::from_secs(10);
+
+    /// Request body pattern that matches block requests to the RPC stub.
+    const GET_BLOCK_BY_NUMBER_PATTERN: &str = r#""method"\s*:\s*"eth_getBlockByNumber""#;
+
     /// Answers a batched block request with a header for every tag that has a block number.
-    fn tip_batch_response(
-        request: &mockito::Request,
-        latest: u64,
-        safe: Option<u64>,
-        finalized: Option<u64>,
-    ) -> Vec<u8> {
-        let body: serde_json::Value =
+    fn tip_batch_response(request: &Request, latest: u64, safe: Option<u64>, finalized: Option<u64>) -> Vec<u8> {
+        let body: Value =
             serde_json::from_slice(request.body().expect("request body")).expect("valid JSON request body");
         let responses = body
             .as_array()
@@ -390,10 +413,10 @@ mod tests {
                     _ => None,
                 };
                 let result = number.map_or(
-                    serde_json::Value::Null,
-                    |number| serde_json::json!({"number": format!("0x{number:x}"), "timestamp": "0x1"}),
+                    Value::Null,
+                    |number| json!({"number": format!("0x{number:x}"), "timestamp": "0x1"}),
                 );
-                serde_json::json!({
+                json!({
                     "jsonrpc": "2.0",
                     "id": call["id"].clone(),
                     "result": result
@@ -405,46 +428,40 @@ mod tests {
     }
 
     /// Answers the chain tip batch with a latest header and no safe or finalized tag.
-    fn mock_tip_without_confirmation_tags(server: &mut mockito::ServerGuard) -> mockito::Mock {
+    fn mock_tip_without_confirmation_tags(server: &mut ServerGuard) -> Mock {
         server
             .mock("POST", "/")
-            .match_body(mockito::Matcher::Regex(
-                r#""method"\s*:\s*"eth_getBlockByNumber""#.to_string(),
-            ))
-            .with_body_from_request(|request| tip_batch_response(request, 100, None, None))
+            .match_body(Matcher::Regex(GET_BLOCK_BY_NUMBER_PATTERN.to_string()))
+            .with_body_from_request(|request| tip_batch_response(request, LATEST_BLOCK, None, None))
             .expect_at_least(1)
             .create()
     }
 
-    /// Answers the chain tip batch once the test sets `release`, and reports the arrived request.
-    fn mock_tip_released_by_test(
-        server: &mut mockito::ServerGuard,
-        arrived: Arc<AtomicBool>,
-        release: Arc<AtomicBool>,
-    ) -> mockito::Mock {
+    /// Answers the chain tip batch after the test sets `release`.
+    ///
+    /// It sets `arrived` when the request arrives.
+    fn mock_tip_released_by_test(server: &mut ServerGuard, arrived: Arc<AtomicBool>, release: Arc<AtomicBool>) -> Mock {
         server
             .mock("POST", "/")
-            .match_body(mockito::Matcher::Regex(
-                r#""method"\s*:\s*"eth_getBlockByNumber""#.to_string(),
-            ))
+            .match_body(Matcher::Regex(GET_BLOCK_BY_NUMBER_PATTERN.to_string()))
             .with_body_from_request(move |request| {
                 arrived.store(true, Ordering::SeqCst);
 
-                let deadline = Instant::now() + Duration::from_secs(10);
+                let deadline = Instant::now() + STUB_TIMEOUT;
                 while !release.load(Ordering::SeqCst) && Instant::now() < deadline {
-                    std::thread::sleep(Duration::from_millis(1));
+                    thread::sleep(Duration::from_millis(1));
                 }
 
-                tip_batch_response(request, 100, None, None)
+                tip_batch_response(request, LATEST_BLOCK, None, None)
             })
             .expect_at_least(1)
             .create()
     }
 
     fn rpc_operations_for(
-        server: &mockito::ServerGuard,
+        server: &ServerGuard,
         config: RpcOperationsConfig,
-    ) -> anyhow::Result<Arc<RpcOperations<ReqwestClient>>> {
+    ) -> Result<Arc<RpcOperations<ReqwestClient>>> {
         let transport = ReqwestTransport::new(server.url().parse()?);
         let rpc_client = ClientBuilder::default().transport(transport.clone(), transport.guess_local());
 
@@ -456,22 +473,22 @@ mod tests {
         )?))
     }
 
-    async fn wait_for_tip_request(arrived: &AtomicBool) -> anyhow::Result<()> {
-        let deadline = Instant::now() + Duration::from_secs(10);
+    async fn wait_for_tip_request(arrived: &AtomicBool) -> Result<()> {
+        let deadline = Instant::now() + STUB_TIMEOUT;
 
         while !arrived.load(Ordering::SeqCst) {
             if Instant::now() >= deadline {
-                anyhow::bail!("the RPC stub did not receive the chain tip request");
+                bail!("the RPC stub did not receive the chain tip request");
             }
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            time::sleep(Duration::from_millis(5)).await;
         }
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn missing_safe_tag_reports_not_ready() -> anyhow::Result<()> {
-        let mut server = mockito::Server::new_async().await;
+    async fn missing_safe_tag_reports_not_ready() -> Result<()> {
+        let mut server = Server::new_async().await;
         let tip = mock_tip_without_confirmation_tags(&mut server);
         let rpc = rpc_operations_for(
             &server,
@@ -493,8 +510,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn verification_failure_reports_not_ready() -> anyhow::Result<()> {
-        let mut server = mockito::Server::new_async().await;
+    async fn verification_failure_reports_not_ready() -> Result<()> {
+        let mut server = Server::new_async().await;
         let tip = mock_tip_without_confirmation_tags(&mut server);
 
         let db = BlokliDb::new_in_memory().await?;
@@ -520,8 +537,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn persisted_verification_failure_in_db_reports_not_ready() -> anyhow::Result<()> {
-        let mut server = mockito::Server::new_async().await;
+    async fn persisted_verification_failure_in_db_reports_not_ready() -> Result<()> {
+        let mut server = Server::new_async().await;
         let tip = mock_tip_without_confirmation_tags(&mut server);
 
         let db = BlokliDb::new_in_memory().await?;
@@ -547,8 +564,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn start_periodic_updates_starts_tip_tracker() -> anyhow::Result<()> {
-        let mut server = mockito::Server::new_async().await;
+    async fn start_periodic_updates_starts_tip_tracker() -> Result<()> {
+        let mut server = Server::new_async().await;
         let tip = mock_tip_without_confirmation_tags(&mut server);
 
         let db = BlokliDb::new_in_memory().await?;
@@ -565,9 +582,9 @@ mod tests {
         assert!(rpc.tip_tracker().current().is_none());
         checker.start_periodic_updates();
 
-        tokio::time::timeout(Duration::from_secs(5), async {
+        time::timeout(Duration::from_secs(5), async {
             while rpc.tip_tracker().current().is_none() {
-                tokio::time::sleep(Duration::from_millis(10)).await;
+                time::sleep(Duration::from_millis(10)).await;
             }
         })
         .await?;
@@ -578,8 +595,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn check_started_before_a_verification_failure_cannot_restore_readiness() -> anyhow::Result<()> {
-        let mut server = mockito::Server::new_async().await;
+    async fn check_started_before_a_verification_failure_cannot_restore_readiness() -> Result<()> {
+        let mut server = Server::new_async().await;
         let arrived = Arc::new(AtomicBool::new(false));
         let release = Arc::new(AtomicBool::new(false));
         let tip = mock_tip_released_by_test(&mut server, arrived.clone(), release.clone());
@@ -598,18 +615,18 @@ mod tests {
         checker.force_ready().await;
         let mut updates = checker.subscribe();
 
-        let running = tokio::spawn({
+        let running = task::spawn({
             let checker = checker.clone();
             async move { checker.check_and_update().await }
         });
 
         wait_for_tip_request(&arrived).await?;
-        // Hold a read lock until the check has collected its diagnostics and queued its write.
+        // Hold a read lock until the check collects its diagnostics and queues its write.
         let cached = checker.cached_state.read().await;
         release.store(true, Ordering::SeqCst);
-        tokio::time::timeout(Duration::from_secs(10), async {
+        time::timeout(STUB_TIMEOUT, async {
             while checker.cached_state.try_read().is_ok() {
-                tokio::task::yield_now().await;
+                task::yield_now().await;
             }
         })
         .await?;

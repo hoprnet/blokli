@@ -135,14 +135,14 @@ spec:
     - alert: blokli-fcr-false-confirmation
       annotations:
         summary: Blokli found a mismatch between stored and finalized logs.
-        # A false confirmation means a range indexed above finality differed from the canonical logs once
-        # it became final: either an indexed log was reorged out or a canonical log was missed. The
-        # readiness check also reports the dedicated verification_failed status, and the indexer stops
-        # advancing until an operator intervenes. See runbooks/fast-confirmation.md.
+        # A false confirmation means that a range indexed above finality differed from the canonical logs
+        # after it became final. A reorganization removed an indexed log, or the indexer missed a canonical
+        # log. The readiness check also reports the verification_failed status. The indexer stops advancing
+        # until an operator intervenes. See runbooks/fast-confirmation.md.
         description: >-
-          Blokli in network {{ $network }} recorded at least one false confirmation over the last
-          {{ .windowMinutes }}m, or its readiness check reports the "verification_failed" status, for over
-          {{ .for }}. Data indexed above finality no longer matches the canonical chain and the indexer is
+          Blokli in network {{ $network }} recorded at least one false confirmation in the last
+          {{ .windowMinutes }}m, or its readiness check reported the "verification_failed" status, for more
+          than {{ .for }}. Data indexed above finality does not match the canonical chain. The indexer
           halted.
         runbook_url: https://github.com/hoprnet/blokli/blob/main/runbooks/fast-confirmation.md
       expr: |-

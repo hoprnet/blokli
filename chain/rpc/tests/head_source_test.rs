@@ -1,4 +1,4 @@
-//! Integration tests for the WebSocket head source against anvil.
+//! Integration tests that run the WebSocket head source against anvil.
 
 use std::time::Duration;
 
@@ -12,11 +12,15 @@ use hopr_bindings::exports::alloy::{
     rpc::client::ClientBuilder,
     transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
 };
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 
 const TEST_BLOCK_TIME: Duration = Duration::from_secs(1);
 const TEST_FINALITY: u32 = 2;
 const TEST_TX_POLLING_INTERVAL: Duration = Duration::from_millis(10);
+/// Upper limit for each wait on the tracker.
+const TEST_WAIT_LIMIT: Duration = Duration::from_secs(20);
+/// Interval between two reads of the current tip during a wait.
+const TEST_POLL_STEP: Duration = Duration::from_millis(100);
 
 #[tokio::test]
 async fn test_websocket_head_source_advances_confirmed_tip() -> anyhow::Result<()> {
@@ -41,12 +45,12 @@ async fn test_websocket_head_source_advances_confirmed_tip() -> anyhow::Result<(
     let tracker = rpc.tip_tracker();
     tracker.ensure_started();
 
-    tokio::time::timeout(Duration::from_secs(20), async {
+    timeout(TEST_WAIT_LIMIT, async {
         loop {
             if tracker.current().is_some_and(|tip| tip.source == HeadSource::WebSocket) {
                 break;
             }
-            sleep(Duration::from_millis(100)).await;
+            sleep(TEST_POLL_STEP).await;
         }
     })
     .await
@@ -57,7 +61,7 @@ async fn test_websocket_head_source_advances_confirmed_tip() -> anyhow::Result<(
         .map(|tip| tip.confirmed)
         .context("tracker did not publish a tip")?;
 
-    tokio::time::timeout(Duration::from_secs(20), async {
+    timeout(TEST_WAIT_LIMIT, async {
         loop {
             if tracker
                 .current()
@@ -65,7 +69,7 @@ async fn test_websocket_head_source_advances_confirmed_tip() -> anyhow::Result<(
             {
                 break;
             }
-            sleep(Duration::from_millis(100)).await;
+            sleep(TEST_POLL_STEP).await;
         }
     })
     .await

@@ -5,7 +5,7 @@
 //!
 //! The following metrics are exported (when the `telemetry` feature is enabled):
 //!
-//! - `blokli_health`: Gauge (0 or 1) with a `status` label indicating the current health state (`ok`, `timeout`,
+//! - `blokli_health`: Gauge (0 or 1) with a `status` label that shows the current health state (`ok`, `timeout`,
 //!   `unsynched`, `corrupted`, `verification_failed`).
 //! - `blokli_errors_total`: Counter of GraphQL errors, labelled by `type`.
 //! - `blokli_request_count`: Counter of GraphQL requests, labelled by `type` (query, mutation, subscription).

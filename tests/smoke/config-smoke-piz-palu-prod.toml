@@ -1,19 +1,20 @@
-# Smoke test configuration for bloklid - Piz Palu production on Gnosis Chain with FCR
-# Tests connectivity, WebSocket newHeads, safe_or_depth confirmation, and post-finality verification
-# against live Gnosis Chain RPC and local PostgreSQL
+# Smoke test configuration for bloklid: Piz Palu production on Gnosis Chain with FCR.
+# The test uses the live Gnosis Chain RPC and a local PostgreSQL. It makes sure that these
+# features work: connectivity, WebSocket newHeads, safe_or_depth confirmation, and
+# post-finality verification.
 #
 
-# Directory for storing data files
+# Directory for the data files
 data_directory = "/data"
 
-# Network identifier - using Piz Palu production network on Gnosis Chain
+# Network identifier: the Piz Palu production network on Gnosis Chain
 network = "piz-palu-prod"
 
-# RPC endpoint URLs - connects to real Gnosis Chain
+# RPC endpoint URLs for the real Gnosis Chain
 rpc_url    = "https://rpc.gnosischain.com"
 rpc_ws_url = "wss://rpc.gnosischain.com/wss"
 
-# Rate limit RPC requests to avoid overwhelming public endpoint
+# Limit the RPC request rate. The public endpoint must not receive too many requests.
 max_rpc_requests_per_sec = 10
 
 # PostgreSQL database configuration
@@ -23,14 +24,14 @@ url  = "postgresql://bloklid:bloklid_smoke_test@postgres:5432/bloklid"
 
 # Indexer configuration
 [indexer]
-# Enable fast sync for production network testing
-# We don't want to index from genesis on the real network
+# Enable fast sync for the production network test.
+# The test must not index the real network from genesis.
 fast_sync = true
 
-# Disable logs snapshot for smoke tests
+# Disable the logs snapshot for smoke tests
 enable_logs_snapshot = false
 
-# Chain head tracking via WebSocket newHeads with polling fallback
+# Chain head tracking with WebSocket newHeads. If newHeads is not available, the indexer uses polling.
 [indexer.head_tracking]
 head_poll_interval = "1s"
 head_subscription  = true
@@ -55,6 +56,6 @@ playground_enabled = true
 
 # Health check configuration
 [api.health]
-# Allow high lag for production network connectivity smoke test
+# Allow a high lag. This smoke test only tests the connectivity to the production network.
 max_indexer_lag = 100000000
 timeout         = "10s"

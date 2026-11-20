@@ -5,6 +5,12 @@ use url::Url;
 
 use crate::snapshot::download::normalize_sha256_hex;
 
+/// Default of [`IndexerConfig::max_safe_gap`].
+const DEFAULT_MAX_SAFE_GAP: u64 = 32;
+
+/// Default of [`IndexerConfig::head_poll_interval`].
+const DEFAULT_HEAD_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
 /// Tuning for the concurrent pre-fetch of transactions needed to decode Safe execution failures.
 ///
 /// The lookups run before a block's database transaction is opened, so these values trade requests
@@ -107,38 +113,43 @@ pub struct IndexerConfig {
     #[default(10)]
     pub shutdown_signal_capacity: usize,
 
-    /// Rule used to derive the confirmed block from the chain tip.
+    /// Rule that derives the confirmed block from the chain tip.
     ///
     /// Default is `ConfirmationMode::Depth`.
     #[default(_code = "ConfirmationMode::Depth")]
     pub confirmation_mode: ConfirmationMode,
 
-    /// Indexing depth override. When unset, the tracker uses the network confirmation count.
+    /// Override for the indexing depth.
+    ///
+    /// If this value is not set, the tracker uses the network confirmation count.
     pub confirmation_depth: Option<u16>,
 
-    /// Latest-to-safe gap at or above which FCR is considered degraded.
+    /// Gap between the latest block and the safe block at which FCR becomes degraded.
+    ///
+    /// FCR counts as degraded when the gap is equal to or larger than this value.
     ///
     /// Default is `32`.
-    #[default(32)]
+    #[default(_code = "DEFAULT_MAX_SAFE_GAP")]
     pub max_safe_gap: u64,
 
-    /// Interval at which the chain tip is polled.
+    /// Interval between two polls of the chain tip.
     ///
     /// Default is `1s`.
-    #[default(_code = "Duration::from_secs(1)")]
+    #[default(_code = "DEFAULT_HEAD_POLL_INTERVAL")]
     pub head_poll_interval: Duration,
 
-    /// Whether the indexer may use a WebSocket `newHeads` head source.
+    /// Whether the indexer can use a WebSocket `newHeads` head source.
     ///
-    /// The indexer falls back to polling when the endpoint cannot serve subscriptions.
+    /// If the endpoint cannot serve subscriptions, the indexer falls back to polling.
     ///
     /// Default is `true`.
     #[default(true)]
     pub head_subscription: bool,
 
-    /// WebSocket URL used for `newHeads` notifications.
+    /// WebSocket URL for `newHeads` notifications.
     ///
-    /// When unset and subscriptions are enabled, the URL is derived from the HTTP RPC URL.
+    /// If this value is not set and subscriptions are enabled, Blokli derives the URL from the
+    /// HTTP RPC URL.
     ///
     /// Default is `None`.
     #[default(None)]
@@ -148,10 +159,10 @@ pub struct IndexerConfig {
     #[default(_code = "SafeTxPrefetchConfig::default()")]
     pub safe_tx_prefetch: SafeTxPrefetchConfig,
 
-    /// Whether to re-check indexed blocks against the canonical chain once they become final.
+    /// Whether to re-check indexed blocks against the canonical chain after they become final.
     ///
-    /// A detected mismatch halts the indexer, so this can be turned off for deployments that
-    /// accept the risk in exchange for no verification traffic.
+    /// A detected mismatch halts the indexer. A deployment that accepts this risk can turn the
+    /// check off to avoid the verification traffic.
     ///
     /// Default is `true`.
     #[default(true)]
@@ -200,8 +211,8 @@ impl IndexerConfig {
             shutdown_signal_capacity,
             confirmation_mode: ConfirmationMode::default(),
             confirmation_depth: None,
-            max_safe_gap: 32,
-            head_poll_interval: Duration::from_secs(1),
+            max_safe_gap: DEFAULT_MAX_SAFE_GAP,
+            head_poll_interval: DEFAULT_HEAD_POLL_INTERVAL,
             head_subscription: true,
             head_ws_url: None,
             safe_tx_prefetch: SafeTxPrefetchConfig::default(),

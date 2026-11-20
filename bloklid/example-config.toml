@@ -14,8 +14,9 @@ network = "jura-dev"
 # If not specified, uses the network's default RPC endpoint (default: http://localhost:8545)
 rpc_url = "http://localhost:8545"
 
-# Optional. WebSocket URL for newHeads. Defaults to rpc_url with http(s) replaced by ws(s).
-# Set it when the provider serves WebSocket on a different path or port.
+# WebSocket URL for newHeads notifications. This value is optional.
+# If it is not set, bloklid uses rpc_url and replaces http(s) with ws(s).
+# If the provider serves WebSocket on a different path or port, set this value.
 # rpc_ws_url = "wss://rpc.gnosischain.com/wss"
 
 # Hard cap on RPC requests per second, enforced by a token bucket on the shared RPC client
@@ -145,25 +146,31 @@ enable_logs_snapshot = false
 # PortalFactory is allowed, but Portal-specific GraphQL queries are unavailable.
 enable_curvy_indexing = false
 
-# Chain head tracking. newHeads over WebSocket is used when the RPC endpoint supports it.
+# Configuration for how the indexer follows the chain head.
 [indexer.head_tracking]
-# Use newHeads (default). Falls back to polling when the RPC cannot serve it. false forces polling.
+# If true (default), the indexer uses WebSocket newHeads notifications.
+# If the RPC endpoint cannot serve subscriptions, the indexer uses polling.
+# Set this value to false to always use polling.
 head_subscription = true
-# Polling interval for the fallback (default: 1s). Each poll is one batched JSON-RPC request
-# with three eth_getBlockByNumber calls (latest, safe, finalized).
+# Time between two polls of the chain tip (default: 1s). The value must be greater than 0.
+# Each poll is one batched JSON-RPC request with three eth_getBlockByNumber calls
+# (latest, safe, finalized).
 head_poll_interval = "1s"
 
-# Rule used to derive the confirmed block from the observed chain tip.
+# Configuration for the rule that gives the confirmed block from the observed chain tip.
 [indexer.confirmation]
-# depth | safe_or_depth | safe | finalized
-# Omit to use depth on all networks. Set safe_or_depth to opt in to fast confirmation.
+# Confirmation rule: depth | safe_or_depth | safe | finalized
+# If you omit it, all networks use depth. Set safe_or_depth to use the Fast Confirmation Rule.
 # mode = "depth"
-# Blocks behind latest used by `depth` and as the fallback of `safe_or_depth`.
-# Defaults to the network value (3 on Gnosis, 1 on anvil-localhost).
+# Number of blocks behind the latest block for `depth` and for the fallback of `safe_or_depth`.
+# If it is not set, the network value applies (3 on Gnosis, 1 on anvil-localhost).
+# The value must be from 1 to 100.
 # depth = 3
-# latest - safe at or above this marks FCR as degraded (default: 32).
+# If the gap from the latest block to the safe block is this value or more, FCR is degraded
+# (default: 32). The value must be at least 1.
 max_safe_gap = 32
-# Re-check indexed blocks against the canonical chain once they become final (default: true).
+# If true (default), post-finality verification compares indexed blocks with the canonical
+# chain after the blocks become final.
 # verify_finalized = true
 
 # Deprecated: the indexer no longer pre-fetches transactions, so the keys in this
@@ -337,14 +344,14 @@ interval = "15s"
 [api.health]
 # Maximum allowed indexer lag before the server reports "not ready"
 #
-# This limit is compared against the chain tip tracker's confirmed block:
+# bloklid compares this limit with the lag from the confirmed block of the chain tip tracker:
 #   lag = confirmed_block - indexed_block
 #
 # The confirmed block follows the configured confirmation rule (depth, safe_or_depth,
-# safe, or finalized). For jura-dev (Gnosis) with depth=3 and max_indexer_lag=10:
-# - While the depth rule is active (mode depth, or safe_or_depth in its fallback),
+# safe, or finalized). Example for jura-dev (Gnosis) with depth=3 and max_indexer_lag=10:
+# - When the depth rule is active (mode depth, or safe_or_depth in its fallback),
 #   the indexer can be up to 13 blocks behind the RPC chain head
-# - But must be within 10 blocks of confirmed blocks
+# - The indexer must stay within 10 blocks of the confirmed block
 #
 # This ensures the server doesn't report "ready" when caught up to
 # unconfirmed blocks that might be reorganized.

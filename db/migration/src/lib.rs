@@ -162,7 +162,9 @@ mod tests {
         assert!(result.is_ok(), "Migrations should run without errors");
     }
 
-    /// Verification halt marker is optional, so a fresh or cleared index starts unset.
+    /// The verification halt marker column is nullable, and reverting m015 drops it.
+    ///
+    /// Thus a fresh or cleared index starts without a halt marker.
     #[tokio::test]
     async fn test_post_finality_verification_migration_up_and_down() {
         for (db, use_index_only) in [(setup_test_db().await, false), (setup_test_db().await, true)] {

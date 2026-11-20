@@ -16,15 +16,15 @@ Alerts related to on-chain indexing progress and correctness.
 
 ## Fast Confirmation
 
-Operational guidance for the confirmation modes, the chain head source and the Fast Confirmation Rule health checks.
+Procedures for the confirmation modes, the chain head source and the health of the Fast Confirmation Rule (FCR).
 
 | Runbook                                   | Description                                                                                   |
 | ----------------------------------------- | --------------------------------------------------------------------------------------------- |
 | [Fast Confirmation](fast-confirmation.md) | Confirmation modes, endpoint trust, hard forks, false confirmations and WebSocket head source |
 
-| Alert                                          | Severity | Responsible     | Description                                                                                           |
-| ---------------------------------------------- | -------- | --------------- | ----------------------------------------------------------------------------------------------------- |
-| [FCR False Confirmation](fast-confirmation.md) | Critical | DevOps Engineer | An indexed range no longer matches the canonical chain once final, or verification halted the indexer |
+| Alert                                          | Severity | Responsible     | Description                                                                                                   |
+| ---------------------------------------------- | -------- | --------------- | ------------------------------------------------------------------------------------------------------------- |
+| [FCR False Confirmation](fast-confirmation.md) | Critical | DevOps Engineer | An indexed range does not match the canonical chain after it became final, or verification halted the indexer |
 
 ## Readiness
 

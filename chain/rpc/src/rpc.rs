@@ -177,20 +177,20 @@ pub struct RpcOperationsConfig {
     pub tx_polling_interval: Duration,
     /// Confirmation depth
     ///
-    /// Network confirmation count for transaction receipts and the default indexing depth.
+    /// Number of network confirmations for transaction receipts. It is also the default indexing depth.
     ///
     /// Defaults to 3
     #[validate(range(min = 1, max = 100))]
     #[default = 3]
     pub finality: u32,
-    /// Indexer-only override for the depth and safe-or-depth rules.
+    /// Override of the depth for the depth and safe-or-depth rules. Only the indexer uses it.
     pub confirmation_depth: Option<u16>,
-    /// Rule used to derive the confirmed block from the chain tip.
+    /// Rule that derives the confirmed block from the chain tip.
     ///
     /// Defaults to [`ConfirmationMode::Depth`].
     #[default(_code = "ConfirmationMode::Depth")]
     pub confirmation_mode: ConfirmationMode,
-    /// Latest-to-safe gap at or above which FCR is considered degraded.
+    /// Smallest gap from the latest block to the safe block that makes FCR degraded.
     ///
     /// Must be at least 1.
     ///
@@ -198,21 +198,21 @@ pub struct RpcOperationsConfig {
     #[validate(range(min = 1))]
     #[default = 32]
     pub max_safe_gap: u64,
-    /// Interval at which the chain tip is polled.
+    /// Interval between two polls of the chain tip.
     ///
     /// Must be non-zero.
     ///
     /// Defaults to 1 second.
     #[default(Duration::from_secs(1))]
     pub head_poll_interval: Duration,
-    /// WebSocket URL used for `newHeads` notifications.
+    /// WebSocket URL for `newHeads` notifications.
     ///
-    /// Defaults to `None`, which keeps the HTTP polling head source.
+    /// Defaults to `None`. With `None`, the head source polls over HTTP.
     #[default(None)]
     pub head_ws_url: Option<Url>,
-    /// Whether [`RpcOperationsConfig::head_ws_url`] was derived from the HTTP RPC URL.
+    /// `true` if the caller derived [`RpcOperationsConfig::head_ws_url`] from the HTTP RPC URL.
     ///
-    /// This only changes the hint in the fallback log message.
+    /// It changes only the hint in the fallback log message.
     #[default(false)]
     pub head_ws_url_derived: bool,
     /// URL to the gas price oracle.
@@ -655,7 +655,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         })
     }
 
-    /// Returns the chain tip tracker shared by indexer and readiness consumers.
+    /// Returns the chain tip tracker that the indexer and the readiness check share.
     pub fn tip_tracker(&self) -> Arc<ChainTipTracker> {
         self.tip_tracker.clone()
     }
@@ -720,13 +720,18 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
     /// Get the current confirmed block number from the chain tip tracker.
     ///
     /// The tracker applies the configured confirmation mode to the latest, safe and finalized
-    /// blocks. A stale cached tip is refreshed before the value is returned, so an unreachable RPC
-    /// endpoint surfaces as an error rather than as a stale block number.
+    /// blocks. The tracker refreshes a stale cached tip before it returns the value. Thus an RPC
+    /// endpoint that is not reachable causes an error, not a stale block number.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`RpcError`] if the tip refresh fails, or if the tag that the confirmation mode
+    /// needs is missing.
     ///
     /// # Impact on Readiness Checks
     ///
-    /// The API readiness check uses this method, meaning `max_indexer_lag`
-    /// is compared against the tracker's confirmed tip, not the latest RPC chain head.
+    /// The API readiness check uses this method. Thus the check compares `max_indexer_lag`
+    /// against the confirmed tip of the tracker, not the latest RPC chain head.
     /// This prevents premature "ready" state when the indexer is caught up
     /// to unconfirmed blocks that might be reorganized.
     pub async fn get_block_number(&self) -> Result<u64> {

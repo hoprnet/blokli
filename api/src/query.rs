@@ -2654,11 +2654,11 @@ impl QueryRoot {
     /// (`eth_maxPriorityFeePerGas`, or `eth_gasPrice` minus the base fee) take its place, with the same formulas
     /// and bounds.
     /// When `api.max_max_fee_per_gas` is below the scaled next-block base fee, the capped max fee could not be
-    /// included in the next block, so `maxFeePerGas` and `maxPriorityFeePerGas` are null instead,
-    /// minimum incoming ticket winning probability, optional 32-byte domain separator hashes
-    /// for channels/ledger/safe registry as `Hex32`, a map of contract addresses, a channel
-    /// closure grace period in seconds, the configured confirmation rule, and the live
-    /// health of the Fast Confirmation Rule.
+    /// included in the next block, so `maxFeePerGas` and `maxPriorityFeePerGas` are null instead.
+    /// The `ChainInfo` also contains the minimum incoming ticket winning probability, optional
+    /// 32-byte domain separator hashes for channels/ledger/safe registry as `Hex32`, and a map of
+    /// contract addresses. It also contains a channel closure grace period in seconds, the
+    /// configured confirmation rule, and the live health of the Fast Confirmation Rule.
     ///
     /// # Examples
     ///

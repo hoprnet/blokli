@@ -1,13 +1,14 @@
 //! Chain tip tracking and confirmation mode handling.
 //!
-//! The tracker observes the chain head through a [`TipSource`] and derives a confirmed block number
-//! from the configured [`ConfirmationMode`]. Every successful update is published on a
-//! `tokio::sync::watch` channel so consumers can wait for the confirmed tip without polling the RPC
-//! endpoint themselves.
+//! The tracker reads the chain head through a [`TipSource`]. It derives a confirmed block number
+//! with the configured [`ConfirmationMode`]. The tracker publishes each successful update on a
+//! `tokio::sync::watch` channel. Consumers can wait for the confirmed tip on that channel, and they
+//! do not have to poll the RPC endpoint.
 
 use std::{
     collections::VecDeque,
     fmt::{self, Formatter},
+    result::Result as StdResult,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -26,6 +27,7 @@ use hopr_bindings::exports::alloy::{
 use hopr_types::telemetry::{MultiGauge, SimpleCounter, SimpleGauge};
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString};
+use thiserror::Error;
 use tokio::{
     sync::{Mutex as AsyncMutex, watch},
     task::JoinHandle,
@@ -41,7 +43,7 @@ use crate::{
     transport::HttpRequestor,
 };
 
-/// Rule used to derive the confirmed block from the observed chain tip.
+/// Rule that derives the confirmed block from the observed chain tip.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Display, EnumString)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -49,7 +51,7 @@ pub enum ConfirmationMode {
     /// Use a fixed number of blocks behind the chain head.
     #[default]
     Depth,
-    /// Use the safe tip when it is healthy, otherwise fall back to the configured depth.
+    /// Use the safe tip if it is healthy. If not, use the configured depth.
     SafeOrDepth,
     /// Use the safe tip only.
     Safe,
@@ -57,7 +59,7 @@ pub enum ConfirmationMode {
     Finalized,
 }
 
-/// Health of the Fast Confirmation Rule as observed through the safe block tag.
+/// Health of the Fast Confirmation Rule, as the safe block tag shows it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, EnumString)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -66,18 +68,18 @@ pub enum FcrState {
     Unavailable,
     /// The safe block is too far behind the latest block.
     Degraded,
-    /// The safe block is close enough to the latest block to be useful.
+    /// The safe block is near enough to the latest block to be useful.
     Healthy,
 }
 
-/// Source of head updates used by the tracker.
+/// Source of the head updates that the tracker uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, EnumString)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum HeadSource {
-    /// The head is polled over HTTP.
+    /// The tracker polls the head over HTTP.
     Polling,
-    /// The head is delivered through a WebSocket subscription.
+    /// A WebSocket subscription delivers the head.
     #[serde(rename = "websocket")]
     #[strum(serialize = "websocket")]
     WebSocket,
@@ -86,17 +88,17 @@ pub enum HeadSource {
 /// A chain tip with the confirmed block derived from it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChainTip {
-    /// Latest block observed on the endpoint.
+    /// Latest block that the endpoint reports.
     pub latest: u64,
-    /// Safe block reported by the endpoint, when available.
+    /// Safe block that the endpoint reports, if available.
     pub safe: Option<u64>,
-    /// Finalized block reported by the endpoint, when available.
+    /// Finalized block that the endpoint reports, if available.
     pub finalized: Option<u64>,
-    /// Block considered confirmed under the configured confirmation mode.
+    /// Block that the configured confirmation mode treats as confirmed.
     ///
-    /// This value is monotonic: it is the indexing watermark and never moves backwards.
+    /// This value is monotonic. It is the indexing watermark and never moves backwards.
     pub confirmed: u64,
-    /// Source that produced the observation.
+    /// Source of the observation.
     pub source: HeadSource,
     /// Health of the safe block at the time of the observation.
     pub fcr: FcrState,
@@ -109,17 +111,24 @@ pub struct TipObservation {
     pub latest: u64,
     /// Timestamp of the latest block header in seconds since the Unix epoch.
     pub latest_timestamp: Option<u64>,
-    /// Safe block number, when the endpoint reports one.
+    /// Safe block number, if the endpoint reports one.
     pub safe: Option<u64>,
     /// Timestamp of the safe block header in seconds since the Unix epoch.
     pub safe_timestamp: Option<u64>,
-    /// Finalized block number, when the endpoint reports one.
+    /// Finalized block number, if the endpoint reports one.
     pub finalized: Option<u64>,
     /// Timestamp of the finalized block header in seconds since the Unix epoch.
     pub finalized_timestamp: Option<u64>,
 }
 
+/// Number of recent header timestamps that the tracker keeps.
 const HEADER_TIMESTAMP_CAPACITY: usize = 256;
+
+/// Number of intervals after which a cached tip is stale.
+///
+/// The interval is the larger value of the expected block time and the head poll interval. The log
+/// stream of the indexer also waits for a tip update for at most this many intervals.
+pub(crate) const TIP_STALENESS_INTERVALS: u32 = 3;
 
 #[derive(Debug)]
 struct HeaderTimestamps {
@@ -172,9 +181,9 @@ impl HeaderTimestamps {
 pub struct ConfirmationConfig {
     /// Confirmation rule.
     pub mode: ConfirmationMode,
-    /// Number of blocks behind latest used by depth-based modes.
+    /// Number of blocks behind the latest block for the depth-based modes.
     pub depth: u64,
-    /// Latest-to-safe gap at or above which FCR is considered degraded.
+    /// Smallest gap from the latest block to the safe block that makes FCR degraded.
     pub max_safe_gap: u64,
 }
 
@@ -188,25 +197,25 @@ impl Default for ConfirmationConfig {
     }
 }
 
-/// Result of applying one observation to a tracker.
+/// Result of one observation that the tracker applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TipUpdate {
     /// New tip to publish.
     pub tip: ChainTip,
-    /// Whether the tip may be published on the watch channel.
+    /// `true` if the tracker can publish the tip on the watch channel.
     ///
-    /// A mode that needs the safe or finalized tag publishes nothing until that tag has been
-    /// observed at least once, so a missing tag is never mistaken for a confirmation height of
-    /// zero. Once a tip exists, later observations without the tag keep the last height.
+    /// A mode that needs the safe or finalized tag publishes nothing until the tracker observes that
+    /// tag at least once. Thus a missing tag never becomes a confirmation height of zero. When a tip
+    /// exists, later observations without the tag keep the last height.
     pub publish: bool,
-    /// Whether the safe block moved backwards compared with the previous tip.
+    /// `true` if the safe block moved backwards compared with the previous tip.
     pub safe_regressed: bool,
-    /// Whether this update entered the safe-or-depth fallback from a non-fallback update.
+    /// `true` if this update entered the safe-or-depth fallback after an update without the fallback.
     pub entered_fallback: bool,
 }
 
-/// Errors produced while deriving or tracking the confirmed tip.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+/// Errors from deriving or tracking the confirmed tip.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum TipError {
     /// The observation violates the ordering between latest, safe and finalized.
     #[error("invalid chain tip observation: {0}")]
@@ -214,12 +223,17 @@ pub enum TipError {
 }
 
 /// Computes the next tip from a previous tip and a raw observation.
+///
+/// # Errors
+///
+/// Returns [`TipError::InvalidObservation`] if the safe or finalized block is above the latest block,
+/// or if the finalized block is above the safe block.
 pub fn next_tip(
     previous: Option<&ChainTip>,
     observation: &TipObservation,
     cfg: &ConfirmationConfig,
     source: HeadSource,
-) -> std::result::Result<TipUpdate, TipError> {
+) -> StdResult<TipUpdate, TipError> {
     if let Some(safe) = observation.safe {
         if safe > observation.latest {
             return Err(TipError::InvalidObservation(format!(
@@ -296,13 +310,21 @@ pub fn next_tip(
 /// Source of raw chain tip observations.
 #[async_trait]
 pub trait TipSource: Send + Sync {
-    /// Reads the current chain tip from the underlying endpoint.
+    /// Reads the current chain tip from the endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`RpcError`] if the endpoint cannot supply the latest block.
     async fn observe(&self) -> Result<TipObservation>;
 
-    /// Reads the block hash for the given block number from the underlying endpoint.
+    /// Reads the block hash for the given block number from the endpoint.
     ///
-    /// The default implementation reports that the lookup is unavailable, so sources that only
-    /// implement [`TipSource::observe`] keep working outside the WebSocket startup probe.
+    /// The default implementation tells that the lookup is not available. Thus a source that
+    /// implements only [`TipSource::observe`] continues to work outside the WebSocket startup probe.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`RpcError`] if the lookup fails or if the endpoint does not know the block.
     async fn block_hash(&self, _block: u64) -> Result<B256> {
         Err(RpcError::Other("block hash lookup is not supported".to_string()))
     }
@@ -314,7 +336,7 @@ struct RpcBlockHeader {
     timestamp: U64,
 }
 
-/// Production [`TipSource`] that reads latest, safe and finalized headers through one batched RPC
+/// Production [`TipSource`] that reads the latest, safe and finalized headers in one batched RPC
 /// request.
 #[derive(Debug, Clone)]
 pub(crate) struct RpcTipSource<R: HttpRequestor + 'static + Clone> {
@@ -458,7 +480,7 @@ impl TrackerRuntime {
             .is_some_and(|last_success| last_success.elapsed() < max_age)
     }
 
-    /// Returns the confirmed block of a tip, requiring the tag selected by the mode.
+    /// Returns the confirmed block of a tip. The tip must have the tag that the mode selects.
     fn confirmed_from_tip(&self, tip: ChainTip) -> Result<u64> {
         let missing_tag = match self.confirmation.mode {
             ConfirmationMode::Safe if tip.safe.is_none() => Some("safe"),
@@ -569,7 +591,7 @@ impl TrackerRuntime {
     fn record_update(&self, update: &TipUpdate, previous: Option<&ChainTip>) {
         record_tip_metrics(update);
 
-        if previous.is_none() {
+        let Some(previous) = previous else {
             info!(
                 mode = %self.confirmation.mode,
                 source = %update.tip.source,
@@ -588,18 +610,16 @@ impl TrackerRuntime {
                 );
             }
             return;
-        }
+        };
 
-        if let Some(previous) = previous {
-            if previous.fcr == FcrState::Healthy && update.tip.fcr != FcrState::Healthy {
-                warn!(
-                    previous = %previous.fcr,
-                    current = %update.tip.fcr,
-                    "FCR is no longer healthy"
-                );
-            } else if previous.fcr != FcrState::Healthy && update.tip.fcr == FcrState::Healthy {
-                info!(previous = %previous.fcr, "FCR is healthy again");
-            }
+        if previous.fcr == FcrState::Healthy && update.tip.fcr != FcrState::Healthy {
+            warn!(
+                previous = %previous.fcr,
+                current = %update.tip.fcr,
+                "FCR is no longer healthy"
+            );
+        } else if previous.fcr != FcrState::Healthy && update.tip.fcr == FcrState::Healthy {
+            info!(previous = %previous.fcr, "FCR is healthy again");
         }
     }
 }
@@ -622,7 +642,7 @@ impl fmt::Debug for ChainTipTracker {
 }
 
 impl ChainTipTracker {
-    /// Creates a tracker around the given tip source.
+    /// Creates a tracker for the given tip source.
     pub fn new(
         source: Arc<dyn TipSource>,
         confirmation: ConfirmationConfig,
@@ -643,7 +663,7 @@ impl ChainTipTracker {
         )
     }
 
-    /// Creates a tracker around the given tip source and optional WebSocket head subscriber.
+    /// Creates a tracker for the given tip source and an optional WebSocket head subscriber.
     pub fn with_head_source(
         source: Arc<dyn TipSource>,
         confirmation: ConfirmationConfig,
@@ -673,7 +693,7 @@ impl ChainTipTracker {
         self.runtime.tip_tx.subscribe()
     }
 
-    /// Returns the most recently published tip.
+    /// Returns the last published tip.
     pub fn current(&self) -> Option<ChainTip> {
         self.runtime.current()
     }
@@ -683,26 +703,31 @@ impl ChainTipTracker {
         self.runtime.confirmation.mode
     }
 
-    /// Returns the remembered header timestamp for the given block, if it was observed recently.
+    /// Returns the cached header timestamp for the given block, if the tracker observed it recently.
     pub fn header_timestamp(&self, block: u64) -> Option<u64> {
         self.runtime.header_timestamp(block)
     }
 
-    /// Returns the number of successful WebSocket reconnects since the tracker was created.
+    /// Returns the number of successful WebSocket reconnects since the creation of the tracker.
     pub fn ws_reconnect_count(&self) -> u64 {
         self.runtime.ws_reconnects.load(Ordering::SeqCst)
     }
 
-    /// Reads the chain tip once from the active head source and publishes the resulting confirmed tip.
+    /// Reads the chain tip once from the active head source and publishes the confirmed tip.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`RpcError`] if the tip source fails or if the observation is not valid. The
+    /// tracker then keeps the previous tip.
     pub async fn refresh(&self) -> Result<ChainTip> {
         let source = self.runtime.active_source();
         self.runtime.refresh_from(source).await
     }
 
-    /// Starts the background refresh task if it is not running yet.
+    /// Starts the background refresh task if it is not running.
     ///
-    /// The task holds only a weak reference to the tracker runtime, so it stops once the tracker is
-    /// dropped.
+    /// The task holds only a weak reference to the tracker runtime. Thus the task stops when the
+    /// tracker is dropped.
     pub fn ensure_started(&self) {
         if self.started.swap(true, Ordering::SeqCst) {
             return;
@@ -720,13 +745,17 @@ impl ChainTipTracker {
 
     /// Returns the confirmed block.
     ///
-    /// Before the background task is started this refreshes on every call, matching a direct RPC
-    /// read. Once [`ChainTipTracker::ensure_started`] has been called, a cached tip younger than the
-    /// staleness limit is served directly.
+    /// Before the background task starts, each call refreshes the tip, the same as a direct RPC read.
+    /// After a call to [`ChainTipTracker::ensure_started`], the function returns a cached tip if that
+    /// tip is younger than the staleness limit.
     ///
-    /// In safe and finalized mode the confirmed block is reported only while the tag required by
-    /// the mode is present. An endpoint that reports `latest` but no such tag therefore surfaces as
-    /// an error instead of a confirmed block of zero.
+    /// In safe and finalized mode, the function returns the confirmed block only while the tag for
+    /// the mode is present. If an endpoint reports `latest` but not that tag, the result is an error,
+    /// not a confirmed block of zero.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`RpcError`] if a refresh fails, or if the tag that the mode needs is missing.
     pub async fn confirmed_block(&self) -> Result<u64> {
         if self.started.load(Ordering::SeqCst) {
             let max_age = self
@@ -734,7 +763,7 @@ impl ChainTipTracker {
                 .head
                 .expected_block_time
                 .max(self.runtime.head.poll_interval)
-                .saturating_mul(3);
+                .saturating_mul(TIP_STALENESS_INTERVALS);
 
             if self.runtime.is_fresh(max_age) {
                 if let Some(tip) = self.current() {
@@ -871,10 +900,13 @@ mod tests {
     use url::Url;
 
     use super::{
-        ChainTip, ChainTipTracker, ConfirmationConfig, ConfirmationMode, FcrState, HeadSource, HeaderTimestamps,
-        TipObservation, TipSource, next_tip,
+        ChainTip, ChainTipTracker, ConfirmationConfig, ConfirmationMode, FcrState, HEADER_TIMESTAMP_CAPACITY,
+        HeadSource, HeaderTimestamps, StdResult, TipObservation, TipSource, TipUpdate, next_tip,
     };
-    use crate::errors::{Result, RpcError};
+    use crate::{
+        errors::{Result, RpcError},
+        head::HeadSourceConfig,
+    };
 
     const SOURCE: HeadSource = HeadSource::Polling;
 
@@ -897,13 +929,13 @@ mod tests {
         }
     }
 
-    fn update(previous: Option<&ChainTip>, observation: &TipObservation, cfg: &ConfirmationConfig) -> super::TipUpdate {
+    fn update(previous: Option<&ChainTip>, observation: &TipObservation, cfg: &ConfirmationConfig) -> TipUpdate {
         next_tip(previous, observation, cfg, SOURCE).expect("observation should be valid")
     }
 
     #[test]
     fn test_next_tip_modes_boundaries_and_monotonicity() {
-        // Depth saturation & configured depth.
+        // Depth mode saturates at zero and uses the configured depth.
         let t0 = update(None, &observation(2, None, None), &config(ConfirmationMode::Depth)).tip;
         assert_eq!((t0.confirmed, t0.fcr), (0, FcrState::Unavailable));
         let t1 = update(
@@ -914,8 +946,8 @@ mod tests {
         .tip;
         assert_eq!((t1.confirmed, t1.fcr), (97, FcrState::Healthy));
 
-        // SafeOrDepth: uses safe when healthy, falls back at gap == max_safe_gap (32), entered_fallback only on
-        // transition.
+        // SafeOrDepth uses safe while FCR is healthy. It falls back at gap == max_safe_gap (32). entered_fallback is
+        // set only on the transition.
         let sod = config(ConfirmationMode::SafeOrDepth);
         let u1 = update(None, &observation(100, Some(99), Some(80)), &sod);
         assert_eq!(
@@ -950,8 +982,8 @@ mod tests {
             assert!(!update(None, &observation(100, None, None), &config(mode)).entered_fallback);
         }
 
-        // Safe & Finalized: missing tag publishes nothing initially, genesis 0 publishes, missing tag later keeps
-        // previous confirmed.
+        // Safe and Finalized publish nothing while the tag is missing at the start. Genesis 0 publishes. A tag that
+        // goes missing later keeps the previous confirmed block.
         assert!(!update(None, &observation(100, None, None), &config(ConfirmationMode::Safe)).publish);
         assert!(
             !update(
@@ -1007,7 +1039,7 @@ mod tests {
         .tip;
         assert_eq!((back.confirmed, back.latest), (97, 98));
 
-        // Invalid orderings are rejected.
+        // The function rejects orderings that are not valid.
         for (obs, needle) in [
             (observation(100, Some(101), None), "safe block"),
             (observation(100, Some(90), Some(91)), "finalized block"),
@@ -1029,10 +1061,10 @@ mod tests {
         assert_eq!(timestamps.get(13), Some(1_003));
 
         let mut bounded = HeaderTimestamps::default();
-        for block in 0..=super::HEADER_TIMESTAMP_CAPACITY as u64 {
+        for block in 0..=HEADER_TIMESTAMP_CAPACITY as u64 {
             bounded.insert(block, block + 1_000);
         }
-        assert_eq!(bounded.entries.len(), super::HEADER_TIMESTAMP_CAPACITY);
+        assert_eq!(bounded.entries.len(), HEADER_TIMESTAMP_CAPACITY);
         assert_eq!(bounded.get(0), None);
 
         for mode in [
@@ -1050,7 +1082,7 @@ mod tests {
     #[derive(Clone)]
     struct MockTipSource {
         script: Arc<Mutex<VecDeque<Result<TipObservation>>>>,
-        fallback: Option<std::result::Result<TipObservation, String>>,
+        fallback: Option<StdResult<TipObservation, String>>,
         calls: Arc<AtomicUsize>,
         first_call_delay: Duration,
     }
@@ -1108,7 +1140,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tracker_refresh_safe_tag_errors_and_debug_redaction() {
-        // Publishes on refresh and keeps previous tip on invalid observation or source error.
+        // A refresh publishes the tip. An invalid observation or a source error keeps the previous tip.
         let source = MockTipSource::scripted(vec![
             Ok(observation(100, Some(99), Some(80))),
             Ok(observation(90, Some(91), Some(80))),
@@ -1127,7 +1159,7 @@ mod tests {
         assert!(tracker.refresh().await.unwrap_err().to_string().contains("rpc failed"));
         assert_eq!(tracker.current(), Some(first));
 
-        // Safe mode: waits for safe tag, accepts genesis 0, errors if safe disappears later.
+        // Safe mode waits for the safe tag and accepts genesis 0. It returns an error if safe disappears later.
         let safe_tracker = tracker_with(
             MockTipSource::scripted(vec![
                 Ok(observation(100, None, Some(80))),
@@ -1162,11 +1194,11 @@ mod tests {
         );
         assert_eq!(genesis_tracker.confirmed_block().await.unwrap(), 0);
 
-        // Debug redacts WS URL credentials/path/query.
+        // Debug output removes the credentials, path and query of the WebSocket URL.
         let redacted = ChainTipTracker::with_head_source(
             Arc::new(MockTipSource::scripted(vec![])),
             config(ConfirmationMode::Depth),
-            crate::head::HeadSourceConfig {
+            HeadSourceConfig {
                 chain_id: 100,
                 poll_interval: Duration::from_secs(1),
                 expected_block_time: Duration::from_secs(5),
@@ -1184,7 +1216,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tracker_caching_staleness_concurrency_and_drop() {
-        // Without background task, every confirmed_block refreshes.
+        // Without the background task, each confirmed_block call refreshes.
         let tracker = tracker_with(
             MockTipSource::scripted(vec![
                 Ok(observation(100, Some(99), Some(80))),
@@ -1195,7 +1227,7 @@ mod tests {
         assert_eq!(tracker.confirmed_block().await.unwrap(), 97);
         assert_eq!(tracker.confirmed_block().await.unwrap(), 107);
 
-        // After ensure_started, fresh cached tip is served without extra observe().
+        // After ensure_started, a fresh cached tip comes back without an extra observe() call.
         let source = MockTipSource::repeating(observation(100, Some(99), Some(80)));
         let tracker = ChainTipTracker::new(
             Arc::new(source.clone()),
@@ -1214,7 +1246,7 @@ mod tests {
         assert_eq!(tracker.confirmed_block().await.unwrap(), 97);
         assert_eq!(source.calls(), before);
 
-        // Stale cached tip refreshes and surfaces source error.
+        // A stale cached tip causes a refresh, which returns the source error.
         let mut stale_src = MockTipSource::scripted(vec![Ok(observation(100, Some(99), Some(80)))]);
         stale_src.fallback = Some(Err("rpc failed".to_string()));
         let stale_tracker = ChainTipTracker::new(
@@ -1250,7 +1282,7 @@ mod tests {
         b.unwrap();
         assert_eq!(conc_tracker.current().unwrap().confirmed, 117);
 
-        // Background task stops on drop.
+        // The background task stops when the tracker is dropped.
         let drop_src = MockTipSource::repeating(observation(100, Some(99), Some(80)));
         let drop_tracker = ChainTipTracker::new(
             Arc::new(drop_src.clone()),

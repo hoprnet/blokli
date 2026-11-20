@@ -1,27 +1,29 @@
 //! Post-finality verification of indexed logs.
 //!
-//! A background task re-checks indexed blocks once the chain tip tracker publishes that they are
-//! final. It re-runs `eth_getLogs` with the same filter set the indexer uses and compares the
-//! result with the logs stored in the logs database on block number, block hash, transaction hash
-//! and log index. Any difference means that the logs were indexed from a chain that the canonical
-//! chain does not confirm, or that the canonical chain has logs that were never indexed.
+//! A background task re-checks indexed blocks after the chain tip tracker reports them as final.
+//! The task runs `eth_getLogs` again with the filter set of the indexer. It compares the result
+//! with the logs in the logs database on block number, block hash, transaction hash and log index.
+//! A difference means one of two things. The indexer stored logs from a chain that the canonical
+//! chain does not confirm, or the canonical chain has logs that the indexer never stored.
 //!
-//! A range that does not match is re-checked on the next tip update, because a backend can return
-//! an empty or partial `eth_getLogs` response without an error. A corroborated mismatch is counted
-//! in `blokli_fcr_false_confirmations_total`, persisted in `chain_info.verification_failed_at` and
-//! recorded in the shared [`VerificationStatus`] flag. The flag is sticky: the indexer stops
-//! advancing and readiness reports not ready until an operator restores or rebuilds the index. A
-//! failing RPC or database read is not a mismatch: the same range is retried on the next tip
-//! update.
+//! A backend can return an empty or partial `eth_getLogs` response without an error. For this
+//! reason, the task re-checks a range that does not match on the next tip update. A mismatch is
+//! corroborated when both checks report the same difference. The task counts a corroborated
+//! mismatch in `blokli_fcr_false_confirmations_total`, persists it in
+//! `chain_info.verification_failed_at` and records it in the shared [`VerificationStatus`] flag.
+//! The flag is sticky. The indexer stops advancing and readiness reports not ready until an
+//! operator restores or rebuilds the index. A failed RPC or database read is not a mismatch. The
+//! task tries the same range again on the next tip update.
 //!
-//! On startup with an existing index, the in-memory cursor starts [`STARTUP_LOOKBACK_BLOCKS`]
-//! blocks behind the committed watermark so blocks indexed right before a clean restart that
-//! finalized while the daemon was down are verified in one range fetch.
+//! When the daemon starts with an existing index, the in-memory cursor starts
+//! [`STARTUP_LOOKBACK_BLOCKS`] blocks behind the committed watermark. One range fetch then
+//! verifies the blocks that the indexer stored shortly before a clean restart. These blocks can
+//! become final while the daemon is down.
 //!
-//! The set of Safe contract addresses grows at runtime, while the stored logs of a block only
-//! contain the addresses known when that block was indexed. Stored Safe logs are still compared
-//! strictly against the canonical chain (`missing_from_chain` and `changed`), while
-//! `missing_from_store` is checked only for the static contract addresses.
+//! The set of Safe contract addresses grows at runtime. The stored logs of a block contain only
+//! the addresses that the indexer knew when it indexed that block. Thus the task compares stored
+//! Safe logs strictly with the canonical chain (`missing_from_chain` and `changed`). It checks
+//! `missing_from_store` only for the static contract addresses.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -55,25 +57,30 @@ use crate::{
     traits::ChainLogHandler,
 };
 
-/// Maximum number of example entries attached to the reported mismatch.
+/// Maximum number of example entries that the report of a mismatch contains.
 const MAX_MISMATCH_EXAMPLES: usize = 10;
 
-/// Maximum number of blocks verified in one round.
+/// Maximum number of blocks that one round verifies.
 ///
-/// A larger backlog is verified over several tip updates, so one round never fetches an unbounded
-/// amount of logs from the RPC endpoint.
+/// The task verifies a larger backlog over several tip updates. Thus one round never fetches an
+/// unbounded amount of logs from the RPC endpoint.
 const MAX_VERIFICATION_RANGE: u64 = 1000;
 
-/// Blocks behind the startup watermark re-checked when resuming an existing index.
+/// Number of blocks behind the startup watermark that the task re-checks for an existing index.
 ///
-/// Covers blocks indexed shortly before a clean restart that finalized while the daemon was down,
-/// without persisting a moving verification cursor on every epoch.
+/// This covers blocks that the indexer stored shortly before a clean restart and that became final
+/// while the daemon was down. With this lookback, the daemon does not persist a moving verification
+/// cursor on every epoch.
 const STARTUP_LOOKBACK_BLOCKS: u64 = 256;
 
-/// Minimal RPC surface needed by post-finality verification.
+/// Minimal RPC interface that post-finality verification needs.
 #[async_trait]
 pub(crate) trait CanonicalLogFetcher: Send + Sync {
     /// Fetches canonical logs matching `filters` in the inclusive block range `[from_block, to_block]`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the RPC request fails.
     async fn get_logs_for_block_range(
         &self,
         filters: Vec<Filter>,
@@ -94,9 +101,9 @@ impl<T: HoprIndexerRpcOperations + Send + Sync> CanonicalLogFetcher for T {
     }
 }
 
-/// Shared, sticky flag recording whether post-finality verification found a mismatch.
+/// Shared sticky flag that records whether post-finality verification found a mismatch.
 ///
-/// It is owned by [`IndexerState`], so the indexer, the verification task and the API readiness
+/// [`IndexerState`] owns the flag. Thus the indexer, the verification task and the API readiness
 /// checker all read the same value.
 #[derive(Debug, Clone, Default)]
 pub struct VerificationStatus {
@@ -111,26 +118,27 @@ impl VerificationStatus {
 
     /// Records that a verified range differed from the canonical logs.
     ///
-    /// The flag never clears in this process. Startup restores it from a durable verification halt.
+    /// The flag never clears in this process. Startup sets it again from a durable verification
+    /// halt.
     pub fn mark_failed(&self) {
         self.failed.store(true, Ordering::SeqCst);
     }
 }
 
-/// Identity of a log inside the chain.
+/// Identity of a log in the chain.
 ///
-/// Verification compares logs on this identity only: the event payload follows from the position in
-/// the chain and the hashes that pin it to a block and a transaction. Both hashes are rendered as
-/// hexadecimal strings so a mismatch can be reported and inspected directly.
+/// Verification compares logs on this identity only. The position in the chain and the hashes
+/// that pin the log to a block and a transaction fix the event payload. Both hashes are
+/// hexadecimal strings, so that a report can show a mismatch directly.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LogIdentity {
-    /// Block the log was emitted in.
+    /// Block that contains the log.
     pub block_number: u64,
     /// Hash of that block.
     pub block_hash: String,
     /// Hash of the transaction that emitted the log.
     pub tx_hash: String,
-    /// Index of the log within its block.
+    /// Index of the log in its block.
     pub log_index: u64,
 }
 
@@ -148,7 +156,7 @@ impl LogIdentity {
 /// A log whose position holds a different log on the canonical chain.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ChangedLog {
-    /// Identity of the log as stored by the indexer.
+    /// Identity of the log that the indexer stored.
     pub stored: LogIdentity,
     /// Identity of the log at the same position on the canonical chain.
     pub canonical: LogIdentity,
@@ -177,22 +185,23 @@ impl VerificationMismatch {
     }
 }
 
-/// Position of a log within the chain.
+/// Returns the position of a log in the chain.
 fn log_position(log: &SerializableLog) -> (u64, u64) {
     (log.block_number, log.log_index)
 }
 
 /// Compares the stored logs of a range with the canonical logs of the same range.
 ///
-/// Logs are matched by their position within the chain, that is a block number and a log index.
-/// Two logs at the same position differ when their block hash or their transaction hash differs,
-/// which is what a reorganization produces. The event payload itself is not compared, because a
-/// matching position and block hash pin down the payload.
+/// The function matches logs by their position in the chain: a block number and a log index. Two
+/// logs at the same position differ when their block hashes or their transaction hashes differ. A
+/// reorganization causes this type of difference. The function does not compare the event
+/// payload, because a matching position and block hash fix the payload.
 ///
-/// `static_addresses` are the contract addresses filtered from the start of indexing: canonical
-/// logs absent from the store are reported only for those addresses so runtime-discovered Safe
-/// contracts never trigger false missing-log halts, while all stored logs (including Safe logs)
-/// are still checked for `missing_from_chain` and `changed`.
+/// `static_addresses` are the contract addresses that the indexer filters from the start of
+/// indexing. The function reports canonical logs that are missing from the store only for these
+/// addresses. Thus Safe contracts that the indexer discovers at runtime never cause a false halt
+/// for a missing log. The function still checks all stored logs, Safe logs included, for
+/// `missing_from_chain` and `changed`.
 pub fn compare_logs(
     stored: &[SerializableLog],
     canonical: &[SerializableLog],
@@ -233,12 +242,12 @@ pub fn compare_logs(
     mismatch
 }
 
-/// Outcome of planning one post-finality verification round.
+/// Plan for one post-finality verification round.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CursorStep {
-    /// Nothing to verify: the finalized block is unknown or did not move past the cursor.
+    /// Nothing to verify. The finalized block is unknown or did not move past the cursor.
     Idle,
-    /// Verify the inclusive range and advance the cursor to `to` once it matches.
+    /// Verify the inclusive range. If the range matches, advance the cursor to `to`.
     Verify {
         /// First block of the range.
         from: u64,
@@ -247,14 +256,17 @@ pub enum CursorStep {
     },
 }
 
-/// Chooses the block at which the in-memory cursor starts once a finalized block is known.
+/// Chooses the start block of the in-memory cursor after a finalized block is known.
 ///
-/// When resuming an existing index (`last_indexed_at_startup > 0`), the cursor starts
-/// [`STARTUP_LOOKBACK_BLOCKS`] blocks behind the committed watermark (capped at `finalized`, and
-/// raised to at least `floor`), so blocks indexed right before a restart that finalized while the
-/// daemon was down are verified in one range fetch. On an empty index (`last_indexed_at_startup ==
-/// 0`), the cursor starts at `finalized.max(floor)` without walking older history. Returns `None`
-/// while the finalized block is unknown.
+/// For an existing index (`last_indexed_at_startup > 0`), the cursor starts
+/// [`STARTUP_LOOKBACK_BLOCKS`] blocks behind the committed watermark. The start is at most
+/// `finalized` and at least `floor`. One range fetch then verifies the blocks that the indexer
+/// stored right before a restart and that became final while the daemon was down.
+///
+/// For an empty index (`last_indexed_at_startup == 0`), the cursor starts at
+/// `finalized.max(floor)` and does not walk older history.
+///
+/// Returns `None` while the finalized block is unknown.
 pub fn initial_cursor(last_indexed_at_startup: u64, finalized: Option<u64>, floor: u64) -> Option<u64> {
     finalized.map(|finalized| {
         if last_indexed_at_startup > 0 {
@@ -270,9 +282,9 @@ pub fn initial_cursor(last_indexed_at_startup: u64, finalized: Option<u64>, floo
 
 /// Returns the differences that both comparisons report.
 ///
-/// Two comparisons of the same range are fetched a few seconds apart. A backend that answers with
-/// a partial result produces differences that the other comparison does not show, so only a
-/// difference that both comparisons report counts. Order follows `first`.
+/// The task fetches two comparisons of the same range a few seconds apart. A backend that sends a
+/// partial result causes differences that the other comparison does not show. Thus only a
+/// difference that both comparisons report counts. The order of the result follows `first`.
 pub fn corroborated_mismatch(first: &VerificationMismatch, second: &VerificationMismatch) -> VerificationMismatch {
     VerificationMismatch {
         missing_from_chain: first
@@ -296,13 +308,13 @@ pub fn corroborated_mismatch(first: &VerificationMismatch, second: &Verification
     }
 }
 
-/// Plans the next post-finality verification round of a cursor that is already set.
+/// Plans the next post-finality verification round for a cursor that is already set.
 ///
-/// The cursor only ever advances over blocks that the indexer has already committed. `last_indexed`
-/// bounds the range from above, so a finalized tag that moves faster than the indexer never asks for
-/// logs that were not stored yet, and a round covers at most [`MAX_VERIFICATION_RANGE`] blocks. The
-/// cursor is only advanced by the caller after the range matched, so a finalized block moving
-/// backwards never moves it backwards.
+/// The cursor advances only over blocks that the indexer already committed. `last_indexed` is the
+/// upper limit of the range. Thus a finalized tag that moves faster than the indexer never asks
+/// for logs that the indexer did not store yet. A round covers at most [`MAX_VERIFICATION_RANGE`]
+/// blocks. The caller advances the cursor only after the range matched. Thus a finalized block
+/// that moves backwards never moves the cursor backwards.
 pub fn next_cursor_step(cursor: u64, finalized: Option<u64>, last_indexed: u64) -> CursorStep {
     let Some(finalized) = finalized else {
         return CursorStep::Idle;
@@ -320,6 +332,7 @@ pub fn next_cursor_step(cursor: u64, finalized: Option<u64>, last_indexed: u64) 
     }
 }
 
+/// Formats one log of a mismatch as an example entry, with `kind` as the label.
 fn describe_log(log: &LogIdentity, kind: &str) -> String {
     format!(
         "{kind}: block {} log {} block hash {} tx hash {}",
@@ -327,29 +340,18 @@ fn describe_log(log: &LogIdentity, kind: &str) -> String {
     )
 }
 
-/// Summarises the differences of a mismatch, capped at [`MAX_MISMATCH_EXAMPLES`] entries.
+/// Summarizes the differences of a mismatch in at most [`MAX_MISMATCH_EXAMPLES`] entries.
 fn describe_mismatch(mismatch: &VerificationMismatch) -> Vec<String> {
-    let mut examples = Vec::new();
-
-    for log in &mismatch.missing_from_chain {
-        if examples.len() >= MAX_MISMATCH_EXAMPLES {
-            return examples;
-        }
-        examples.push(describe_log(log, "missing from chain"));
-    }
-
-    for log in &mismatch.missing_from_store {
-        if examples.len() >= MAX_MISMATCH_EXAMPLES {
-            return examples;
-        }
-        examples.push(describe_log(log, "missing from store"));
-    }
-
-    for change in &mismatch.changed {
-        if examples.len() >= MAX_MISMATCH_EXAMPLES {
-            return examples;
-        }
-        examples.push(format!(
+    let missing_from_chain = mismatch
+        .missing_from_chain
+        .iter()
+        .map(|log| describe_log(log, "missing from chain"));
+    let missing_from_store = mismatch
+        .missing_from_store
+        .iter()
+        .map(|log| describe_log(log, "missing from store"));
+    let changed = mismatch.changed.iter().map(|change| {
+        format!(
             "changed: block {} log {}, stored block hash {} tx hash {}, canonical block hash {} tx hash {}",
             change.stored.block_number,
             change.stored.log_index,
@@ -357,12 +359,20 @@ fn describe_mismatch(mismatch: &VerificationMismatch) -> Vec<String> {
             change.stored.tx_hash,
             change.canonical.block_hash,
             change.canonical.tx_hash,
-        ));
-    }
+        )
+    });
 
-    examples
+    missing_from_chain
+        .chain(missing_from_store)
+        .chain(changed)
+        .take(MAX_MISMATCH_EXAMPLES)
+        .collect()
 }
 
+/// Logs a failed verification attempt and increases the failure streak.
+///
+/// The first failure of a streak logs a warning. Later failures of the same streak log at debug
+/// level.
 fn record_failure(failure_streak: &mut u32, range: Option<(u64, u64)>, error: &str) {
     if *failure_streak == 0 {
         warn!(
@@ -388,6 +398,9 @@ lazy_static::lazy_static! {
         ).inspect_err(|error| error!(%error, metric = "blokli_fcr_false_confirmations_total", "failed to register telemetry metric")).ok();
 }
 
+/// Counts one corroborated mismatch in `blokli_fcr_false_confirmations_total`.
+///
+/// Without telemetry, or when the metric is not registered, the function does nothing.
 fn record_false_confirmation() {
     #[cfg(all(feature = "telemetry", not(test)))]
     if let Some(metric) = METRIC_FCR_FALSE_CONFIRMATIONS_TOTAL.as_ref() {
@@ -395,14 +408,12 @@ fn record_false_confirmation() {
     }
 }
 
-/// Re-fetches the canonical logs of a range and compares them with the stored ones.
-async fn verify_range<T, U, Db>(
-    rpc: &T,
-    db: &Db,
-    logs_handler: &Arc<U>,
-    from: u64,
-    to: u64,
-) -> Result<VerificationMismatch>
+/// Fetches the canonical logs of a range again and compares them with the stored logs.
+///
+/// # Errors
+///
+/// Returns an error when the filter set, the RPC request or the database read fails.
+async fn verify_range<T, U, Db>(rpc: &T, db: &Db, logs_handler: &U, from: u64, to: u64) -> Result<VerificationMismatch>
 where
     T: CanonicalLogFetcher,
     U: ChainLogHandler + Send + Sync + 'static,
@@ -416,18 +427,19 @@ where
         + Sync
         + 'static,
 {
-    let filters = generate_log_filters(db, logs_handler.as_ref(), LogFilterPhase::Continuous).await?;
+    let filters = generate_log_filters(db, logs_handler, LogFilterPhase::Continuous).await?;
 
-    // The canonical fetch uses every currently known filter, which is a superset of the filters the
-    // block was indexed with: the set only grows. Token approvals are fetched by the indexer but
-    // filtered out before storage, so the compared canonical set is the non-token one.
+    // The canonical fetch uses all filters that are known now. The filter set only grows, so this
+    // is a superset of the filters that the block was indexed with. The indexer fetches token
+    // approvals but drops them before storage. Thus the comparison uses the non-token set.
     let canonical = rpc.get_logs_for_block_range(filters.no_token, from, to).await?;
 
-    // Blocks `from..=to`; the offset counts the blocks stored after `from`.
+    // Read blocks `from..=to`. The offset is the number of blocks stored after `from`.
     let stored = db.get_logs(Some(from), Some(to - from)).await?;
 
-    // Only static contracts configured from startup are required in the missing-from-store
-    // direction; runtime-discovered Safe contracts are still checked strictly when stored.
+    // Only the static contracts from startup count for logs that are missing from the store.
+    // Stored logs of Safe contracts that the indexer discovered at runtime still get the strict
+    // check.
     let token = logs_handler.contract_addresses_map().token;
     let static_addresses = logs_handler
         .contract_addresses()
@@ -438,23 +450,32 @@ where
     Ok(compare_logs(&stored, &canonical, &static_addresses))
 }
 
-/// Verifies indexed ranges once the chain tip tracker reports them as final.
+/// Inputs of the post-finality verification task that stay the same while it runs.
+pub(crate) struct VerificationContext<U, Db> {
+    /// Database that holds the indexed logs and the halt marker.
+    pub(crate) db: Db,
+    /// Log handler that supplies the contract addresses and topics for the log filters.
+    pub(crate) logs_handler: Arc<U>,
+    /// Indexer state that receives a corroborated mismatch.
+    pub(crate) indexer_state: IndexerState,
+    /// Committed watermark before live indexing starts.
+    pub(crate) last_indexed_at_startup: u64,
+    /// Block below the configured start block.
+    pub(crate) floor: u64,
+    /// Publishes the number of completed rounds.
+    ///
+    /// Tests use it to wait for a round instead of sleeping. Production passes `None`.
+    pub(crate) round_updates: Option<watch::Sender<u32>>,
+}
+
+/// Verifies indexed ranges after the chain tip tracker reports them as final.
 ///
-/// The task runs until the tip publisher is dropped, the indexer shuts down or a corroborated
-/// mismatch is found. `last_indexed_at_startup` is the committed watermark before live indexing
-/// starts, and `floor` is the block below the configured start block. `round_updates` publishes the
-/// number of completed rounds so tests can wait for a round instead of sleeping; production passes
-/// `None`.
-#[allow(clippy::too_many_arguments)]
+/// The task runs until the tip publisher stops, the indexer shuts down, or the task finds a
+/// corroborated mismatch.
 pub(crate) async fn run_verification<T, U, Db>(
     mut tip_updates: watch::Receiver<Option<ChainTip>>,
     rpc: &T,
-    db: Db,
-    logs_handler: Arc<U>,
-    indexer_state: IndexerState,
-    last_indexed_at_startup: u64,
-    floor: u64,
-    round_updates: Option<watch::Sender<u32>>,
+    context: VerificationContext<U, Db>,
 ) where
     T: CanonicalLogFetcher,
     U: ChainLogHandler + Send + Sync + 'static,
@@ -468,15 +489,24 @@ pub(crate) async fn run_verification<T, U, Db>(
         + Sync
         + 'static,
 {
+    let VerificationContext {
+        db,
+        logs_handler,
+        indexer_state,
+        last_indexed_at_startup,
+        floor,
+        round_updates,
+    } = context;
+
     let mut cursor: Option<u64> = None;
     let mut pending_mismatch: Option<((u64, u64), VerificationMismatch)> = None;
     let mut failure_streak: u32 = 0;
     let mut rounds: u32 = 0;
 
     loop {
-        // The committed block is read before the finalized one of this round: a block committed
-        // while this round is being planned then falls into the next round instead of being
-        // compared against a canonical set that was fetched before it existed.
+        // Read the committed block before the finalized block of this round. A block that the
+        // indexer commits while the task plans this round then falls into the next round. The task
+        // does not compare it with a canonical set that it fetched before the block existed.
         let last_indexed = match db.get_indexer_state_info(None).await {
             Ok(info) => Some(u64::from(info.latest_block_number)),
             Err(error) => {
@@ -509,7 +539,7 @@ pub(crate) async fn run_verification<T, U, Db>(
             };
 
             if let Some((from, to)) = range {
-                match verify_range(rpc, &db, &logs_handler, from, to).await {
+                match verify_range(rpc, &db, logs_handler.as_ref(), from, to).await {
                     Ok(mismatch) if mismatch.is_empty() => {
                         if pending_mismatch.take().is_some() {
                             debug!(from_block = from, to_block = to, "the re-check matched the stored logs");
@@ -525,8 +555,8 @@ pub(crate) async fn run_verification<T, U, Db>(
                     Ok(mismatch) => match pending_mismatch.take() {
                         None => {
                             // A load-balanced or lagging backend can return an empty or partial
-                            // response without an error; keep the cursor unchanged and re-check
-                            // the same range on the next tip update.
+                            // response without an error. Keep the cursor and re-check the same
+                            // range on the next tip update.
                             warn!(
                                 from_block = from,
                                 to_block = to,
@@ -616,11 +646,11 @@ mod tests {
     use hopr_bindings::exports::alloy::rpc::types::Filter;
     use hopr_types::primitive::prelude::{Address, SerializableLog};
     use mockall::mock;
-    use tokio::sync::watch;
+    use tokio::{sync::watch, task::JoinHandle, time::timeout};
 
     use super::{
-        CanonicalLogFetcher, ChangedLog, CursorStep, LogIdentity, STARTUP_LOOKBACK_BLOCKS, VerificationMismatch,
-        compare_logs, corroborated_mismatch, initial_cursor, next_cursor_step, run_verification,
+        CanonicalLogFetcher, ChangedLog, CursorStep, LogIdentity, STARTUP_LOOKBACK_BLOCKS, VerificationContext,
+        VerificationMismatch, compare_logs, corroborated_mismatch, initial_cursor, next_cursor_step, run_verification,
     };
     use crate::{IndexerState, traits::MockChainLogHandler};
 
@@ -664,12 +694,12 @@ mod tests {
         assert!(compare_logs(&logs, &logs, &static_addrs).is_empty());
         assert!(compare_logs(&[], &[], &static_addrs).is_empty());
 
-        // Canonical Safe log missing from store is exempt.
+        // A canonical Safe log that is missing from the store does not count.
         let stored = vec![sample_log(20, 0, 1, 2)];
         let canonical = vec![sample_log(20, 0, 1, 2), sample_safe_log(20)];
         assert!(compare_logs(&stored, &canonical, &static_addrs).is_empty());
 
-        // Stored Safe logs are still checked strictly for missing_from_chain and changed.
+        // Stored Safe logs still get the strict check for missing_from_chain and changed.
         let stored_safes = vec![sample_safe_log(20), sample_safe_log(21)];
         let mismatch = compare_logs(&stored_safes, &[sample_safe_log(20)], &static_addrs);
         assert_eq!(mismatch.missing_from_chain.len(), 1);
@@ -829,7 +859,7 @@ mod tests {
         state: IndexerState,
         tip_tx: watch::Sender<Option<ChainTip>>,
         round_rx: watch::Receiver<u32>,
-        task: tokio::task::JoinHandle<()>,
+        task: JoinHandle<()>,
     }
 
     impl VerificationHarness {
@@ -852,12 +882,14 @@ mod tests {
                     run_verification(
                         tip_rx,
                         rpc.as_ref(),
-                        db,
-                        Arc::new(log_handler(contracts)),
-                        state,
-                        last_indexed_at_startup,
-                        floor,
-                        Some(round_tx),
+                        VerificationContext {
+                            db,
+                            logs_handler: Arc::new(log_handler(contracts)),
+                            indexer_state: state,
+                            last_indexed_at_startup,
+                            floor,
+                            round_updates: Some(round_tx),
+                        },
                     )
                     .await;
                 }
@@ -872,7 +904,7 @@ mod tests {
         }
 
         async fn wait_round(&mut self, round: u32) {
-            tokio::time::timeout(
+            timeout(
                 Duration::from_secs(1),
                 self.round_rx.wait_for(|completed| *completed >= round),
             )
@@ -945,16 +977,16 @@ mod tests {
         let mut h = VerificationHarness::spawn(db.clone(), rpc, vec![static_addr()], Some(10), 0, 0).await;
         h.wait_round(1).await;
 
-        // First mismatch records pending state without halting yet.
+        // The first mismatch records a pending state and does not halt yet.
         h.send_finalized(Some(12));
         h.wait_round(2).await;
         assert_eq!(calls.load(AtomicOrdering::SeqCst), 1);
         assert!(!h.state.verification_failed());
         assert_eq!(db.verification_failed_at().await?, None);
 
-        // Next tip update corroborates the same range, persists the halt marker, and stops the task.
+        // The next tip update corroborates the same range. The task persists the halt marker and stops.
         h.send_finalized(Some(13));
-        tokio::time::timeout(Duration::from_secs(1), h.task)
+        timeout(Duration::from_secs(1), h.task)
             .await
             .expect("task should stop after corroborated mismatch")?;
 
@@ -968,7 +1000,7 @@ mod tests {
     async fn transient_empty_and_conflicting_rechecks_do_not_halt() -> anyhow::Result<()> {
         let logs = vec![sample_log(11, 0, 1, 2), sample_log(12, 0, 3, 4)];
 
-        // Case 1: transient empty first response, clean recheck on next tip update.
+        // Case 1: the first response is empty for a short time. The re-check on the next tip update matches.
         let db = prepare_db(12, logs.clone()).await?;
         let calls = Arc::new(AtomicUsize::new(0));
         let counted = calls.clone();
@@ -994,7 +1026,8 @@ mod tests {
         assert_eq!(h.db.verification_failed_at().await?, None);
         h.finish().await?;
 
-        // Case 2: two conflicting partial responses retry without halting or writing a halt marker.
+        // Case 2: two partial responses that do not agree cause a retry. The task does not halt and
+        // does not write a halt marker.
         let db = prepare_db(12, logs.clone()).await?;
         let calls = Arc::new(AtomicUsize::new(0));
         let counted = calls.clone();
@@ -1027,7 +1060,7 @@ mod tests {
 
     #[tokio::test]
     async fn rpc_error_and_safe_canonical_log_do_not_halt() -> anyhow::Result<()> {
-        // RPC error retries on the next tip update.
+        // After an RPC error, the task tries again on the next tip update.
         let logs = vec![sample_log(11, 0, 1, 2)];
         let db = prepare_db(11, logs.clone()).await?;
         let calls = Arc::new(AtomicUsize::new(0));
@@ -1053,7 +1086,7 @@ mod tests {
         assert!(!h.state.verification_failed());
         h.finish().await?;
 
-        // Canonical Safe log missing from store does not halt verification.
+        // A canonical Safe log that is missing from the store does not halt verification.
         let base_log = sample_log(11, 0, 1, 2);
         let db = prepare_db(11, vec![base_log.clone()]).await?;
         db.create_safe_contract(None, safe_addr(), Address::default(), Address::default(), 11, 0, 1)
@@ -1073,7 +1106,7 @@ mod tests {
 
     #[tokio::test]
     async fn startup_lookback_and_empty_index_initialization() -> anyhow::Result<()> {
-        // Resuming an existing index verifies the last STARTUP_LOOKBACK_BLOCKS blocks in one fetch.
+        // For an existing index, the task verifies the last STARTUP_LOOKBACK_BLOCKS blocks in one fetch.
         let expected_from = 300 - STARTUP_LOOKBACK_BLOCKS + 1;
         let logs = vec![sample_log(expected_from, 0, 1, 2), sample_log(300, 0, 3, 4)];
         let db = prepare_db(300, logs.clone()).await?;
@@ -1093,7 +1126,8 @@ mod tests {
         assert!(!h.state.verification_failed());
         h.finish().await?;
 
-        // Empty index starts at the first finalized block without fetching older history.
+        // On an empty index, the cursor starts at the first finalized block. The task does not fetch
+        // older history.
         let db = prepare_db(0, Vec::new()).await?;
         let mut h = VerificationHarness::spawn(db, MockCanonicalLogs::new(), Vec::new(), None, 0, 0).await;
         h.wait_round(1).await;
@@ -1102,7 +1136,7 @@ mod tests {
         assert!(!h.state.verification_failed());
         h.finish().await?;
 
-        // Range read only returns logs inside [from, to].
+        // The range read returns only the logs inside [from, to].
         let db = prepare_db(
             13,
             vec![

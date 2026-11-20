@@ -137,7 +137,7 @@
         "rpcWsUrl": {
           "type": "string",
           "pattern": "^(wss?://[^/\\s]\\S*)?$",
-          "description": "WebSocket RPC URL used for newHeads (empty derives it from rpcUrl)"
+          "description": "WebSocket RPC URL for newHeads (if empty, the daemon derives it from rpcUrl)"
         },
         "maxRpcRequestsPerSec": {
           "type": "integer",
@@ -187,12 +187,12 @@
                     { "type": "boolean" },
                     { "type": "string", "maxLength": 0 }
                   ],
-                  "description": "Use newHeads over WebSocket when the RPC endpoint supports it (empty uses the daemon default)"
+                  "description": "If the RPC endpoint supports it, use newHeads over WebSocket (empty uses the daemon default)"
                 },
                 "headPollInterval": {
                   "type": "string",
                   "pattern": "^(\\d+(\\.\\d+)?(nsec|ns|usec|us|msec|ms|seconds|second|sec|s|minutes|minute|min|m|hours|hour|hr|h|days|day|d|weeks|week|w|months|month|M|years|year|y)\\s*)*$",
-                  "description": "Polling interval used when newHeads is unavailable or disabled (empty uses the daemon default)"
+                  "description": "Polling interval if newHeads is unavailable or disabled (empty uses the daemon default)"
                 }
               }
             },
@@ -209,7 +209,7 @@
                     { "type": "integer", "minimum": 1, "maximum": 100 },
                     { "type": "string", "maxLength": 0 }
                   ],
-                  "description": "Blocks behind latest used by depth-based modes (empty uses the network default)"
+                  "description": "Number of blocks behind the latest block for depth-based modes (empty uses the network default)"
                 },
                 "maxSafeGap": {
                   "oneOf": [
@@ -220,14 +220,14 @@
                     },
                     { "type": "string", "maxLength": 0 }
                   ],
-                  "description": "Latest-to-safe gap at or above which the Fast Confirmation Rule counts as degraded (empty uses the daemon default)"
+                  "description": "Gap from the latest block to the safe block at or above which the Fast Confirmation Rule counts as degraded (empty uses the daemon default)"
                 },
                 "verifyFinalized": {
                   "oneOf": [
                     { "type": "boolean" },
                     { "type": "string", "maxLength": 0 }
                   ],
-                  "description": "Re-check indexed blocks against the canonical chain once they become final (empty uses the daemon default)"
+                  "description": "Re-check indexed blocks against the canonical chain after they become final (empty uses the daemon default)"
                 }
               }
             }

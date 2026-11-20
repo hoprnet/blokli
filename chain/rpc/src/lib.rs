@@ -31,7 +31,11 @@ use hopr_types::{crypto::types::Hash, internal::prelude::WinningProbability, pri
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
-use crate::{RetryAction::NoRetry, errors::Result, tip::ChainTip};
+use crate::{
+    RetryAction::NoRetry,
+    errors::{Result, RpcError},
+    tip::ChainTip,
+};
 
 pub mod client;
 pub mod errors;
@@ -447,12 +451,12 @@ pub trait HoprIndexerRpcOperations {
     /// Retrieves the latest block number.
     async fn block_number(&self) -> Result<u64>;
 
-    /// Last published confirmed height, without refreshing the tracker.
+    /// Last published confirmed height. The tracker does not refresh.
     fn cached_confirmed_block(&self) -> Option<u64> {
         None
     }
 
-    /// Timestamp of a recently observed header, without a network lookup.
+    /// Timestamp of a recently observed header. There is no network lookup.
     fn cached_header_timestamp(&self, _block: u64) -> Option<u64> {
         None
     }
@@ -593,18 +597,23 @@ pub trait HoprIndexerRpcOperations {
 
     /// Subscribes to the chain tip updates that drive post-finality verification.
     ///
-    /// The indexer re-checks the blocks it indexed before they were final once the chain tip
-    /// tracker publishes that they are. Implementations that do not track the chain tip return
-    /// `None`, which leaves post-finality verification off.
+    /// The indexer indexes some blocks before they are final. When the chain tip tracker publishes
+    /// that these blocks are final, the indexer checks them again. An implementation that does not
+    /// track the chain tip returns `None`, and post-finality verification stays off.
     fn subscribe_tip(&self) -> Option<watch::Receiver<Option<ChainTip>>> {
         None
     }
 
     /// Fetches the canonical logs of an inclusive block range with the given filters.
     ///
-    /// This is the range counterpart of [`Self::try_stream_logs`]: it uses the same filters and the
-    /// same `eth_getLogs` request path, including its block range chunking, but does not wait for
-    /// the tip to advance. The default implementation reports that the range cannot be fetched.
+    /// This is the range version of [`Self::try_stream_logs`]. It uses the same filters and the same
+    /// `eth_getLogs` request path, with the same block range chunking. But it does not wait for the
+    /// tip to advance.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`RpcError`] if a log request fails. The default implementation always returns
+    /// [`RpcError::Other`], because it cannot fetch the range.
     async fn get_logs_for_block_range(
         &self,
         filters: Vec<Filter>,
@@ -612,7 +621,7 @@ pub trait HoprIndexerRpcOperations {
         to_block: u64,
     ) -> Result<Vec<SerializableLog>> {
         let _ = (filters, from_block, to_block);
-        Err(errors::RpcError::Other("log range fetch is not supported".to_string()))
+        Err(RpcError::Other("log range fetch is not supported".to_string()))
     }
 
     /// Retrieves on-chain xdai balance of the given address.

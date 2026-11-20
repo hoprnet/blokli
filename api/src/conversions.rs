@@ -91,7 +91,7 @@ pub fn convert_transaction_status(status: StoreTransactionStatus) -> GqlTransact
     }
 }
 
-/// Convert [`ChainConfirmationMode`] to GraphQL [`GqlConfirmationMode`]
+/// Convert [`ChainConfirmationMode`] to the GraphQL [`GqlConfirmationMode`]
 pub fn convert_confirmation_mode(mode: ChainConfirmationMode) -> GqlConfirmationMode {
     match mode {
         ChainConfirmationMode::Depth => GqlConfirmationMode::Depth,
@@ -101,7 +101,7 @@ pub fn convert_confirmation_mode(mode: ChainConfirmationMode) -> GqlConfirmation
     }
 }
 
-/// Convert [`ChainFcrState`] to GraphQL [`GqlFcrStatus`]
+/// Convert [`ChainFcrState`] to the GraphQL [`GqlFcrStatus`]
 pub fn convert_fcr_status(state: ChainFcrState) -> GqlFcrStatus {
     match state {
         ChainFcrState::Unavailable => GqlFcrStatus::Unavailable,

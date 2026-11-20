@@ -275,7 +275,7 @@ monitoring:
         ## @param monitoring.prometheusRule.rules.fcrFalseConfirmation.enabled Enable the blokli-fcr-false-confirmation alert
         ##
         enabled: true
-        ## @param monitoring.prometheusRule.rules.fcrFalseConfirmation.windowMinutes Look-back window (minutes) used to count block ranges whose post-finality verification found a false confirmation
+        ## @param monitoring.prometheusRule.rules.fcrFalseConfirmation.windowMinutes Look-back window (minutes) in which the alert counts the block ranges where post-finality verification found a false confirmation
         ##
         windowMinutes: 10
         ## @param monitoring.prometheusRule.rules.fcrFalseConfirmation.for How long the condition must persist across evaluations before firing
@@ -466,7 +466,7 @@ config:
   ## @param config.rpcUrl Blockchain RPC URL
   ##
   rpcUrl: ""
-  ## @param config.rpcWsUrl WebSocket RPC URL used for newHeads. Leave empty to derive it from rpcUrl by replacing http(s) with ws(s). Set it when the provider serves WebSocket on a different path or port
+  ## @param config.rpcWsUrl WebSocket RPC URL for newHeads. If empty, the daemon derives it from rpcUrl and replaces http(s) with ws(s). If the provider serves WebSocket on a different path or port, set it
   ##
   rpcWsUrl: ""
   ## @param config.maxRpcRequestsPerSec Hard cap on RPC requests per second, retries included (0 = unlimited)
@@ -503,10 +503,10 @@ config:
     logsSnapshotSha256: ""
     # Chain head tracking
     headTracking:
-      ## @param config.indexer.headTracking.headSubscription Use newHeads over WebSocket when the RPC endpoint supports it. false forces polling. Leave empty to keep the daemon default (true)
+      ## @param config.indexer.headTracking.headSubscription If the RPC endpoint supports it, use newHeads over WebSocket. false forces polling. Leave empty to keep the daemon default (true)
       ##
       headSubscription: ""
-      ## @param config.indexer.headTracking.headPollInterval Polling interval used when newHeads is unavailable or disabled (humantime, e.g. "1s"). Leave empty to keep the daemon default (1s)
+      ## @param config.indexer.headTracking.headPollInterval Polling interval if newHeads is unavailable or disabled (humantime format, for example "1s"). Leave empty to keep the daemon default (1s)
       ##
       headPollInterval: ""
     # Confirmation rule
@@ -514,13 +514,13 @@ config:
       ## @param config.indexer.confirmation.mode Confirmation rule: depth, safe_or_depth, safe or finalized. Leave empty for depth on all networks
       ##
       mode: ""
-      ## @param config.indexer.confirmation.depth Blocks behind latest used by depth and as the safe_or_depth fallback (1-100). Leave empty for the network default
+      ## @param config.indexer.confirmation.depth Number of blocks behind the latest block for depth mode and for the safe_or_depth fallback (1-100). Leave empty for the network default
       ##
       depth: ""
-      ## @param config.indexer.confirmation.maxSafeGap Latest-to-safe gap in blocks at or above which the Fast Confirmation Rule counts as degraded. Leave empty to keep the daemon default (32)
+      ## @param config.indexer.confirmation.maxSafeGap Gap in blocks from the latest block to the safe block. If the gap is at or above this value, the Fast Confirmation Rule (FCR) counts as degraded. Leave empty to keep the daemon default (32)
       ##
       maxSafeGap: ""
-      ## @param config.indexer.confirmation.verifyFinalized Re-check indexed blocks against the canonical chain once they become final. Leave empty to keep the daemon default (true)
+      ## @param config.indexer.confirmation.verifyFinalized Re-check indexed blocks against the canonical chain after they become final (post-finality verification). Leave empty to keep the daemon default (true)
       ##
       verifyFinalized: ""
     # Subscription behavior configuration

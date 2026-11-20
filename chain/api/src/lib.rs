@@ -60,9 +60,12 @@ use crate::{
 
 pub type DefaultHttpRequestor = blokli_chain_rpc::transport::ReqwestClient;
 
+fn parse_rpc_url(url: &str) -> Result<Url> {
+    Url::parse(url).map_err(|e| BlokliChainError::Configuration(format!("failed to parse RPC URL: {e}")))
+}
+
 fn build_transport_client(url: &str) -> Result<Http<ReqwestClient>> {
-    let parsed_url =
-        Url::parse(url).map_err(|e| BlokliChainError::Configuration(format!("failed to parse RPC URL: {e}")))?;
+    let parsed_url = parse_rpc_url(url)?;
     Ok(ReqwestTransport::new(parsed_url))
 }
 
@@ -118,8 +121,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         let max_requests_per_sec = resolve_max_requests_per_sec(chain_config.max_requests_per_sec);
         let retry_compute_units_per_sec: u64 = max_requests_per_sec.map_or(u64::MAX, |rate| u64::from(rate.get()));
 
-        let parsed_rpc_url = Url::parse(&rpc_url)
-            .map_err(|e| BlokliChainError::Configuration(format!("failed to parse RPC URL: {e}")))?;
+        let parsed_rpc_url = parse_rpc_url(&rpc_url)?;
         let (head_ws_url, head_ws_url_derived) = match resolve_head_ws_url(
             &parsed_rpc_url,
             indexer_cfg.head_ws_url.as_ref(),
@@ -176,7 +178,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
 
         // Create IndexerState for coordinating block processing with subscriptions
         let indexer_state = IndexerState::new(indexer_cfg.event_bus_capacity, indexer_cfg.shutdown_signal_capacity);
-        // The API serves readiness before the indexer starts.
+        // The API serves readiness before the indexer starts, so load a persisted verification halt now.
         if db.verification_failed_at().await?.is_some() {
             indexer_state.mark_verification_failed();
         }

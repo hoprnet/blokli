@@ -27,7 +27,6 @@ use blokli_db::{
 use clap::Parser;
 use futures::TryStreamExt;
 use tokio::net::TcpListener;
-use url::Url;
 
 use crate::{
     config::{Config, DatabaseConfig, PoolRole, pool_application_name},
@@ -201,12 +200,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
             let database = require_database(&cfg)?;
 
             let rpc_ws_url = cfg
-                .rpc_ws_url
-                .as_deref()
-                .map(str::trim)
-                .filter(|url| !url.is_empty())
-                .map(Url::parse)
-                .transpose()
+                .parsed_rpc_ws_url()
                 .map_err(|error| BloklidError::Config(ConfigError::Parse(format!("invalid rpc_ws_url: {error}"))))?;
 
             let indexer_config = blokli_chain_indexer::IndexerConfig {
@@ -371,6 +365,8 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
 
         // Get IndexerState for API subscriptions
         let indexer_state = blokli_chain.indexer_state();
+        // A stored post-finality verification halt stops the index until an operator restores
+        // or rebuilds it. While the halt is stored, startup does not refresh the Safe owners.
         if !indexer_state.verification_failed() {
             startup::refresh_preseeded_safe_modules(blokli_chain.db(), blokli_chain.rpc()).await?;
         }

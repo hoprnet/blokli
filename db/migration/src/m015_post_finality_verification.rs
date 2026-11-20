@@ -1,7 +1,9 @@
 use sea_orm_migration::prelude::*;
 
-/// Adds post-finality verification halt marker column to `chain_info`:
-/// - `verification_failed_at`: first block of a corroborated mismatching range (NULL when clear)
+/// Adds the post-finality verification halt marker column to `chain_info`.
+///
+/// - `verification_failed_at`: first block of a corroborated range that does not match. The value is NULL when no
+///   unresolved mismatch exists.
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 

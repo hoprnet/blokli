@@ -51,6 +51,7 @@ use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     IndexerConfig, IndexerState,
+    constants::topics,
     errors::{CoreEthereumIndexerError, Result},
     numeric::{u64_to_i64, u64_to_u32},
     safe_owner_refresh::{
@@ -60,7 +61,7 @@ use crate::{
     snapshot::{SnapshotInfo, SnapshotManager},
     traits::{ChainLogHandler, PrefetchedLogData},
     utils::AbortOnDrop,
-    verification::run_verification,
+    verification::{VerificationContext, run_verification},
 };
 
 /// Number of not-yet-committed blocks whose chain data the indexer fetches ahead of time.
@@ -155,10 +156,11 @@ where
     Ok(queued)
 }
 
-/// Parks the caller for good once post-finality verification found a mismatch.
+/// Parks the caller forever after post-finality verification found a mismatch.
 ///
-/// The flag is sticky, so the caller never continues. Awaiting forever keeps the process alive:
-/// the API keeps serving the already indexed data until an operator restarts the daemon.
+/// If verification did not fail, the function returns at once. The flag is sticky, so a parked
+/// caller never continues. The wait never ends, so the process stays alive. The API continues to
+/// serve the indexed data until an operator restarts the daemon.
 async fn halt_if_verification_failed(indexer_state: &IndexerState, at_block: u64) {
     if !indexer_state.verification_failed() {
         return;
@@ -178,6 +180,10 @@ pub(crate) enum LogFilterPhase {
 }
 
 /// Builds the RPC log filter set for the given indexing phase.
+///
+/// # Errors
+///
+/// Returns an error when the database cannot read the Safe contract addresses.
 pub(crate) async fn generate_log_filters<U, Db>(db: &Db, logs_handler: &U, phase: LogFilterPhase) -> Result<FilterSet>
 where
     U: ChainLogHandler,
@@ -214,7 +220,7 @@ where
                     .map(AlloyAddress::from_hopr_address)
                     .collect::<Vec<_>>(),
             )
-            .event_signature(crate::constants::topics::safe_contract())
+            .event_signature(topics::safe_contract())
     });
     let filter_token_approval = (!safe_addresses.is_empty()).then(|| {
         Filter::new()
@@ -320,15 +326,17 @@ pub struct ReorgInfo {
 
 /// Returns whether a committed block is close enough to the confirmed tip to sample the head lag.
 ///
-/// While the indexer works through a backlog the confirmed tip is far ahead of the committed
-/// block. Only blocks within the prefetch window of the confirmed tip measure live head lag.
+/// While the indexer works through a backlog, the confirmed tip is far ahead of the committed
+/// block. Only blocks inside the prefetch window of the confirmed tip measure the live head lag.
 #[cfg(any(feature = "telemetry", test))]
 fn is_near_confirmed_tip(confirmed: u64, block_id: u64) -> bool {
     confirmed.saturating_sub(block_id) <= HEAD_LAG_SAMPLE_WINDOW
 }
 
-/// Samples the head lag of a commitment when the gauge is registered and the block is near the
-/// confirmed tip. Missing cache entries leave the gauge unchanged.
+/// Samples the head lag of a committed block when the block is near the confirmed tip.
+///
+/// The gauge changes only when it is registered. If a cache entry is missing, the gauge does not
+/// change.
 #[cfg(feature = "telemetry")]
 fn maybe_record_head_lag<T>(rpc: &T, block_id: u64)
 where
@@ -356,8 +364,9 @@ where
     record_indexer_head_lag(rpc.cached_header_timestamp(block_id), observed_at_secs);
 }
 
-/// Samples the head lag of a commitment when the gauge is registered. Without telemetry there is
-/// no gauge, so no RPC call is made.
+/// Skips the head lag sample in builds without telemetry.
+///
+/// These builds have no gauge, so the function makes no RPC call.
 #[cfg(not(feature = "telemetry"))]
 fn maybe_record_head_lag<T>(_rpc: &T, _block_id: u64)
 where
@@ -365,19 +374,19 @@ where
 {
 }
 
-/// Records the head lag of a block that the indexer has just committed.
+/// Records the head lag of a block that the indexer just committed.
 ///
-/// The sample is taken after the block's writes, so it includes the time the indexer spent on the
-/// block itself. It uses the block header's timestamp for the committed height and a wall-clock
-/// sample taken before the header lookup.
+/// The sample comes after the writes of the block, so it includes the time that the indexer
+/// spent on the block. The lag is the wall-clock time minus the header timestamp of the committed
+/// block. The caller reads the wall-clock time before the header lookup.
 #[cfg(feature = "telemetry")]
 fn record_indexer_head_lag(header_timestamp: Option<u64>, observed_at_secs: u64) {
-    #[cfg(all(feature = "telemetry", not(test)))]
+    #[cfg(not(test))]
     if let (Some(metric), Some(header_timestamp)) = (METRIC_INDEXER_HEAD_LAG_SECONDS.as_ref(), header_timestamp) {
         metric.set(observed_at_secs.saturating_sub(header_timestamp) as f64);
     }
 
-    #[cfg(not(all(feature = "telemetry", not(test))))]
+    #[cfg(test)]
     let _ = (header_timestamp, observed_at_secs);
 }
 
@@ -567,8 +576,9 @@ where
 
         info!("Starting chain indexing");
 
-        // Do not enter fast sync or historical replay with an unresolved mismatch, even if
-        // verification is now disabled. Return normally so the daemon can serve /readyz.
+        // If a mismatch is not resolved, do not start fast sync or historical replay. This also
+        // applies when verification is now disabled. Return normally so that the daemon can serve
+        // /readyz.
         if let Some(from) = self.db.verification_failed_at().await? {
             self.indexer_state.mark_verification_failed();
             error!(
@@ -767,31 +777,33 @@ where
             info!("post-finality verification is disabled by configuration");
             None
         };
-        // Blocks below the configured start are never indexed, so they are never verified.
+        // The indexer never indexes blocks below the configured start, so verification never checks them.
         let verification_floor = self.cfg.start_block_number.saturating_sub(1);
         let verification_db = db.clone();
         let verification_handler = logs_handler.clone();
         let verification_state = indexer_state.clone();
         let (indexing_process, indexing_abort_handle) = abortable(async move {
-            // Shared by the verification task, the indexing loop and the Safe owner refresh task.
+            // The verification task, the indexing loop and the Safe owner refresh task share this client.
             let rpc = Arc::new(rpc);
-            let _verification_guard = tip_updates.map(|tip_updates| {
+            let verification_guard = tip_updates.map(|tip_updates| {
                 let rpc_for_verification = rpc.clone();
                 AbortOnDrop(tokio::spawn(async move {
                     run_verification(
                         tip_updates,
                         rpc_for_verification.as_ref(),
-                        verification_db,
-                        verification_handler,
-                        verification_state,
-                        last_indexed_at_startup,
-                        verification_floor,
-                        None,
+                        VerificationContext {
+                            db: verification_db,
+                            logs_handler: verification_handler,
+                            indexer_state: verification_state,
+                            last_indexed_at_startup,
+                            floor: verification_floor,
+                            round_updates: None,
+                        },
                     )
                     .await;
                 }))
             });
-            if _verification_guard.is_none() {
+            if verification_guard.is_none() {
                 debug!("chain tip tracking is unavailable, post-finality verification is off");
             }
 
@@ -947,7 +959,8 @@ where
 
                 loop {
                     if indexer_state.verification_failed() {
-                        let _ = owner_refresh_guard.take();
+                        // Dropping the guard aborts the Safe owner refresh task.
+                        drop(owner_refresh_guard.take());
                         halt_if_verification_failed(&indexer_state, stream_start_block).await;
                     }
 
@@ -1113,7 +1126,7 @@ where
     /// * `all` contains every active filter.
     /// * `token` contains owner-filtered token Approval filters.
     /// * `no_token` contains non-token filters for historical discovery.
-    pub(crate) async fn generate_log_filters(db: &Db, logs_handler: &U, phase: LogFilterPhase) -> Result<FilterSet> {
+    async fn generate_log_filters(db: &Db, logs_handler: &U, phase: LogFilterPhase) -> Result<FilterSet> {
         generate_log_filters(db, logs_handler, phase).await
     }
 
@@ -2092,7 +2105,7 @@ mod tests {
         }
     }
 
-    /// Mock RPC operations that do not expose a chain tip, so post-finality verification stays off.
+    /// Returns mock RPC operations without a chain tip, so post-finality verification stays off.
     fn mock_rpc() -> MockHoprIndexerOps {
         let mut rpc = MockHoprIndexerOps::new();
         rpc.expect_subscribe_tip().returning(|| None);
@@ -2100,10 +2113,10 @@ mod tests {
         rpc
     }
 
-    /// Time a test gives the indexer to take one more step after it passed the halt check.
+    /// Time that a test gives the indexer to take one more step after the halt check.
     ///
-    /// Each test first waits for a mocked call that runs before the check, so this period elapses
-    /// only when the indexer has parked.
+    /// Each test first waits for a mocked call that runs before the check. Thus this period elapses
+    /// without progress only when the indexer is parked.
     const HALT_QUIET_PERIOD: Duration = Duration::from_millis(500);
 
     /// Asserts that the indexer does not take one more step after its halt check.
@@ -2120,7 +2133,7 @@ mod tests {
     /// Upper bound for a setup step of a halt test.
     const HALT_SETUP_TIMEOUT: Duration = Duration::from_secs(5);
 
-    /// Waits for a setup signal of a halt test and fails when it does not arrive in time.
+    /// Waits for a setup signal of a halt test and fails when the signal does not arrive in time.
     async fn wait_for_setup(signal: &Notify, what: &str) {
         assert!(
             tokio::time::timeout(HALT_SETUP_TIMEOUT, signal.notified())
@@ -3625,7 +3638,7 @@ mod tests {
         Ok(())
     }
 
-    /// The head lag sample must be taken after the indexer commits the block.
+    /// Returns an indexer configuration with fast sync that starts at `start_block`.
     fn test_indexer_config(start_block: u64) -> IndexerConfig {
         IndexerConfig::new(
             start_block,
@@ -3657,13 +3670,14 @@ mod tests {
         Ok((db, handlers))
     }
 
+    // The indexer must take the head lag sample after it commits the block.
     #[tokio::test]
     async fn test_indexer_head_lag_sampling_near_tip_and_backlog() -> anyhow::Result<()> {
         let addr = Address::new(b"my address 123456789");
         let head_block = 10;
         let block_id = head_block + 1;
 
-        // Near tip: samples cached header timestamp after committing the block.
+        // Near the tip: the indexer commits the block, then samples the cached header timestamp.
         let (db, handlers) = setup_single_contract_env(addr, ContractAddresses::default()).await?;
         let samples = Arc::new(StdAtomicUsize::new(0));
         let sampled = samples.clone();
@@ -3713,7 +3727,7 @@ mod tests {
             usize::from(cfg!(feature = "telemetry"))
         );
 
-        // Backlog block far behind confirmed tip: skips header lookup.
+        // A backlog block far behind the confirmed tip: the indexer skips the header lookup.
         let (db, handlers) = setup_single_contract_env(addr, ContractAddresses::default()).await?;
         let mut rpc = MockHoprIndexerOps::new();
         rpc.expect_subscribe_tip().returning(|| None);
@@ -3746,7 +3760,8 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(100)).await;
         abort_handle.abort();
 
-        // Missing confirmed height skips without RPC calls; boundary check on window.
+        // Without a confirmed height, the sample is skipped and no RPC call occurs. Then check the
+        // boundaries of the window.
         let mut rpc = MockHoprIndexerOps::new();
         rpc.expect_cached_confirmed_block()
             .times(usize::from(cfg!(feature = "telemetry")))

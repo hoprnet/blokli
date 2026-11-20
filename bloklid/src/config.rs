@@ -1,4 +1,4 @@
-use std::{fmt, time::Duration};
+use std::{fmt, ops::RangeInclusive, time::Duration};
 
 use blokli_chain_indexer::{snapshot::download::normalize_sha256_hex, utils::redact_url};
 use blokli_chain_rpc::tip::ConfirmationMode;
@@ -6,9 +6,19 @@ use blokli_chain_types::{ChainConfig, ContractAddresses};
 use blokli_db::utils::redact_database_url;
 use hopr_types::primitive::primitives::Address;
 use tracing::warn;
-use url::Url;
+use url::{ParseError, Url};
+use validator::ValidationError;
 
 use crate::network::Network;
+
+/// Default time between two polls of the chain tip.
+const DEFAULT_HEAD_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Default gap from the latest block to the safe block at which FCR is degraded.
+const DEFAULT_MAX_SAFE_GAP: u64 = 32;
+
+/// Permitted values for `indexer.confirmation.depth`.
+const CONFIRMATION_DEPTH_RANGE: RangeInclusive<u16> = 1..=100;
 
 fn default_rpc_url() -> String {
     "http://localhost:8545".to_string()
@@ -39,11 +49,11 @@ fn default_block_range_reprobe_interval() -> u32 {
 }
 
 fn default_head_poll_interval() -> Duration {
-    Duration::from_secs(1)
+    DEFAULT_HEAD_POLL_INTERVAL
 }
 
 fn default_max_safe_gap() -> u64 {
-    32
+    DEFAULT_MAX_SAFE_GAP
 }
 
 /// PostgreSQL database configuration
@@ -322,9 +332,9 @@ pub struct Config {
     #[serde(default = "default_rpc_url")]
     pub rpc_url: String,
 
-    /// Optional WebSocket URL used for `newHeads` notifications.
+    /// WebSocket URL for `newHeads` notifications. This value is optional.
     ///
-    /// Defaults to the HTTP RPC URL with `http(s)` replaced by `ws(s)`.
+    /// If it is not set, bloklid uses `rpc_url` and replaces `http(s)` with `ws(s)`.
     #[serde(default)]
     #[validate(custom(function = "validate_rpc_ws_url"))]
     pub rpc_ws_url: Option<String>,
@@ -396,24 +406,48 @@ fn validate_api(api: &ApiConfig) -> Result<(), validator::ValidationError> {
     Ok(())
 }
 
-fn validate_rpc_ws_url(value: &str) -> Result<(), validator::ValidationError> {
+/// Parses a value of `rpc_ws_url`.
+///
+/// The parser ignores white space at the start and at the end. A blank value gives `None`.
+fn parse_rpc_ws_url(value: &str) -> Result<Option<Url>, ParseError> {
     let raw = value.trim();
     if raw.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
 
-    let url = Url::parse(raw)
-        .map_err(|error| validator::ValidationError::new("rpc_ws_url").with_message(error.to_string().into()))?;
+    Url::parse(raw).map(Some)
+}
+
+/// Makes sure that `rpc_ws_url` is blank or is a valid URL with the `ws` or `wss` scheme.
+fn validate_rpc_ws_url(value: &str) -> Result<(), ValidationError> {
+    let Some(url) = parse_rpc_ws_url(value)
+        .map_err(|error| ValidationError::new("rpc_ws_url").with_message(error.to_string().into()))?
+    else {
+        return Ok(());
+    };
 
     if !matches!(url.scheme(), "ws" | "wss") {
-        return Err(validator::ValidationError::new("rpc_ws_url")
-            .with_message("rpc_ws_url must use the ws or wss scheme".into()));
+        return Err(ValidationError::new("rpc_ws_url").with_message("rpc_ws_url must use the ws or wss scheme".into()));
     }
 
     Ok(())
 }
 
 impl Config {
+    /// Returns `rpc_ws_url` as a parsed URL.
+    ///
+    /// The value is `None` when `rpc_ws_url` is not set or is blank.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] when `rpc_ws_url` is set but is not a valid URL.
+    pub fn parsed_rpc_ws_url(&self) -> Result<Option<Url>, ParseError> {
+        match self.rpc_ws_url.as_deref() {
+            Some(value) => parse_rpc_ws_url(value),
+            None => Ok(None),
+        }
+    }
+
     /// Display the configuration with sensitive data redacted
     pub fn display_redacted(&self) -> String {
         let mut output = String::new();
@@ -627,18 +661,19 @@ pub struct TelemetryConfig {
     pub otlp_signals: String,
 }
 
+/// Configuration for how the indexer follows the chain head.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
 #[serde(deny_unknown_fields)]
 pub struct HeadTrackingConfig {
-    /// Whether to use WebSocket `newHeads` notifications.
+    /// If `true`, the indexer uses WebSocket `newHeads` notifications.
     ///
-    /// Falls back to polling when the RPC endpoint cannot serve subscriptions. Set to `false`
-    /// to force polling.
+    /// If the RPC endpoint cannot serve subscriptions, the indexer uses polling.
+    /// Set this value to `false` to always use polling.
     #[default(true)]
     #[serde(default = "default_true")]
     pub head_subscription: bool,
 
-    /// Interval at which the chain tip is polled.
+    /// Time between two polls of the chain tip. The value must be greater than 0.
     ///
     /// Each poll is one batched JSON-RPC request with three `eth_getBlockByNumber` calls
     /// (latest, safe, finalized).
@@ -647,25 +682,31 @@ pub struct HeadTrackingConfig {
     pub head_poll_interval: Duration,
 }
 
+/// Configuration for the rule that gives the confirmed block.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
 #[serde(deny_unknown_fields)]
 pub struct IndexerConfirmationConfig {
-    /// Confirmation rule. All networks default to depth.
+    /// Confirmation rule. The default is `depth` on all networks.
     #[serde(default)]
     pub mode: ConfirmationMode,
 
-    /// Number of blocks behind latest used by depth-based modes. Defaults to the network value when unset.
+    /// Number of blocks behind the latest block for `depth` and for the fallback of `safe_or_depth`.
+    ///
+    /// If it is not set, the network value applies. The value must be from 1 to 100.
     #[serde(default)]
     pub depth: Option<u16>,
 
-    /// Latest-to-safe gap at or above which FCR is considered degraded.
-    #[default(32)]
+    /// If the gap from the latest block to the safe block is this value or more, FCR is degraded.
+    ///
+    /// The value must be at least 1.
+    #[default(_code = "default_max_safe_gap()")]
     #[serde(default = "default_max_safe_gap")]
     pub max_safe_gap: u64,
 
-    /// Re-check indexed blocks against the canonical chain once they become final.
+    /// If `true`, post-finality verification compares indexed blocks with the canonical chain
+    /// after the blocks become final.
     ///
-    /// Default is `true`.
+    /// The default is `true`.
     #[default(true)]
     #[serde(default = "default_true")]
     pub verify_finalized: bool,
@@ -698,9 +739,11 @@ pub struct IndexerConfig {
     #[serde(default)]
     pub subscription: SubscriptionConfig,
 
+    /// Configuration for chain head tracking.
     #[serde(default)]
     pub head_tracking: HeadTrackingConfig,
 
+    /// Configuration for the confirmation rule.
     #[serde(default)]
     pub confirmation: IndexerConfirmationConfig,
 
@@ -724,19 +767,30 @@ pub struct SafeTxPrefetchConfig {
 }
 
 impl IndexerConfig {
-    /// Validates the logs snapshot settings.
+    /// Makes sure that the indexer configuration obeys these rules:
     ///
-    /// `logs_snapshot_sha256` is required when `enable_logs_snapshot` is true or a non-empty
-    /// `logs_snapshot_url` is set, and must be a SHA-256 digest of 64 hex characters when present.
+    /// - `head_tracking.head_poll_interval` must be greater than 0.
+    /// - If `confirmation.depth` is set, it must be from 1 to 100.
+    /// - `confirmation.max_safe_gap` must be at least 1.
+    /// - If `enable_logs_snapshot` is true or `logs_snapshot_url` is not empty, `logs_snapshot_sha256` must be set.
+    /// - If `logs_snapshot_sha256` is set, it must be a SHA-256 digest of 64 hex characters.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message about the first rule that the configuration does not obey.
     pub fn validate(&self) -> Result<(), String> {
         if self.head_tracking.head_poll_interval.is_zero() {
             return Err("indexer.head_tracking.head_poll_interval must be greater than 0".to_string());
         }
 
         if let Some(depth) = self.confirmation.depth
-            && !(1..=100).contains(&depth)
+            && !CONFIRMATION_DEPTH_RANGE.contains(&depth)
         {
-            return Err("indexer.confirmation.depth must be between 1 and 100".to_string());
+            return Err(format!(
+                "indexer.confirmation.depth must be between {} and {}",
+                CONFIRMATION_DEPTH_RANGE.start(),
+                CONFIRMATION_DEPTH_RANGE.end()
+            ));
         }
 
         if self.confirmation.max_safe_gap == 0 {
@@ -1640,6 +1694,24 @@ mod tests {
             toml::from_str(r#"rpc_url = "https://rpc.example.com""#).expect("config without rpc_ws_url should parse");
         assert!(cfg.rpc_ws_url.is_none());
         cfg.validate().expect("an absent rpc_ws_url should validate");
+    }
+
+    #[test]
+    fn test_parsed_rpc_ws_url() {
+        let mut cfg = Config::default();
+        assert_eq!(cfg.parsed_rpc_ws_url(), Ok(None));
+
+        cfg.rpc_ws_url = Some("   ".to_string());
+        assert_eq!(cfg.parsed_rpc_ws_url(), Ok(None));
+
+        cfg.rpc_ws_url = Some(" wss://rpc.example.com/ws ".to_string());
+        assert_eq!(
+            cfg.parsed_rpc_ws_url(),
+            Ok(Some(Url::parse("wss://rpc.example.com/ws").expect("test URL is valid")))
+        );
+
+        cfg.rpc_ws_url = Some("not a url".to_string());
+        assert!(cfg.parsed_rpc_ws_url().is_err());
     }
 
     #[test]

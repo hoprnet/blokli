@@ -56,7 +56,7 @@ pub struct LogsDatabase(pub DatabaseConnection);
 #[derive(Clone)]
 pub struct RpcOperationsContext(pub Arc<dyn HoprRpcOperations + Send + Sync>);
 
-/// Chain tip tracker used by GraphQL resolvers to report the live Fast Confirmation Rule state.
+/// Chain tip tracker that GraphQL resolvers use to report the live state of the Fast Confirmation Rule.
 #[derive(Clone)]
 pub struct ChainTipTrackerContext(pub Arc<ChainTipTracker>);
 
@@ -170,7 +170,7 @@ where
 /// - Contract addresses injected as context data
 /// - Expected block time injected as context data
 /// - Finality (block confirmations) injected as context data
-/// - Chain tip tracker injected as context data (for chain info confirmation mode and FCR status)
+/// - Chain tip tracker injected as context data (for the confirmation mode and the FCR status in chain info)
 /// - IndexerState injected as context data (for subscription coordination)
 /// - Transaction executor and store injected as context data (for mutations and transaction queries)
 /// - RPC operations injected as context data (for passthrough balance queries)

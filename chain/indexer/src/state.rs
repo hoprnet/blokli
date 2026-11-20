@@ -184,10 +184,10 @@ pub struct IndexerState {
     /// Coordination between block processing and the Safe owner refresh task.
     safe_owner_sync: Arc<SafeOwnerSync>,
 
-    /// Sticky flag recording that post-finality verification found a mismatch.
+    /// Sticky flag that records a mismatch found by post-finality verification.
     ///
-    /// Shared with the API readiness checker, which reports the service as not ready while it is
-    /// set, and with the indexer, which stops advancing while it is set.
+    /// The API readiness checker and the indexer share this flag. While the flag is set, readiness
+    /// reports the service as not ready and the indexer stops advancing.
     verification_status: VerificationStatus,
 }
 
@@ -504,7 +504,9 @@ impl IndexerState {
         self.safe_filter_epoch.fetch_add(1, Ordering::Relaxed) + 1
     }
 
-    /// Returns the post-finality verification status shared with the rest of the process.
+    /// Returns a handle to the post-finality verification status of the process.
+    ///
+    /// The handle shares its flag with this state, so all handles see the same value.
     pub fn verification_status(&self) -> VerificationStatus {
         self.verification_status.clone()
     }
@@ -516,7 +518,7 @@ impl IndexerState {
 
     /// Records that post-finality verification found a mismatch.
     ///
-    /// The flag is sticky: only a process restart clears it.
+    /// The flag is sticky. Only a process restart clears it.
     pub fn mark_verification_failed(&self) {
         self.verification_status.mark_failed();
     }
