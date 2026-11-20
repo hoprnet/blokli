@@ -202,7 +202,7 @@
                 "mode": {
                   "type": "string",
                   "enum": ["", "depth", "safe_or_depth", "safe", "finalized"],
-                  "description": "Confirmation rule (empty uses the network default)"
+                  "description": "Confirmation rule (empty uses depth on all networks)"
                 },
                 "depth": {
                   "oneOf": [

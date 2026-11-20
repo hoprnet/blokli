@@ -139,6 +139,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
             expected_block_time: Duration::from_secs(chain_config.expected_block_time),
             tx_polling_interval: Duration::from_millis(chain_config.tx_polling_interval),
             finality: chain_config.confirmations as u32,
+            confirmation_depth: indexer_cfg.confirmation_depth,
             confirmation_mode: indexer_cfg.confirmation_mode,
             max_safe_gap: indexer_cfg.max_safe_gap,
             head_poll_interval: indexer_cfg.head_poll_interval,
@@ -175,6 +176,10 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
 
         // Create IndexerState for coordinating block processing with subscriptions
         let indexer_state = IndexerState::new(indexer_cfg.event_bus_capacity, indexer_cfg.shutdown_signal_capacity);
+        // The API serves readiness before the indexer starts.
+        if db.verification_failed_at().await?.is_some() {
+            indexer_state.mark_verification_failed();
+        }
 
         // Build transaction submission infrastructure
         let transaction_store = Arc::new(TransactionStore::new());

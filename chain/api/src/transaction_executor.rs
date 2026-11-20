@@ -4,12 +4,11 @@
 //! in three different modes:
 //! - Fire-and-forget: Submit and return hash immediately
 //! - Async: Submit, track in store, return UUID for later querying
-//! - Sync: Submit and wait for the configured confirmation target before returning
+//! - Sync: Submit and wait for confirmations before returning
 
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use blokli_chain_rpc::confirmation::ConfirmationTarget;
 use chrono::Utc;
 use hopr_types::{crypto::types::Hash, primitive::prelude::Address};
 use thiserror::Error;
@@ -150,11 +149,11 @@ pub trait RpcClient: Send + Sync {
         self.send_raw_transaction(raw_tx).await.map(BroadcastOutcome::Accepted)
     }
 
-    /// Send a raw transaction and wait for the confirmation target
+    /// Send a raw transaction and wait for confirmations
     async fn send_raw_transaction_with_confirm(
         &self,
         raw_tx: Vec<u8>,
-        target: ConfirmationTarget,
+        confirmations: u64,
         timeout: Option<Duration>,
     ) -> Result<Hash, ConfirmationError>;
 }
@@ -162,7 +161,9 @@ pub trait RpcClient: Send + Sync {
 /// Configuration for the raw transaction executor
 #[derive(Debug, Clone)]
 pub struct RawTransactionExecutorConfig {
-    /// Maximum time to wait for the confirmation target
+    /// Default number of confirmations to wait for in sync mode
+    pub default_confirmations: u64,
+    /// Maximum time to wait for confirmations
     pub confirmation_timeout: Duration,
     /// Global number of transactions awaiting receipt monitoring. `0` means unbounded.
     ///
@@ -189,6 +190,7 @@ pub struct RawTransactionExecutorConfig {
 impl Default for RawTransactionExecutorConfig {
     fn default() -> Self {
         Self {
+            default_confirmations: 3,
             confirmation_timeout: Duration::from_secs(60),
             max_submitted_transactions: 1_024,
             max_submitted_transactions_per_identity: 64,
@@ -203,7 +205,7 @@ impl Default for RawTransactionExecutorConfig {
 /// Supports three submission modes:
 /// - Fire-and-forget: Returns tx hash immediately, no tracking
 /// - Async: Returns UUID, tracks in store, background monitoring
-/// - Sync: Waits for the confirmation target, returns complete transaction record
+/// - Sync: Waits for confirmations, returns complete transaction record
 pub struct RawTransactionExecutor<R: RpcClient> {
     rpc_client: Arc<R>,
     transaction_store: Arc<TransactionStore>,
@@ -516,16 +518,13 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         }
     }
 
-    /// Sync mode: Submit transaction and wait for the confirmation target
+    /// Sync mode: Submit transaction and wait for confirmations
     ///
     /// This mode:
     /// - Validates the transaction
-    /// - Submits to RPC and waits for the confirmation target
+    /// - Submits to RPC and waits for confirmations
     /// - Creates transaction record in store with result
     /// - Returns complete transaction record
-    ///
-    /// Without an explicit confirmation count the transaction waits until the chain tip tracker
-    /// confirms the block that included it, which is the same rule the indexer applies.
     pub async fn send_raw_transaction_sync(
         &self,
         raw_tx: Vec<u8>,
@@ -542,13 +541,13 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         // no identity to return; preflight and invalid-action suppression still apply.
         self.apply_hopr_policy(&raw_tx, SubmissionMode::Untracked).await?;
 
-        let target = ConfirmationTarget::from_blocks(confirmations);
+        let confirmations = confirmations.unwrap_or(self.config.default_confirmations);
         let submitted_at = Utc::now();
 
-        // Submit to RPC with the confirmation wait
+        // Submit to RPC with confirmation wait
         let tx_hash = match self
             .rpc_client
-            .send_raw_transaction_with_confirm(raw_tx.clone(), target, Some(self.config.confirmation_timeout))
+            .send_raw_transaction_with_confirm(raw_tx.clone(), confirmations, Some(self.config.confirmation_timeout))
             .await
         {
             Ok(hash) => hash,
@@ -654,7 +653,6 @@ mod tests {
         call_count: Arc<Mutex<usize>>,
         /// Answer every broadcast as an already-known transaction the node holds.
         already_known: Arc<Mutex<bool>>,
-        last_target: Arc<Mutex<Option<ConfirmationTarget>>>,
     }
 
     impl MockRpcClient {
@@ -664,7 +662,6 @@ mod tests {
                 should_timeout: false,
                 call_count: Arc::new(Mutex::new(0)),
                 already_known: Arc::new(Mutex::new(false)),
-                last_target: Arc::new(Mutex::new(None)),
             }
         }
 
@@ -674,7 +671,6 @@ mod tests {
                 should_timeout: false,
                 call_count: Arc::new(Mutex::new(0)),
                 already_known: Arc::new(Mutex::new(false)),
-                last_target: Arc::new(Mutex::new(None)),
             }
         }
 
@@ -684,7 +680,6 @@ mod tests {
                 should_timeout: true,
                 call_count: Arc::new(Mutex::new(0)),
                 already_known: Arc::new(Mutex::new(false)),
-                last_target: Arc::new(Mutex::new(None)),
             }
         }
 
@@ -718,11 +713,10 @@ mod tests {
         async fn send_raw_transaction_with_confirm(
             &self,
             raw_tx: Vec<u8>,
-            target: ConfirmationTarget,
+            _confirmations: u64,
             _timeout: Option<Duration>,
         ) -> Result<Hash, ConfirmationError> {
             *self.call_count.lock().unwrap() += 1;
-            *self.last_target.lock().unwrap() = Some(target);
 
             if self.should_fail {
                 return Err(ConfirmationError::SubmissionFailed("transaction failed".to_string()));
@@ -1084,7 +1078,7 @@ mod tests {
         async fn send_raw_transaction_with_confirm(
             &self,
             _raw_tx: Vec<u8>,
-            _target: ConfirmationTarget,
+            _confirmations: u64,
             _timeout: Option<Duration>,
         ) -> Result<Hash, ConfirmationError> {
             Ok(self.0)
@@ -1386,34 +1380,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sync_mode_defaults_to_confirmed_tip() {
-        let rpc_client = MockRpcClient::new();
-        let last_target = rpc_client.last_target.clone();
-        let executor = create_executor(rpc_client);
-
-        let result = executor.send_raw_transaction_sync(vec![0x01, 0x02, 0x03], None).await;
-        assert!(result.is_ok());
-        assert_eq!(
-            *last_target.lock().unwrap(),
-            Some(ConfirmationTarget::ConfirmedTip),
-            "sync mode without an explicit count must follow the confirmed tip"
-        );
-    }
-
-    #[tokio::test]
     async fn test_sync_mode_uses_custom_confirmations() {
         let rpc_client = MockRpcClient::new();
-        let last_target = rpc_client.last_target.clone();
         let executor = create_executor(rpc_client);
         let raw_tx = vec![0x01, 0x02, 0x03];
 
         let result = executor.send_raw_transaction_sync(raw_tx, Some(16)).await;
         assert!(result.is_ok());
-        assert_eq!(
-            *last_target.lock().unwrap(),
-            Some(ConfirmationTarget::Blocks(16)),
-            "an explicit count must keep waiting for that many blocks"
-        );
     }
 
     #[tokio::test]

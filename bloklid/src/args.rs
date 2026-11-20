@@ -367,11 +367,7 @@ impl Args {
         let chain_config = ChainConfig {
             chain_id: network_config.chain_id,
             tx_polling_interval: config.network.tx_polling_interval(),
-            confirmations: config
-                .indexer
-                .confirmation
-                .depth
-                .unwrap_or_else(|| config.network.confirmations()),
+            confirmations: config.network.confirmations(),
             max_block_range: config.max_block_range,
             block_range_reprobe_interval: config.block_range_reprobe_interval,
             channel_contract_deploy_block: network_config.indexer_start_block_number,
@@ -725,6 +721,10 @@ mod tests {
                 let config = args.load_config(false).expect("whole number settings should load");
 
                 assert_eq!(config.indexer.confirmation.depth, Some(5));
+                assert_eq!(
+                    config.chain_network.unwrap().confirmations,
+                    config.network.confirmations()
+                );
                 assert_eq!(config.indexer.confirmation.max_safe_gap, 20);
             },
         );

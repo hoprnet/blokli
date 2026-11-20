@@ -11,31 +11,21 @@ the post-finality checks that detect a false confirmation. The rule is selected 
 
 Blokli supports four modes:
 
-- `depth`: confirmed block is latest minus the configured depth. There is no formal guarantee, only a fixed wait.
+- `depth` (default on all networks): confirmed block is latest minus the configured depth. There is no formal guarantee, only a fixed wait.
 - `safe_or_depth`: while FCR is healthy the confirmed block is the higher of the safe block and (latest - depth). While FCR is degraded or
-  unavailable it is latest - depth. The lag behind latest never exceeds the depth. This is the default on Gnosis networks.
+  unavailable it is latest - depth. The lag behind latest never exceeds the depth.
 - `safe`: confirmed block is the `safe` block only. No depth fallback. If the endpoint has never reported a safe block, the tracker
-  publishes no tip at all: the indexer does not advance, readiness reports not ready, and `sendTransactionSync` calls without
-  `confirmations` wait until their timeout. If the safe tag disappears later, the confirmed block stays at its last value, readiness reports
-  not ready, and the same calls wait. A safe block that is only slow (FCR stalled) makes the lag grow, up to about one epoch. `safe` is
-  weaker than `finalized`: it is the fast-confirmed block.
+  publishes no tip: the indexer does not advance and readiness reports not ready. If the safe tag disappears later, the confirmed block
+  stays at its last value and readiness reports not ready. A slow safe block makes the lag grow, up to about one epoch. `safe` is weaker
+  than `finalized`: it is the fast-confirmed block.
 - `finalized`: confirmed block is the `finalized` block only. Same handling of a missing tag as `safe`: the tracker publishes no tip if the
-  endpoint never reported the tag; if the tag disappears later, the confirmed block stays at its last value, readiness reports not ready,
-  and the same calls wait. `finalized` is the strongest rule (no reorganization).
+  endpoint never reported the tag. If the tag disappears later, the confirmed block stays at its last value and readiness reports not ready.
+  `finalized` is the strongest rule (no reorganization).
 
 `depth` is the fallback distance used by `depth` and `safe_or_depth`. It defaults to the network value. `max_safe_gap` is the latest-to-safe
 gap at or above which FCR counts as degraded.
 
-The mode also applies to `sendTransactionSync` calls that omit `confirmations`: the call returns when the tracker's current confirmation
-height reaches the block that included the transaction, a fresh tip observation still reports that height, and the re-read receipt still has
-the same block number and block hash. The fresh observation is read from the endpoint before the call may return, so a height cached before
-a reorganization cannot confirm a replacement block. The wait uses the current height, not the monotonic confirmed block. The receipt is
-re-read at the poll interval, and a transaction moved by a reorg is followed to its new block. Receipt lookup and tip observation errors are
-retried. The wait restarts only when the height falls below the receipt block or becomes unknown; a drop that stays at or above the receipt
-block does not restart it. The whole wait is limited to 60 seconds. On timeout the transaction is still submitted and the error names the
-accepted transaction hash. In `finalized` mode or with a stalled `safe` block, the call can time out if confirmation does not complete
-within 60 seconds. Clients can pass an explicit `confirmations` value to use a different confirmation count, but this does not guarantee
-completion before the deadline.
+The indexer mode does not change the block count that `sendTransactionSync` waits for.
 
 ## Switch the Mode
 
@@ -88,7 +78,7 @@ Use `finalized` when a temporary lag is acceptable. Use `depth` when indexing mu
 The alert rule `blokli-fcr-false-confirmation` fires when
 `increase(blokli_fcr_false_confirmations_total[windowMinutes]) > 0 or blokli_health{status="verification_failed"} == 1`, held for `for`.
 Defaults are `windowMinutes` 10 and `for` 1m. The counter branch only sees false confirmations recorded inside the window. The health branch
-stays `1` until restart.
+stays `1` while the index has an unresolved verification failure.
 
 This means that a block range indexed above finality no longer matches the canonical logs once it became final. Either an indexed log was
 reorged out or a canonical log was missed.
@@ -98,17 +88,17 @@ reorged out or a canonical log was missed.
    transaction hash and log index.
 3. Compare the same range against an independent node with the same filter set.
 4. Check whether the endpoint that served `safe` had FCR enabled and whether it switched clients or nodes.
-5. Record the affected range before restarting. A range that differs is fetched and compared a second time after a few seconds; only a
-   second difference halts the indexer. The halt is sticky until restart. The verification position is stored in the index database and is
-   not advanced past a range that differs, so after a restart the same range is checked again and halts again while the difference exists.
+5. Record the affected range. The index database retains the failure across restarts. Disabling verification does not clear it. If the
+   daemon stopped during the second comparison, it also halts on restart. In that case, a second mismatch is not established.
 6. Use the supported recovery: there is no in-place repair of indexed data. Reverting one log does not undo the state derived from it
    (channels, accounts, Safes). Restore the database from a backup taken before the affected range, or start from an empty index database
-   (optionally from a logs snapshot) against a trusted endpoint. See [Blokli State Corrupted](blokli-state-corrupted.md). An empty index
-   database resets the stored verification position. Restart the daemon after the recovery.
+   against a trusted endpoint. Use only a trusted logs snapshot from before the affected range. See
+   [Blokli State Corrupted](blokli-state-corrupted.md). An empty index database resets the stored verification position. Restart the daemon
+   after the recovery.
 
 Setting `verify_finalized = false` is the last resort. It disables the post-finality comparison, so false confirmations are no longer
-detected at all and the halt never fires. Even when `verify_finalized` is true, verification stays idle when the endpoint reports no
-finalized block. Use it only with `depth` or `finalized` mode, or together with external verification.
+detected by that comparison. It does not bypass a recorded halt. Even when `verify_finalized` is true, verification stays idle when the
+endpoint reports no finalized block. Use it only with `depth` or `finalized` mode, or together with external verification.
 
 One halt stays active with `verify_finalized = false`. When a replayed block puts a different log at the position of a Safe registration
 that the index already applied, the indexer does not write the block, sets the same `verification_failed` status and stops. This guard
@@ -172,5 +162,5 @@ If reconnects keep failing, the tracker stays on polling and keeps indexing. Res
 | `blokli_fcr_false_confirmations_total` | verified ranges whose stored logs differ from the canonical logs           |
 | `blokli_head_source`                   | head source: 0 polling, 1 websocket                                        |
 | `blokli_head_ws_reconnects_total`      | successful WebSocket reconnects                                            |
-| `blokli_indexer_head_lag_seconds`      | time between the committed block header timestamp and the commit           |
+| `blokli_indexer_head_lag_seconds`      | last near-tip lag sample with a cached block header timestamp              |
 | `blokli_health`                        | health status, including `verification_failed` after a failed verification |

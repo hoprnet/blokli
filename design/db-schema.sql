@@ -39,7 +39,8 @@ CREATE TABLE "chain_info" (
     "min_incoming_ticket_win_prob" double NOT NULL DEFAULT 1,
     "channel_closure_grace_period" integer NULL,
     "key_binding_fee" blob (12) NULL,
-    "last_verified_block" integer NULL
+    "last_verified_block" integer NULL,
+    "verification_failed_at" integer NULL
 );
 
 CREATE TABLE "channel" (

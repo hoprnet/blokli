@@ -156,8 +156,8 @@ head_poll_interval = "1s"
 # Rule used to derive the confirmed block from the observed chain tip.
 [indexer.confirmation]
 # depth | safe_or_depth | safe | finalized
-# Omit to use the network default (safe_or_depth on Gnosis networks, depth on anvil-localhost).
-# mode = "safe_or_depth"
+# Omit to use depth on all networks. Set safe_or_depth to opt in to fast confirmation.
+# mode = "depth"
 # Blocks behind latest used by `depth` and as the fallback of `safe_or_depth`.
 # Defaults to the network value (3 on Gnosis, 1 on anvil-localhost).
 # depth = 3

@@ -2925,7 +2925,7 @@ mod tests {
             safe_registry_dst: Set(None),
             min_incoming_ticket_win_prob: Set(0.0),
             channel_closure_grace_period: Set(None),
-            last_verified_block: Set(None),
+            ..Default::default()
         };
 
         chain_info.insert(db).await?;
@@ -3501,7 +3501,7 @@ mod tests {
             safe_registry_dst: Set(None),
             min_incoming_ticket_win_prob: Set(0.0),
             channel_closure_grace_period: Set(None),
-            last_verified_block: Set(None),
+            ..Default::default()
         };
         chain_info.insert(db.conn(blokli_db::TargetDb::Index)).await.unwrap();
 

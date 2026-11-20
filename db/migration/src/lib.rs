@@ -16,6 +16,7 @@ mod m012_safe_module_address_index;
 mod m013_account_unique_chain_key;
 mod m014_safe_owner_snapshot;
 mod m015_last_verified_block;
+mod m016_verification_halt;
 
 /// This is a special block ID that even pre-dates the v3 contract deployment on Gnosis chain,
 /// and therefore could be safely used to mark data added via the migration.
@@ -53,6 +54,7 @@ impl MigratorTrait for Migrator {
             Box::new(m013_account_unique_chain_key::Migration),
             Box::new(m014_safe_owner_snapshot::Migration),
             Box::new(m015_last_verified_block::Migration),
+            Box::new(m016_verification_halt::Migration),
         ]
     }
 }
@@ -81,6 +83,7 @@ impl MigratorTrait for MigratorIndex {
             Box::new(m013_account_unique_chain_key::Migration),
             Box::new(m014_safe_owner_snapshot::Migration),
             Box::new(m015_last_verified_block::Migration),
+            Box::new(m016_verification_halt::Migration),
         ]
     }
 }
@@ -179,7 +182,7 @@ mod tests {
         let db = setup_test_db().await;
         Migrator::up(&db, None).await.unwrap();
 
-        Migrator::down(&db, Some(1)).await.unwrap();
+        Migrator::down(&db, Some(2)).await.unwrap();
 
         let column = db
             .query_one_raw(Statement::from_string(

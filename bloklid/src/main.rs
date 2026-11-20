@@ -219,11 +219,8 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 data_directory: cfg.data_directory.clone(),
                 event_bus_capacity: cfg.indexer.subscription.event_bus_capacity,
                 shutdown_signal_capacity: cfg.indexer.subscription.shutdown_signal_capacity,
-                confirmation_mode: cfg
-                    .indexer
-                    .confirmation
-                    .mode
-                    .unwrap_or_else(|| cfg.network.default_confirmation_mode()),
+                confirmation_mode: cfg.indexer.confirmation.mode,
+                confirmation_depth: cfg.indexer.confirmation.depth,
                 max_safe_gap: cfg.indexer.confirmation.max_safe_gap,
                 head_poll_interval: cfg.indexer.head_tracking.head_poll_interval,
                 head_subscription: cfg.indexer.head_tracking.head_subscription,
@@ -372,10 +369,11 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
             );
         }
 
-        startup::refresh_preseeded_safe_modules(blokli_chain.db(), blokli_chain.rpc()).await?;
-
         // Get IndexerState for API subscriptions
         let indexer_state = blokli_chain.indexer_state();
+        if !indexer_state.verification_failed() {
+            startup::refresh_preseeded_safe_modules(blokli_chain.db(), blokli_chain.rpc()).await?;
+        }
 
         // Start API server if enabled (before starting indexer processes)
         // This ensures the API is available immediately even if indexer initialization takes time
@@ -392,13 +390,11 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                     cfg.rpc_url.clone(),
                     cfg.contracts,
                     cfg.network.expected_block_time(),
-                    cfg.chain_network
-                        .as_ref()
-                        .map_or_else(|| cfg.network.confirmations(), |chain| chain.confirmations),
                     cfg.indexer
                         .confirmation
-                        .mode
-                        .unwrap_or_else(|| cfg.network.default_confirmation_mode()),
+                        .depth
+                        .unwrap_or_else(|| cfg.network.confirmations()),
+                    cfg.indexer.confirmation.mode,
                 )
             };
 

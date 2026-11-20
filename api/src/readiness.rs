@@ -134,10 +134,11 @@ impl ReadinessChecker {
 
     /// Get the current readiness state, returning `NotReady` when verification has failed.
     pub async fn get(&self) -> ReadinessState {
+        let cached = self.cached_state.read().await;
         if self.verification_status.failed() {
             return ReadinessState::NotReady;
         }
-        *self.cached_state.read().await
+        *cached
     }
 
     pub fn subscribe(&self) -> Receiver<ReadinessState> {
@@ -152,35 +153,30 @@ impl ReadinessChecker {
     /// the result is stored so a check that started before the mismatch cannot restore readiness.
     pub async fn check_and_update(&self) -> ReadinessReport {
         if self.verification_status.failed() {
-            self.store_state(ReadinessState::NotReady, metrics::HEALTH_STATUS_VERIFICATION_FAILED)
-                .await;
+            let mut cached = self.cached_state.write().await;
+            self.store_state(
+                &mut cached,
+                ReadinessState::NotReady,
+                metrics::HEALTH_STATUS_VERIFICATION_FAILED,
+            );
         }
 
         let mut report = self.check_readiness().await;
-
+        let mut cached = self.cached_state.write().await;
         if self.verification_status.failed() {
             report.state = ReadinessState::NotReady;
             report.health_status = metrics::HEALTH_STATUS_VERIFICATION_FAILED;
             report.verification.failed = true;
         }
 
-        self.store_state(report.state, report.health_status).await;
+        self.store_state(&mut cached, report.state, report.health_status);
 
         report
     }
 
     /// Stores a readiness decision, updates the health metric and notifies subscribers when the
     /// state changes.
-    async fn store_state(&self, new_state: ReadinessState, health_status: &'static str) {
-        let mut cached = self.cached_state.write().await;
-
-        // Reading the sticky failure flag under the lock orders every publication after the failure.
-        let (new_state, health_status) = if self.verification_status.failed() {
-            (ReadinessState::NotReady, metrics::HEALTH_STATUS_VERIFICATION_FAILED)
-        } else {
-            (new_state, health_status)
-        };
-
+    fn store_state(&self, cached: &mut ReadinessState, new_state: ReadinessState, health_status: &'static str) {
         let old_state = *cached;
         *cached = new_state;
 
@@ -224,22 +220,9 @@ impl ReadinessChecker {
         });
     }
 
-    /// Check if the server is ready
-    ///
-    /// The returned report holds the readiness decision and the details of every individual check.
-    /// All checks run even when an earlier one already failed, so the `/readyz` body keeps its
-    /// diagnostic details. A post-finality verification mismatch wins over the other checks for
-    /// the health status label.
+    /// Collect database, RPC and lag diagnostics before taking the publication lock.
+    /// `check_and_update` applies the verification status under that lock.
     async fn check_readiness(&self) -> ReadinessReport {
-        let verification_failed = self.verification_status.failed();
-
-        // A post-finality verification mismatch means the indexed data can no longer be trusted,
-        // so readiness stays failed until an operator restarts the daemon. Checking it first makes
-        // it win over the other conditions; the transition log reports the change once.
-        if verification_failed {
-            debug!("Post-finality verification found a mismatch, indexed data is no longer trusted");
-        }
-
         // 1. Check database connectivity by querying chain_info
         let mut database = DatabaseCheck::default();
         let mut database_health_status = None;
@@ -300,9 +283,7 @@ impl ReadinessChecker {
             indexer.last_indexed_block = Some(indexed);
         }
 
-        let health_status = if verification_failed {
-            metrics::HEALTH_STATUS_VERIFICATION_FAILED
-        } else if let Some(status) = database_health_status {
+        let health_status = if let Some(status) = database_health_status {
             status
         } else if rpc.error.is_some() {
             metrics::HEALTH_STATUS_TIMEOUT
@@ -324,9 +305,7 @@ impl ReadinessChecker {
             database,
             rpc,
             indexer,
-            verification: VerificationCheck {
-                failed: verification_failed,
-            },
+            verification: VerificationCheck::default(),
         }
     }
 }
@@ -477,7 +456,7 @@ mod tests {
         let db = BlokliDb::new_in_memory().await?;
         let checker = ReadinessChecker::new(db.conn(TargetDb::Index).clone(), rpc, HealthConfig::default());
 
-        let report = checker.check_readiness().await;
+        let report = checker.check_and_update().await;
 
         tip.assert();
         assert_eq!(report.state, ReadinessState::NotReady);
@@ -510,7 +489,7 @@ mod tests {
         )
         .with_verification_status(indexer_state.verification_status());
 
-        let report = checker.check_readiness().await;
+        let report = checker.check_and_update().await;
 
         tip.assert();
         assert_eq!(report.state, ReadinessState::NotReady);
@@ -581,10 +560,14 @@ mod tests {
         let checker = ReadinessChecker::new(
             db.conn(TargetDb::Index).clone(),
             rpc_operations_for(&server, RpcOperationsConfig::default())?,
-            HealthConfig::default(),
+            HealthConfig {
+                max_indexer_lag: 100,
+                ..HealthConfig::default()
+            },
         )
         .with_verification_status(indexer_state.verification_status());
         checker.force_ready().await;
+        let mut updates = checker.subscribe();
 
         let running = tokio::spawn({
             let checker = checker.clone();
@@ -592,8 +575,17 @@ mod tests {
         });
 
         wait_for_tip_request(&arrived).await?;
-        indexer_state.mark_verification_failed();
+        // Hold a read lock until the check has collected its diagnostics and queued its write.
+        let cached = checker.cached_state.read().await;
         release.store(true, Ordering::SeqCst);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while checker.cached_state.try_read().is_ok() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        indexer_state.mark_verification_failed();
+        drop(cached);
 
         let report = running.await?;
 
@@ -601,11 +593,8 @@ mod tests {
         assert_eq!(report.state, ReadinessState::NotReady);
         assert_eq!(report.health_status, metrics::HEALTH_STATUS_VERIFICATION_FAILED);
         assert!(report.verification.failed);
-        assert_eq!(
-            checker.get().await,
-            ReadinessState::NotReady,
-            "a check that started before the mismatch must not store Ready"
-        );
+        assert_eq!(updates.try_recv()?, report.state);
+        assert_eq!(checker.get().await, report.state);
 
         Ok(())
     }

@@ -34,7 +34,6 @@ use tokio::sync::watch;
 use crate::{RetryAction::NoRetry, errors::Result, tip::ChainTip};
 
 pub mod client;
-pub mod confirmation;
 pub mod errors;
 pub mod head;
 pub mod indexer;
@@ -448,12 +447,13 @@ pub trait HoprIndexerRpcOperations {
     /// Retrieves the latest block number.
     async fn block_number(&self) -> Result<u64>;
 
-    /// Returns the timestamp of the header of `block`, using the chain tip cache when possible.
-    ///
-    /// The indexer calls this for a block it has just committed, so the head lag sample is taken
-    /// after the database write. Implementations that do not track the chain tip return `None`.
-    async fn header_timestamp(&self, block: u64) -> Option<u64> {
-        let _ = block;
+    /// Last published confirmed height, without refreshing the tracker.
+    fn cached_confirmed_block(&self) -> Option<u64> {
+        None
+    }
+
+    /// Timestamp of a recently observed header, without a network lookup.
+    fn cached_header_timestamp(&self, _block: u64) -> Option<u64> {
         None
     }
 

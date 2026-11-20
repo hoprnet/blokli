@@ -285,8 +285,7 @@ pub mod messages {
     /// Invalid confirmations value message
     pub fn invalid_confirmations(value: impl std::fmt::Display, max: u64) -> String {
         format!(
-            "Invalid confirmations value: {}. Must be between 0 and {}; omit the argument to follow the confirmation \
-             rule reported by chainInfo.confirmationMode",
+            "Invalid confirmations value: {}. Must be between 0 and {} (default: 3)",
             value, max
         )
     }
@@ -809,21 +808,6 @@ mod tests {
         assert_eq!(
             error.message,
             "Too many subscriptions are loading their initial state; none became free within 10s, retry later"
-        );
-    }
-
-    #[test]
-    fn invalid_confirmations_points_at_the_confirmation_rule() {
-        let message = messages::invalid_confirmations(65, 64);
-
-        assert!(message.contains("between 0 and 64"), "{message}");
-        assert!(
-            message.contains("chainInfo.confirmationMode"),
-            "omitting the argument follows the confirmation rule of the node: {message}"
-        );
-        assert!(
-            !message.contains("default: 3"),
-            "the omitted argument no longer selects a fixed count of three blocks: {message}"
         );
     }
 }

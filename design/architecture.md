@@ -345,7 +345,7 @@ The schema is organized into three root types following GraphQL best practices:
 
 - Fire-and-forget: Returns transaction hash immediately, no tracking
 - Async: Returns UUID for status tracking, background monitoring
-- Sync: Waits for the current confirmation height, or a requested block depth, before returning
+- Sync: Waits for the configured or requested number of confirmations before returning
 
 **Subscription Operations** (via SSE):
 
@@ -1590,9 +1590,8 @@ unsupported subscription reduces the tracker to polling, and a connection failur
   they are fast-confirmed.
 - **Safe**: the safe block only, with no depth fallback. A safe block that is slow (FCR stalled) makes the lag grow, up to about one epoch.
   If the endpoint never reports a safe block, the tracker publishes no tip: the indexer does not advance, readiness reports not ready (the
-  RPC check fails), and sync transaction calls without confirmations wait until their timeout. If the safe tag disappears later, the
-  confirmed block stays at its last value, readiness reports not ready, and the same calls wait. Safe is weaker than finalized; safe is the
-  fast-confirmed block.
+  RPC check fails). If the safe tag disappears later, the confirmed block stays at its last value and readiness reports not ready. Safe is
+  weaker than finalized: it is the fast-confirmed block.
 - **Finalized**: the finalized block only, with the same handling of a missing tag as safe. Finalized is the strongest rule and allows no
   reorganization.
 
@@ -1600,13 +1599,6 @@ unsupported subscription reduces the tracker to polling, and a connection failur
 unavailable when the endpoint exposes no safe block. The tracker rejects observations where safe is above latest or finalized is above safe
 and keeps the previous tip. The confirmed block never moves backwards: when the safe block regresses, the tracker keeps the previous value
 and counts the event, and post-finality verification decides whether anything already indexed was affected.
-
-**Confirmation height.** Next to the confirmed watermark the tracker publishes the confirmation height of the current observation. This
-value is not clamped. It drops when the safe or finalized tag regresses, and it is unknown when the mode needs a tag that the endpoint does
-not report. Sync transaction waits read this value instead of the watermark, so a replacement block on a shorter fork is not treated as
-confirmed only because the watermark is higher. The wait restarts only when the height falls below the receipt block or becomes unknown; a
-drop that stays at or above the receipt block does not restart it. Before the wait returns, it reads a fresh tip observation and checks that
-height under the same rule, so a height cached before a reorganization cannot confirm a replacement block.
 
 **Consumers.** The indexer waits for the next published confirmed tip instead of sleeping for a fixed block time, then fetches logs up to
 that block. Readiness and the GraphQL server read the same cached confirmed block, so lag is measured against confirmed blocks without an
@@ -1619,13 +1611,13 @@ position stored in the index database, so a restart resumes above the blocks an 
 became final while the daemon was down. The first position starts at the lower of the first finalized block and the committed watermark the
 process had when it started, so blocks written before the provider returned a finalized block are checked later as well. A range that
 differs is compared a second time after a short delay, because a load-balanced or lagging backend can return an empty or partial result
-without an error; only a second difference sets the sticky flag. The indexer then stops advancing and readiness reports the failure until an
-operator restarts the process. A failed read, or a failed write of the stored position, is retried on the next tip update instead of being
-reported. A replayed block that puts a different log at the position of a Safe registration the index already applied is not written and is
-treated as a difference, because applying the replacement would leave the replaced Safe in the index while hiding the change from the
-comparison. Because the set of Safe contract addresses grows while indexing, a canonical log of a Safe has to be in the store only when the
-block was indexed by the continuous phase of the same process and the Safe was discovered in an earlier block. Logs of the static contracts
-are always required.
+without an error. If both comparisons find the same difference, the indexer records the failure in the index database and stops advancing.
+Readiness reports the failure across restarts until an operator restores or rebuilds the index. The index also retains the unresolved range
+if the process stops during the second comparison. A failed read or cursor write causes a retry on the next tip update. A replayed block
+that puts a different log at the position of a Safe registration the index already applied is not written and is treated as a difference,
+because applying the replacement would leave the replaced Safe in the index while hiding the change from the comparison. Because the set of
+Safe contract addresses grows while indexing, a canonical log of a Safe has to be in the store only when the block was indexed by the
+continuous phase of the same process and the Safe was discovered in an earlier block. Logs of the static contracts are always required.
 
 ### Finality Handling in Readiness Checks
 
@@ -1651,8 +1643,8 @@ lag plus the confirmation distance of the active rule behind the tip while still
 The indexer is actually 13 blocks behind the RPC chain head (1000 - 987), but only 10 blocks behind the confirmed block, within the
 acceptable threshold.
 
-**Configuration Flow**: The network selects the default confirmation mode, runtime configuration can override it, the tracker applies it,
-and the indexer and readiness checks reuse the resulting confirmed tip.
+**Configuration Flow**: All networks use depth mode unless the operator selects another rule. The network supplies the default depth. The
+indexer and readiness checks use the same confirmed tip.
 
 ## Local Contract Deployment Variants
 

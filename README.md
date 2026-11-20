@@ -300,7 +300,7 @@ fields. SQLite uses separate index and raw-log databases.
 | `indexer.logs_snapshot_sha256`                  | unset   | `BLOKLI_INDEXER_LOGS_SNAPSHOT_SHA256`                  | SHA-256 hex digest of the archive (required with URL)  |
 | `indexer.head_tracking.head_subscription`       | `true`  | `BLOKLI_INDEXER_HEAD_TRACKING_HEAD_SUBSCRIPTION`       | Uses `newHeads` over WebSocket; `false` forces polling |
 | `indexer.head_tracking.head_poll_interval`      | `1s`    | `BLOKLI_INDEXER_HEAD_TRACKING_HEAD_POLL_INTERVAL`      | Polling interval for the head source fallback          |
-| `indexer.confirmation.mode`                     | network | `BLOKLI_INDEXER_CONFIRMATION_MODE`                     | `depth`, `safe_or_depth`, `safe` or `finalized`        |
+| `indexer.confirmation.mode`                     | `depth` | `BLOKLI_INDEXER_CONFIRMATION_MODE`                     | `depth`, `safe_or_depth`, `safe` or `finalized`        |
 | `indexer.confirmation.depth`                    | network | `BLOKLI_INDEXER_CONFIRMATION_DEPTH`                    | Blocks behind latest for depth-based modes             |
 | `indexer.confirmation.max_safe_gap`             | `32`    | `BLOKLI_INDEXER_CONFIRMATION_MAX_SAFE_GAP`             | Latest-to-safe gap at which FCR counts as degraded     |
 | `indexer.confirmation.verify_finalized`         | `true`  | `BLOKLI_INDEXER_CONFIRMATION_VERIFY_FINALIZED`         | Re-checks indexed logs; needs a `finalized` block      |

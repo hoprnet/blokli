@@ -511,7 +511,7 @@ config:
       headPollInterval: ""
     # Confirmation rule
     confirmation:
-      ## @param config.indexer.confirmation.mode Confirmation rule: depth, safe_or_depth, safe or finalized. Leave empty for the network default (safe_or_depth on Gnosis, depth on anvil-localhost)
+      ## @param config.indexer.confirmation.mode Confirmation rule: depth, safe_or_depth, safe or finalized. Leave empty for depth on all networks
       ##
       mode: ""
       ## @param config.indexer.confirmation.depth Blocks behind latest used by depth and as the safe_or_depth fallback (1-100). Leave empty for the network default

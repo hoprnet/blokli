@@ -7,17 +7,12 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use blokli_chain_rpc::{
-    confirmation::{ConfirmationTarget, ProviderReceiptLookup, TipWaitError, wait_for_confirmed_tip},
-    rpc::RpcOperations,
-    transport::HttpRequestor,
-};
+use blokli_chain_rpc::{rpc::RpcOperations, transport::HttpRequestor};
 use hopr_bindings::exports::alloy::{
     primitives::{Address as AlloyAddress, B256, Bytes},
-    providers::{PendingTransactionBuilder, Provider},
+    providers::Provider,
 };
 use hopr_types::{crypto::types::Hash, primitive::prelude::Address};
-use tokio::time::{Instant, sleep};
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -55,14 +50,6 @@ impl<R: HttpRequestor + 'static + Clone> RpcAdapter<R> {
         self.gas_fee_policy = gas_fee_policy;
         self
     }
-}
-
-/// Maps an interrupted tip wait to the confirmation outcome seen by sync-mode callers.
-///
-/// The node accepted the transaction before the wait started, so the caller gets a timeout that
-/// names the accepted transaction instead of a failed submission it could resubmit.
-fn tip_wait_error(error: TipWaitError, tx_hash: B256) -> ConfirmationError {
-    ConfirmationError::Timeout(format!("{error}, accepted transaction {tx_hash}"))
 }
 
 #[async_trait]
@@ -154,21 +141,20 @@ impl<R: HttpRequestor + 'static + Clone> RpcClient for RpcAdapter<R> {
         }
     }
 
-    /// Send a raw transaction and wait for the confirmation target
+    /// Send a raw transaction and wait for confirmations
     ///
-    /// Submits the transaction and waits until either the requested number of blocks has passed or
-    /// the chain tip tracker confirms the block that included the transaction.
+    /// Submits the transaction and waits for the specified number of confirmations
+    /// before returning the transaction hash.
     async fn send_raw_transaction_with_confirm(
         &self,
         raw_tx: Vec<u8>,
-        target: ConfirmationTarget,
+        confirmations: u64,
         timeout: Option<Duration>,
     ) -> Result<Hash, ConfirmationError> {
         let raw_tx_len = raw_tx.len();
         debug!(
             raw_tx_len,
-            ?target,
-            "sending raw transaction and waiting for the confirmation target"
+            confirmations, "sending raw transaction and waiting for confirmations"
         );
 
         // Convert Vec<u8> to alloy Bytes
@@ -182,74 +168,37 @@ impl<R: HttpRequestor + 'static + Clone> RpcClient for RpcAdapter<R> {
 
                 // Use configured timeout or default to 60 seconds
                 let timeout_duration = timeout.unwrap_or(Duration::from_secs(60));
-                let deadline = Instant::now() + timeout_duration;
-                let timeout_error = || {
-                    ConfirmationError::Timeout(format!(
-                        "timed out after {timeout_duration:?} waiting for transaction {tx_hash} to be confirmed"
-                    ))
-                };
 
-                let success = match target {
-                    ConfirmationTarget::Blocks(confirmations) => {
-                        // The node already accepted the transaction, so a receipt lookup error is
-                        // retried within the deadline instead of being reported as a rejected
-                        // broadcast. The transaction can still be mined.
-                        let (provider, config) = pending_tx.split();
-                        loop {
-                            let builder = PendingTransactionBuilder::from_config(provider.clone(), config.clone())
-                                .with_required_confirmations(confirmations);
+                // Wait for confirmations with timeout
+                let receipt_future = pending_tx.with_required_confirmations(confirmations).get_receipt();
 
-                            match tokio::time::timeout_at(deadline, builder.get_receipt()).await {
-                                Ok(Ok(receipt)) => break Ok(receipt.status()),
-                                Ok(Err(error)) => {
-                                    error!(%error, "error waiting for transaction confirmation, retrying");
-                                    if Instant::now() >= deadline {
-                                        break Err(timeout_error());
-                                    }
-                                    // The pause never outlasts the confirmation deadline.
-                                    if tokio::time::timeout_at(deadline, sleep(self.rpc.tx_polling_interval()))
-                                        .await
-                                        .is_err()
-                                    {
-                                        break Err(timeout_error());
-                                    }
-                                }
-                                Err(_) => break Err(timeout_error()),
-                            }
+                match tokio::time::timeout(timeout_duration, receipt_future).await {
+                    Ok(Ok(receipt)) => {
+                        debug!(?tx_hash, "Transaction confirmed");
+
+                        // Check transaction status
+                        if receipt.status() {
+                            let hash = Hash::from(receipt.transaction_hash.0);
+                            Ok(hash)
+                        } else {
+                            error!(?tx_hash, "Transaction reverted");
+                            Err(ConfirmationError::Reverted(format!("{:?}", tx_hash)))
                         }
                     }
-                    ConfirmationTarget::ConfirmedTip => {
-                        // The standalone API binary has no indexer that starts the tracker, so it
-                        // is started here before the first tip is awaited.
-                        let tracker = self.rpc.tip_tracker();
-                        tracker.ensure_started();
-                        let mut tips = tracker.subscribe();
-
-                        let lookup = ProviderReceiptLookup::new(self.rpc.provider.clone(), tx_hash);
-                        let receipt_future = wait_for_confirmed_tip(
-                            &mut tips,
-                            &lookup,
-                            tracker.as_ref(),
-                            self.rpc.tx_polling_interval(),
-                        );
-
-                        match tokio::time::timeout_at(deadline, receipt_future).await {
-                            Ok(Ok(receipt)) => Ok(receipt.success),
-                            Ok(Err(e)) => {
-                                error!(error = %e, "error waiting for the confirmed chain tip");
-                                Err(tip_wait_error(e, tx_hash))
-                            }
-                            Err(_) => Err(timeout_error()),
-                        }
+                    Ok(Err(e)) => {
+                        error!(error = %e, "error waiting for transaction confirmation");
+                        Err(ConfirmationError::SubmissionFailed(format!(
+                            "Confirmation error: {}",
+                            e
+                        )))
                     }
-                }?;
-
-                if success {
-                    debug!(?tx_hash, "Transaction confirmed");
-                    Ok(Hash::from(tx_hash.0))
-                } else {
-                    error!(?tx_hash, "Transaction reverted");
-                    Err(ConfirmationError::Reverted(format!("{:?}", tx_hash)))
+                    Err(_) => {
+                        error!(?timeout_duration, ?tx_hash, "Transaction timed out");
+                        Err(ConfirmationError::Timeout(format!(
+                            "timed out after {:?}",
+                            timeout_duration
+                        )))
+                    }
                 }
             }
             Err(e) => {

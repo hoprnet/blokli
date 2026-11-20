@@ -113,6 +113,9 @@ pub struct IndexerConfig {
     #[default(_code = "ConfirmationMode::Depth")]
     pub confirmation_mode: ConfirmationMode,
 
+    /// Indexing depth override. When unset, the tracker uses the network confirmation count.
+    pub confirmation_depth: Option<u16>,
+
     /// Latest-to-safe gap at or above which FCR is considered degraded.
     ///
     /// Default is `32`.
@@ -196,6 +199,7 @@ impl IndexerConfig {
             event_bus_capacity,
             shutdown_signal_capacity,
             confirmation_mode: ConfirmationMode::default(),
+            confirmation_depth: None,
             max_safe_gap: 32,
             head_poll_interval: Duration::from_secs(1),
             head_subscription: true,

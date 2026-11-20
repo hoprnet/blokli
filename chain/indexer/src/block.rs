@@ -70,6 +70,7 @@ use crate::{
 const BLOCK_PREFETCH_DEPTH: usize = 4;
 
 /// Number of blocks behind the confirmed tip that still sample the head lag.
+#[cfg(any(feature = "telemetry", test))]
 const HEAD_LAG_SAMPLE_WINDOW: u64 = BLOCK_PREFETCH_DEPTH as u64;
 
 /// Attempts made to mark a committed block's logs as processed before giving up.
@@ -186,7 +187,7 @@ async fn halt_if_verification_failed(indexer_state: &IndexerState, at_block: u64
 
     error!(
         at_block,
-        "post-finality verification failed, the indexer stops advancing until the daemon restarts"
+        "post-finality verification failed; restore or rebuild the index before resuming"
     );
     pending::<()>().await;
 }
@@ -256,7 +257,7 @@ lazy_static::lazy_static! {
     static ref METRIC_INDEXER_HEAD_LAG_SECONDS: Option<SimpleGauge> =
         SimpleGauge::new(
             "blokli_indexer_head_lag_seconds",
-            "Seconds between the committed block header timestamp and the moment the indexer commits the block",
+            "Seconds from block timestamp to commit, sampled near the confirmed tip when the timestamp is cached",
     ).inspect_err(|error| error!(%error, metric = "blokli_indexer_head_lag_seconds", "failed to register telemetry metric")).ok();
 
 
@@ -289,52 +290,45 @@ pub struct ReorgInfo {
 /// Returns whether a committed block is close enough to the confirmed tip to sample the head lag.
 ///
 /// While the indexer works through a backlog the confirmed tip is far ahead of the committed
-/// block, so sampling every block would add a header lookup on a cache miss without measuring the
-/// live head lag. Only blocks within the prefetch window of the confirmed tip are sampled.
+/// block. Only blocks within the prefetch window of the confirmed tip measure live head lag.
+#[cfg(any(feature = "telemetry", test))]
 fn is_near_confirmed_tip(confirmed: u64, block_id: u64) -> bool {
     confirmed.saturating_sub(block_id) <= HEAD_LAG_SAMPLE_WINDOW
 }
 
 /// Samples the head lag of a commitment when the gauge is registered and the block is near the
-/// confirmed tip. Without telemetry there is no gauge, so no RPC call is made.
+/// confirmed tip. Missing cache entries leave the gauge unchanged.
 #[cfg(feature = "telemetry")]
-async fn maybe_record_head_lag<T>(rpc: &T, block_id: u64)
+fn maybe_record_head_lag<T>(rpc: &T, block_id: u64)
 where
     T: HoprIndexerRpcOperations + Sync,
 {
-    match rpc.block_number().await {
-        Ok(confirmed) if is_near_confirmed_tip(confirmed, block_id) => {
-            #[cfg(all(feature = "telemetry", not(test)))]
-            let observed_at_secs = match SystemTime::now().duration_since(UNIX_EPOCH) {
-                Ok(now) => now.as_secs(),
-                Err(error) => {
-                    debug!(
-                        %error,
-                        block_id,
-                        "failed to read the wall clock for the head lag sample"
-                    );
-                    return;
-                }
-            };
-
-            #[cfg(not(all(feature = "telemetry", not(test))))]
-            let observed_at_secs = 0;
-
-            record_indexer_head_lag(rpc.header_timestamp(block_id).await, observed_at_secs);
-        }
-        Ok(_) => {}
-        Err(error) => debug!(
-            %error,
-            block_id,
-            "failed to read the confirmed tip for the head lag sample"
-        ),
+    if !rpc
+        .cached_confirmed_block()
+        .is_some_and(|confirmed| is_near_confirmed_tip(confirmed, block_id))
+    {
+        return;
     }
+
+    #[cfg(not(test))]
+    let observed_at_secs = match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(now) => now.as_secs(),
+        Err(error) => {
+            debug!(%error, block_id, "failed to read the wall clock for the head lag sample");
+            return;
+        }
+    };
+
+    #[cfg(test)]
+    let observed_at_secs = 0;
+
+    record_indexer_head_lag(rpc.cached_header_timestamp(block_id), observed_at_secs);
 }
 
 /// Samples the head lag of a commitment when the gauge is registered. Without telemetry there is
 /// no gauge, so no RPC call is made.
 #[cfg(not(feature = "telemetry"))]
-async fn maybe_record_head_lag<T>(_rpc: &T, _block_id: u64)
+fn maybe_record_head_lag<T>(_rpc: &T, _block_id: u64)
 where
     T: HoprIndexerRpcOperations + Sync,
 {
@@ -345,6 +339,7 @@ where
 /// The sample is taken after the block's writes, so it includes the time the indexer spent on the
 /// block itself. It uses the block header's timestamp for the committed height and a wall-clock
 /// sample taken before the header lookup.
+#[cfg(feature = "telemetry")]
 fn record_indexer_head_lag(header_timestamp: Option<u64>, observed_at_secs: u64) {
     #[cfg(all(feature = "telemetry", not(test)))]
     if let (Some(metric), Some(header_timestamp)) = (METRIC_INDEXER_HEAD_LAG_SECONDS.as_ref(), header_timestamp) {
@@ -540,6 +535,17 @@ where
         }
 
         info!("Starting chain indexing");
+
+        // Do not enter fast sync or historical replay with an unresolved mismatch, even if
+        // verification is now disabled. Return normally so the daemon can serve /readyz.
+        if let Some(from) = self.db.verification_failed_at().await? {
+            self.indexer_state.mark_verification_failed();
+            error!(
+                from,
+                "index halted by post-finality verification; restore or rebuild the index"
+            );
+            return Ok(AbortHandle::new_pair().0);
+        }
 
         let rpc = self
             .rpc
@@ -1023,7 +1029,7 @@ where
                         record_block_step("process", process_started);
 
                         if processed.is_some() {
-                            maybe_record_head_lag(rpc.as_ref(), block.block_id).await;
+                            maybe_record_head_lag(rpc.as_ref(), block.block_id);
                         }
 
                         stream_start_block = block.block_id.saturating_add(1);
@@ -2204,7 +2210,8 @@ mod tests {
         #[async_trait]
         impl HoprIndexerRpcOperations for HoprIndexerOps {
             async fn block_number(&self) -> blokli_chain_rpc::errors::Result<u64>;
-            async fn header_timestamp(&self, block: u64) -> Option<u64>;
+            fn cached_confirmed_block(&self) -> Option<u64>;
+            fn cached_header_timestamp(&self, block: u64) -> Option<u64>;
             async fn get_transaction_sender(&self, tx_hash: hopr_types::crypto::types::Hash) -> blokli_chain_rpc::errors::Result<Address>;
             async fn get_transaction_bytes(&self, tx_hash: hopr_types::crypto::types::Hash) -> blokli_chain_rpc::errors::Result<Vec<u8>>;
             async fn get_transaction_bytes_batch(&self, tx_hashes: &[hopr_types::crypto::types::Hash]) -> Vec<blokli_chain_rpc::errors::Result<Vec<u8>>>;
@@ -2248,6 +2255,7 @@ mod tests {
     fn mock_rpc() -> MockHoprIndexerOps {
         let mut rpc = MockHoprIndexerOps::new();
         rpc.expect_subscribe_tip().returning(|| None);
+        rpc.expect_cached_confirmed_block().return_const(None);
         rpc
     }
 
@@ -3801,15 +3809,19 @@ mod tests {
         };
         let samples = Arc::new(StdAtomicUsize::new(0));
         let sampled = samples.clone();
-        let mut rpc = mock_rpc();
-        rpc.expect_block_number().returning(move || Ok(head_block));
+        let mut rpc = MockHoprIndexerOps::new();
+        rpc.expect_subscribe_tip().returning(|| None);
+        rpc.expect_cached_confirmed_block()
+            .times(usize::from(cfg!(feature = "telemetry")))
+            .return_const(Some(head_block));
+        rpc.expect_block_number().times(2).returning(move || Ok(head_block));
         rpc.expect_get_channel_closure_notice_period()
             .returning(|| Ok(Duration::from_secs(1)));
         rpc.expect_try_stream_logs()
             .times(1)
             .withf(move |start: &u64, _filters: &FilterSet, is_synced: &bool| *start == block_id && *is_synced)
             .return_once(move |_, _, _| Ok(Box::pin(futures::stream::iter(vec![block]))));
-        rpc.expect_header_timestamp()
+        rpc.expect_cached_header_timestamp()
             .times(usize::from(cfg!(feature = "telemetry")))
             .returning(move |block| {
                 assert_eq!(block, block_id, "the sample must use the committed height");
@@ -3871,25 +3883,19 @@ mod tests {
             block_id,
             logs: BTreeSet::new(),
         };
-        let block_number_calls = Arc::new(StdAtomicUsize::new(0));
-        let observed_block_number_calls = block_number_calls.clone();
-        let mut rpc = mock_rpc();
-        rpc.expect_block_number().returning(move || {
-            // The first reads set the chain head for the historical decision; the head lag sample
-            // then sees a tip that is far ahead of the committed block.
-            if observed_block_number_calls.fetch_add(1, StdOrdering::SeqCst) < 2 {
-                Ok(head_block)
-            } else {
-                Ok(block_id + HEAD_LAG_SAMPLE_WINDOW + 1)
-            }
-        });
+        let mut rpc = MockHoprIndexerOps::new();
+        rpc.expect_subscribe_tip().returning(|| None);
+        rpc.expect_block_number().times(2).returning(move || Ok(head_block));
+        rpc.expect_cached_confirmed_block()
+            .times(usize::from(cfg!(feature = "telemetry")))
+            .return_const(Some(block_id + HEAD_LAG_SAMPLE_WINDOW + 1));
         rpc.expect_get_channel_closure_notice_period()
             .returning(|| Ok(Duration::from_secs(1)));
         rpc.expect_try_stream_logs()
             .times(1)
             .withf(move |start: &u64, _filters: &FilterSet, is_synced: &bool| *start == block_id && *is_synced)
             .return_once(move |_, _, _| Ok(Box::pin(futures::stream::iter(vec![block]))));
-        rpc.expect_header_timestamp().times(0).returning(|_| None);
+        rpc.expect_cached_header_timestamp().never();
 
         let cfg = IndexerConfig::new(
             head_block + 1,
@@ -3908,6 +3914,18 @@ mod tests {
         abort_handle.abort();
 
         Ok(())
+    }
+
+    #[test]
+    fn test_head_lag_skips_missing_confirmed_height() {
+        let mut rpc = MockHoprIndexerOps::new();
+        rpc.expect_cached_confirmed_block()
+            .times(usize::from(cfg!(feature = "telemetry")))
+            .return_const(None);
+        rpc.expect_cached_header_timestamp().never();
+        rpc.expect_block_number().never();
+
+        maybe_record_head_lag(&rpc, 1);
     }
 
     #[test]

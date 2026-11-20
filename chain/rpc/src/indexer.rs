@@ -291,13 +291,12 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
         self.get_block_number().await
     }
 
-    async fn header_timestamp(&self, block: u64) -> Option<u64> {
-        let tracker = self.tip_tracker();
-        if let Some(timestamp) = tracker.header_timestamp(block) {
-            return Some(timestamp);
-        }
+    fn cached_confirmed_block(&self) -> Option<u64> {
+        self.tip_tracker().current().map(|tip| tip.confirmed)
+    }
 
-        tracker.fetch_header_timestamp(block).await
+    fn cached_header_timestamp(&self, block: u64) -> Option<u64> {
+        self.tip_tracker().header_timestamp(block)
     }
 
     /// Retrieves the sender (signer) address for a given transaction hash.
@@ -836,10 +835,7 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::{
-            Arc, Mutex,
-            atomic::{AtomicUsize, Ordering},
-        },
+        sync::{Arc, Mutex},
         time::{Duration, Instant},
     };
 
@@ -970,36 +966,6 @@ mod tests {
         .to_string()
     }
 
-    fn mock_single_block_header(server: &mut mockito::ServerGuard, block: u64, timestamp: u64) -> mockito::Mock {
-        server
-            .mock("POST", "/")
-            .match_body(mockito::Matcher::AllOf(vec![
-                mockito::Matcher::Regex(r#""method"\s*:\s*"eth_getBlockByNumber""#.to_string()),
-                mockito::Matcher::Regex(format!(r#""0x{block:x}""#)),
-            ]))
-            .with_body_from_request(move |request| {
-                let body: serde_json::Value =
-                    serde_json::from_slice(request.body().expect("request body")).expect("valid JSON request body");
-                let calls = body.as_array().expect("a batched block request is a JSON array");
-                let responses = calls
-                    .iter()
-                    .map(|call| {
-                        json!({
-                            "jsonrpc": "2.0",
-                            "id": call["id"].clone(),
-                            "result": {
-                                "number": format!("{block:#x}"),
-                                "timestamp": format!("{timestamp:#x}")
-                            }
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                serde_json::to_vec(&responses).expect("batch response should serialize")
-            })
-            .expect(1)
-            .create()
-    }
-
     fn mock_block_number_batch(server: &mut mockito::ServerGuard, latest: u64) -> mockito::Mock {
         server
             .mock("POST", "/")
@@ -1032,33 +998,12 @@ mod tests {
             .create()
     }
 
-    #[derive(Clone)]
-    struct SharedTipSource {
-        observation: Arc<Mutex<TipObservation>>,
-        calls: Arc<AtomicUsize>,
-    }
-
-    impl SharedTipSource {
-        fn new(observation: TipObservation) -> Self {
-            Self {
-                observation: Arc::new(Mutex::new(observation)),
-                calls: Arc::new(AtomicUsize::new(0)),
-            }
-        }
-
-        fn calls(&self) -> usize {
-            self.calls.load(Ordering::SeqCst)
-        }
-    }
+    struct SharedTipSource(Arc<Mutex<TipObservation>>);
 
     #[async_trait]
     impl TipSource for SharedTipSource {
         async fn observe(&self) -> RpcResult<TipObservation> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            Ok(*self
-                .observation
-                .lock()
-                .expect("shared observation lock should not be poisoned"))
+            Ok(*self.0.lock().expect("shared observation lock should not be poisoned"))
         }
     }
 
@@ -1656,12 +1601,8 @@ mod tests {
             safe: None,
             finalized: None,
         }));
-        let tip_source = SharedTipSource {
-            observation: observation.clone(),
-            calls: Arc::new(AtomicUsize::new(0)),
-        };
         let tracker = ChainTipTracker::new(
-            Arc::new(tip_source),
+            Arc::new(SharedTipSource(observation.clone())),
             ConfirmationConfig {
                 mode: ConfirmationMode::Depth,
                 depth: 3,
@@ -1724,26 +1665,29 @@ mod tests {
         Ok(())
     }
 
-    /// The head lag sample reads the committed block's header timestamp when the tracker cache has
-    /// no entry for that height.
+    /// A head lag sample never fetches a missing header from the endpoint.
     #[test_log::test(tokio::test)]
-    async fn test_header_timestamp_falls_back_to_the_chain_on_a_cache_miss() -> anyhow::Result<()> {
+    async fn test_head_lag_reads_only_cached_headers() -> anyhow::Result<()> {
         let mut server = mockito::Server::new_async().await;
         let rpc = create_test_rpc_operations(&server.url())?;
 
         let latest = mock_block_number_batch(&mut server, 8);
-        let header = mock_single_block_header(&mut server, 5, 1_700_000_005);
+        let header = server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::Regex("\"0x5\"".into()))
+            .expect(0)
+            .create();
 
         rpc.tip_tracker().refresh().await?;
         assert_eq!(
-            rpc.header_timestamp(8).await,
+            rpc.cached_header_timestamp(8),
             Some(1),
             "a cached height must not cost an RPC call"
         );
         assert_eq!(
-            rpc.header_timestamp(5).await,
-            Some(1_700_000_005),
-            "a height that was never observed as latest must be read from the chain"
+            rpc.cached_header_timestamp(5),
+            None,
+            "an unobserved height has no sample"
         );
         latest.assert();
         header.assert();
@@ -1760,7 +1704,6 @@ mod tests {
             safe: None,
             finalized: None,
             confirmed,
-            confirmation_height: Some(confirmed),
             source: HeadSource::Polling,
             fcr: FcrState::Unavailable,
         };

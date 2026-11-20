@@ -1104,22 +1104,11 @@ type MutationRoot {
 	"""
 	Submit a transaction synchronously
 	
-	Validates the pre-signed raw transaction data, submits it to the chain, and waits for the
-	block that included it to be confirmed before returning. When `confirmations` is omitted,
-	the wait follows the node's confirmation rule reported by `chainInfo.confirmationMode`;
-	when it is given, the endpoint counts that many confirmations including the inclusion
-	block (max: 64). Transaction is persisted to store and can be queried later.
+	Validates the pre-signed raw transaction data, submits it to the chain, and waits for
+	the specified number of confirmations (default: 3 blocks, max: 64) before returning.
+	Transaction is persisted to store and can be queried later.
 	"""
-	sendTransactionSync(
-		"""
-		Pre-signed raw transaction to submit
-		"""
-		input: TransactionInput!,
-		"""
-		Confirmations to wait for, counting the inclusion block as the first one. Omitted: wait until the node's confirmation rule (chainInfo.confirmationMode) confirms the block
-		"""
-		confirmations: Int
-	): SendTransactionSyncResult!
+	sendTransactionSync(input: TransactionInput!, confirmations: Int): SendTransactionSyncResult!
 }
 
 """

@@ -111,10 +111,37 @@ pub trait BlokliDbInfoOperations {
 
     /// Stores the last block that post-finality verification checked.
     async fn set_last_verified_block<'a>(&'a self, tx: OptTx<'a>, block: u64) -> Result<()>;
+
+    /// First block of a failed verification range, if the index is halted.
+    async fn verification_failed_at(&self) -> Result<Option<u64>>;
+
+    /// Records or clears an unresolved mismatch without advancing the verification cursor.
+    async fn set_verification_failed_at(&self, block: Option<u64>) -> Result<()>;
 }
 
 #[async_trait]
 impl BlokliDbInfoOperations for BlokliDb {
+    async fn verification_failed_at(&self) -> Result<Option<u64>> {
+        chain_info::Entity::find_by_id(SINGULAR_TABLE_FIXED_ID)
+            .one(self.conn(TargetDb::Index))
+            .await?
+            .ok_or(MissingFixedTableEntry("chain_info".into()))?
+            .verification_failed_at
+            .map(|block| i64_to_u64(block, "verification_failed_at"))
+            .transpose()
+    }
+
+    async fn set_verification_failed_at(&self, block: Option<u64>) -> Result<()> {
+        chain_info::ActiveModel {
+            id: Set(SINGULAR_TABLE_FIXED_ID),
+            verification_failed_at: Set(block.map(|n| u64_to_i64(n, "verification_failed_at")).transpose()?),
+            ..Default::default()
+        }
+        .update(self.conn(TargetDb::Index))
+        .await?;
+        Ok(())
+    }
+
     async fn index_is_empty(&self) -> Result<bool> {
         let c = self.conn(TargetDb::Index);
 

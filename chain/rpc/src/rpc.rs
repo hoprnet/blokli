@@ -42,7 +42,6 @@ use hopr_types::{
     primitive::prelude::*,
 };
 use serde::{Deserialize, Serialize};
-use tokio::time::timeout;
 #[cfg(all(feature = "telemetry", not(test)))]
 use tracing::error;
 use tracing::{debug, info, warn};
@@ -53,7 +52,6 @@ use validator::Validate;
 use crate::{
     CurvyAggregatorFees, CurvyAggregatorState, CurvyGasFees, CurvyVaultToken, FeeHistorySnapshot, HoprRpcOperations,
     client::GasOracleFiller,
-    confirmation::{ProviderReceiptLookup, wait_for_confirmed_tip},
     errors::{Result, RpcError},
     head::{HeadSourceConfig, HeadSubscriber, WsHeadSubscriber, redact_ws_url},
     tip::{ChainTipTracker, ConfirmationConfig, ConfirmationMode, RpcTipSource},
@@ -179,13 +177,14 @@ pub struct RpcOperationsConfig {
     pub tx_polling_interval: Duration,
     /// Confirmation depth
     ///
-    /// Number of blocks behind the chain head used by the `depth` confirmation mode and as the
-    /// fallback of the `safe_or_depth` mode.
+    /// Network confirmation count for transaction receipts and the default indexing depth.
     ///
     /// Defaults to 3
     #[validate(range(min = 1, max = 100))]
     #[default = 3]
     pub finality: u32,
+    /// Indexer-only override for the depth and safe-or-depth rules.
+    pub confirmation_depth: Option<u16>,
     /// Rule used to derive the confirmed block from the chain tip.
     ///
     /// Defaults to [`ConfirmationMode::Depth`].
@@ -269,6 +268,7 @@ impl fmt::Debug for RpcOperationsConfig {
             )
             .field("tx_polling_interval", &self.tx_polling_interval)
             .field("finality", &self.finality)
+            .field("confirmation_depth", &self.confirmation_depth)
             .field("confirmation_mode", &self.confirmation_mode)
             .field("max_safe_gap", &self.max_safe_gap)
             .field("head_poll_interval", &self.head_poll_interval)
@@ -528,9 +528,6 @@ pub(crate) fn is_log_block_range_limit_error(error: &RpcError) -> bool {
     message_indicates_known_log_range_limit(&error.to_string())
 }
 
-/// Upper bound for the standalone wait for a transaction to be confirmed by the chain tip.
-const CONFIRMATION_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
-
 /// Number of recent blocks read from `eth_feeHistory`.
 const FEE_HISTORY_BLOCKS: u64 = 10;
 
@@ -631,7 +628,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
             Arc::new(RpcTipSource::new(provider.clone())),
             ConfirmationConfig {
                 mode: cfg.confirmation_mode,
-                depth: cfg.finality as u64,
+                depth: cfg.confirmation_depth.map_or(u64::from(cfg.finality), u64::from),
                 max_safe_gap: cfg.max_safe_gap,
             },
             HeadSourceConfig {
@@ -661,11 +658,6 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
     /// Returns the chain tip tracker shared by indexer and readiness consumers.
     pub fn tip_tracker(&self) -> Arc<ChainTipTracker> {
         self.tip_tracker.clone()
-    }
-
-    /// Returns the polling interval used for transaction and receipt lookups.
-    pub fn tx_polling_interval(&self) -> Duration {
-        self.cfg.tx_polling_interval
     }
 
     #[cfg(test)]
@@ -1341,40 +1333,22 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
 
     async fn send_transaction_with_confirm(&self, tx: TransactionRequest) -> Result<Hash> {
         let sent_tx = self.provider.send_transaction(tx).await?;
-        let tx_hash = *sent_tx.tx_hash();
 
-        // The standalone API binary has no indexer that starts the tracker, so it is started here
-        // before the first tip is awaited.
-        self.tip_tracker.ensure_started();
-        let mut tips = self.tip_tracker.subscribe();
-        let lookup = ProviderReceiptLookup::new(self.provider.clone(), tx_hash);
+        let receipt = sent_tx
+            .with_required_confirmations(self.cfg.finality as u64)
+            .get_receipt()
+            .await
+            .map_err(RpcError::PendingTransactionError)?;
 
-        let receipt = timeout(
-            CONFIRMATION_WAIT_TIMEOUT,
-            wait_for_confirmed_tip(
-                &mut tips,
-                &lookup,
-                self.tip_tracker.as_ref(),
-                self.cfg.tx_polling_interval,
-            ),
-        )
-        .await
-        .map_err(|_| {
-            RpcError::Other(format!(
-                "timed out after {CONFIRMATION_WAIT_TIMEOUT:?} waiting for transaction {tx_hash} to be confirmed"
-            ))
-        })?
-        .map_err(|error| RpcError::Other(format!("Confirmation error: {error}")))?;
-
-        let hopr_tx_hash = Hash::from(tx_hash.0);
+        let tx_hash = Hash::from(receipt.transaction_hash.0);
 
         // Check the transaction status. `status()` returns `true` for successful transactions
         // and `false` for failed or reverted transactions.
-        if receipt.success {
-            Ok(hopr_tx_hash)
+        if receipt.status() {
+            Ok(tx_hash)
         } else {
             // Transaction failed, raise an error
-            Err(RpcError::TransactionFailed(hopr_tx_hash))
+            Err(RpcError::TransactionFailed(tx_hash))
         }
     }
 }

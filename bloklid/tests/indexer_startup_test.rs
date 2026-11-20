@@ -1,15 +1,43 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
+use blokli_chain_api::BlokliChain;
 use blokli_chain_indexer::{IndexerConfig, block::Indexer, handlers::ContractEventHandlers, traits::ChainLogHandler};
 use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
-use blokli_chain_types::ContractAddresses;
+use blokli_chain_types::{ChainConfig, ContractAddresses};
 use blokli_db::{api::logs::BlokliDbLogOperations, db::BlokliDb, info::BlokliDbInfoOperations};
 use futures::stream::{self, StreamExt};
 use hopr_bindings::exports::alloy::primitives::B256;
 use hopr_types::{crypto::types::Hash, primitive::prelude::*};
 use tempfile::TempDir;
 use tokio::sync::Mutex;
+
+#[tokio::test]
+async fn persisted_halt_is_visible_before_indexer_start() -> anyhow::Result<()> {
+    let db = BlokliDb::new_in_memory().await?;
+    db.set_verification_failed_at(Some(11)).await?;
+    let chain = BlokliChain::new(
+        db,
+        ChainConfig {
+            chain_id: 100,
+            tx_polling_interval: 1000,
+            confirmations: 3,
+            max_block_range: 100,
+            block_range_reprobe_interval: 0,
+            channel_contract_deploy_block: 0,
+            max_requests_per_sec: None,
+            expected_block_time: 5,
+        },
+        ContractAddresses::default(),
+        IndexerConfig::default(),
+        "http://127.0.0.1:8545".into(),
+        Default::default(),
+        Default::default(),
+    )
+    .await?;
+    assert!(chain.indexer_state().verification_failed());
+    Ok(())
+}
 
 /// Mock RPC operations for testing
 #[derive(Clone)]

@@ -11,7 +11,7 @@
 //! can return an empty or partial `eth_getLogs` response without an error. A confirmed mismatch is
 //! counted in `blokli_fcr_false_confirmations_total` and recorded in the shared
 //! [`VerificationStatus`] flag. The flag is sticky: the indexer stops advancing and readiness
-//! reports not ready until an operator restarts the process. A failing RPC or database read is not
+//! reports not ready until an operator restores or rebuilds the index. A failing RPC or database read is not
 //! a mismatch: the same range is retried on the next tip update.
 //!
 //! The position the task reached is stored in the index database, so a restart resumes where the
@@ -91,7 +91,7 @@ impl VerificationStatus {
 
     /// Records that a verified range differed from the canonical logs.
     ///
-    /// The flag is sticky: only a process restart clears it.
+    /// The flag never clears in this process. Startup restores it from a durable verification halt.
     pub fn mark_failed(&self) {
         self.failed.store(true, Ordering::SeqCst);
     }
@@ -565,7 +565,7 @@ pub(crate) async fn run_verification<T, U, Db>(
 
                             match verify_range(rpc, &db, &logs_handler, &indexer_state, from, to).await {
                                 Ok(mismatch) if mismatch.is_empty() => {}
-                                Ok(mismatch) => {
+                                Ok(mismatch) => 'recheck: {
                                     warn!(
                                         from_block = from,
                                         to_block = to,
@@ -577,6 +577,14 @@ pub(crate) async fn run_verification<T, U, Db>(
                                          confirm, re-checking the range"
                                     );
 
+                                    // A restart loses the Safe filter coverage used by this comparison.
+                                    // Record the unresolved range before corroborating it. If interrupted,
+                                    // fail closed instead of accepting it with weaker coverage on restart.
+                                    if let Err(error) = db.set_verification_failed_at(Some(from)).await {
+                                        record_failure(&mut failure_streak, Some((from, to)), &error.to_string());
+                                        matched = false;
+                                        break 'recheck;
+                                    }
                                     sleep(MISMATCH_RECHECK_DELAY).await;
 
                                     match verify_range(rpc, &db, &logs_handler, &indexer_state, from, to).await {
@@ -621,6 +629,11 @@ pub(crate) async fn run_verification<T, U, Db>(
                                             record_failure(&mut failure_streak, Some((from, to)), &error.to_string());
                                             matched = false;
                                         }
+                                    }
+                                    if let Err(error) = db.set_verification_failed_at(None).await {
+                                        error!(from, to, %error, "cannot clear the verification halt; stopping indexing");
+                                        indexer_state.mark_verification_failed();
+                                        return;
                                     }
                                 }
                                 Err(error) => {
@@ -702,7 +715,7 @@ mod tests {
         ChangedLog, CursorStart, CursorStep, LogIdentity, StoreCoverage, VerificationMismatch, compare_logs,
         corroborated_mismatch, initial_cursor, next_cursor_step, run_verification,
     };
-    use crate::{IndexerState, traits::MockChainLogHandler};
+    use crate::{IndexerConfig, IndexerState, block::Indexer, traits::MockChainLogHandler};
 
     fn sample_log(block_number: u64, log_index: u64, block_hash: u8, tx_hash: u8) -> SerializableLog {
         SerializableLog {
@@ -1096,7 +1109,6 @@ mod tests {
             safe: None,
             finalized,
             confirmed: 180,
-            confirmation_height: finalized,
             source: HeadSource::Polling,
             fcr: FcrState::Unavailable,
         }
@@ -1341,6 +1353,7 @@ mod tests {
             Some(12),
             "the re-check matched, so the cursor advances"
         );
+        assert_eq!(observed.verification_failed_at().await?, None);
         drop(tip_tx);
         task.await?;
 
@@ -1446,6 +1459,7 @@ mod tests {
             Some(10),
             "conflicting partial responses should keep the stored cursor"
         );
+        assert_eq!(observed.verification_failed_at().await?, None);
 
         tip_tx.send_replace(Some(sample_tip(Some(12))));
         wait_for_round(&mut round_rx, 3).await;
@@ -1609,7 +1623,7 @@ mod tests {
         let (round_tx, mut round_rx) = watch::channel(0);
         let task = spawn_verification(
             Arc::new(rpc),
-            db,
+            db.clone(),
             log_handler(vec![base_address]),
             indexer_state.clone(),
             tip_rx,
@@ -1628,6 +1642,27 @@ mod tests {
             indexer_state.verification_failed(),
             "a missing log of a known Safe is a mismatch"
         );
+
+        for verify_finalized in [true, false] {
+            let fresh = IndexerState::default();
+            let indexer = Indexer::new(
+                MockVerificationRpc::new(), // No RPC calls are allowed before honoring the halt.
+                log_handler(vec![base_address]),
+                db.clone(),
+                IndexerConfig {
+                    verify_finalized,
+                    ..Default::default()
+                },
+                fresh.clone(),
+            );
+            let handle = tokio::time::timeout(Duration::from_secs(1), indexer.start()).await??;
+            assert!(
+                fresh.verification_failed(),
+                "readiness must remain failed after restart"
+            );
+            assert_eq!(db.get_last_verified_block(None).await?, Some(10));
+            handle.abort();
+        }
 
         Ok(())
     }
@@ -1809,6 +1844,45 @@ mod tests {
         drop(tip_tx);
         task.await?;
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn mismatch_recheck_waits_for_a_durable_range() -> anyhow::Result<()> {
+        let db = prepare_db(12, vec![sample_log(11, 0, 1, 2)]).await?;
+        db.set_last_verified_block(None, 10).await?;
+        let conn = db.conn(TargetDb::Index);
+        conn.execute_unprepared(
+            "CREATE TRIGGER reject_marker BEFORE UPDATE OF verification_failed_at ON chain_info BEGIN SELECT \
+             RAISE(ABORT, 'read only'); END",
+        )
+        .await?;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = calls.clone();
+        let mut rpc = MockVerificationRpc::new();
+        rpc.expect_get_logs_for_block_range().returning(move |_, _, _| {
+            counted.fetch_add(1, AtomicOrdering::SeqCst);
+            Ok(Vec::new())
+        });
+        let state = IndexerState::default();
+        let (tips, receiver) = watch::channel(Some(sample_tip(Some(12))));
+        let (rounds, mut completed) = watch::channel(0);
+        let task = spawn_verification(
+            Arc::new(rpc),
+            db.clone(),
+            log_handler(Vec::new()),
+            state.clone(),
+            receiver,
+            None,
+            rounds,
+        );
+        wait_for_round(&mut completed, 1).await;
+        assert_eq!(calls.load(AtomicOrdering::SeqCst), 1);
+        assert_eq!(db.get_last_verified_block(None).await?, Some(10));
+        conn.execute_unprepared("DROP TRIGGER reject_marker").await?;
+        tips.send_replace(Some(sample_tip(Some(12))));
+        tokio::time::timeout(Duration::from_secs(1), task).await??;
+        assert!(state.verification_failed());
         Ok(())
     }
 

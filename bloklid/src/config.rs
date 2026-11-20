@@ -650,9 +650,9 @@ pub struct HeadTrackingConfig {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
 #[serde(deny_unknown_fields)]
 pub struct IndexerConfirmationConfig {
-    /// Confirmation rule. Defaults to the network-specific mode when unset.
+    /// Confirmation rule. All networks default to depth.
     #[serde(default)]
-    pub mode: Option<ConfirmationMode>,
+    pub mode: ConfirmationMode,
 
     /// Number of blocks behind latest used by depth-based modes. Defaults to the network value when unset.
     #[serde(default)]
@@ -1463,7 +1463,7 @@ mod tests {
         assert_eq!(config.indexer.subscription.event_bus_capacity, 1000);
         assert!(config.indexer.head_tracking.head_subscription);
         assert_eq!(config.indexer.head_tracking.head_poll_interval, Duration::from_secs(1));
-        assert_eq!(config.indexer.confirmation.mode, None);
+        assert_eq!(config.indexer.confirmation.mode, ConfirmationMode::Depth);
         assert_eq!(config.indexer.confirmation.depth, None);
         assert_eq!(config.indexer.confirmation.max_safe_gap, 32);
         assert!(config.indexer.confirmation.verify_finalized);
@@ -1582,7 +1582,7 @@ mod tests {
         assert_eq!(cfg.indexer.subscription.event_bus_capacity, 1000); // Default
         assert!(cfg.indexer.head_tracking.head_subscription); // Default
         assert_eq!(cfg.indexer.head_tracking.head_poll_interval, Duration::from_secs(1)); // Default
-        assert_eq!(cfg.indexer.confirmation.mode, None); // Network-specific default
+        assert_eq!(cfg.indexer.confirmation.mode, ConfirmationMode::Depth);
         assert_eq!(cfg.indexer.confirmation.depth, None); // Network-specific default
         assert_eq!(cfg.indexer.confirmation.max_safe_gap, 32); // Default
         assert!(cfg.indexer.confirmation.verify_finalized); // Default
@@ -1608,7 +1608,7 @@ mod tests {
         let cfg: Config = toml::from_str(config).expect("head tracking and confirmation should parse");
         assert!(!cfg.indexer.head_tracking.head_subscription);
         assert_eq!(cfg.indexer.head_tracking.head_poll_interval, Duration::from_secs(2));
-        assert_eq!(cfg.indexer.confirmation.mode, Some(ConfirmationMode::SafeOrDepth));
+        assert_eq!(cfg.indexer.confirmation.mode, ConfirmationMode::SafeOrDepth);
         assert_eq!(cfg.indexer.confirmation.depth, Some(5));
         assert_eq!(cfg.indexer.confirmation.max_safe_gap, 20);
         assert!(!cfg.indexer.confirmation.verify_finalized);

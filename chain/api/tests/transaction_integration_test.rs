@@ -23,11 +23,10 @@ use blokli_chain_rpc::{
 };
 use blokli_chain_types::{AlloyAddressExt, ContractAddresses, utils::create_anvil};
 use hopr_bindings::exports::alloy::{
-    consensus::{SignableTransaction, TxEnvelope, TxLegacy},
-    eips::eip2718::{Decodable2718, Encodable2718},
+    consensus::{SignableTransaction, TxLegacy},
+    eips::eip2718::Encodable2718,
     node_bindings::AnvilInstance,
     primitives::{Address as AlloyAddress, TxKind, U256},
-    providers::{Provider, ProviderBuilder},
     rpc::client::ClientBuilder,
     signers::{Signer, local::PrivateKeySigner},
     transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
@@ -79,7 +78,6 @@ async fn setup_test_environment(
     let cfg = RpcOperationsConfig {
         chain_id: anvil.chain_id(),
         tx_polling_interval: Duration::from_millis(100),
-        head_poll_interval: Duration::from_millis(100),
         expected_block_time: block_time,
         finality: confirmations,
         gas_oracle_url: None,
@@ -398,83 +396,6 @@ async fn test_sync_mode_waits_for_confirmations() -> anyhow::Result<()> {
     // Should be confirmed
     assert_eq!(record.status, TransactionStatus::Confirmed);
     assert_ne!(record.transaction_hash, Hash::default());
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_sync_mode_default_waits_for_the_confirmed_tip() -> anyhow::Result<()> {
-    let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
-
-    let recipient = random_address();
-    let raw_tx = create_eth_transfer_tx(&ctx, recipient, 1000, 0).await?;
-
-    // Mine by hand so the head only moves when the test says so.
-    let provider = ProviderBuilder::new().connect_http(ctx.anvil.endpoint_url());
-    provider
-        .raw_request::<_, serde_json::Value>("anvil_setIntervalMining".into(), [0u64])
-        .await?;
-    provider
-        .raw_request::<_, serde_json::Value>("anvil_setAutomine".into(), [false])
-        .await?;
-
-    let mut encoded = raw_tx.as_slice();
-    let tx_hash = *TxEnvelope::decode_2718(&mut encoded)?.tx_hash();
-
-    // No explicit count: the wait follows the configured confirmation mode (depth 2 here).
-    let executor = ctx.executor.clone();
-    let waiting = tokio::spawn(async move { executor.send_raw_transaction_sync(raw_tx, None).await });
-
-    // Wait until the node holds the transaction, then mine only the block that includes it.
-    for _ in 0..100 {
-        if provider.get_transaction_by_hash(tx_hash).await?.is_some() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    provider
-        .raw_request::<_, serde_json::Value>("anvil_mine".into(), ["0x1"])
-        .await?;
-
-    let mut receipt = None;
-    for _ in 0..100 {
-        if let Some(found) = provider.get_transaction_receipt(tx_hash).await? {
-            receipt = Some(found);
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    let receipt_block = receipt
-        .expect("the mined transaction must have a receipt")
-        .block_number
-        .expect("the receipt must be in a block");
-
-    // One block above the inclusion block: depth 2 still confirms the block below the receipt.
-    provider
-        .raw_request::<_, serde_json::Value>("anvil_mine".into(), ["0x1"])
-        .await?;
-    assert_eq!(provider.get_block_number().await?, receipt_block + 1);
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    assert!(
-        !waiting.is_finished(),
-        "a depth-2 wait must stay pending while the head is one block above the receipt block"
-    );
-
-    provider
-        .raw_request::<_, serde_json::Value>("anvil_mine".into(), ["0x1"])
-        .await?;
-    let record = tokio::time::timeout(Duration::from_secs(10), waiting)
-        .await
-        .expect("the depth-2 wait must finish one block later")??;
-    assert_eq!(record.status, TransactionStatus::Confirmed);
-
-    let latest = provider.get_block_number().await?;
-    assert_eq!(latest, receipt_block + 2);
-    assert_eq!(
-        latest.saturating_sub(2),
-        receipt_block,
-        "the wait must only return once latest - 2 reaches the receipt block, latest {latest}, receipt {receipt_block}"
-    );
 
     Ok(())
 }
