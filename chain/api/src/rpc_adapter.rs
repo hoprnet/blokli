@@ -206,7 +206,13 @@ impl<R: HttpRequestor + 'static + Clone> RpcClient for RpcAdapter<R> {
                                     if Instant::now() >= deadline {
                                         break Err(timeout_error());
                                     }
-                                    sleep(self.rpc.tx_polling_interval()).await;
+                                    // The pause never outlasts the confirmation deadline.
+                                    if tokio::time::timeout_at(deadline, sleep(self.rpc.tx_polling_interval()))
+                                        .await
+                                        .is_err()
+                                    {
+                                        break Err(timeout_error());
+                                    }
                                 }
                                 Err(_) => break Err(timeout_error()),
                             }

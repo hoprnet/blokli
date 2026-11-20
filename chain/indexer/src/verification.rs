@@ -263,14 +263,58 @@ pub enum CursorStep {
     },
 }
 
+/// Inputs that decide where an unset verification cursor starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CursorStart {
+    /// Last block the indexer had committed when the process started, or the block below the first
+    /// one this run indexes when the index was empty and no finalized block was known.
+    pub baseline: Option<u64>,
+    /// Block right below the configured indexing start. Blocks below the start are never indexed,
+    /// so the cursor never starts below this block.
+    pub floor: u64,
+}
+
 /// Chooses the block at which an unset cursor starts once a finalized block is known.
 ///
 /// `baseline` is the last block the indexer had committed when the process started. Everything
 /// above it may have been indexed while finality was still unknown, so the cursor starts at its
 /// minimum with the first finalized block and those blocks are re-checked once they become final.
-/// Returns `None` while the finalized block is unknown.
-pub fn initial_cursor(baseline: Option<u64>, finalized: Option<u64>) -> Option<u64> {
-    finalized.map(|finalized| baseline.map_or(finalized, |last_indexed| last_indexed.min(finalized)))
+/// `floor` is the block right below the configured indexing start; the returned cursor is raised to
+/// at least `floor`. Returns `None` while the finalized block is unknown.
+pub fn initial_cursor(baseline: Option<u64>, finalized: Option<u64>, floor: u64) -> Option<u64> {
+    finalized.map(|finalized| {
+        baseline
+            .map_or(finalized, |last_indexed| last_indexed.min(finalized))
+            .max(floor)
+    })
+}
+
+/// Returns the differences that both comparisons report.
+///
+/// Two comparisons of the same range are fetched a few seconds apart. A backend that answers with
+/// a partial result produces differences that the other comparison does not show, so only a
+/// difference that both comparisons report counts. Order follows `first`.
+pub fn corroborated_mismatch(first: &VerificationMismatch, second: &VerificationMismatch) -> VerificationMismatch {
+    VerificationMismatch {
+        missing_from_chain: first
+            .missing_from_chain
+            .iter()
+            .filter(|entry| second.missing_from_chain.contains(*entry))
+            .cloned()
+            .collect(),
+        missing_from_store: first
+            .missing_from_store
+            .iter()
+            .filter(|entry| second.missing_from_store.contains(*entry))
+            .cloned()
+            .collect(),
+        changed: first
+            .changed
+            .iter()
+            .filter(|entry| second.changed.contains(*entry))
+            .cloned()
+            .collect(),
+    }
 }
 
 /// Plans the next post-finality verification round of a cursor that is already set.
@@ -424,8 +468,9 @@ where
 /// Verifies indexed ranges once the chain tip tracker reports them as final.
 ///
 /// The task runs until the tip publisher is dropped, the indexer shuts down or a mismatch is found.
-/// `baseline` is the committed block at the moment the indexer started, captured before the
-/// indexing loop could write a block that the first finalized response would no longer cover.
+/// `cursor_start` holds the committed block at the moment the indexer started, captured before the
+/// indexing loop could write a block that the first finalized response would no longer cover, and
+/// the floor below which the cursor never starts.
 /// `round_updates` publishes the number of completed rounds so tests can wait for a round instead
 /// of sleeping; production passes `None`.
 pub(crate) async fn run_verification<T, U, Db>(
@@ -434,7 +479,7 @@ pub(crate) async fn run_verification<T, U, Db>(
     db: Db,
     logs_handler: Arc<U>,
     indexer_state: IndexerState,
-    baseline: Option<u64>,
+    cursor_start: CursorStart,
     round_updates: Option<watch::Sender<u32>>,
 ) where
     T: HoprIndexerRpcOperations + Sync + Send + 'static,
@@ -494,7 +539,7 @@ pub(crate) async fn run_verification<T, U, Db>(
                         // The baseline is unset when nothing was indexed at process start, so no
                         // block is owed a check. Recording it would start the cursor at the genesis
                         // block and walk the whole chain below the first indexed block.
-                        if let Some(start) = initial_cursor(baseline, finalized) {
+                        if let Some(start) = initial_cursor(cursor_start.baseline, finalized, cursor_start.floor) {
                             match db.set_last_verified_block(None, start).await {
                                 Ok(()) => {
                                     cursor = Some(start);
@@ -543,19 +588,34 @@ pub(crate) async fn run_verification<T, U, Db>(
                                             );
                                         }
                                         Ok(recheck) => {
-                                            error!(
-                                                from_block = from,
-                                                to_block = to,
-                                                missing_from_chain = recheck.missing_from_chain.len(),
-                                                missing_from_store = recheck.missing_from_store.len(),
-                                                changed = recheck.changed.len(),
-                                                examples = ?describe_mismatch(&recheck),
-                                                "post-finality verification found logs that the canonical chain does \
-                                                 not confirm, halting the indexer"
-                                            );
-                                            record_false_confirmation();
-                                            indexer_state.mark_verification_failed();
-                                            return;
+                                            let confirmed = corroborated_mismatch(&mismatch, &recheck);
+                                            if confirmed.is_empty() {
+                                                // A partial backend answer can make one comparison
+                                                // report differences that the other does not. Only a
+                                                // difference both comparisons report is decided;
+                                                // otherwise re-check the same range on the next tip
+                                                // update instead of halting.
+                                                record_failure(
+                                                    &mut failure_streak,
+                                                    Some((from, to)),
+                                                    "the two comparisons of the range report different differences",
+                                                );
+                                                matched = false;
+                                            } else {
+                                                error!(
+                                                    from_block = from,
+                                                    to_block = to,
+                                                    missing_from_chain = confirmed.missing_from_chain.len(),
+                                                    missing_from_store = confirmed.missing_from_store.len(),
+                                                    changed = confirmed.changed.len(),
+                                                    examples = ?describe_mismatch(&confirmed),
+                                                    "post-finality verification found logs that the canonical chain does \
+                                                     not confirm, halting the indexer"
+                                                );
+                                                record_false_confirmation();
+                                                indexer_state.mark_verification_failed();
+                                                return;
+                                            }
                                         }
                                         Err(error) => {
                                             record_failure(&mut failure_streak, Some((from, to)), &error.to_string());
@@ -638,7 +698,10 @@ mod tests {
     use sea_orm::ConnectionTrait;
     use tokio::sync::watch;
 
-    use super::{CursorStep, StoreCoverage, compare_logs, initial_cursor, next_cursor_step, run_verification};
+    use super::{
+        ChangedLog, CursorStart, CursorStep, LogIdentity, StoreCoverage, VerificationMismatch, compare_logs,
+        corroborated_mismatch, initial_cursor, next_cursor_step, run_verification,
+    };
     use crate::{IndexerState, traits::MockChainLogHandler};
 
     fn sample_log(block_number: u64, log_index: u64, block_hash: u8, tx_hash: u8) -> SerializableLog {
@@ -894,21 +957,97 @@ mod tests {
 
     #[test]
     fn initial_cursor_is_unset_while_finalized_is_unknown() {
-        assert_eq!(initial_cursor(None, None), None);
-        assert_eq!(initial_cursor(Some(100), None), None);
+        assert_eq!(initial_cursor(None, None, 0), None);
+        assert_eq!(initial_cursor(Some(100), None, 0), None);
     }
 
     #[test]
     fn initial_cursor_starts_at_the_first_finalized_block() {
-        assert_eq!(initial_cursor(None, Some(42)), Some(42));
-        assert_eq!(initial_cursor(Some(100), Some(42)), Some(42));
+        assert_eq!(initial_cursor(None, Some(42), 0), Some(42));
+        assert_eq!(initial_cursor(Some(100), Some(42), 0), Some(42));
     }
 
     /// Blocks indexed after the starting watermark are re-checked from it.
     #[test]
     fn initial_cursor_starts_at_the_lower_of_the_baseline_and_the_finalized_block() {
-        assert_eq!(initial_cursor(Some(100), Some(110)), Some(100));
-        assert_eq!(initial_cursor(Some(110), Some(110)), Some(110));
+        assert_eq!(initial_cursor(Some(100), Some(110), 0), Some(100));
+        assert_eq!(initial_cursor(Some(110), Some(110), 0), Some(110));
+    }
+
+    #[test]
+    fn initial_cursor_uses_the_floor_when_no_baseline_exists() {
+        assert_eq!(initial_cursor(None, Some(50), 99), Some(99));
+    }
+
+    #[test]
+    fn initial_cursor_keeps_a_cursor_above_the_floor() {
+        assert_eq!(initial_cursor(Some(100), Some(110), 99), Some(100));
+    }
+
+    fn identity(block: u64, index: u64) -> LogIdentity {
+        LogIdentity {
+            block_number: block,
+            block_hash: format!("0x{:02x}", block),
+            tx_hash: "0x02".to_string(),
+            log_index: index,
+        }
+    }
+
+    #[test]
+    fn corroborated_mismatch_requires_both_comparisons() {
+        let first = VerificationMismatch {
+            missing_from_chain: vec![identity(1, 0)],
+            ..Default::default()
+        };
+        let second = VerificationMismatch {
+            missing_from_chain: vec![identity(2, 0)],
+            ..Default::default()
+        };
+
+        assert_eq!(corroborated_mismatch(&first, &second), VerificationMismatch::default());
+    }
+
+    #[test]
+    fn corroborated_mismatch_keeps_differences_reported_by_both() {
+        let a = identity(1, 0);
+        let first = VerificationMismatch {
+            missing_from_chain: vec![a.clone()],
+            ..Default::default()
+        };
+        let second = VerificationMismatch {
+            missing_from_chain: vec![a.clone()],
+            ..Default::default()
+        };
+        let expected = VerificationMismatch {
+            missing_from_chain: vec![a],
+            ..Default::default()
+        };
+
+        assert_eq!(corroborated_mismatch(&first, &second), expected);
+    }
+
+    #[test]
+    fn corroborated_mismatch_keeps_only_corroborated_changed_entries() {
+        let changed = ChangedLog {
+            stored: identity(3, 0),
+            canonical: identity(4, 0),
+        };
+        let only_second = identity(5, 1);
+        let first = VerificationMismatch {
+            changed: vec![changed.clone()],
+            ..Default::default()
+        };
+        let second = VerificationMismatch {
+            changed: vec![changed.clone()],
+            missing_from_store: vec![only_second],
+            ..Default::default()
+        };
+        let expected = VerificationMismatch {
+            changed: vec![changed],
+            ..Default::default()
+        };
+
+        assert_eq!(corroborated_mismatch(&first, &second), expected);
     }
 
     #[test]
@@ -1051,7 +1190,7 @@ mod tests {
                 db,
                 Arc::new(handler),
                 indexer_state,
-                baseline,
+                CursorStart { baseline, floor: 0 },
                 Some(round_updates),
             )
             .await;

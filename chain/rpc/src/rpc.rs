@@ -42,6 +42,7 @@ use hopr_types::{
     primitive::prelude::*,
 };
 use serde::{Deserialize, Serialize};
+use tokio::time::timeout;
 #[cfg(all(feature = "telemetry", not(test)))]
 use tracing::error;
 use tracing::{debug, info, warn};
@@ -526,6 +527,9 @@ pub(crate) fn is_log_block_range_limit_error(error: &RpcError) -> bool {
 
     message_indicates_known_log_range_limit(&error.to_string())
 }
+
+/// Upper bound for the standalone wait for a transaction to be confirmed by the chain tip.
+const CONFIRMATION_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Number of recent blocks read from `eth_feeHistory`.
 const FEE_HISTORY_BLOCKS: u64 = 10;
@@ -1345,13 +1349,21 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
         let mut tips = self.tip_tracker.subscribe();
         let lookup = ProviderReceiptLookup::new(self.provider.clone(), tx_hash);
 
-        let receipt = wait_for_confirmed_tip(
-            &mut tips,
-            &lookup,
-            self.tip_tracker.as_ref(),
-            self.cfg.tx_polling_interval,
+        let receipt = timeout(
+            CONFIRMATION_WAIT_TIMEOUT,
+            wait_for_confirmed_tip(
+                &mut tips,
+                &lookup,
+                self.tip_tracker.as_ref(),
+                self.cfg.tx_polling_interval,
+            ),
         )
         .await
+        .map_err(|_| {
+            RpcError::Other(format!(
+                "timed out after {CONFIRMATION_WAIT_TIMEOUT:?} waiting for transaction {tx_hash} to be confirmed"
+            ))
+        })?
         .map_err(|error| RpcError::Other(format!("Confirmation error: {error}")))?;
 
         let hopr_tx_hash = Hash::from(tx_hash.0);

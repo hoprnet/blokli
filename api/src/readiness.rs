@@ -132,8 +132,11 @@ impl ReadinessChecker {
         self
     }
 
-    /// Get the current cached readiness state (fast, non-blocking)
+    /// Get the current readiness state, returning `NotReady` when verification has failed.
     pub async fn get(&self) -> ReadinessState {
+        if self.verification_status.failed() {
+            return ReadinessState::NotReady;
+        }
         *self.cached_state.read().await
     }
 
@@ -170,6 +173,14 @@ impl ReadinessChecker {
     /// state changes.
     async fn store_state(&self, new_state: ReadinessState, health_status: &'static str) {
         let mut cached = self.cached_state.write().await;
+
+        // Reading the sticky failure flag under the lock orders every publication after the failure.
+        let (new_state, health_status) = if self.verification_status.failed() {
+            (ReadinessState::NotReady, metrics::HEALTH_STATUS_VERIFICATION_FAILED)
+        } else {
+            (new_state, health_status)
+        };
+
         let old_state = *cached;
         *cached = new_state;
 

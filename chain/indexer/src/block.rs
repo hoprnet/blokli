@@ -28,7 +28,7 @@ use blokli_db::{
 use blokli_db_entity::{channel_state, prelude::ChannelState};
 use futures::{
     Stream, StreamExt,
-    channel::mpsc::channel,
+    channel::mpsc::{Sender, channel},
     future::{AbortHandle, abortable},
 };
 use hopr_bindings::{
@@ -60,7 +60,7 @@ use crate::{
     snapshot::{SnapshotInfo, SnapshotManager},
     traits::{ChainLogHandler, PrefetchedLogData},
     utils::AbortOnDrop,
-    verification::run_verification,
+    verification::{CursorStart, run_verification},
 };
 
 /// Number of not-yet-committed blocks whose chain data the indexer fetches ahead of time.
@@ -191,6 +191,21 @@ async fn halt_if_verification_failed(indexer_state: &IndexerState, at_block: u64
     pending::<()>().await;
 }
 
+/// Completes the startup handshake before parking once post-finality verification failed.
+///
+/// `Indexer::start()` returns its abort handle only after the first `()` was sent on the startup
+/// channel (or the sender was dropped). Parking before the handshake would make startup wait
+/// forever even though readiness stays failed; sending first lets `start()` return while this task
+/// parks until an operator restarts the daemon.
+async fn halt_startup_if_verification_failed(indexer_state: &IndexerState, at_block: u64, startup: &mut Sender<()>) {
+    if !indexer_state.verification_failed() {
+        return;
+    }
+
+    let _ = startup.try_send(());
+    halt_if_verification_failed(indexer_state, at_block).await;
+}
+
 /// One item the continuous indexing loop waits for between blocks.
 enum LiveItem {
     /// A block of the continuous log stream together with its pre-fetched chain data.
@@ -289,7 +304,23 @@ where
 {
     match rpc.block_number().await {
         Ok(confirmed) if is_near_confirmed_tip(confirmed, block_id) => {
-            record_indexer_head_lag(rpc.header_timestamp(block_id).await);
+            #[cfg(all(feature = "telemetry", not(test)))]
+            let observed_at_secs = match SystemTime::now().duration_since(UNIX_EPOCH) {
+                Ok(now) => now.as_secs(),
+                Err(error) => {
+                    debug!(
+                        %error,
+                        block_id,
+                        "failed to read the wall clock for the head lag sample"
+                    );
+                    return;
+                }
+            };
+
+            #[cfg(not(all(feature = "telemetry", not(test))))]
+            let observed_at_secs = 0;
+
+            record_indexer_head_lag(rpc.header_timestamp(block_id).await, observed_at_secs);
         }
         Ok(_) => {}
         Err(error) => debug!(
@@ -312,17 +343,16 @@ where
 /// Records the head lag of a block that the indexer has just committed.
 ///
 /// The sample is taken after the block's writes, so it includes the time the indexer spent on the
-/// block itself. It uses the block header's timestamp for the committed height.
-fn record_indexer_head_lag(_header_timestamp: Option<u64>) {
+/// block itself. It uses the block header's timestamp for the committed height and a wall-clock
+/// sample taken before the header lookup.
+fn record_indexer_head_lag(header_timestamp: Option<u64>, observed_at_secs: u64) {
     #[cfg(all(feature = "telemetry", not(test)))]
-    if let (Some(metric), Some(header_timestamp)) = (METRIC_INDEXER_HEAD_LAG_SECONDS.as_ref(), _header_timestamp) {
-        if let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) {
-            metric.set(now.as_secs().saturating_sub(header_timestamp) as f64);
-        }
+    if let (Some(metric), Some(header_timestamp)) = (METRIC_INDEXER_HEAD_LAG_SECONDS.as_ref(), header_timestamp) {
+        metric.set(observed_at_secs.saturating_sub(header_timestamp) as f64);
     }
 
     #[cfg(not(all(feature = "telemetry", not(test))))]
-    let _ = _header_timestamp;
+    let _ = (header_timestamp, observed_at_secs);
 }
 
 /// Records how long one per-block indexing step took.
@@ -694,7 +724,7 @@ where
         // The committed watermark is captured before the indexing loop runs. The first finalized
         // response from the provider can arrive only after that loop has written blocks, and those
         // blocks must still be covered by the verification cursor that starts from this value.
-        let verification_baseline = match self.db.get_indexer_state_info(None).await?.latest_block_number {
+        let verification_watermark = match self.db.get_indexer_state_info(None).await?.latest_block_number {
             0 => None,
             last_indexed => Some(u64::from(last_indexed)),
         };
@@ -706,6 +736,20 @@ where
             info!("post-finality verification is disabled by configuration");
             None
         };
+        // An empty index has no watermark. When the endpoint reports no finalized block at this point
+        // either, the block below the first one this run indexes bounds the cursor, so blocks written
+        // before the first finalized response are still checked. With a finalized block known, an
+        // empty index starts at that block and does not walk the history below it.
+        let finalized_at_start = tip_updates
+            .as_ref()
+            .and_then(|tips| tips.borrow().and_then(|tip| tip.finalized));
+        let verification_baseline = verification_watermark.or_else(|| {
+            finalized_at_start
+                .is_none()
+                .then(|| next_block_to_process.saturating_sub(1))
+        });
+        // Blocks below the configured start are never indexed, so they are never verified.
+        let verification_floor = self.cfg.start_block_number.saturating_sub(1);
         let verification_db = db.clone();
         let verification_handler = logs_handler.clone();
         let verification_state = indexer_state.clone();
@@ -720,7 +764,10 @@ where
                         verification_db,
                         verification_handler,
                         verification_state,
-                        verification_baseline,
+                        CursorStart {
+                            baseline: verification_baseline,
+                            floor: verification_floor,
+                        },
                         None,
                     )
                     .await;
@@ -784,7 +831,7 @@ where
 
                     // The last historical block can be the one whose processing set the flag, so the
                     // historical head is only committed once verification still agrees.
-                    halt_if_verification_failed(&indexer_state, historical_sync_head).await;
+                    halt_startup_if_verification_failed(&indexer_state, historical_sync_head, &mut tx).await;
 
                     let checksum = match db.update_logs_checksums().await {
                         Ok(checksum) => checksum,
@@ -793,6 +840,8 @@ where
                             return;
                         }
                     };
+                    // The flag can be set while the checksum update is pending.
+                    halt_startup_if_verification_failed(&indexer_state, historical_sync_head, &mut tx).await;
                     if let Err(error) = db.set_indexer_state_info(None, historical_sync_head_u32).await {
                         error!(%error, "historical sync state finalization failed");
                         return;
@@ -926,6 +975,8 @@ where
                         match Self::replaces_an_applied_safe_registration(&db, &logs_handler, &block).await {
                             Ok(true) => {
                                 indexer_state.mark_verification_failed();
+                                // Drop the refresh worker before parking.
+                                let _ = owner_refresh_guard.take();
                                 halt_if_verification_failed(&indexer_state, block.block_id).await;
                             }
                             Ok(false) => {}
@@ -937,6 +988,12 @@ where
                             }
                         }
 
+                        // The flag can be set while the applied Safe registration lookup is pending.
+                        if indexer_state.verification_failed() {
+                            let _ = owner_refresh_guard.take();
+                            halt_if_verification_failed(&indexer_state, block.block_id).await;
+                        }
+
                         let store_started = Instant::now();
                         if let Err(error) = Self::store_block_logs(&db, &logs_handler, &block).await {
                             break 'stream_refresh Some(format!(
@@ -946,6 +1003,11 @@ where
                         }
                         record_block_step("store", store_started);
 
+                        // The flag can be set while the logs are stored.
+                        if indexer_state.verification_failed() {
+                            let _ = owner_refresh_guard.take();
+                            halt_if_verification_failed(&indexer_state, block.block_id).await;
+                        }
                         let process_started = Instant::now();
                         let processed = Self::process_block(
                             &db,
@@ -1268,7 +1330,10 @@ where
             return Ok(false);
         }
 
-        let applied = db.get_processed_log_identities(block.block_id).await?;
+        let applied = retry_with_backoff(PRE_WRITE_READ_ATTEMPTS, PRE_WRITE_READ_INITIAL_BACKOFF, || async {
+            db.get_processed_log_identities(block.block_id).await
+        })
+        .await?;
         Ok(block.logs.iter().filter(|log| log.address == registry).any(|log| {
             applied.iter().any(|(tx_index, log_index, block_hash)| {
                 *tx_index == log.tx_index && *log_index == log.log_index && *block_hash != log.block_hash
@@ -1334,11 +1399,21 @@ where
                 break;
             }
 
-            halt_if_verification_failed(indexer_state, block.block_id).await;
+            // The historical caller completes the startup handshake and parks after this early return.
+            if indexer_state.verification_failed() {
+                return Ok(());
+            }
 
             if Self::replaces_an_applied_safe_registration(db, logs_handler, &block).await? {
                 indexer_state.mark_verification_failed();
-                halt_if_verification_failed(indexer_state, block.block_id).await;
+                // The historical caller completes the startup handshake and parks after this early return.
+                return Ok(());
+            }
+
+            // The lookup can take a while, so the flag is checked again once it has returned false.
+            // The historical caller completes the startup handshake and parks after this early return.
+            if indexer_state.verification_failed() {
+                return Ok(());
             }
 
             let store_started = Instant::now();
@@ -1346,8 +1421,10 @@ where
             record_block_step("store", store_started);
 
             // Storing took a while, so the flag is checked again before the index writes start.
-            halt_if_verification_failed(indexer_state, block.block_id).await;
-
+            // The historical caller completes the startup handshake and parks after this early return.
+            if indexer_state.verification_failed() {
+                return Ok(());
+            }
             let process_started = Instant::now();
             Self::process_block(
                 db,
@@ -2187,6 +2264,19 @@ mod tests {
     {
         assert!(
             tokio::time::timeout(HALT_QUIET_PERIOD, progress).await.is_err(),
+            "{what}"
+        );
+    }
+
+    /// Upper bound for a setup step of a halt test.
+    const HALT_SETUP_TIMEOUT: Duration = Duration::from_secs(5);
+
+    /// Waits for a setup signal of a halt test and fails when it does not arrive in time.
+    async fn wait_for_setup(signal: &Notify, what: &str) {
+        assert!(
+            tokio::time::timeout(HALT_SETUP_TIMEOUT, signal.notified())
+                .await
+                .is_ok(),
             "{what}"
         );
     }
@@ -3894,7 +3984,11 @@ mod tests {
 
         let abort_handle = indexer.start().await.expect("indexer should start successfully");
 
-        stream_requested.notified().await;
+        wait_for_setup(
+            &stream_requested,
+            "the indexer should reach the step `stream_requested`",
+        )
+        .await;
         assert_halts_without_progress(
             processed.notified(),
             "the indexer must not process a block after the halt",
@@ -3988,7 +4082,7 @@ mod tests {
         // The historical phase never returns once it has parked, so `start` is driven by the test.
         let task = tokio::spawn(async move { indexer.start().await });
 
-        first_processed.notified().await;
+        wait_for_setup(&first_processed, "the indexer should reach the step `first_processed`").await;
         assert_halts_without_progress(
             second_processed.notified(),
             "the historical loop must not process the block after the failure",
@@ -4160,7 +4254,11 @@ mod tests {
         // The historical phase never returns once it has parked, so `start` is driven by the test.
         let task = tokio::spawn(async move { indexer.start().await });
 
-        stream_requested.notified().await;
+        wait_for_setup(
+            &stream_requested,
+            "the indexer should reach the step `stream_requested`",
+        )
+        .await;
         assert_halts_without_progress(
             processed.notified(),
             "the replayed block must not be processed after the replacement was detected",
@@ -4256,7 +4354,7 @@ mod tests {
         // The historical phase never returns once it has parked, so `start` is driven by the test.
         let task = tokio::spawn(async move { indexer.start().await });
 
-        last_processed.notified().await;
+        wait_for_setup(&last_processed, "the indexer should reach the step `last_processed`").await;
         assert_halts_without_progress(
             stream_requested.notified(),
             "the historical head must not be committed after the failure",
@@ -4346,7 +4444,7 @@ mod tests {
 
         let abort_handle = indexer.start().await.expect("indexer should start successfully");
 
-        read_requested.notified().await;
+        wait_for_setup(&read_requested, "the indexer should reach the step `read_requested`").await;
         // The pending marker is cleared when the snapshot is stored, so only a stored snapshot makes
         // the wait complete.
         let stored = tokio::time::timeout(HALT_QUIET_PERIOD, async {

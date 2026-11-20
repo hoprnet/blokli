@@ -597,6 +597,14 @@ pub(crate) async fn run_head_driver(
                                 let mut last_header_received = TokioInstant::now();
                                 let mut next_refresh = Some(header);
 
+                                enum RefreshLoopOutcome {
+                                    Refreshed,
+                                    Leave {
+                                        reason: String,
+                                        timeout_secs: Option<u64>,
+                                    },
+                                }
+
                                 let next_state = 'refresh: loop {
                                     let Some(header) = next_refresh.take() else {
                                         break 'refresh State::WebSocket {
@@ -607,56 +615,62 @@ pub(crate) async fn run_head_driver(
                                         };
                                     };
 
-                                    let refresh = refresh_from_header(&runtime, &head, header);
-                                    tokio::pin!(refresh);
-                                    let mut refreshed = false;
+                                    let outcome = {
+                                        let refresh = refresh_from_header(&runtime, &head, header);
+                                        tokio::pin!(refresh);
 
-                                    while !refreshed {
-                                        let silent_deadline = last_header_received + probe_timeout;
+                                        loop {
+                                            let silent_deadline = last_header_received + probe_timeout;
 
-                                        tokio::select! {
-                                            _ = &mut refresh => refreshed = true,
-                                            _ = sleep_until(silent_deadline) => {
-                                                let reconnect_at = leave_websocket(
-                                                    &runtime,
-                                                    &head,
-                                                    "no new head received on the WebSocket while refreshing, switching to polling",
-                                                    Some(probe_timeout.as_secs()),
-                                                    &mut backoff,
-                                                )
-                                                .await;
-                                                break 'refresh State::Polling { reconnect_at: Some(reconnect_at) };
-                                            }
-                                            header = next_websocket_header(&mut headers) => {
-                                                match header {
-                                                    Some(Ok(header)) => {
-                                                        last_header_received = TokioInstant::now();
-                                                        next_refresh = Some(header);
-                                                    }
-                                                    Some(Err(error)) => {
-                                                        let reconnect_at = leave_websocket(
-                                                            &runtime,
-                                                            &head,
-                                                            &format!("WebSocket head source failed, switching to polling: {error}"),
-                                                            None,
-                                                            &mut backoff,
-                                                        )
-                                                        .await;
-                                                        break 'refresh State::Polling { reconnect_at: Some(reconnect_at) };
-                                                    }
-                                                    None => {
-                                                        let reconnect_at = leave_websocket(
-                                                            &runtime,
-                                                            &head,
-                                                            "WebSocket head source closed, switching to polling",
-                                                            None,
-                                                            &mut backoff,
-                                                        )
-                                                        .await;
-                                                        break 'refresh State::Polling { reconnect_at: Some(reconnect_at) };
+                                            tokio::select! {
+                                                _ = &mut refresh => break RefreshLoopOutcome::Refreshed,
+                                                _ = sleep_until(silent_deadline) => {
+                                                    break RefreshLoopOutcome::Leave {
+                                                        reason: "no new head received on the WebSocket while refreshing, switching to polling".to_string(),
+                                                        timeout_secs: Some(probe_timeout.as_secs()),
+                                                    };
+                                                }
+                                                header = next_websocket_header(&mut headers) => {
+                                                    match header {
+                                                        Some(Ok(header)) => {
+                                                            last_header_received = TokioInstant::now();
+                                                            next_refresh = Some(header);
+                                                        }
+                                                        Some(Err(error)) => {
+                                                            break RefreshLoopOutcome::Leave {
+                                                                reason: format!("WebSocket head source failed, switching to polling: {error}"),
+                                                                timeout_secs: None,
+                                                            };
+                                                        }
+                                                        None => {
+                                                            break RefreshLoopOutcome::Leave {
+                                                                reason: "WebSocket head source closed, switching to polling".to_string(),
+                                                                timeout_secs: None,
+                                                            };
+                                                        }
                                                     }
                                                 }
                                             }
+                                        }
+                                    };
+
+                                    match outcome {
+                                        RefreshLoopOutcome::Refreshed => {}
+                                        RefreshLoopOutcome::Leave {
+                                            reason,
+                                            timeout_secs,
+                                        } => {
+                                            let reconnect_at = leave_websocket(
+                                                &runtime,
+                                                &head,
+                                                &reason,
+                                                timeout_secs,
+                                                &mut backoff,
+                                            )
+                                            .await;
+                                            break 'refresh State::Polling {
+                                                reconnect_at: Some(reconnect_at),
+                                            };
                                         }
                                     }
                                 };
@@ -724,6 +738,7 @@ pub(crate) fn record_ws_reconnect_metric() {
 mod tests {
     use std::{
         collections::VecDeque,
+        future::pending,
         sync::{
             Arc, Mutex,
             atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -1729,5 +1744,87 @@ mod tests {
                 headers,
             })
         }
+    }
+
+    struct PendingObserveTipSource {
+        calls: Arc<AtomicUsize>,
+        hash: B256,
+        block_from_call: Arc<AtomicUsize>,
+    }
+
+    impl PendingObserveTipSource {
+        fn new(hash: B256, block_from_call: Arc<AtomicUsize>) -> Self {
+            Self {
+                calls: Arc::new(AtomicUsize::new(0)),
+                hash,
+                block_from_call,
+            }
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl TipSource for PendingObserveTipSource {
+        async fn observe(&self) -> Result<TipObservation> {
+            let call_number = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+            let block_from_call = self.block_from_call.load(Ordering::SeqCst);
+            if call_number == block_from_call {
+                pending::<()>().await;
+            }
+            Ok(observation(100 + call_number as u64, None, None))
+        }
+
+        async fn block_hash(&self, _block: u64) -> Result<B256> {
+            Ok(self.hash)
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_head_driver_falls_back_while_the_observation_is_pending() {
+        let (tx, rx) = mpsc::unbounded_channel::<StdResult<HeadHeader, HeadError>>();
+        tx.send(Ok(header(50, 0x11)))
+            .expect("the probe header should be queued");
+        let subscriber = ChannelHeadSubscriber {
+            chain_id: 100,
+            receiver: Arc::new(Mutex::new(Some(rx))),
+        };
+
+        let block_from_call = Arc::new(AtomicUsize::new(usize::MAX));
+        let source = Arc::new(PendingObserveTipSource::new(
+            B256::repeat_byte(0x11),
+            block_from_call.clone(),
+        ));
+        let tracker = ChainTipTracker::with_head_source(
+            source.clone(),
+            config(ConfirmationMode::Depth),
+            HeadSourceConfig {
+                chain_id: 100,
+                poll_interval: Duration::from_secs(30),
+                expected_block_time: Duration::from_secs(1),
+                ws_url: Some(Url::parse("ws://localhost:8546").expect("test URL should parse")),
+                ws_url_derived: false,
+            },
+            Some(Arc::new(subscriber)),
+        );
+
+        tracker.ensure_started();
+        advance(Duration::from_millis(10)).await;
+        assert_eq!(tracker.current().map(|tip| tip.source), Some(HeadSource::WebSocket));
+
+        let n = source.calls();
+        block_from_call.store(n + 1, Ordering::SeqCst);
+
+        tx.send(Ok(header(101, 0x12)))
+            .expect("the next header should be delivered");
+        advance(Duration::from_secs(4)).await;
+
+        assert_eq!(
+            tracker.current().map(|tip| tip.source),
+            Some(HeadSource::Polling),
+            "the fallback must complete while the observation is pending"
+        );
     }
 }

@@ -33,8 +33,9 @@ a reorganization cannot confirm a replacement block. The wait uses the current h
 re-read at the poll interval, and a transaction moved by a reorg is followed to its new block. Receipt lookup and tip observation errors are
 retried. The wait restarts only when the height falls below the receipt block or becomes unknown; a drop that stays at or above the receipt
 block does not restart it. The whole wait is limited to 60 seconds. On timeout the transaction is still submitted and the error names the
-accepted transaction hash. In `finalized` mode or with a stalled `safe` block, the call times out only if the height does not reach the
-receipt block within the limit. Clients that need a result in these modes must pass an explicit `confirmations` value.
+accepted transaction hash. In `finalized` mode or with a stalled `safe` block, the call can time out if confirmation does not complete
+within 60 seconds. Clients can pass an explicit `confirmations` value to use a different confirmation count, but this does not guarantee
+completion before the deadline.
 
 ## Switch the Mode
 
@@ -108,6 +109,11 @@ reorged out or a canonical log was missed.
 Setting `verify_finalized = false` is the last resort. It disables the post-finality comparison, so false confirmations are no longer
 detected at all and the halt never fires. Even when `verify_finalized` is true, verification stays idle when the endpoint reports no
 finalized block. Use it only with `depth` or `finalized` mode, or together with external verification.
+
+One halt stays active with `verify_finalized = false`. When a replayed block puts a different log at the position of a Safe registration
+that the index already applied, the indexer does not write the block, sets the same `verification_failed` status and stops. This guard
+protects the derived Safe state and has no switch. The recovery is the same as in step 6: rebuild the index, because the applied
+registration no longer matches the chain.
 
 ### Which logs are checked
 
