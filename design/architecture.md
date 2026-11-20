@@ -188,8 +188,10 @@ RPC Endpoint
   Confirmation Rule health
 - **Reorg Handling**: Detects blockchain reorganizations by tracking block hashes and marks affected logs as removed
 - **Post-Finality Verification**: Re-checks every block that was indexed before it was final once the chain reports it final, by re-fetching
-  the canonical logs of the finalized range and comparing them with the stored ones. A difference halts the indexer, marks the service as
-  not ready, and is counted in a metric, while a failed fetch is retried on the next tip update.
+  the logs of the finalized range through the same endpoint and comparing them with the stored ones. A difference that a second comparison
+  confirms halts the indexer, marks the service as not ready, and is counted in a metric, while a failed fetch is retried on the next tip
+  update. The check has limits: operators can disable it, it stays idle while the endpoint reports no finalized block, and a missing log of
+  a Safe is only detected in blocks that the continuous phase of the running process indexed after the Safe was discovered.
 - **Watermark Tracking**: Maintains precise last processed position using (block, tx_index, log_index) triplet for exact resume capability
 - **Dual Database Support**: Separates logs (high write volume) from indexed state (frequent reads) to reduce contention
 
@@ -433,12 +435,14 @@ selectors against permitted operations. Prevents submission of malicious or unin
 2. **Async Mode**: Submits transaction, stores record with generated UUID, returns immediately. Background monitor tracks confirmation.
    Suitable for most applications needing status tracking.
 
-3. **Sync Mode**: Submits transaction and waits until the chain tip tracker's current confirmation height reaches the receipt block, or for
-   a requested number of blocks counting the inclusion block as the first one, before returning. Without an explicit depth it follows the
-   same confirmation rule as the indexer, so callers see the same latency gain and the same reorg guarantee. A height that drops after the
-   receipt was read keeps the call waiting. The wait re-reads the receipt on every poll interval, so a reorg that moves the transaction to
-   another block follows the new inclusion block, and a transient receipt lookup error is retried until the confirmation deadline instead of
-   reporting the accepted transaction as failed. Highest certainty, suitable for critical operations requiring immediate confirmation.
+3. **Sync Mode**: Submits a transaction and waits until the chain tip tracker's current confirmation height reaches the receipt block, or
+   for a requested number of blocks counting the inclusion block as the first one, before returning. Without an explicit depth it uses the
+   same confirmation rule as the indexer, so callers see the same latency gain; the sync call and the indexer share that rule, but this is
+   not an end-to-end reorganization guarantee. The wait restarts only when the height falls below the receipt block or becomes unknown; a
+   drop that stays at or above the receipt block does not restart it. The wait re-reads the receipt on every poll interval, so a reorg that
+   moves the transaction to another block follows the new inclusion block, and a transient receipt lookup error is retried until the
+   confirmation deadline instead of reporting the accepted transaction as failed. In a mode other than finalized a later reorganization can
+   still invalidate a block that the rule confirmed.
 
 **TransactionStore**: In-memory storage using concurrent hash map (DashMap) for thread-safe access. Tracks transaction records with UUID
 identifiers, maintains status lifecycle, and provides query interface for GraphQL resolvers.
@@ -1574,17 +1578,23 @@ endpoint, derives the confirmed block from the configured rule and publishes the
 **Head source.** The tracker prefers a WebSocket `newHeads` subscription. Each new header triggers one batched read of the safe and
 finalized headers, which is the moment the consensus client has updated its fork choice for that head. When the endpoint cannot serve the
 subscription, when it is disabled, or when the socket goes silent, the tracker polls the same batch at a short fixed interval and reconnects
-in the background. A startup probe checks the subscription chain and block hash against the HTTP endpoint, so a WebSocket URL that points at
-a different node or chain reduces to polling instead of corrupting the tip.
+in the background. A startup probe compares the chain identifier and the block hash of the first header with the HTTP endpoint. It detects
+disagreement at the probed block; it does not prove that both URLs lead to the same node. A failed probe with mismatched observations or an
+unsupported subscription reduces the tracker to polling, and a connection failure is retried with backoff.
 
 **Confirmation modes.** The confirmed block follows one of four rules:
 
 - **Depth**: the latest block minus the configured depth, a fixed confirmation count with no formal guarantee.
-- **Safe or depth**: the safe block while FCR is healthy, otherwise the latest block minus the depth. Lag never exceeds the depth rule, and
-  blocks above it are only indexed when they are fast-confirmed.
-- **Safe**: the safe block only. This gives the strongest guarantee, but lag grows to about one epoch whenever FCR stalls or the endpoint
-  does not provide a safe block.
-- **Finalized**: the finalized block only, for deployments that cannot tolerate any reorganization.
+- **Safe or depth**: while FCR is healthy, the higher of the safe block and the latest block minus the depth. While FCR is degraded or
+  unavailable, the latest block minus the depth. The lag behind latest never exceeds the depth. Blocks above the depth are indexed only when
+  they are fast-confirmed.
+- **Safe**: the safe block only, with no depth fallback. A safe block that is slow (FCR stalled) makes the lag grow, up to about one epoch.
+  If the endpoint never reports a safe block, the tracker publishes no tip: the indexer does not advance, readiness reports not ready (the
+  RPC check fails), and sync transaction calls without confirmations wait until their timeout. If the safe tag disappears later, the
+  confirmed block stays at its last value, readiness reports not ready, and the same calls wait. Safe is weaker than finalized; safe is the
+  fast-confirmed block.
+- **Finalized**: the finalized block only, with the same handling of a missing tag as safe. Finalized is the strongest rule and allows no
+  reorganization.
 
 **FCR health.** FCR is healthy while the gap between latest and safe stays below the configured limit, degraded at or above it, and
 unavailable when the endpoint exposes no safe block. The tracker rejects observations where safe is above latest or finalized is above safe
@@ -1594,8 +1604,9 @@ and counts the event, and post-finality verification decides whether anything al
 **Confirmation height.** Next to the confirmed watermark the tracker publishes the confirmation height of the current observation. This
 value is not clamped. It drops when the safe or finalized tag regresses, and it is unknown when the mode needs a tag that the endpoint does
 not report. Sync transaction waits read this value instead of the watermark, so a replacement block on a shorter fork is not treated as
-confirmed only because the watermark is higher. After the receipt re-read the wait also checks the latest published height again, so a
-height that drops while the receipt is read restarts the wait.
+confirmed only because the watermark is higher. The wait restarts only when the height falls below the receipt block or becomes unknown; a
+drop that stays at or above the receipt block does not restart it. After the receipt re-read the wait checks the latest published height
+again under the same rule.
 
 **Consumers.** The indexer waits for the next published confirmed tip instead of sleeping for a fixed block time, then fetches logs up to
 that block. Readiness and the GraphQL server read the same cached confirmed block, so lag is measured against confirmed blocks without an
@@ -1623,20 +1634,19 @@ The readiness check automatically accounts for blockchain finality to prevent fa
 **Confirmed Block**: Readiness uses the confirmed block from the chain tip tracker instead of the latest block reported by the RPC endpoint.
 The confirmation rule determines how far the confirmed block trails the chain head.
 
-**Readiness Calculation**: Readiness compares the confirmed block with the indexer watermark. If the lag in confirmed blocks is within
-`max_indexer_lag`, readiness passes.
+**Readiness Calculation**: Readiness compares the confirmed block with the indexer watermark. If the lag in confirmed blocks is within the
+maximum indexer lag, the lag check passes. Readiness as a whole also needs the database check, the RPC check and no verification failure.
 
-**Effective Threshold**: Because readiness uses the confirmed block rather than the chain head, the indexer can be up to `max_indexer_lag`
-plus the confirmation distance of the active rule behind the tip while still reporting ready.
+**Effective Threshold**: Because readiness uses the confirmed block rather than the chain head, the indexer can be up to the maximum indexer
+lag plus the confirmation distance of the active rule behind the tip while still passing the lag check.
 
-**Example (Gnosis Chain, depth mode)**:
+**Example (Gnosis Chain, depth mode)**: With a maximum indexer lag of 10 blocks and a confirmation depth of 3 blocks:
 
-- Configuration: `max_indexer_lag=10`, depth 3
 - Latest RPC block: 1000
 - Confirmed block: 997
 - Indexed block: 987
 - Calculated lag: 10 blocks
-- Result: READY
+- Result: the lag check passes
 
 The indexer is actually 13 blocks behind the RPC chain head (1000 - 987), but only 10 blocks behind the confirmed block, within the
 acceptable threshold.

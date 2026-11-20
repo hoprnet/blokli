@@ -134,7 +134,7 @@ spec:
     {{- if .enabled }}
     - alert: blokli-fcr-false-confirmation
       annotations:
-        summary: Blokli verified a block range that the canonical chain no longer contains.
+        summary: Blokli found a mismatch between stored and finalized logs.
         # A false confirmation means a range indexed above finality differed from the canonical logs once
         # it became final: either an indexed log was reorged out or a canonical log was missed. The
         # readiness check also reports the dedicated verification_failed status, and the indexer stops

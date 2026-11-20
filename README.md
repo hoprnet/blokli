@@ -303,7 +303,7 @@ fields. SQLite uses separate index and raw-log databases.
 | `indexer.confirmation.mode`                     | network | `BLOKLI_INDEXER_CONFIRMATION_MODE`                     | `depth`, `safe_or_depth`, `safe` or `finalized`        |
 | `indexer.confirmation.depth`                    | network | `BLOKLI_INDEXER_CONFIRMATION_DEPTH`                    | Blocks behind latest for depth-based modes             |
 | `indexer.confirmation.max_safe_gap`             | `32`    | `BLOKLI_INDEXER_CONFIRMATION_MAX_SAFE_GAP`             | Latest-to-safe gap at which FCR counts as degraded     |
-| `indexer.confirmation.verify_finalized`         | `true`  | `BLOKLI_INDEXER_CONFIRMATION_VERIFY_FINALIZED`         | Re-checks indexed blocks after finality                |
+| `indexer.confirmation.verify_finalized`         | `true`  | `BLOKLI_INDEXER_CONFIRMATION_VERIFY_FINALIZED`         | Re-checks indexed logs; needs a `finalized` block      |
 | `indexer.subscription.event_bus_capacity`       | `1000`  | `BLOKLI_INDEXER_SUBSCRIPTION_EVENT_BUS_CAPACITY`       | Channel-event bus capacity                             |
 | `indexer.subscription.shutdown_signal_capacity` | `10`    | `BLOKLI_INDEXER_SUBSCRIPTION_SHUTDOWN_SIGNAL_CAPACITY` | Shutdown signal buffer capacity                        |
 

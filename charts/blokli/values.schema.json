@@ -136,7 +136,7 @@
         },
         "rpcWsUrl": {
           "type": "string",
-          "pattern": "^(wss?://\\S*)?$",
+          "pattern": "^(wss?://[^/\\s]\\S*)?$",
           "description": "WebSocket RPC URL used for newHeads (empty derives it from rpcUrl)"
         },
         "maxRpcRequestsPerSec": {
@@ -191,6 +191,7 @@
                 },
                 "headPollInterval": {
                   "type": "string",
+                  "pattern": "^(\\d+(nsec|ns|usec|us|msec|ms|seconds|second|sec|s|minutes|minute|min|m|hours|hour|hr|h|days|day|d|weeks|week|w|months|month|M|years|year|y)\\s*)*$",
                   "description": "Polling interval used when newHeads is unavailable or disabled (empty uses the daemon default)"
                 }
               }
@@ -212,7 +213,11 @@
                 },
                 "maxSafeGap": {
                   "oneOf": [
-                    { "type": "integer", "minimum": 1 },
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9223372036854775807
+                    },
                     { "type": "string", "maxLength": 0 }
                   ],
                   "description": "Latest-to-safe gap at or above which the Fast Confirmation Rule counts as degraded (empty uses the daemon default)"

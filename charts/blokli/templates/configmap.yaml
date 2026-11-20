@@ -71,7 +71,7 @@ data:
     depth = {{ $confirmationDepth | int }}
     {{- end }}
     {{- if ne $maxSafeGap "" }}
-    max_safe_gap = {{ $maxSafeGap | int }}
+    max_safe_gap = {{ .Values.config.indexer.confirmation.maxSafeGap | int64 }}
     {{- end }}
     {{- if ne $verifyFinalized "" }}
     verify_finalized = {{ $verifyFinalized }}

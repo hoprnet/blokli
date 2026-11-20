@@ -339,7 +339,8 @@ interval = "15s"
 #
 # The confirmed block follows the configured confirmation rule (depth, safe_or_depth,
 # safe, or finalized). For jura-dev (Gnosis) with depth=3 and max_indexer_lag=10:
-# - The indexer can be up to 13 blocks behind the RPC chain head
+# - While the depth rule is active (mode depth, or safe_or_depth in its fallback),
+#   the indexer can be up to 13 blocks behind the RPC chain head
 # - But must be within 10 blocks of confirmed blocks
 #
 # This ensures the server doesn't report "ready" when caught up to
