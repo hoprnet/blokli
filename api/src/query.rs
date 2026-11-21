@@ -3099,10 +3099,7 @@ mod tests {
         CurrentSafe, fetch_safe_addresses, fetch_safe_threshold_by_address, fetch_safes_by_chain_key,
         fetch_safes_by_owner,
     };
-    use hopr_types::{
-        crypto::types::Hash,
-        primitive::{prelude::Address, traits::ToHex},
-    };
+    use hopr_types::primitive::{prelude::Address, traits::ToHex};
     use insta::assert_yaml_snapshot;
     use rstest::rstest;
 
@@ -3120,10 +3117,6 @@ mod tests {
 
     fn random_address() -> Address {
         Address::from(rand::random::<[u8; 20]>())
-    }
-
-    fn random_hash() -> Hash {
-        Hash::from(rand::random::<[u8; 32]>())
     }
 
     fn build_test_schema(

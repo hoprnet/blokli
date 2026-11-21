@@ -5181,7 +5181,7 @@ mod tests {
             },
             2,
             "fetch Curvy pending-note history",
-            |row| Ok::<_, QueryFailedError>(row),
+            Ok::<_, QueryFailedError>,
         );
         pin_mut!(history);
 

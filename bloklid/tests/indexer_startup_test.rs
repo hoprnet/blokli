@@ -142,7 +142,7 @@ impl HoprIndexerRpcOperations for MockRpcOperations {
     }
 
     async fn get_xhopr_balance(&self, _address: Address) -> blokli_chain_rpc::errors::Result<XHoprBalance> {
-        Ok(self.xhopr_balance.clone())
+        Ok(self.xhopr_balance)
     }
 
     async fn get_hopr_allowance(

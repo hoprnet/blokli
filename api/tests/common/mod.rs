@@ -11,6 +11,10 @@
 //!
 //! Tests can use this shared setup to ensure consistency and reduce maintenance burden.
 
+// Each test crate compiles this module on its own and uses only some of its helpers. `expect` cannot
+// replace `allow` here, because the lint fires in some test crates and not in others.
+#![allow(dead_code)]
+
 use std::{sync::Arc, time::Duration};
 
 use async_graphql::Schema;

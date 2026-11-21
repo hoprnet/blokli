@@ -1,17 +1,16 @@
 //! Common test utilities for integration tests
 
+// Each test crate compiles this module on its own and uses only some of its helpers. `expect` cannot
+// replace `allow` here, because the lint fires in some test crates and not in others.
+#![allow(dead_code, unused_imports)]
+
 use std::time::Duration;
 
 use blokli_chain_rpc::{
     rpc::{RpcOperations, RpcOperationsConfig},
     transport::HttpRequestor,
 };
-use hopr_bindings::exports::alloy::{
-    node_bindings::AnvilInstance,
-    providers::PendingTransaction,
-    rpc::client::{ClientBuilder, RpcClient},
-    transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
-};
+use hopr_bindings::exports::alloy::{providers::PendingTransaction, rpc::client::RpcClient};
 use tokio::time::sleep;
 
 /// Standard block time for tests (1 second)
@@ -55,27 +54,6 @@ pub async fn wait_until_tx(pending: PendingTransaction, timeout: Duration) {
 /// * `block_time` - Expected time between blocks
 pub async fn wait_for_finality(finality: u32, block_time: Duration) {
     sleep(block_time * (1 + finality)).await;
-}
-
-/// Create a standard RPC client for Anvil-based tests with retry layer.
-///
-/// This function creates an RPC client configured with:
-/// - Retry policy: 2 retries with 100ms base and 100ms max backoff
-/// - ReqwestTransport connected to the Anvil endpoint
-///
-/// # Arguments
-///
-/// * `anvil` - The Anvil instance to connect to
-///
-/// # Returns
-///
-/// Returns an RPC client configured with retry layer
-pub fn create_test_rpc_client(anvil: &AnvilInstance) -> RpcClient {
-    let transport_client = ReqwestTransport::new(anvil.endpoint_url());
-
-    ClientBuilder::default()
-        .layer(RetryBackoffLayer::new(2, 100, 100))
-        .transport(transport_client.clone(), transport_client.guess_local())
 }
 
 /// Create standard RpcOperations for tests with common configuration.
