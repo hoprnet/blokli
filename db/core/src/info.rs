@@ -22,7 +22,7 @@ use crate::{
     api::info::{DomainSeparator, IndexerData},
     db::BlokliDb,
     errors::{DbSqlError, DbSqlError::MissingFixedTableEntry, Result},
-    numeric::i64_to_u32,
+    numeric::{i64_to_u32, i64_to_u64, u64_to_i64},
 };
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -102,10 +102,48 @@ pub trait BlokliDbInfoOperations {
 
     /// Updates the indexer state info.
     async fn set_indexer_state_info<'a>(&'a self, tx: OptTx<'a>, block_num: u32) -> Result<()>;
+
+    /// Gets the first block of a failed verification range, if the index is halted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails, if the `chain_info` row is missing, or if the
+    /// stored block is negative.
+    async fn verification_failed_at(&self) -> Result<Option<u64>>;
+
+    /// Records or clears an unresolved verification mismatch.
+    ///
+    /// `Some(block)` records the first block of the failed range. `None` clears the marker.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the block does not fit in an `i64`, or if the update fails.
+    async fn set_verification_failed_at(&self, block: Option<u64>) -> Result<()>;
 }
 
 #[async_trait]
 impl BlokliDbInfoOperations for BlokliDb {
+    async fn verification_failed_at(&self) -> Result<Option<u64>> {
+        chain_info::Entity::find_by_id(SINGULAR_TABLE_FIXED_ID)
+            .one(self.conn(TargetDb::Index))
+            .await?
+            .ok_or_else(|| MissingFixedTableEntry("chain_info".into()))?
+            .verification_failed_at
+            .map(|block| i64_to_u64(block, "verification_failed_at"))
+            .transpose()
+    }
+
+    async fn set_verification_failed_at(&self, block: Option<u64>) -> Result<()> {
+        chain_info::ActiveModel {
+            id: Set(SINGULAR_TABLE_FIXED_ID),
+            verification_failed_at: Set(block.map(|n| u64_to_i64(n, "verification_failed_at")).transpose()?),
+            ..Default::default()
+        }
+        .update(self.conn(TargetDb::Index))
+        .await?;
+        Ok(())
+    }
+
     async fn index_is_empty(&self) -> Result<bool> {
         let c = self.conn(TargetDb::Index);
 
@@ -518,6 +556,29 @@ mod tests {
             "the snapshot marker is reset together with the owner state"
         );
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_verification_failed_at_lifecycle() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        assert_eq!(db.verification_failed_at().await?, None);
+
+        db.set_verification_failed_at(Some(42)).await?;
+        assert_eq!(db.verification_failed_at().await?, Some(42));
+
+        db.clear_index_db(None).await?;
+        assert_eq!(db.verification_failed_at().await?, None);
+
+        let dir = tempfile::tempdir()?;
+        let url = format!("sqlite://{}?mode=rwc", dir.path().join("index.db").display());
+        let persistent = BlokliDb::new(&url, None, Default::default()).await?;
+        persistent.ensure_singletons().await?;
+        persistent.set_verification_failed_at(Some(7)).await?;
+        drop(persistent);
+
+        let reopened = BlokliDb::new(&url, None, Default::default()).await?;
+        assert_eq!(reopened.verification_failed_at().await?, Some(7));
         Ok(())
     }
 

@@ -5,8 +5,8 @@
 //!
 //! The following metrics are exported (when the `telemetry` feature is enabled):
 //!
-//! - `blokli_health`: Gauge (0 or 1) with a `status` label indicating the current health state (`ok`, `timeout`,
-//!   `unsynched`, `corrupted`).
+//! - `blokli_health`: Gauge (0 or 1) with a `status` label that shows the current health state (`ok`, `timeout`,
+//!   `unsynched`, `corrupted`, `verification_failed`).
 //! - `blokli_errors_total`: Counter of GraphQL errors, labelled by `type`.
 //! - `blokli_request_count`: Counter of GraphQL requests, labelled by `type` (query, mutation, subscription).
 //! - `blokli_request_duration_seconds`: Histogram of GraphQL request durations in seconds, labelled by `type`.
@@ -16,6 +16,7 @@ pub const HEALTH_STATUS_OK: &str = "ok";
 pub const HEALTH_STATUS_TIMEOUT: &str = "timeout";
 pub const HEALTH_STATUS_UNSYNCHED: &str = "unsynched";
 pub const HEALTH_STATUS_CORRUPTED: &str = "corrupted";
+pub const HEALTH_STATUS_VERIFICATION_FAILED: &str = "verification_failed";
 
 /// All possible health status values, used to reset metrics on state transition.
 #[cfg(all(feature = "telemetry", not(test)))]
@@ -26,17 +27,18 @@ const ALL_HEALTH_STATUSES: &[&str] = &[
     HEALTH_STATUS_TIMEOUT,
     HEALTH_STATUS_UNSYNCHED,
     HEALTH_STATUS_CORRUPTED,
+    HEALTH_STATUS_VERIFICATION_FAILED,
 ];
 
 #[cfg(all(feature = "telemetry", not(test)))]
 lazy_static::lazy_static! {
     /// Health status gauge. One label value is set to 1.0, others to 0.0.
-    /// `status` label: ok | timeout | unsynched | corrupted
+    /// `status` label: ok | timeout | unsynched | corrupted | verification_failed
     static ref METRIC_BLOKLI_HEALTH: hopr_metrics::MultiGauge =
         hopr_metrics::MultiGauge::new(
             "blokli_health",
             "Health status of the blokli service (1 = active status, 0 = inactive). \
-             Label 'status' indicates current state: ok|timeout|unsynched|corrupted",
+             Label 'status' indicates current state: ok|timeout|unsynched|corrupted|verification_failed",
             &["status"],
         )
         .unwrap();

@@ -2925,6 +2925,7 @@ mod tests {
             safe_registry_dst: Set(None),
             min_incoming_ticket_win_prob: Set(0.0),
             channel_closure_grace_period: Set(None),
+            ..Default::default()
         };
 
         chain_info.insert(db).await?;
@@ -3500,6 +3501,7 @@ mod tests {
             safe_registry_dst: Set(None),
             min_incoming_ticket_win_prob: Set(0.0),
             channel_closure_grace_period: Set(None),
+            ..Default::default()
         };
         chain_info.insert(db.conn(blokli_db::TargetDb::Index)).await.unwrap();
 
@@ -5179,7 +5181,7 @@ mod tests {
             },
             2,
             "fetch Curvy pending-note history",
-            |row| Ok::<_, QueryFailedError>(row),
+            Ok::<_, QueryFailedError>,
         );
         pin_mut!(history);
 

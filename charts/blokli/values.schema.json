@@ -134,6 +134,11 @@
           "format": "uri",
           "description": "Blockchain RPC URL"
         },
+        "rpcWsUrl": {
+          "type": "string",
+          "pattern": "^(wss?://[^/\\s]\\S*)?$",
+          "description": "WebSocket RPC URL for newHeads (if empty, the daemon derives it from rpcUrl)"
+        },
         "maxRpcRequestsPerSec": {
           "type": "integer",
           "minimum": 0,
@@ -173,6 +178,58 @@
               "type": "string",
               "description": "Expected SHA-256 hex digest of the logs snapshot archive",
               "pattern": "^([0-9a-fA-F]{64})?$"
+            },
+            "headTracking": {
+              "type": "object",
+              "properties": {
+                "headSubscription": {
+                  "oneOf": [
+                    { "type": "boolean" },
+                    { "type": "string", "maxLength": 0 }
+                  ],
+                  "description": "If the RPC endpoint supports it, use newHeads over WebSocket (empty uses the daemon default)"
+                },
+                "headPollInterval": {
+                  "type": "string",
+                  "pattern": "^(\\d+(\\.\\d+)?(nsec|ns|usec|us|msec|ms|seconds|second|sec|s|minutes|minute|min|m|hours|hour|hr|h|days|day|d|weeks|week|w|months|month|M|years|year|y)\\s*)*$",
+                  "description": "Polling interval if newHeads is unavailable or disabled (empty uses the daemon default)"
+                }
+              }
+            },
+            "confirmation": {
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": ["", "depth", "safe_or_depth", "safe", "finalized"],
+                  "description": "Confirmation rule (empty uses depth on all networks)"
+                },
+                "depth": {
+                  "oneOf": [
+                    { "type": "integer", "minimum": 1, "maximum": 100 },
+                    { "type": "string", "maxLength": 0 }
+                  ],
+                  "description": "Number of blocks behind the latest block for depth-based modes (empty uses the network default)"
+                },
+                "maxSafeGap": {
+                  "oneOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9223372036854775807
+                    },
+                    { "type": "string", "maxLength": 0 }
+                  ],
+                  "description": "Gap from the latest block to the safe block at or above which the Fast Confirmation Rule counts as degraded (empty uses the daemon default)"
+                },
+                "verifyFinalized": {
+                  "oneOf": [
+                    { "type": "boolean" },
+                    { "type": "string", "maxLength": 0 }
+                  ],
+                  "description": "Re-check indexed blocks against the canonical chain after they become final (empty uses the daemon default)"
+                }
+              }
             }
           },
           "allOf": [

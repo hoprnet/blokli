@@ -1,0 +1,61 @@
+# Smoke test configuration for bloklid: Piz Palu production on Gnosis Chain with FCR.
+# The test uses the live Gnosis Chain RPC and a local PostgreSQL. It makes sure that these
+# features work: connectivity, WebSocket newHeads, safe_or_depth confirmation, and
+# post-finality verification.
+#
+
+# Directory for the data files
+data_directory = "/data"
+
+# Network identifier: the Piz Palu production network on Gnosis Chain
+network = "piz-palu-prod"
+
+# RPC endpoint URLs for the real Gnosis Chain
+rpc_url    = "https://rpc.gnosischain.com"
+rpc_ws_url = "wss://rpc.gnosischain.com/wss"
+
+# Limit the RPC request rate. The public endpoint must not receive too many requests.
+max_rpc_requests_per_sec = 10
+
+# PostgreSQL database configuration
+[database]
+type = "postgresql"
+url  = "postgresql://bloklid:bloklid_smoke_test@postgres:5432/bloklid"
+
+# Indexer configuration
+[indexer]
+# Enable fast sync for the production network test.
+# The test must not index the real network from genesis.
+fast_sync = true
+
+# Disable the logs snapshot for smoke tests
+enable_logs_snapshot = false
+
+# Chain head tracking with WebSocket newHeads. If newHeads is not available, the indexer uses polling.
+[indexer.head_tracking]
+head_poll_interval = "1s"
+head_subscription  = true
+
+# Fast Confirmation Rule with depth fallback and post-finality verification
+[indexer.confirmation]
+depth            = 3
+max_safe_gap     = 32
+mode             = "safe_or_depth"
+verify_finalized = true
+
+# GraphQL subscription configuration
+[indexer.subscription]
+event_bus_capacity       = 100
+shutdown_signal_capacity = 10
+
+# API server configuration
+[api]
+bind_address       = "0.0.0.0:8080"
+enabled            = true
+playground_enabled = true
+
+# Health check configuration
+[api.health]
+# Allow a high lag. This smoke test only tests the connectivity to the production network.
+max_indexer_lag = 100000000
+timeout         = "10s"

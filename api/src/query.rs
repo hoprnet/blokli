@@ -8,7 +8,7 @@ use blokli_api_types::{
     ChannelsList, ChannelsResult, ContractAddressMap, CountResult, CurvyAddress, CurvyAggregatorFees,
     CurvyAggregatorState, CurvyBooleanValue, CurvyCommittedNotes, CurvyCommittedNullifiers, CurvyEventCursor,
     CurvyGasFees, CurvyNoteStatus, CurvyPendingNotes, CurvyShardRootPage, CurvySyncCheckpoint, CurvySyncNotePage,
-    CurvySyncNullifierPage, CurvyVaultFees, CurvyVaultToken, CurvyVaultTokenCount, Hex32, HoprBalance,
+    CurvySyncNullifierPage, CurvyVaultFees, CurvyVaultToken, CurvyVaultTokenCount, FcrStatus, Hex32, HoprBalance,
     InvalidAddressError, MissingFilterError, ModuleAddress, NativeBalance, QueryFailedError, RedeemedStats,
     RedeemedStatsFilter, Safe, SafeHoprAllowance, SafeSelectorInput, SafesBalance, SafesBalanceResult,
     ServiceRegistryConfigResult, ServiceTypesList, ServiceTypesResult, ServicesList, ServicesResult, Token,
@@ -19,7 +19,10 @@ use blokli_chain_api::{
     transaction_store::TransactionStore,
 };
 use blokli_chain_indexer::IndexerState;
-use blokli_chain_rpc::{FeeHistorySnapshot, HoprIndexerRpcOperations, HoprRpcOperations, rpc::RpcOperations};
+use blokli_chain_rpc::{
+    FeeHistorySnapshot, HoprIndexerRpcOperations, HoprRpcOperations, rpc::RpcOperations,
+    tip::ConfirmationMode as ChainConfirmationMode,
+};
 use blokli_chain_types::ContractAddresses;
 use blokli_db_entity::{
     account, chain_info,
@@ -60,13 +63,13 @@ use tracing::warn;
 use crate::{
     cache::{ChannelStatsCache, ChannelStatsKey, FeeEstimateCache},
     conversions::{
-        service_entry_from_aggregate, service_registry_config_from_model, service_type_from_aggregate,
-        transaction_from_record,
+        convert_confirmation_mode, convert_fcr_status, service_entry_from_aggregate,
+        service_registry_config_from_model, service_type_from_aggregate, transaction_from_record,
     },
     curvy, errors,
     loader::{AccountsByChainKeyLoader, ChannelsBySafeLoader},
     mutation::TransactionResult,
-    schema::RpcOperationsContext,
+    schema::{ChainTipTrackerContext, RpcOperationsContext},
     validation::{parse_service_type, validate_eth_address},
 };
 
@@ -2651,10 +2654,11 @@ impl QueryRoot {
     /// (`eth_maxPriorityFeePerGas`, or `eth_gasPrice` minus the base fee) take its place, with the same formulas
     /// and bounds.
     /// When `api.max_max_fee_per_gas` is below the scaled next-block base fee, the capped max fee could not be
-    /// included in the next block, so `maxFeePerGas` and `maxPriorityFeePerGas` are null instead,
-    /// minimum incoming ticket winning probability, optional 32-byte domain separator hashes
-    /// for channels/ledger/safe registry as `Hex32`, a map of contract addresses, and an optional
-    /// channel closure grace period in seconds.
+    /// included in the next block, so `maxFeePerGas` and `maxPriorityFeePerGas` are null instead.
+    /// The `ChainInfo` also contains the minimum incoming ticket winning probability, optional
+    /// 32-byte domain separator hashes for channels/ledger/safe registry as `Hex32`, and a map of
+    /// contract addresses. It also contains a channel closure grace period in seconds, the
+    /// configured confirmation rule, and the live health of the Fast Confirmation Rule.
     ///
     /// # Examples
     ///
@@ -2703,6 +2707,13 @@ impl QueryRoot {
                 return ChainInfoResult::QueryFailed(errors::context_error("finality", format!("{:?}", e)));
             }
         };
+        let tracker = ctx.data_opt::<ChainTipTrackerContext>();
+        let confirmation_mode = convert_confirmation_mode(
+            tracker.map_or(ChainConfirmationMode::Depth, |tracker| tracker.0.confirmation_mode()),
+        );
+        let fcr_status = tracker
+            .and_then(|tracker| tracker.0.current())
+            .map_or(FcrStatus::Unavailable, |tip| convert_fcr_status(tip.fcr));
         let gas_multiplier = match ctx.data::<crate::schema::GasMultiplier>() {
             Ok(multiplier) => multiplier.0,
             Err(e) => {
@@ -2854,6 +2865,8 @@ impl QueryRoot {
             channel_closure_grace_period,
             expected_block_time: UInt64(expected_block_time.0),
             finality: UInt64(finality.0 as u64),
+            confirmation_mode,
+            fcr_status,
         }))
     }
 
@@ -3086,10 +3099,7 @@ mod tests {
         CurrentSafe, fetch_safe_addresses, fetch_safe_threshold_by_address, fetch_safes_by_chain_key,
         fetch_safes_by_owner,
     };
-    use hopr_types::{
-        crypto::types::Hash,
-        primitive::{prelude::Address, traits::ToHex},
-    };
+    use hopr_types::primitive::{prelude::Address, traits::ToHex};
     use insta::assert_yaml_snapshot;
     use rstest::rstest;
 
@@ -3107,10 +3117,6 @@ mod tests {
 
     fn random_address() -> Address {
         Address::from(rand::random::<[u8; 20]>())
-    }
-
-    fn random_hash() -> Hash {
-        Hash::from(rand::random::<[u8; 32]>())
     }
 
     fn build_test_schema(

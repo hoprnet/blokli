@@ -1,0 +1,1257 @@
+//! WebSocket `newHeads` head source, support detection and the background head driver.
+//!
+//! All RPC requests use HTTP. The WebSocket connection only receives `newHeads` notifications.
+//! Each notification starts a usual HTTP refresh of the chain tip.
+//!
+//! The subscription is optional. A deployment without a usable WebSocket endpoint continues to poll.
+//! At startup, the driver probes the subscription. It follows `newHeads` while the subscription is
+//! healthy. If the subscription fails, the driver polls and reconnects with exponential backoff.
+
+use std::{
+    fmt::{self, Formatter},
+    future::pending,
+    result::Result as StdResult,
+    sync::{Arc, Weak},
+    time::Duration,
+};
+
+use async_trait::async_trait;
+use futures::{StreamExt, stream::BoxStream};
+use hopr_bindings::exports::alloy::{
+    network::Ethereum,
+    primitives::B256,
+    providers::{Provider, RootProvider, WsConnect},
+    rpc::client::RpcClient,
+    transports::{RpcError as AlloyRpcError, TransportErrorKind},
+};
+#[cfg(all(feature = "telemetry", not(test)))]
+use hopr_types::telemetry::SimpleCounter;
+use thiserror::Error;
+use tokio::{
+    sync::watch,
+    time::{Instant as TokioInstant, MissedTickBehavior, interval, sleep, sleep_until, timeout, timeout_at},
+};
+use tracing::{debug, error, info, warn};
+use url::Url;
+
+use crate::tip::{HeadSource, TipSource, TrackerRuntime};
+
+/// JSON-RPC error code for a method that the endpoint does not know.
+const JSON_RPC_METHOD_NOT_FOUND: i64 = -32601;
+
+/// Phrases in a JSON-RPC error message that tell that the endpoint cannot serve `newHeads`.
+///
+/// Only an explicit statement that the notification method or subscriptions are missing is terminal.
+/// Generic wording such as "service is not available" tells of a temporary failure and must stay retryable.
+const UNSUPPORTED_PHRASES: [&str; 6] = [
+    "method not found",
+    "notifications not supported",
+    "subscriptions are not supported",
+    "subscriptions not supported",
+    "subscription not supported",
+    "does not exist",
+];
+
+/// Delay before the first reconnect, and after each successful connection.
+const INITIAL_RECONNECT_BACKOFF: Duration = Duration::from_secs(1);
+
+/// Upper limit of the exponential reconnect backoff.
+const MAX_RECONNECT_BACKOFF: Duration = Duration::from_secs(60);
+
+/// Number of expected block times that the probe and a silent socket can wait for a header.
+const HEADER_TIMEOUT_BLOCKS: u32 = 3;
+
+/// A header received through the `newHeads` subscription.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HeadHeader {
+    /// Block number of the header.
+    pub number: u64,
+    /// Hash of the block header.
+    pub hash: B256,
+}
+
+/// Configuration of the WebSocket head source and the polling fallback.
+#[derive(Clone)]
+pub struct HeadSourceConfig {
+    /// Chain id that the endpoint must serve.
+    pub chain_id: u64,
+    /// Interval between two polling refreshes.
+    pub poll_interval: Duration,
+    /// Expected block time. The probe timeout and the silent-socket timeout use it.
+    pub expected_block_time: Duration,
+    /// Effective WebSocket URL. `None` means polling only.
+    pub ws_url: Option<Url>,
+    /// `true` if the caller derived [`HeadSourceConfig::ws_url`] from the HTTP RPC URL.
+    pub ws_url_derived: bool,
+}
+
+impl fmt::Debug for HeadSourceConfig {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HeadSourceConfig")
+            .field("chain_id", &self.chain_id)
+            .field("poll_interval", &self.poll_interval)
+            .field("expected_block_time", &self.expected_block_time)
+            .field("ws_url", &self.ws_url.as_ref().map(redact_ws_url))
+            .field("ws_url_derived", &self.ws_url_derived)
+            .finish()
+    }
+}
+
+/// Errors from opening or reading a `newHeads` subscription.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum HeadError {
+    /// The endpoint does not support `newHeads` subscriptions.
+    #[error("head subscription is not supported: {reason}")]
+    Unsupported {
+        /// Error text from the endpoint or the transport.
+        reason: String,
+        /// JSON-RPC error code, if the endpoint sent an error response.
+        code: Option<i64>,
+    },
+    /// The connection failed or closed, or the endpoint stopped sending headers.
+    #[error("head subscription connection failed: {reason}")]
+    Connection {
+        /// Error text from the endpoint or the transport.
+        reason: String,
+        /// JSON-RPC error code, if the endpoint sent an error response.
+        code: Option<i64>,
+    },
+}
+
+impl HeadError {
+    /// Creates an unsupported-subscription error.
+    pub fn unsupported(reason: impl Into<String>, code: Option<i64>) -> Self {
+        Self::Unsupported {
+            reason: reason.into(),
+            code,
+        }
+    }
+
+    /// Creates a connection error.
+    pub fn connection(reason: impl Into<String>, code: Option<i64>) -> Self {
+        Self::Connection {
+            reason: reason.into(),
+            code,
+        }
+    }
+
+    /// Returns `true` if the error tells that the endpoint cannot serve `newHeads` at all.
+    pub fn is_unsupported(&self) -> bool {
+        matches!(self, Self::Unsupported { .. })
+    }
+
+    /// Returns the JSON-RPC error code, if the endpoint sent an error response.
+    pub fn code(&self) -> Option<i64> {
+        match self {
+            Self::Unsupported { code, .. } | Self::Connection { code, .. } => *code,
+        }
+    }
+}
+
+/// An open `newHeads` subscription.
+pub struct HeadSubscription {
+    /// Chain id that the WebSocket endpoint reports.
+    pub chain_id: u64,
+    /// Stream of the headers that follow.
+    pub headers: BoxStream<'static, StdResult<HeadHeader, HeadError>>,
+}
+
+impl fmt::Debug for HeadSubscription {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HeadSubscription")
+            .field("chain_id", &self.chain_id)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Opens `newHeads` subscriptions.
+#[async_trait]
+pub trait HeadSubscriber: Send + Sync {
+    /// Connects to the endpoint and subscribes to `newHeads`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeadError::Unsupported`] if the endpoint cannot serve `newHeads`, and
+    /// [`HeadError::Connection`] for all other failures.
+    async fn subscribe(&self) -> StdResult<HeadSubscription, HeadError>;
+}
+
+/// Errors from deriving a WebSocket URL from an HTTP RPC URL.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum HeadUrlError {
+    /// The source URL does not use the `http` or `https` scheme.
+    #[error("cannot derive a WebSocket URL from scheme '{0}'")]
+    UnsupportedScheme(String),
+}
+
+/// Derives the WebSocket URL that matches an HTTP RPC URL.
+///
+/// `http` becomes `ws` and `https` becomes `wss`. The host, port, path, query and userinfo do not change.
+///
+/// # Errors
+///
+/// Returns [`HeadUrlError::UnsupportedScheme`] if `rpc_url` does not use `http` or `https`.
+pub fn derive_ws_url(rpc_url: &Url) -> StdResult<Url, HeadUrlError> {
+    let scheme = match rpc_url.scheme() {
+        "http" => "ws",
+        "https" => "wss",
+        other => return Err(HeadUrlError::UnsupportedScheme(other.to_string())),
+    };
+
+    let mut ws_url = rpc_url.clone();
+    ws_url
+        .set_scheme(scheme)
+        .map_err(|_| HeadUrlError::UnsupportedScheme(rpc_url.scheme().to_string()))?;
+    Ok(ws_url)
+}
+
+/// Resolves the effective WebSocket URL for the head source.
+///
+/// Returns the URL and a flag that is `true` if the URL comes from `rpc_url`. An explicit
+/// `rpc_ws_url` has priority over the derived URL. If `head_subscription` is `false`, the result
+/// is `None` and the head source polls.
+///
+/// # Errors
+///
+/// Returns [`HeadUrlError::UnsupportedScheme`] if the function must derive the URL and `rpc_url`
+/// does not use `http` or `https`.
+pub fn resolve_head_ws_url(
+    rpc_url: &Url,
+    rpc_ws_url: Option<&Url>,
+    head_subscription: bool,
+) -> StdResult<Option<(Url, bool)>, HeadUrlError> {
+    if !head_subscription {
+        return Ok(None);
+    }
+
+    match rpc_ws_url {
+        Some(url) => Ok(Some((url.clone(), false))),
+        None => derive_ws_url(rpc_url).map(|url| Some((url, true))),
+    }
+}
+
+/// Classifies a JSON-RPC error as an unsupported error or a connection error.
+///
+/// Only a JSON-RPC error response can tell that the endpoint does not support `newHeads`.
+/// Transport failures, HTTP errors and socket events are always temporary. The classification
+/// looks only at the error code and the message, so tests do not need a network.
+pub fn classify_head_error(is_error_response: bool, code: Option<i64>, message: &str) -> HeadError {
+    let message = message.to_ascii_lowercase();
+    let unsupported = is_error_response
+        && (code == Some(JSON_RPC_METHOD_NOT_FOUND)
+            || UNSUPPORTED_PHRASES.iter().any(|phrase| message.contains(phrase)));
+
+    if unsupported {
+        HeadError::unsupported(message, code)
+    } else {
+        HeadError::connection(message, code)
+    }
+}
+
+fn classify_alloy_error(error: &AlloyRpcError<TransportErrorKind>) -> HeadError {
+    match error.as_error_resp() {
+        Some(payload) => classify_head_error(true, Some(payload.code), payload.message.as_ref()),
+        None => classify_head_error(false, None, error.to_string().as_str()),
+    }
+}
+
+/// Formats a WebSocket URL for logs, without the userinfo, path and query.
+pub fn redact_ws_url(url: &Url) -> String {
+    let host = url.host_str().unwrap_or("<unknown>");
+    match url.port() {
+        Some(port) => format!("{}://{host}:{port}", url.scheme()),
+        None => format!("{}://{host}", url.scheme()),
+    }
+}
+
+/// Production [`HeadSubscriber`] that uses an alloy WebSocket connection.
+#[derive(Debug, Clone)]
+pub struct WsHeadSubscriber {
+    url: Url,
+}
+
+impl WsHeadSubscriber {
+    /// Creates a subscriber for the given WebSocket URL.
+    pub fn new(url: Url) -> Self {
+        Self { url }
+    }
+}
+
+#[async_trait]
+impl HeadSubscriber for WsHeadSubscriber {
+    async fn subscribe(&self) -> StdResult<HeadSubscription, HeadError> {
+        let client = RpcClient::connect_pubsub(WsConnect::new(self.url.as_str()))
+            .await
+            .map_err(|error| classify_alloy_error(&error))?;
+        let provider = RootProvider::<Ethereum>::new(client);
+
+        let chain_id = provider
+            .get_chain_id()
+            .await
+            .map_err(|error| classify_alloy_error(&error))?;
+        let subscription = provider
+            .subscribe_blocks()
+            .await
+            .map_err(|error| classify_alloy_error(&error))?;
+        let headers = subscription
+            .into_stream()
+            .map(move |header| {
+                // The closure holds the provider. Thus the provider and its WebSocket client stay open while
+                // a reader uses the stream.
+                let _provider = &provider;
+                Ok(HeadHeader {
+                    number: header.inner.number,
+                    hash: header.hash,
+                })
+            })
+            .boxed();
+
+        Ok(HeadSubscription { chain_id, headers })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ProbeFailure {
+    Unsupported { code: Option<i64> },
+    Connection { code: Option<i64> },
+    ChainIdMismatch { expected: u64, actual: u64 },
+    BlockHashMismatch { number: u64, expected: B256, actual: B256 },
+}
+
+impl From<HeadError> for ProbeFailure {
+    fn from(error: HeadError) -> Self {
+        let code = error.code();
+        match error {
+            HeadError::Unsupported { .. } => Self::Unsupported { code },
+            HeadError::Connection { .. } => Self::Connection { code },
+        }
+    }
+}
+
+struct ProbeSuccess {
+    subscription: HeadSubscription,
+    first_header: HeadHeader,
+}
+
+async fn probe_head_source(
+    subscriber: Arc<dyn HeadSubscriber>,
+    source: Arc<dyn TipSource>,
+    expected_chain_id: u64,
+    timeout: Duration,
+) -> StdResult<ProbeSuccess, ProbeFailure> {
+    let deadline = TokioInstant::now() + timeout;
+
+    let mut subscription = match timeout_at(deadline, subscriber.subscribe()).await {
+        Err(_) => return Err(ProbeFailure::Connection { code: None }),
+        Ok(Err(error)) => return Err(error.into()),
+        Ok(Ok(subscription)) => subscription,
+    };
+
+    if subscription.chain_id != expected_chain_id {
+        return Err(ProbeFailure::ChainIdMismatch {
+            expected: expected_chain_id,
+            actual: subscription.chain_id,
+        });
+    }
+
+    let first_header = match timeout_at(deadline, subscription.headers.next()).await {
+        Err(_) | Ok(None) => return Err(ProbeFailure::Connection { code: None }),
+        Ok(Some(Err(error))) => return Err(error.into()),
+        Ok(Some(Ok(header))) => header,
+    };
+
+    let expected_hash = source
+        .block_hash(first_header.number)
+        .await
+        .map_err(|_| ProbeFailure::Connection { code: None })?;
+
+    if expected_hash != first_header.hash {
+        return Err(ProbeFailure::BlockHashMismatch {
+            number: first_header.number,
+            expected: expected_hash,
+            actual: first_header.hash,
+        });
+    }
+
+    Ok(ProbeSuccess {
+        subscription,
+        first_header,
+    })
+}
+
+fn next_reconnect_backoff(current: Duration) -> Duration {
+    current.saturating_mul(2).min(MAX_RECONNECT_BACKOFF)
+}
+
+fn log_probe_failure(failure: &ProbeFailure, ws_url: &Url, ws_url_derived: bool) {
+    let url = redact_ws_url(ws_url);
+    let hint = if ws_url_derived {
+        " set rpc_ws_url to use a different WebSocket endpoint"
+    } else {
+        ""
+    };
+
+    match failure {
+        ProbeFailure::Unsupported { code } => {
+            warn!(url = %url, code = ?code, category = "unsupported", "WebSocket head source is not supported, using polling{}", hint);
+        }
+        ProbeFailure::Connection { code } => {
+            warn!(url = %url, code = ?code, category = "connection", "WebSocket head source is unavailable, using polling{}", hint);
+        }
+        ProbeFailure::ChainIdMismatch { expected, actual } => {
+            error!(url = %url, expected_chain_id = expected, actual_chain_id = actual, "WebSocket head source serves a different chain, using polling");
+        }
+        ProbeFailure::BlockHashMismatch {
+            number,
+            expected,
+            actual,
+        } => {
+            error!(url = %url, block = number, expected_hash = %expected, actual_hash = %actual, "WebSocket head source serves a different chain, using polling");
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HeadWakeup {
+    source: HeadSource,
+    header_number: u64,
+    seq: u64,
+}
+
+async fn wait_for_polling(wakeup_rx: &mut watch::Receiver<HeadWakeup>) {
+    loop {
+        if wakeup_rx.borrow().source == HeadSource::Polling {
+            return;
+        }
+        if wakeup_rx.changed().await.is_err() {
+            pending::<()>().await;
+        }
+    }
+}
+
+async fn run_ws_wakeup_loop(
+    runtime: Weak<TrackerRuntime>,
+    head: HeadSourceConfig,
+    subscriber: Arc<dyn HeadSubscriber>,
+    wakeup_tx: watch::Sender<HeadWakeup>,
+) {
+    let probe_timeout = head.expected_block_time.saturating_mul(HEADER_TIMEOUT_BLOCKS);
+    let mut backoff = INITIAL_RECONNECT_BACKOFF;
+    let mut ever_connected = false;
+    let mut seq = 0u64;
+
+    loop {
+        let Some(rt) = runtime.upgrade() else {
+            return;
+        };
+        let tip_source = rt.tip_source();
+        drop(rt);
+
+        match probe_head_source(subscriber.clone(), tip_source, head.chain_id, probe_timeout).await {
+            Ok(ProbeSuccess {
+                mut subscription,
+                first_header,
+            }) => {
+                let Some(rt) = runtime.upgrade() else {
+                    return;
+                };
+                rt.set_active_source(HeadSource::WebSocket);
+                if ever_connected {
+                    rt.record_ws_reconnect();
+                }
+                ever_connected = true;
+                backoff = INITIAL_RECONNECT_BACKOFF;
+                if let Some(url) = head.ws_url.as_ref() {
+                    info!(source = %HeadSource::WebSocket, url = %redact_ws_url(url), "chain head source switched");
+                }
+                drop(rt);
+
+                seq = seq.wrapping_add(1);
+                let _ = wakeup_tx.send(HeadWakeup {
+                    source: HeadSource::WebSocket,
+                    header_number: first_header.number,
+                    seq,
+                });
+
+                loop {
+                    match timeout(probe_timeout, subscription.headers.next()).await {
+                        Ok(Some(Ok(header))) => {
+                            seq = seq.wrapping_add(1);
+                            let _ = wakeup_tx.send(HeadWakeup {
+                                source: HeadSource::WebSocket,
+                                header_number: header.number,
+                                seq,
+                            });
+                        }
+                        Ok(Some(Err(error))) => {
+                            warn!("WebSocket head source failed, switching to polling: {error}");
+                            break;
+                        }
+                        Ok(None) => {
+                            warn!("WebSocket head source closed, switching to polling");
+                            break;
+                        }
+                        Err(_) => {
+                            warn!(
+                                timeout_secs = probe_timeout.as_secs(),
+                                "no new head received on the WebSocket, switching to polling"
+                            );
+                            break;
+                        }
+                    }
+                }
+
+                let Some(rt) = runtime.upgrade() else {
+                    return;
+                };
+                rt.set_active_source(HeadSource::Polling);
+                if let Some(url) = head.ws_url.as_ref() {
+                    info!(source = %HeadSource::Polling, url = %redact_ws_url(url), "chain head source switched");
+                }
+                drop(rt);
+
+                seq = seq.wrapping_add(1);
+                let _ = wakeup_tx.send(HeadWakeup {
+                    source: HeadSource::Polling,
+                    header_number: 0,
+                    seq,
+                });
+            }
+            Err(failure) => {
+                if let Some(url) = head.ws_url.as_ref() {
+                    log_probe_failure(&failure, url, head.ws_url_derived);
+                }
+                if matches!(
+                    failure,
+                    ProbeFailure::Unsupported { .. }
+                        | ProbeFailure::ChainIdMismatch { .. }
+                        | ProbeFailure::BlockHashMismatch { .. }
+                ) {
+                    return;
+                }
+            }
+        }
+
+        // After a connection failure or a socket drop, the loop retries with exponential backoff.
+        sleep(backoff).await;
+        backoff = next_reconnect_backoff(backoff);
+    }
+}
+
+async fn run_refresh_loop(
+    runtime: Weak<TrackerRuntime>,
+    poll_interval: Duration,
+    mut wakeup_rx: watch::Receiver<HeadWakeup>,
+) {
+    let mut poll_timer = interval(poll_interval);
+    poll_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut retry_at: Option<TokioInstant> = None;
+
+    loop {
+        let Some(rt) = runtime.upgrade() else {
+            break;
+        };
+        let is_ws = wakeup_rx.borrow().source == HeadSource::WebSocket;
+
+        tokio::select! {
+            biased;
+            Ok(()) = wakeup_rx.changed() => {
+                let wakeup = *wakeup_rx.borrow_and_update();
+                retry_at = None;
+                match wakeup.source {
+                    HeadSource::Polling => {
+                        let _ = rt.refresh_from(HeadSource::Polling).await;
+                        poll_timer.reset();
+                    }
+                    HeadSource::WebSocket => {
+                        let mut fallback_rx = wakeup_rx.clone();
+                        let outcome = tokio::select! {
+                            res = rt.refresh_from(HeadSource::WebSocket) => Some(res),
+                            _ = wait_for_polling(&mut fallback_rx) => None,
+                        };
+                        match outcome {
+                            Some(Ok(tip)) if tip.latest < wakeup.header_number => {
+                                retry_at = Some(TokioInstant::now() + poll_interval);
+                            }
+                            Some(Err(error)) => {
+                                debug!(%error, "background chain tip refresh failed");
+                                retry_at = Some(TokioInstant::now() + poll_interval);
+                            }
+                            Some(Ok(_)) | None => {}
+                        }
+                    }
+                }
+            }
+            _ = async {
+                match retry_at {
+                    Some(deadline) => sleep_until(deadline).await,
+                    None => pending::<()>().await,
+                }
+            }, if is_ws && retry_at.is_some() => {
+                retry_at = None;
+                let mut fallback_rx = wakeup_rx.clone();
+                tokio::select! {
+                    res = rt.refresh_from(HeadSource::WebSocket) => {
+                        if let Err(error) = res {
+                            debug!(%error, "background chain tip refresh retry failed");
+                        }
+                    }
+                    _ = wait_for_polling(&mut fallback_rx) => {}
+                }
+            }
+            _ = poll_timer.tick(), if !is_ws => {
+                if let Err(error) = rt.refresh_from(HeadSource::Polling).await {
+                    debug!(%error, "background chain tip refresh failed");
+                }
+            }
+        }
+    }
+}
+
+pub(crate) async fn run_head_driver(
+    runtime: Weak<TrackerRuntime>,
+    head: HeadSourceConfig,
+    subscriber: Option<Arc<dyn HeadSubscriber>>,
+) {
+    let ws_url_display = head.ws_url.as_ref().map(redact_ws_url);
+    info!(
+        source = %HeadSource::Polling,
+        websocket = ?ws_url_display,
+        "chain head source selected"
+    );
+
+    let Some(initial_runtime) = runtime.upgrade() else {
+        return;
+    };
+    initial_runtime.set_active_source(HeadSource::Polling);
+    drop(initial_runtime);
+
+    let (wakeup_tx, wakeup_rx) = watch::channel(HeadWakeup {
+        source: HeadSource::Polling,
+        header_number: 0,
+        seq: 0,
+    });
+    let poll_interval = head.poll_interval;
+
+    tokio::select! {
+        _ = run_refresh_loop(runtime.clone(), poll_interval, wakeup_rx) => {}
+        _ = async {
+            if let (Some(subscriber), Some(_)) = (subscriber, head.ws_url.as_ref()) {
+                run_ws_wakeup_loop(runtime, head, subscriber, wakeup_tx).await;
+            }
+            // The refresh loop continues to poll until the tracker is dropped.
+            pending::<()>().await;
+        } => {}
+    }
+}
+
+#[cfg(all(feature = "telemetry", not(test)))]
+lazy_static::lazy_static! {
+    static ref METRIC_HEAD_WS_RECONNECTS_TOTAL: Option<SimpleCounter> =
+        SimpleCounter::new(
+            "blokli_head_ws_reconnects_total",
+            "Successful WebSocket head source reconnects",
+        ).inspect_err(|error| error!(%error, metric = "blokli_head_ws_reconnects_total", "failed to register telemetry metric")).ok();
+}
+
+pub(crate) fn record_ws_reconnect_metric() {
+    #[cfg(all(feature = "telemetry", not(test)))]
+    if let Some(metric) = METRIC_HEAD_WS_RECONNECTS_TOTAL.as_ref() {
+        metric.increment();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::VecDeque,
+        future::pending,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
+
+    use async_trait::async_trait;
+    use futures::StreamExt;
+    use hopr_bindings::exports::alloy::primitives::B256;
+    use tokio::sync::mpsc;
+    use url::Url;
+
+    use super::{
+        HeadError, HeadHeader, HeadSourceConfig, HeadSubscriber, HeadSubscription, ProbeFailure, StdResult,
+        classify_head_error, derive_ws_url, next_reconnect_backoff, redact_ws_url, resolve_head_ws_url,
+    };
+    use crate::{
+        errors::{Result, RpcError},
+        tip::{ChainTipTracker, ConfirmationConfig, ConfirmationMode, HeadSource, TipObservation, TipSource},
+    };
+
+    fn observation(latest: u64, safe: Option<u64>, finalized: Option<u64>) -> TipObservation {
+        TipObservation {
+            latest,
+            latest_timestamp: Some(1_700_000_000 + latest),
+            safe,
+            safe_timestamp: safe.map(|block| 1_700_000_000 + block),
+            finalized,
+            finalized_timestamp: finalized.map(|block| 1_700_000_000 + block),
+        }
+    }
+
+    fn config(mode: ConfirmationMode) -> ConfirmationConfig {
+        ConfirmationConfig {
+            mode,
+            depth: 3,
+            max_safe_gap: 32,
+        }
+    }
+
+    #[test]
+    fn test_ws_url_derivation_resolution_and_redaction() {
+        let http = Url::parse("http://localhost:8545/rpc?key=secret").unwrap();
+        assert_eq!(
+            derive_ws_url(&http).unwrap().as_str(),
+            "ws://localhost:8545/rpc?key=secret"
+        );
+
+        let https = Url::parse("https://rpc.example.com:8443/v1/abc?token=xyz").unwrap();
+        assert_eq!(
+            derive_ws_url(&https).unwrap().as_str(),
+            "wss://rpc.example.com:8443/v1/abc?token=xyz"
+        );
+
+        for raw in ["ftp://example.com", "ws://example.com"] {
+            assert!(derive_ws_url(&Url::parse(raw).unwrap()).is_err());
+        }
+
+        let override_url = Url::parse("wss://ws.example.com/wss").unwrap();
+        assert_eq!(
+            resolve_head_ws_url(&https, None, true).unwrap(),
+            Some((Url::parse("wss://rpc.example.com:8443/v1/abc?token=xyz").unwrap(), true))
+        );
+        assert_eq!(
+            resolve_head_ws_url(&https, Some(&override_url), true).unwrap(),
+            Some((override_url.clone(), false))
+        );
+        assert_eq!(resolve_head_ws_url(&https, Some(&override_url), false).unwrap(), None);
+
+        let secret_ws = Url::parse("wss://user:pass@rpc.example.com:8443/secret/path?token=xyz").unwrap();
+        assert_eq!(redact_ws_url(&secret_ws), "wss://rpc.example.com:8443");
+        let debug = format!(
+            "{:?}",
+            HeadSourceConfig {
+                chain_id: 100,
+                poll_interval: Duration::from_secs(1),
+                expected_block_time: Duration::from_secs(5),
+                ws_url: Some(secret_ws),
+                ws_url_derived: true,
+            }
+        );
+        assert!(debug.contains("wss://rpc.example.com:8443"), "{debug}");
+        for secret in ["user", "pass", "secret", "xyz"] {
+            assert!(!debug.contains(secret), "{debug}");
+        }
+    }
+
+    #[test]
+    fn test_error_classification_probe_failure_and_backoff() {
+        for (is_resp, code, msg, expect_unsupported) in [
+            (true, Some(-32601), "Method not found", true),
+            (true, None, "notifications not supported", true),
+            (true, None, "subscriptions are not supported by this endpoint", true),
+            (true, None, "subscriptions not supported", true),
+            (true, None, "subscription not supported", true),
+            (true, Some(-32000), "method eth_subscribe does not exist", true),
+            (false, Some(-32601), "method not found", false),
+            (false, None, "notifications not supported", false),
+            (true, Some(-32000), "service is not available", false),
+            (true, Some(-32000), "upstream not available", false),
+            (true, Some(-32603), "internal error", false),
+            (true, None, "handshake failed", false),
+        ] {
+            let err = classify_head_error(is_resp, code, msg);
+            assert_eq!(err.is_unsupported(), expect_unsupported, "{code:?} {msg}");
+            assert_eq!(err.code(), code);
+        }
+
+        let failure = ProbeFailure::from(HeadError::connection(
+            "wss://rpc.example.com/?token=secret is not reachable",
+            Some(-32000),
+        ));
+        assert!(!format!("{failure:?}").contains("secret"));
+        assert_eq!(failure, ProbeFailure::Connection { code: Some(-32000) });
+
+        assert_eq!(next_reconnect_backoff(Duration::from_secs(1)), Duration::from_secs(2));
+        assert_eq!(next_reconnect_backoff(Duration::from_secs(30)), Duration::from_secs(60));
+        assert_eq!(
+            next_reconnect_backoff(Duration::from_secs(600)),
+            Duration::from_secs(60)
+        );
+    }
+
+    type HeaderSender = mpsc::UnboundedSender<StdResult<HeadHeader, HeadError>>;
+    type HeaderReceiver = mpsc::UnboundedReceiver<StdResult<HeadHeader, HeadError>>;
+
+    enum MockSubscription {
+        Headers {
+            chain_id: u64,
+            headers: Vec<HeadHeader>,
+            keep_open: bool,
+        },
+        RepeatHeader {
+            chain_id: u64,
+            header: HeadHeader,
+            interval: Duration,
+        },
+        Channel {
+            chain_id: u64,
+            receiver: HeaderReceiver,
+        },
+        Pending {
+            chain_id: u64,
+        },
+        Error(HeadError),
+    }
+
+    #[derive(Clone, Default)]
+    struct MockHeadSubscriber {
+        scripts: Arc<Mutex<VecDeque<MockSubscription>>>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl MockHeadSubscriber {
+        fn new(scripts: Vec<MockSubscription>) -> Self {
+            Self {
+                scripts: Arc::new(Mutex::new(scripts.into())),
+                calls: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+
+        fn channel(chain_id: u64, initial: HeadHeader) -> (HeaderSender, Self) {
+            let (tx, rx) = mpsc::unbounded_channel();
+            tx.send(Ok(initial)).unwrap();
+            (
+                tx,
+                Self::new(vec![MockSubscription::Channel { chain_id, receiver: rx }]),
+            )
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl HeadSubscriber for MockHeadSubscriber {
+        async fn subscribe(&self) -> StdResult<HeadSubscription, HeadError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let script =
+                self.scripts.lock().unwrap().pop_front().unwrap_or_else(|| {
+                    MockSubscription::Error(HeadError::connection("no subscription script left", None))
+                });
+
+            match script {
+                MockSubscription::Error(error) => Err(error),
+                MockSubscription::Pending { chain_id } => Ok(HeadSubscription {
+                    chain_id,
+                    headers: futures::stream::pending().boxed(),
+                }),
+                MockSubscription::Headers {
+                    chain_id,
+                    headers,
+                    keep_open,
+                } => {
+                    let mut stream = futures::stream::iter(headers.into_iter().map(Ok)).boxed();
+                    if keep_open {
+                        stream = stream.chain(futures::stream::pending()).boxed();
+                    }
+                    Ok(HeadSubscription {
+                        chain_id,
+                        headers: stream,
+                    })
+                }
+                MockSubscription::RepeatHeader {
+                    chain_id,
+                    header,
+                    interval,
+                } => {
+                    let headers = async_stream::stream! {
+                        loop {
+                            yield Ok(header);
+                            tokio::time::sleep(interval).await;
+                        }
+                    }
+                    .boxed();
+                    Ok(HeadSubscription { chain_id, headers })
+                }
+                MockSubscription::Channel { chain_id, receiver } => {
+                    let headers =
+                        futures::stream::unfold(
+                            receiver,
+                            |mut rx| async move { rx.recv().await.map(|item| (item, rx)) },
+                        )
+                        .boxed();
+                    Ok(HeadSubscription { chain_id, headers })
+                }
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    struct StubTipSource {
+        calls: Arc<AtomicUsize>,
+        hash_calls: Arc<AtomicUsize>,
+        latest: Arc<AtomicU64>,
+        hash: B256,
+        fail_observe: Arc<AtomicBool>,
+        fail_first_hash: Arc<AtomicBool>,
+        block_observe_on_call: Arc<AtomicUsize>,
+    }
+
+    impl StubTipSource {
+        fn new(hash: B256) -> Self {
+            Self {
+                calls: Arc::new(AtomicUsize::new(0)),
+                hash_calls: Arc::new(AtomicUsize::new(0)),
+                latest: Arc::new(AtomicU64::new(100)),
+                hash,
+                fail_observe: Arc::new(AtomicBool::new(false)),
+                fail_first_hash: Arc::new(AtomicBool::new(false)),
+                block_observe_on_call: Arc::new(AtomicUsize::new(usize::MAX)),
+            }
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl TipSource for StubTipSource {
+        async fn observe(&self) -> Result<TipObservation> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+            if call == self.block_observe_on_call.load(Ordering::SeqCst) {
+                pending::<()>().await;
+            }
+            if self.fail_observe.load(Ordering::SeqCst) {
+                return Err(RpcError::Other("rpc failed".to_string()));
+            }
+            let latest = self.latest.fetch_add(1, Ordering::SeqCst) + 1;
+            Ok(observation(latest, None, None))
+        }
+
+        async fn block_hash(&self, _block: u64) -> Result<B256> {
+            let call = self.hash_calls.fetch_add(1, Ordering::SeqCst);
+            if call == 0 && self.fail_first_hash.load(Ordering::SeqCst) {
+                return Err(RpcError::Other("block is not available".to_string()));
+            }
+            Ok(self.hash)
+        }
+    }
+
+    fn head_config(ws_url: Option<&str>, chain_id: u64) -> HeadSourceConfig {
+        HeadSourceConfig {
+            chain_id,
+            poll_interval: Duration::from_secs(1),
+            expected_block_time: Duration::from_secs(1),
+            ws_url: ws_url.map(|url| Url::parse(url).unwrap()),
+            ws_url_derived: false,
+        }
+    }
+
+    fn driver_tracker(
+        source: StubTipSource,
+        subscriber: MockHeadSubscriber,
+        head: HeadSourceConfig,
+    ) -> ChainTipTracker {
+        ChainTipTracker::with_head_source(
+            Arc::new(source),
+            config(ConfirmationMode::Depth),
+            head,
+            Some(Arc::new(subscriber)),
+        )
+    }
+
+    fn header(number: u64, byte: u8) -> HeadHeader {
+        HeadHeader {
+            number,
+            hash: B256::repeat_byte(byte),
+        }
+    }
+
+    async fn advance(duration: Duration) {
+        let step = Duration::from_millis(100);
+        let mut remaining = duration;
+        while remaining > step {
+            tokio::time::advance(step).await;
+            tokio::task::yield_now().await;
+            remaining -= step;
+        }
+        if !remaining.is_zero() {
+            tokio::time::advance(remaining).await;
+            tokio::task::yield_now().await;
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_head_driver_without_websocket_never_calls_subscriber() {
+        let subscriber = MockHeadSubscriber::new(vec![MockSubscription::Pending { chain_id: 100 }]);
+        let tracker = driver_tracker(
+            StubTipSource::new(B256::ZERO),
+            subscriber.clone(),
+            head_config(None, 100),
+        );
+
+        tracker.ensure_started();
+        advance(Duration::from_secs(5)).await;
+        assert_eq!(subscriber.calls(), 0);
+        assert_eq!(tracker.current().map(|tip| tip.source), Some(HeadSource::Polling));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_head_driver_probe_retries_and_terminal_failures() {
+        // After a temporary connection error or a timeout, the driver retries. It recovers when the WebSocket is up.
+        let subscriber = MockHeadSubscriber::new(vec![
+            MockSubscription::Error(HeadError::connection("handshake failed", None)),
+            MockSubscription::Headers {
+                chain_id: 100,
+                headers: vec![header(50, 0x11)],
+                keep_open: true,
+            },
+        ]);
+        let tracker = driver_tracker(
+            StubTipSource::new(B256::repeat_byte(0x11)),
+            subscriber.clone(),
+            head_config(Some("ws://localhost:8546"), 100),
+        );
+        tracker.ensure_started();
+        advance(Duration::from_millis(1_500)).await;
+        assert_eq!(subscriber.calls(), 2);
+        assert_eq!(tracker.current().map(|tip| tip.source), Some(HeadSource::WebSocket));
+
+        // After a probe timeout, the driver retries with backoff. Polling continues to publish tips.
+        let subscriber = MockHeadSubscriber::new(vec![MockSubscription::Pending { chain_id: 100 }]);
+        let source = StubTipSource::new(B256::ZERO);
+        let tracker = driver_tracker(
+            source.clone(),
+            subscriber.clone(),
+            head_config(Some("ws://localhost:8546"), 100),
+        );
+        tracker.ensure_started();
+        advance(Duration::from_secs(6)).await;
+        assert!(subscriber.calls() >= 2);
+        assert!(source.calls() > 1);
+        assert_eq!(tracker.current().map(|tip| tip.source), Some(HeadSource::Polling));
+
+        // If the block hash is missing at the first probe, the driver retries and activates the WebSocket.
+        let subscriber = MockHeadSubscriber::new(vec![
+            MockSubscription::Headers {
+                chain_id: 100,
+                headers: vec![header(50, 0x11)],
+                keep_open: true,
+            },
+            MockSubscription::Headers {
+                chain_id: 100,
+                headers: vec![header(51, 0x11)],
+                keep_open: true,
+            },
+        ]);
+        let source = StubTipSource::new(B256::repeat_byte(0x11));
+        source.fail_first_hash.store(true, Ordering::SeqCst);
+        let tracker = driver_tracker(
+            source.clone(),
+            subscriber,
+            head_config(Some("ws://localhost:8546"), 100),
+        );
+        tracker.ensure_started();
+        advance(Duration::from_millis(1_500)).await;
+        assert_eq!(source.hash_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(tracker.current().map(|tip| tip.source), Some(HeadSource::WebSocket));
+
+        // Terminal failures (unsupported, chain_id mismatch, block_hash mismatch) disable the WebSocket permanently.
+        for (sub, hash) in [
+            (
+                MockSubscription::Error(HeadError::unsupported("method not found", Some(-32601))),
+                B256::ZERO,
+            ),
+            (
+                MockSubscription::Headers {
+                    chain_id: 1,
+                    headers: vec![header(50, 0x11)],
+                    keep_open: true,
+                },
+                B256::repeat_byte(0x11),
+            ),
+            (
+                MockSubscription::Headers {
+                    chain_id: 100,
+                    headers: vec![header(50, 0x11)],
+                    keep_open: true,
+                },
+                B256::repeat_byte(0x22),
+            ),
+        ] {
+            let subscriber = MockHeadSubscriber::new(vec![sub]);
+            let source = StubTipSource::new(hash);
+            let tracker = driver_tracker(
+                source.clone(),
+                subscriber.clone(),
+                head_config(Some("ws://localhost:8546"), 100),
+            );
+            tracker.ensure_started();
+            advance(Duration::from_secs(35)).await;
+            assert_eq!(subscriber.calls(), 1);
+            assert!(source.calls() > 0);
+            assert_eq!(tracker.current().map(|tip| tip.source), Some(HeadSource::Polling));
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_head_driver_websocket_refreshes_and_follow_up_retries() {
+        // The second header starts a refresh at once, without a wait for a poll tick. A manual refresh keeps the
+        // WebSocket.
+        let (tx, subscriber) = MockHeadSubscriber::channel(100, header(50, 0x11));
+        let source = StubTipSource::new(B256::repeat_byte(0x11));
+        let tracker = driver_tracker(
+            source.clone(),
+            subscriber,
+            head_config(Some("ws://localhost:8546"), 100),
+        );
+        tracker.ensure_started();
+        advance(Duration::from_millis(10)).await;
+        assert_eq!(tracker.current().map(|tip| tip.source), Some(HeadSource::WebSocket));
+        assert_eq!(tracker.refresh().await.unwrap().source, HeadSource::WebSocket);
+
+        let before = source.calls();
+        tx.send(Ok(header(51, 0x12))).unwrap();
+        advance(Duration::from_millis(10)).await;
+        assert_eq!(source.calls(), before + 1);
+
+        // A header above the HTTP head starts exactly one follow-up refresh after poll_interval.
+        tx.send(Ok(header(1_000, 0x13))).unwrap();
+        advance(Duration::from_millis(10)).await;
+        let after_header = source.calls();
+        advance(Duration::from_secs(1)).await;
+        assert_eq!(source.calls(), after_header + 1);
+        advance(Duration::from_millis(500)).await;
+        assert_eq!(source.calls(), after_header + 1);
+
+        // A failed WebSocket refresh also starts exactly one follow-up refresh.
+        source.fail_observe.store(true, Ordering::SeqCst);
+        tx.send(Ok(header(52, 0x14))).unwrap();
+        advance(Duration::from_millis(10)).await;
+        let after_fail = source.calls();
+        advance(Duration::from_secs(1)).await;
+        assert_eq!(source.calls(), after_fail + 1);
+        advance(Duration::from_millis(500)).await;
+        assert_eq!(source.calls(), after_fail + 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_head_driver_reconnect_drop_error_and_unsupported() {
+        // After a socket drop, the driver polls. Then it reconnects and increments the reconnect counter.
+        let subscriber = MockHeadSubscriber::new(vec![
+            MockSubscription::Headers {
+                chain_id: 100,
+                headers: vec![header(50, 0x11)],
+                keep_open: false,
+            },
+            MockSubscription::RepeatHeader {
+                chain_id: 100,
+                header: header(51, 0x11),
+                interval: Duration::from_millis(500),
+            },
+        ]);
+        let tracker = driver_tracker(
+            StubTipSource::new(B256::repeat_byte(0x11)),
+            subscriber.clone(),
+            head_config(Some("ws://localhost:8546"), 100),
+        );
+        tracker.ensure_started();
+        advance(Duration::from_millis(10)).await;
+        assert_eq!(tracker.current().map(|tip| tip.source), Some(HeadSource::Polling));
+        advance(Duration::from_secs(5)).await;
+        assert_eq!(subscriber.calls(), 2);
+        assert_eq!(tracker.ws_reconnect_count(), 1);
+        assert_eq!(tracker.current().map(|tip| tip.source), Some(HeadSource::WebSocket));
+
+        // If the endpoint becomes unsupported at reconnect, the driver stops retrying permanently.
+        let subscriber = MockHeadSubscriber::new(vec![
+            MockSubscription::Headers {
+                chain_id: 100,
+                headers: vec![header(50, 0x11)],
+                keep_open: false,
+            },
+            MockSubscription::Error(HeadError::unsupported("method not found", Some(-32601))),
+        ]);
+        let tracker = driver_tracker(
+            StubTipSource::new(B256::repeat_byte(0x11)),
+            subscriber.clone(),
+            head_config(Some("ws://localhost:8546"), 100),
+        );
+        tracker.ensure_started();
+        advance(Duration::from_secs(2)).await;
+        assert_eq!(subscriber.calls(), 2);
+        advance(Duration::from_secs(120)).await;
+        assert_eq!(subscriber.calls(), 2);
+
+        // After a stream error, the driver polls at once.
+        let (tx, subscriber) = MockHeadSubscriber::channel(100, header(50, 0x11));
+        let tracker = driver_tracker(
+            StubTipSource::new(B256::repeat_byte(0x11)),
+            subscriber,
+            head_config(Some("ws://localhost:8546"), 100),
+        );
+        tracker.ensure_started();
+        advance(Duration::from_millis(10)).await;
+        assert_eq!(tracker.current().map(|tip| tip.source), Some(HeadSource::WebSocket));
+        tx.send(Err(HeadError::connection("socket closed", None))).unwrap();
+        advance(Duration::from_millis(10)).await;
+        assert_eq!(tracker.current().map(|tip| tip.source), Some(HeadSource::Polling));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_head_driver_silence_timer_idle_during_slow_and_pending_refresh() {
+        let slow_cfg = || HeadSourceConfig {
+            chain_id: 100,
+            poll_interval: Duration::from_secs(30),
+            expected_block_time: Duration::from_secs(1),
+            ws_url: Some(Url::parse("ws://localhost:8546").unwrap()),
+            ws_url_derived: false,
+        };
+
+        // A silent socket falls back to polling, also while a retry refresh sleeps.
+        let (tx, subscriber) = MockHeadSubscriber::channel(100, header(50, 0x11));
+        let tracker = driver_tracker(StubTipSource::new(B256::repeat_byte(0x11)), subscriber, slow_cfg());
+        tracker.ensure_started();
+        advance(Duration::from_millis(10)).await;
+        assert_eq!(tracker.current().map(|tip| tip.source), Some(HeadSource::WebSocket));
+        tx.send(Ok(header(1_000_000, 0x12))).unwrap();
+        advance(Duration::from_secs(4)).await;
+        assert_eq!(tracker.current().map(|tip| tip.source), Some(HeadSource::Polling));
+
+        // Continuous headers keep the WebSocket active during a slow refresh.
+        let subscriber = MockHeadSubscriber::new(vec![MockSubscription::RepeatHeader {
+            chain_id: 100,
+            header: header(1_000_000, 0x11),
+            interval: Duration::from_secs(1),
+        }]);
+        let tracker = driver_tracker(StubTipSource::new(B256::repeat_byte(0x11)), subscriber, slow_cfg());
+        tracker.ensure_started();
+        advance(Duration::from_secs(6)).await;
+        assert_eq!(tracker.current().map(|tip| tip.source), Some(HeadSource::WebSocket));
+
+        // A pending observation also falls back on the silence timeout and releases the refresh lock.
+        let (tx, subscriber) = MockHeadSubscriber::channel(100, header(50, 0x11));
+        let source = StubTipSource::new(B256::repeat_byte(0x11));
+        let tracker = driver_tracker(source.clone(), subscriber, slow_cfg());
+        tracker.ensure_started();
+        advance(Duration::from_millis(10)).await;
+        assert_eq!(tracker.current().map(|tip| tip.source), Some(HeadSource::WebSocket));
+        source.block_observe_on_call.store(source.calls() + 1, Ordering::SeqCst);
+        tx.send(Ok(header(101, 0x12))).unwrap();
+        advance(Duration::from_secs(4)).await;
+        assert_eq!(tracker.current().map(|tip| tip.source), Some(HeadSource::Polling));
+    }
+}

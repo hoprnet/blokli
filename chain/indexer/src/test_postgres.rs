@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::Context;
-use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb};
+use blokli_db::db::BlokliDb;
 use sea_orm::{ConnectionTrait, Database};
 use url::Url;
 

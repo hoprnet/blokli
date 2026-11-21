@@ -29,14 +29,21 @@ use hopr_bindings::exports::alloy::{
 };
 use hopr_types::{crypto::types::Hash, internal::prelude::WinningProbability, primitive::prelude::*};
 use serde::{Deserialize, Serialize};
+use tokio::sync::watch;
 
-use crate::{RetryAction::NoRetry, errors::Result};
+use crate::{
+    RetryAction::NoRetry,
+    errors::{Result, RpcError},
+    tip::ChainTip,
+};
 
 pub mod client;
 pub mod errors;
+pub mod head;
 pub mod indexer;
 pub mod rate_limit;
 pub mod rpc;
+pub mod tip;
 pub mod transport;
 
 #[cfg(feature = "runtime-tokio")]
@@ -444,6 +451,16 @@ pub trait HoprIndexerRpcOperations {
     /// Retrieves the latest block number.
     async fn block_number(&self) -> Result<u64>;
 
+    /// Last published confirmed height. The tracker does not refresh.
+    fn cached_confirmed_block(&self) -> Option<u64> {
+        None
+    }
+
+    /// Timestamp of a recently observed header. There is no network lookup.
+    fn cached_header_timestamp(&self, _block: u64) -> Option<u64> {
+        None
+    }
+
     /// Get transaction sender (from address) by transaction hash
     ///
     /// Used to determine the chain_key when processing
@@ -576,6 +593,35 @@ pub trait HoprIndexerRpcOperations {
             snapshots.push(self.get_safe_owners_and_threshold(safe_address, block).await);
         }
         Ok(snapshots)
+    }
+
+    /// Subscribes to the chain tip updates that drive post-finality verification.
+    ///
+    /// The indexer indexes some blocks before they are final. When the chain tip tracker publishes
+    /// that these blocks are final, the indexer checks them again. An implementation that does not
+    /// track the chain tip returns `None`, and post-finality verification stays off.
+    fn subscribe_tip(&self) -> Option<watch::Receiver<Option<ChainTip>>> {
+        None
+    }
+
+    /// Fetches the canonical logs of an inclusive block range with the given filters.
+    ///
+    /// This is the range version of [`Self::try_stream_logs`]. It uses the same filters and the same
+    /// `eth_getLogs` request path, with the same block range chunking. But it does not wait for the
+    /// tip to advance.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`RpcError`] if a log request fails. The default implementation always returns
+    /// [`RpcError::Other`], because it cannot fetch the range.
+    async fn get_logs_for_block_range(
+        &self,
+        filters: Vec<Filter>,
+        from_block: u64,
+        to_block: u64,
+    ) -> Result<Vec<SerializableLog>> {
+        let _ = (filters, from_block, to_block);
+        Err(RpcError::Other("log range fetch is not supported".to_string()))
     }
 
     /// Retrieves on-chain xdai balance of the given address.

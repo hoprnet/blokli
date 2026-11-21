@@ -32,6 +32,10 @@ use hopr_bindings::exports::alloy::{
 use hopr_types::telemetry::SimpleGauge;
 use hopr_types::{crypto::types::Hash, primitive::prelude::*};
 use rust_stream_ext_concurrent::then_concurrent::StreamThenConcurrentExt;
+use tokio::{
+    sync::watch,
+    time::{sleep, timeout},
+};
 use tracing::{debug, error, trace, warn};
 
 use crate::{
@@ -42,6 +46,7 @@ use crate::{
         SafeSingleton::{getOwnersCall, getThresholdCall},
         is_log_block_range_limit_error,
     },
+    tip::{ChainTip, TIP_STALENESS_INTERVALS},
     transport::HttpRequestor,
 };
 
@@ -53,6 +58,23 @@ const MULTICALL3_DETECTION_TTL: Duration = Duration::from_secs(600);
 
 /// Maximum number of concurrent reads when Multicall3 is not available.
 const SAFE_READ_CONCURRENCY: usize = 8;
+
+/// Waits until the confirmed tip reaches `from_block`.
+///
+/// Returns `true` if the wait timed out. A head driver that stopped publishing keeps the watch sender
+/// open. Thus the wait needs its own limit, because the channel does not close.
+async fn wait_for_confirmed_tip(
+    tip_rx: &mut watch::Receiver<Option<ChainTip>>,
+    from_block: u64,
+    wait_limit: Duration,
+) -> bool {
+    timeout(
+        wait_limit,
+        tip_rx.wait_for(|tip| tip.as_ref().is_some_and(|tip| tip.confirmed >= from_block)),
+    )
+    .await
+    .is_err()
+}
 
 fn snapshot_from_returns(owners_return: &[u8], threshold_return: &[u8]) -> Result<SafeOwnersSnapshot> {
     let owners = getOwnersCall::abi_decode_returns(owners_return)
@@ -272,6 +294,14 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
         self.get_block_number().await
     }
 
+    fn cached_confirmed_block(&self) -> Option<u64> {
+        self.tip_tracker().current().map(|tip| tip.confirmed)
+    }
+
+    fn cached_header_timestamp(&self, block: u64) -> Option<u64> {
+        self.tip_tracker().header_timestamp(block)
+    }
+
     /// Retrieves the sender (signer) address for a given transaction hash.
     ///
     /// # Returns
@@ -394,6 +424,10 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
         };
 
         Ok(Box::pin(stream! {
+            let tracker = self.tip_tracker();
+            tracker.ensure_started();
+            let mut tip_rx = tracker.subscribe();
+
             // On first iteration use the given block number as start
             let mut from_block = start_block_number;
 
@@ -413,7 +447,12 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
                             } else if past_diff <= max_rpc_past_blocks as u64 {
                                 // If we came here early (we tolerate only off-by max_rpc_past_blocks), wait some more
                                 debug!(last_block = latest_block, start_block = start_block_number, blocks_diff = past_diff, "Indexer premature request. Block not found yet in RPC provider.");
-                                futures_timer::Delay::new(past_diff as u32 * self.cfg.expected_block_time / 3).await;
+                                let wait_limit = self
+                                    .cfg
+                                    .expected_block_time
+                                    .saturating_mul(u32::try_from(past_diff).unwrap_or(u32::MAX))
+                                    / 3;
+                                let _ = wait_for_confirmed_tip(&mut tip_rx, from_block, wait_limit).await;
                                 continue;
                             } else {
                                 // This is a hard-failure on later iterations which is unrecoverable
@@ -491,12 +530,26 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
                         yield current_block_log;
                         from_block = latest_block + 1;
                         count_failures = 0;
+
+                        let wait_limit = self
+                            .cfg
+                            .expected_block_time
+                            .max(self.cfg.head_poll_interval)
+                            .saturating_mul(TIP_STALENESS_INTERVALS);
+                        if wait_for_confirmed_tip(&mut tip_rx, from_block, wait_limit).await {
+                            debug!(
+                                from_block,
+                                ?wait_limit,
+                                "no confirmed tip update within the wait limit, re-reading the chain tip"
+                            );
+                        }
                     }
 
-                    Err(e) => error!(error = %e, "failed to obtain current block number from chain")
+                    Err(e) => {
+                        error!(error = %e, "failed to obtain current block number from chain");
+                        sleep(self.cfg.head_poll_interval).await;
+                    }
                 }
-
-                futures_timer::Delay::new(self.cfg.expected_block_time).await;
             }
         }))
     }
@@ -641,6 +694,29 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
         Ok(snapshots)
     }
 
+    fn subscribe_tip(&self) -> Option<watch::Receiver<Option<ChainTip>>> {
+        let tracker = self.tip_tracker();
+        tracker.ensure_started();
+        Some(tracker.subscribe())
+    }
+
+    async fn get_logs_for_block_range(
+        &self,
+        filters: Vec<Filter>,
+        from_block: u64,
+        to_block: u64,
+    ) -> Result<Vec<SerializableLog>> {
+        let mut logs = Vec::new();
+        let mut log_stream = self.stream_logs(filters, from_block, to_block);
+
+        while let Some(result) = log_stream.next().await {
+            logs.push(SerializableLog::from(result?));
+        }
+
+        logs.sort_by_key(|log| (log.block_number, log.tx_index, log.log_index));
+        Ok(logs)
+    }
+
     async fn get_xdai_balance(&self, address: Address) -> Result<XDaiBalance> {
         self.get_xdai_balance(address).await
     }
@@ -758,7 +834,10 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{
+        sync::{Arc, Mutex},
+        time::{Duration, Instant},
+    };
 
     use anyhow::Context;
     use async_trait::async_trait;
@@ -774,18 +853,22 @@ mod tests {
     };
     use hopr_types::{crypto::prelude::Hash, primitive::prelude::Address};
     use serde_json::json;
-    use tokio::time::sleep;
+    use tokio::{sync::watch, time::sleep};
     use url::Url;
 
     use super::{
         SafeSingleton::{getOwnersCall, getThresholdCall},
-        SolCall, snapshot_from_returns,
+        SolCall, snapshot_from_returns, wait_for_confirmed_tip,
     };
     use crate::{
         FilterSet, HoprIndexerRpcOperations,
-        errors::{HttpRequestError, RpcError},
+        errors::{HttpRequestError, Result as RpcResult, RpcError},
         indexer::{fetch_subrange_logs_concurrently, split_range},
         rpc::{RpcOperations, RpcOperationsConfig},
+        tip::{
+            ChainTip, ChainTipTracker, ConfirmationConfig, ConfirmationMode, FcrState, HeadSource, TipObservation,
+            TipSource,
+        },
         transport::HttpRequestor,
     };
 
@@ -881,6 +964,47 @@ mod tests {
             }
         })
         .to_string()
+    }
+
+    fn mock_block_number_batch(server: &mut mockito::ServerGuard, latest: u64) -> mockito::Mock {
+        server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::Regex(r#""method"\s*:\s*"eth_getBlockByNumber""#.to_string()),
+                mockito::Matcher::Regex(r#""(latest|safe|finalized)""#.to_string()),
+            ]))
+            .with_body_from_request(move |request| {
+                let body: serde_json::Value =
+                    serde_json::from_slice(request.body().expect("request body")).expect("valid JSON request body");
+                let responses = body
+                    .as_array()
+                    .expect("a batched block request is a JSON array")
+                    .iter()
+                    .map(|call| {
+                        json!({
+                            "jsonrpc": "2.0",
+                            "id": call["id"].clone(),
+                            "result": {
+                                "number": format!("{latest:#x}"),
+                                "timestamp": "0x1"
+                            }
+                        })
+                    })
+                    .collect::<Vec<_>>();
+
+                serde_json::to_vec(&responses).expect("batch response should serialize")
+            })
+            .expect_at_least(1)
+            .create()
+    }
+
+    struct SharedTipSource(Arc<Mutex<TipObservation>>);
+
+    #[async_trait]
+    impl TipSource for SharedTipSource {
+        async fn observe(&self) -> RpcResult<TipObservation> {
+            Ok(*self.0.lock().expect("shared observation lock should not be poisoned"))
+        }
     }
 
     fn single_log_response(block_number: u64) -> String {
@@ -1341,14 +1465,8 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let rpc = create_test_rpc_operations_with_max_range(&server.url(), 8)?;
 
-        // Chain head 12 with the default finality of 3 makes block 9 the latest finalized block.
-        let block_number = server
-            .mock("POST", "/")
-            .match_body(mockito::Matcher::PartialJson(json!({"method": "eth_blockNumber"})))
-            .with_status(200)
-            .with_body(json!({"jsonrpc": "2.0", "id": 1, "result": "0xc"}).to_string())
-            .expect(1)
-            .create();
+        // Chain head 12 with the default depth of 3 makes block 9 the confirmed tip.
+        let block_number = mock_block_number_batch(&mut server, 12);
         let replayed = mock_get_logs_range(&mut server, 0, 7, empty_logs_response());
         let rejected_tail = mock_get_logs_range(&mut server, 8, 9, unrecognized_range_error_response()).expect(2);
         let first_block = mock_get_logs_range(&mut server, 8, 8, empty_logs_response());
@@ -1420,14 +1538,8 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let rpc = create_test_rpc_operations_with_max_range(&server.url(), 8)?;
 
-        // Chain head 10 with the default finality of 3 makes block 7 the latest finalized block.
-        let block_number = server
-            .mock("POST", "/")
-            .match_body(mockito::Matcher::PartialJson(json!({"method": "eth_blockNumber"})))
-            .with_status(200)
-            .with_body(json!({"jsonrpc": "2.0", "id": 1, "result": "0xa"}).to_string())
-            .expect_at_least(1)
-            .create();
+        // Chain head 10 with the default depth of 3 makes block 7 the confirmed tip.
+        let block_number = mock_block_number_batch(&mut server, 10);
         let gateway_timeout = mock_get_logs_range_with_status(&mut server, 0, 7, 504, "gateway timeout".into());
         let unknown_error = mock_get_logs_range(&mut server, 0, 3, unrecognized_range_error_response());
         let working_low = mock_get_logs_range(&mut server, 0, 1, empty_logs_response());
@@ -1474,5 +1586,142 @@ mod tests {
         assert!(RpcError::Other("missing trie node abc (path )".into()).is_state_pruned());
         assert!(RpcError::Other("State already discarded for block 5".into()).is_state_pruned());
         assert!(!RpcError::Other("execution reverted".into()).is_state_pruned());
+    }
+
+    /// The stream waits until the tracker publishes the next confirmed tip. It does not sleep for a full
+    /// expected block time.
+    #[test_log::test(tokio::test)]
+    async fn test_try_stream_logs_advances_on_tip_update() -> anyhow::Result<()> {
+        let mut server = mockito::Server::new_async().await;
+        let mut rpc = create_test_rpc_operations(&server.url())?;
+
+        let observation = Arc::new(Mutex::new(TipObservation {
+            latest: 8,
+            latest_timestamp: Some(1),
+            safe: None,
+            safe_timestamp: None,
+            finalized: None,
+            finalized_timestamp: None,
+        }));
+        let tracker = ChainTipTracker::new(
+            Arc::new(SharedTipSource(observation.clone())),
+            ConfirmationConfig {
+                mode: ConfirmationMode::Depth,
+                depth: 3,
+                max_safe_gap: 32,
+            },
+            Duration::from_secs(3600),
+            Duration::from_secs(60),
+        );
+        rpc.replace_tip_tracker(Arc::new(tracker));
+
+        let first_round = mock_get_logs_range(&mut server, 0, 5, empty_logs_response());
+        let second_round = mock_get_logs_range(&mut server, 6, 6, empty_logs_response());
+
+        let filters = FilterSet {
+            all: vec![Filter::new()],
+            token: vec![],
+            no_token: vec![Filter::new()],
+        };
+        let mut blocks = rpc.try_stream_logs(0, filters, true)?;
+        let started = Instant::now();
+
+        let first = tokio::time::timeout(Duration::from_secs(2), blocks.next())
+            .await
+            .context("the first block should arrive without waiting for the expected block time")?
+            .context("the stream should yield the first block")?;
+        assert_eq!(first.block_id, 0);
+
+        // While the confirmed tip is 5, the next item must wait for the watch channel. It must not return
+        // from a cache read.
+        let next_block = blocks.next();
+        futures::pin_mut!(next_block);
+        assert!(
+            futures::poll!(next_block.as_mut()).is_pending(),
+            "the stream must wait for a tip update before yielding block 6"
+        );
+
+        *observation
+            .lock()
+            .expect("shared observation lock should not be poisoned") = TipObservation {
+            latest: 9,
+            latest_timestamp: Some(2),
+            safe: None,
+            safe_timestamp: None,
+            finalized: None,
+            finalized_timestamp: None,
+        };
+        rpc.tip_tracker().refresh().await?;
+
+        let second = tokio::time::timeout(Duration::from_secs(2), next_block)
+            .await
+            .context("a tip update should advance the stream without waiting for the expected block time")?
+            .context("the stream should yield the next block")?;
+        assert_eq!(second.block_id, 6);
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the stream should advance on the tip update, not after the 60 second expected block time"
+        );
+
+        first_round.assert();
+        second_round.assert();
+
+        Ok(())
+    }
+
+    /// A head lag sample never fetches a missing header from the endpoint.
+    #[test_log::test(tokio::test)]
+    async fn test_head_lag_reads_only_cached_headers() -> anyhow::Result<()> {
+        let mut server = mockito::Server::new_async().await;
+        let rpc = create_test_rpc_operations(&server.url())?;
+
+        let latest = mock_block_number_batch(&mut server, 8);
+        let header = server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::Regex("\"0x5\"".into()))
+            .expect(0)
+            .create();
+
+        rpc.tip_tracker().refresh().await?;
+        assert_eq!(
+            rpc.cached_header_timestamp(8),
+            Some(1),
+            "a cached height must not cost an RPC call"
+        );
+        assert_eq!(
+            rpc.cached_header_timestamp(5),
+            None,
+            "an unobserved height has no sample"
+        );
+        latest.assert();
+        header.assert();
+
+        Ok(())
+    }
+
+    /// The bounded tip wait returns control to the stream after the timeout. A tip update ends the wait
+    /// before the limit.
+    #[tokio::test]
+    async fn test_confirmed_tip_wait_times_out_and_resumes_on_a_tip_update() {
+        let tip = |latest: u64, confirmed: u64| ChainTip {
+            latest,
+            safe: None,
+            finalized: None,
+            confirmed,
+            source: HeadSource::Polling,
+            fcr: FcrState::Unavailable,
+        };
+        let (tip_tx, mut tip_rx) = watch::channel(Some(tip(8, 5)));
+
+        assert!(
+            wait_for_confirmed_tip(&mut tip_rx, 6, Duration::from_millis(20)).await,
+            "the wait must time out while the tip stays at 5"
+        );
+
+        tip_tx.send_replace(Some(tip(9, 6)));
+        assert!(
+            !wait_for_confirmed_tip(&mut tip_rx, 6, Duration::from_secs(1)).await,
+            "a tip update must complete the wait before the limit"
+        );
     }
 }

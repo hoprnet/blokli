@@ -359,6 +359,10 @@ smoke-test-curvy:
 smoke-test-gnosis:
     SMOKE_CONFIG=config-smoke-gnosis.toml ./tests/smoke/run-smoke-test.sh
 
+# Run smoke tests for piz-palu-prod on Gnosis Chain with safe_or_depth FCR (allows high lag)
+smoke-test-piz-palu-prod:
+    SMOKE_CONFIG=config-smoke-piz-palu-prod.toml ./tests/smoke/run-smoke-test.sh
+
 # Run smoke tests against Gnosis Chain RPC with full sync (requires indexer to catch up within 10 blocks) - includes checkpoint resume validation
 smoke-test-gnosis-full-sync:
     SMOKE_CONFIG=config-smoke-gnosis-full-sync.toml ./tests/smoke/run-smoke-test.sh

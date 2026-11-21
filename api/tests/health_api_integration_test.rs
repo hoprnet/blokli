@@ -213,6 +213,30 @@ async fn test_readyz_indexer_lag_exceeded() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Test that a post-finality verification failure wins over a zero indexer lag
+#[test_log::test(tokio::test)]
+async fn test_readyz_verification_failure_wins_over_zero_lag() -> anyhow::Result<()> {
+    let ctx = common::setup_http_test_environment().await?;
+
+    // A watermark far above the RPC block makes the indexer lag zero. Thus only the
+    // verification status can keep the replica out of the ready state.
+    update_chain_info(&ctx.db, 1_000_000_000).await?;
+    ctx.indexer_state.mark_verification_failed();
+
+    let (status, json) = make_request(ctx.app, "/readyz").await;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(json["status"], "not_ready");
+    assert_eq!(json["checks"]["database"]["status"], "healthy");
+    assert_eq!(json["checks"]["rpc"]["status"], "healthy");
+    assert_eq!(json["checks"]["indexer"]["status"], "healthy");
+    assert_eq!(json["checks"]["indexer"]["lag"], 0);
+    assert_eq!(json["checks"]["verification"]["status"], "unhealthy");
+    assert!(json["checks"]["verification"]["error"].is_string());
+
+    Ok(())
+}
+
 /// Test that /readyz includes version in response
 #[test_log::test(tokio::test)]
 async fn test_readyz_includes_version() -> anyhow::Result<()> {

@@ -2,7 +2,10 @@
 //!
 //! The purpose of this module is to give implementation of the [HoprRpcOperations] trait:
 //! [RpcOperations] type, which is the main API exposed by this crate.
+#[cfg(test)]
+use std::mem::replace;
 use std::{
+    fmt::{self, Formatter},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -50,6 +53,8 @@ use crate::{
     CurvyAggregatorFees, CurvyAggregatorState, CurvyGasFees, CurvyVaultToken, FeeHistorySnapshot, HoprRpcOperations,
     client::GasOracleFiller,
     errors::{Result, RpcError},
+    head::{HeadSourceConfig, HeadSubscriber, WsHeadSubscriber, redact_ws_url},
+    tip::{ChainTipTracker, ConfirmationConfig, ConfirmationMode, RpcTipSource},
     transport::HttpRequestor,
 };
 
@@ -131,7 +136,7 @@ pub const DEFAULT_AUTO_LOG_BLOCK_RANGE_CAP: u64 = 10_000;
 pub const DEFAULT_LOG_BLOCK_RANGE_REPROBE_INTERVAL: u64 = 100;
 
 /// Configuration of the RPC related parameters.
-#[derive(Clone, Debug, PartialEq, Eq, smart_default::SmartDefault, Serialize, Deserialize, Validate)]
+#[derive(Clone, PartialEq, Eq, smart_default::SmartDefault, Serialize, Deserialize, Validate)]
 pub struct RpcOperationsConfig {
     /// Blockchain id
     ///
@@ -170,16 +175,46 @@ pub struct RpcOperationsConfig {
     /// Defaults to 7 seconds.
     #[default(Duration::from_secs(7))]
     pub tx_polling_interval: Duration,
-    /// Finalization chain length
+    /// Confirmation depth
     ///
-    /// The number of blocks including and decreasing from the chain HEAD
-    /// that the logs will be buffered for before being considered
-    /// successfully joined to the chain.
+    /// Number of network confirmations for transaction receipts. It is also the default indexing depth.
     ///
     /// Defaults to 3
     #[validate(range(min = 1, max = 100))]
     #[default = 3]
     pub finality: u32,
+    /// Override of the depth for the depth and safe-or-depth rules. Only the indexer uses it.
+    pub confirmation_depth: Option<u16>,
+    /// Rule that derives the confirmed block from the chain tip.
+    ///
+    /// Defaults to [`ConfirmationMode::Depth`].
+    #[default(_code = "ConfirmationMode::Depth")]
+    pub confirmation_mode: ConfirmationMode,
+    /// Smallest gap from the latest block to the safe block that makes FCR degraded.
+    ///
+    /// Must be at least 1.
+    ///
+    /// Defaults to 32.
+    #[validate(range(min = 1))]
+    #[default = 32]
+    pub max_safe_gap: u64,
+    /// Interval between two polls of the chain tip.
+    ///
+    /// Must be non-zero.
+    ///
+    /// Defaults to 1 second.
+    #[default(Duration::from_secs(1))]
+    pub head_poll_interval: Duration,
+    /// WebSocket URL for `newHeads` notifications.
+    ///
+    /// Defaults to `None`. With `None`, the head source polls over HTTP.
+    #[default(None)]
+    pub head_ws_url: Option<Url>,
+    /// `true` if the caller derived [`RpcOperationsConfig::head_ws_url`] from the HTTP RPC URL.
+    ///
+    /// It changes only the hint in the fallback log message.
+    #[default(false)]
+    pub head_ws_url_derived: bool,
     /// URL to the gas price oracle.
     ///
     /// Defaults to `None`, in which case [`RpcOperations::new`] falls back to
@@ -218,6 +253,37 @@ pub struct RpcOperationsConfig {
     #[validate(range(min = 1, max = 200))]
     #[default = 50]
     pub max_indexer_past_blocks: usize,
+}
+
+impl fmt::Debug for RpcOperationsConfig {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RpcOperationsConfig")
+            .field("chain_id", &self.chain_id)
+            .field("contract_addrs", &self.contract_addrs)
+            .field("expected_block_time", &self.expected_block_time)
+            .field("max_block_range_fetch_size", &self.max_block_range_fetch_size)
+            .field(
+                "log_block_range_reprobe_interval",
+                &self.log_block_range_reprobe_interval,
+            )
+            .field("tx_polling_interval", &self.tx_polling_interval)
+            .field("finality", &self.finality)
+            .field("confirmation_depth", &self.confirmation_depth)
+            .field("confirmation_mode", &self.confirmation_mode)
+            .field("max_safe_gap", &self.max_safe_gap)
+            .field("head_poll_interval", &self.head_poll_interval)
+            .field("head_ws_url", &self.head_ws_url.as_ref().map(redact_ws_url))
+            .field("head_ws_url_derived", &self.head_ws_url_derived)
+            .field("gas_oracle_url", &self.gas_oracle_url)
+            .field("gas_oracle_fallback_max_fee", &self.gas_oracle_fallback_max_fee)
+            .field(
+                "gas_oracle_fallback_priority_fee",
+                &self.gas_oracle_fallback_priority_fee,
+            )
+            .field("max_indexer_loop_failures", &self.max_indexer_loop_failures)
+            .field("max_indexer_past_blocks", &self.max_indexer_past_blocks)
+            .finish()
+    }
 }
 
 pub(crate) type HoprProvider<R> = FillProvider<
@@ -509,6 +575,7 @@ pub struct RpcOperations<R: HttpRequestor + 'static + Clone> {
     log_block_range_limit: Arc<Mutex<LogBlockRangeLimit>>,
     /// Result of the last Multicall3 detection and when it was made (see the indexer operations).
     pub(crate) multicall_support: Arc<Mutex<Option<(bool, Instant)>>>,
+    tip_tracker: Arc<ChainTipTracker>,
 }
 
 #[cfg_attr(test, mockall::automock)]
@@ -539,6 +606,12 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         if cfg.tx_polling_interval.is_zero() {
             return Err(RpcError::Other("tx_polling_interval must be non-zero".to_string()));
         }
+        if cfg.head_poll_interval.is_zero() {
+            return Err(RpcError::Other("head_poll_interval must be non-zero".to_string()));
+        }
+        if cfg.max_safe_gap == 0 {
+            return Err(RpcError::Other("max_safe_gap must be at least 1".to_string()));
+        }
         provider.client().set_poll_interval(cfg.tx_polling_interval);
 
         debug!(contract_addresses = ?cfg.contract_addrs, "configured contract addresses");
@@ -546,6 +619,27 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         let log_block_range_limit =
             LogBlockRangeLimit::new(cfg.max_block_range_fetch_size, cfg.log_block_range_reprobe_interval);
         set_log_block_range_metric(log_block_range_limit.current());
+
+        let subscriber = cfg
+            .head_ws_url
+            .clone()
+            .map(|url| Arc::new(WsHeadSubscriber::new(url)) as Arc<dyn HeadSubscriber>);
+        let tip_tracker = Arc::new(ChainTipTracker::with_head_source(
+            Arc::new(RpcTipSource::new(provider.clone())),
+            ConfirmationConfig {
+                mode: cfg.confirmation_mode,
+                depth: cfg.confirmation_depth.map_or(u64::from(cfg.finality), u64::from),
+                max_safe_gap: cfg.max_safe_gap,
+            },
+            HeadSourceConfig {
+                chain_id: cfg.chain_id,
+                poll_interval: cfg.head_poll_interval,
+                expected_block_time: cfg.expected_block_time,
+                ws_url: cfg.head_ws_url.clone(),
+                ws_url_derived: cfg.head_ws_url_derived,
+            },
+            subscriber,
+        ));
 
         Ok(Self {
             contract_instances: Arc::new(ContractInstances::new(
@@ -555,9 +649,20 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
             )),
             log_block_range_limit: Arc::new(Mutex::new(log_block_range_limit)),
             multicall_support: Arc::new(Mutex::new(None)),
+            tip_tracker,
             cfg,
             provider: Arc::new(provider),
         })
+    }
+
+    /// Returns the chain tip tracker that the indexer and the readiness check share.
+    pub fn tip_tracker(&self) -> Arc<ChainTipTracker> {
+        self.tip_tracker.clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_tip_tracker(&mut self, tracker: Arc<ChainTipTracker>) -> Arc<ChainTipTracker> {
+        replace(&mut self.tip_tracker, tracker)
     }
 
     /// Resolves the Curvy Vault and optional PortalFactory from the configured Aggregator proxy, and the shield
@@ -612,39 +717,29 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         Ok(self.cfg.contract_addrs)
     }
 
-    /// Get the current block number from the RPC endpoint, adjusted for finality
+    /// Get the current confirmed block number from the chain tip tracker.
     ///
-    /// This method returns the block number minus the configured finality window
-    /// to ensure operations only consider confirmed (non-reorgable) blocks.
+    /// The tracker applies the configured confirmation mode to the latest, safe and finalized
+    /// blocks. The tracker refreshes a stale cached tip before it returns the value. Thus an RPC
+    /// endpoint that is not reachable causes an error, not a stale block number.
     ///
-    /// # Finality Adjustment
+    /// # Errors
     ///
-    /// The returned block number is calculated as:
-    /// ```text
-    /// confirmed_block = provider.get_block_number() - finality
-    /// ```
-    ///
-    /// For example, with `finality=3`:
-    /// - If RPC reports block 1000, this returns 997
-    /// - Ensures all operations work with blocks that have 3 confirmations
+    /// Returns an [`RpcError`] if the tip refresh fails, or if the tag that the confirmation mode
+    /// needs is missing.
     ///
     /// # Impact on Readiness Checks
     ///
-    /// The API readiness check uses this method, meaning `max_indexer_lag`
-    /// is compared against confirmed blocks, not the latest RPC chain head.
+    /// The API readiness check uses this method. Thus the check compares `max_indexer_lag`
+    /// against the confirmed tip of the tracker, not the latest RPC chain head.
     /// This prevents premature "ready" state when the indexer is caught up
     /// to unconfirmed blocks that might be reorganized.
     pub async fn get_block_number(&self) -> Result<u64> {
-        Ok(self
-            .provider
-            .get_block_number()
-            .await?
-            .saturating_sub(self.cfg.finality as u64))
+        self.tip_tracker.confirmed_block().await
     }
 
     pub(crate) async fn get_block(&self, block_number: u64) -> Result<Option<Block>> {
-        let sanitized_block_number = block_number.saturating_sub(self.cfg.finality as u64);
-        let result = self.provider.get_block_by_number(sanitized_block_number.into()).await?;
+        let result = self.provider.get_block_by_number(block_number.into()).await?;
         Ok(result)
     }
 
@@ -1273,12 +1368,30 @@ mod tests {
         transports::{RpcError as AlloyRpcError, TransportErrorKind},
     };
     use serde_json::value::RawValue;
+    use url::Url;
 
     use super::{
         DEFAULT_AUTO_LOG_BLOCK_RANGE_CAP, DEFAULT_LOG_BLOCK_RANGE_REPROBE_INTERVAL as REPROBE_INTERVAL,
-        LogBlockRangeLimit, is_curvy_token_not_registered, is_log_block_range_limit_error, snapshot_from_fee_history,
+        LogBlockRangeLimit, RpcOperationsConfig, is_curvy_token_not_registered, is_log_block_range_limit_error,
+        snapshot_from_fee_history,
     };
     use crate::errors::RpcError;
+
+    #[test]
+    fn rpc_operations_config_debug_redacts_the_websocket_url() {
+        let config = RpcOperationsConfig {
+            head_ws_url: Some(
+                Url::parse("wss://user:pass@rpc.example.com:8443/secret?token=xyz").expect("URL should parse"),
+            ),
+            ..RpcOperationsConfig::default()
+        };
+
+        let debug = format!("{config:?}");
+        assert!(debug.contains("wss://rpc.example.com:8443"), "{debug}");
+        for secret in ["user", "pass", "secret", "xyz"] {
+            assert!(!debug.contains(secret), "{debug}");
+        }
+    }
 
     fn history(base_fees: Vec<u128>, tips: Option<Vec<Vec<u128>>>) -> FeeHistory {
         FeeHistory {

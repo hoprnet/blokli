@@ -9,6 +9,8 @@ use hopr_types::crypto::prelude::Hash;
 /// Errors produced by this crate and other error-related types.
 use thiserror::Error;
 
+use crate::tip::TipError;
+
 /// Enumerates different errors produced by this crate.
 #[derive(Error, Debug)]
 pub enum RpcError {
@@ -47,6 +49,9 @@ pub enum RpcError {
 
     #[error("Safe nonce value {0} exceeds maximum u64 value")]
     SafeNonceOverflow(U256),
+
+    #[error(transparent)]
+    TipError(#[from] TipError),
 
     #[error("unknown error: {0}")]
     Other(String),
