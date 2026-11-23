@@ -1642,15 +1642,15 @@ check passes. Readiness as a whole also needs a passing database check, a passin
 Readiness uses the confirmed block, not the chain head. Thus the indexer can pass the lag check while it is behind the tip by up to the
 maximum indexer lag plus the confirmation distance of the active rule.
 
-The example below uses Gnosis Chain in depth mode, with a maximum indexer lag of 10 blocks and a confirmation depth of 3 blocks:
+The example below uses Gnosis Chain in depth mode, with a maximum indexer lag of 10 blocks and a confirmation depth of 1 block:
 
 - Latest RPC block: 1000
-- Confirmed block: 997
-- Indexed block: 987
+- Confirmed block: 999
+- Indexed block: 989
 - Calculated lag: 10 blocks
 - Result: the lag check passes
 
-The indexer is 13 blocks behind the RPC chain head (1000 - 987). But it is only 10 blocks behind the confirmed block, which is within the
+The indexer is 11 blocks behind the RPC chain head (1000 - 989). But it is only 10 blocks behind the confirmed block, which is within the
 acceptable threshold.
 
 If the operator selects no other rule, all networks use depth mode. The network supplies the default depth. The indexer and readiness checks

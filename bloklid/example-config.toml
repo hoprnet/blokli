@@ -163,9 +163,9 @@ head_poll_interval = "1s"
 # If you omit it, all networks use depth. Set safe_or_depth to use the Fast Confirmation Rule.
 # mode = "depth"
 # Number of blocks behind the latest block for `depth` and for the fallback of `safe_or_depth`.
-# If it is not set, the network value applies (3 on Gnosis, 1 on anvil-localhost).
+# If it is not set, the network value applies (1 on all networks).
 # The value must be from 1 to 100.
-# depth = 3
+# depth = 1
 # If the gap from the latest block to the safe block is this value or more, FCR is degraded
 # (default: 32). The value must be at least 1.
 max_safe_gap = 32
@@ -348,9 +348,9 @@ interval = "15s"
 #   lag = confirmed_block - indexed_block
 #
 # The confirmed block follows the configured confirmation rule (depth, safe_or_depth,
-# safe, or finalized). Example for jura-dev (Gnosis) with depth=3 and max_indexer_lag=10:
+# safe, or finalized). Example for jura-dev (Gnosis) with depth=1 and max_indexer_lag=10:
 # - When the depth rule is active (mode depth, or safe_or_depth in its fallback),
-#   the indexer can be up to 13 blocks behind the RPC chain head
+#   the indexer can be up to 11 blocks behind the RPC chain head
 # - The indexer must stay within 10 blocks of the confirmed block
 #
 # This ensures the server doesn't report "ready" when caught up to

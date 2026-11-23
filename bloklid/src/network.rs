@@ -111,11 +111,11 @@ impl Network {
     pub fn confirmations(&self) -> u16 {
         match self {
             Network::AnvilLocalhost => 1,
-            Network::JuraDev => 3,
-            Network::JuraProd => 3,
-            Network::PizPaluDev => 3,
-            Network::PizPaluStaging => 3,
-            Network::PizPaluProd => 3,
+            Network::JuraDev => 1,
+            Network::JuraProd => 1,
+            Network::PizPaluDev => 1,
+            Network::PizPaluStaging => 1,
+            Network::PizPaluProd => 1,
         }
     }
 
