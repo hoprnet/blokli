@@ -7,7 +7,9 @@
 //! chain does not confirm, or the canonical chain has logs that the indexer never stored.
 //!
 //! A backend can return an empty or partial `eth_getLogs` response without an error. For this
-//! reason, the task re-checks a range that does not match on the next tip update. A mismatch is
+//! reason, the task counts a stored log as wrong only when the canonical hash of its block differs
+//! from the stored block hash, and skips the round when the backend does not have the block. It
+//! also re-checks a range that does not match on the next tip update. A mismatch is
 //! corroborated when both checks report the same difference. The task counts a corroborated
 //! mismatch in `blokli_fcr_false_confirmations_total`, persists it in
 //! `chain_info.verification_failed_at` and records it in the shared [`VerificationStatus`] flag.
@@ -34,7 +36,11 @@ use std::{
 };
 
 use async_trait::async_trait;
-use blokli_chain_rpc::{HoprIndexerRpcOperations, errors::Result as RpcResult, tip::ChainTip};
+use blokli_chain_rpc::{
+    HoprIndexerRpcOperations,
+    errors::{Result as RpcResult, RpcError},
+    tip::ChainTip,
+};
 use blokli_db::{
     BlokliDbGeneralModelOperations, api::logs::BlokliDbLogOperations, info::BlokliDbInfoOperations,
     safe_contracts::BlokliDbSafeContractOperations, safe_history::BlokliDbSafeHistoryOperations,
@@ -87,6 +93,13 @@ pub(crate) trait CanonicalLogFetcher: Send + Sync {
         from_block: u64,
         to_block: u64,
     ) -> RpcResult<Vec<SerializableLog>>;
+
+    /// Returns the canonical hash of the block at `block`, or `None` if the endpoint does not have the block.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the RPC request fails.
+    async fn block_hash(&self, block: u64) -> RpcResult<Option<Hash>>;
 }
 
 #[async_trait]
@@ -98,6 +111,10 @@ impl<T: HoprIndexerRpcOperations + Send + Sync> CanonicalLogFetcher for T {
         to_block: u64,
     ) -> RpcResult<Vec<SerializableLog>> {
         HoprIndexerRpcOperations::get_logs_for_block_range(self, filters, from_block, to_block).await
+    }
+
+    async fn block_hash(&self, block: u64) -> RpcResult<Option<Hash>> {
+        HoprIndexerRpcOperations::block_hash(self, block).await
     }
 }
 
@@ -447,7 +464,41 @@ where
         .filter(|address| *address != token)
         .collect::<BTreeSet<_>>();
 
-    Ok(compare_logs(&stored, &canonical, &static_addresses))
+    let mut mismatch = compare_logs(&stored, &canonical, &static_addresses);
+    if mismatch.missing_from_chain.is_empty() && mismatch.changed.is_empty() {
+        return Ok(mismatch);
+    }
+
+    // A lagging or load-balanced backend can return an empty or partial `eth_getLogs` result
+    // without an error. If the backend does not have the range yet, skip the round. Otherwise
+    // count a stored log as wrong only when the canonical hash of its block differs from the
+    // stored block hash.
+    if rpc.block_hash(to).await?.is_none() {
+        return Err(RpcError::Other(format!("block {to} is not available on the endpoint")).into());
+    }
+    let blocks = mismatch
+        .missing_from_chain
+        .iter()
+        .chain(mismatch.changed.iter().map(|changed| &changed.stored))
+        .map(|entry| entry.block_number)
+        .collect::<BTreeSet<_>>();
+    let mut canonical_hashes = BTreeMap::new();
+    for block in blocks {
+        let hash = rpc
+            .block_hash(block)
+            .await?
+            .ok_or_else(|| RpcError::Other(format!("block {block} is not available on the endpoint")))?;
+        canonical_hashes.insert(block, hash.to_hex());
+    }
+    let block_differs = |entry: &LogIdentity| {
+        canonical_hashes
+            .get(&entry.block_number)
+            .is_some_and(|hash| *hash != entry.block_hash)
+    };
+    mismatch.missing_from_chain.retain(|entry| block_differs(entry));
+    mismatch.changed.retain(|changed| block_differs(&changed.stored));
+
+    Ok(mismatch)
 }
 
 /// Inputs of the post-finality verification task that stay the same while it runs.
@@ -644,7 +695,10 @@ mod tests {
         safe_contracts::BlokliDbSafeContractOperations,
     };
     use hopr_bindings::exports::alloy::rpc::types::Filter;
-    use hopr_types::primitive::prelude::{Address, SerializableLog};
+    use hopr_types::{
+        crypto::types::Hash,
+        primitive::prelude::{Address, SerializableLog},
+    };
     use mockall::mock;
     use tokio::{sync::watch, task::JoinHandle, time::timeout};
 
@@ -841,6 +895,8 @@ mod tests {
                 from_block: u64,
                 to_block: u64,
             ) -> RpcResult<Vec<SerializableLog>>;
+
+            async fn block_hash(&self, block: u64) -> RpcResult<Option<Hash>>;
         }
     }
 
@@ -852,6 +908,11 @@ mod tests {
             .return_const(ContractAddresses::default());
         handler.expect_contract_address_topics().return_const(Vec::new());
         handler
+    }
+
+    /// Makes every block hash differ from the stored hashes, as after a reorganization.
+    fn reorged_block_hashes(rpc: &mut MockCanonicalLogs) {
+        rpc.expect_block_hash().returning(|_| Ok(Some(Hash::from([0xee; 32]))));
     }
 
     struct VerificationHarness {
@@ -973,6 +1034,7 @@ mod tests {
                 counted.fetch_add(1, AtomicOrdering::SeqCst);
                 Ok(vec![sample_log(11, 0, 1, 2)])
             });
+        reorged_block_hashes(&mut rpc);
 
         let mut h = VerificationHarness::spawn(db.clone(), rpc, vec![static_addr()], Some(10), 0, 0).await;
         h.wait_round(1).await;
@@ -1013,6 +1075,7 @@ mod tests {
                 Ok(expected.clone())
             }
         });
+        reorged_block_hashes(&mut rpc);
         let mut h = VerificationHarness::spawn(db, rpc, Vec::new(), Some(10), 0, 0).await;
         h.wait_round(1).await;
         h.send_finalized(Some(12));
@@ -1039,6 +1102,7 @@ mod tests {
                 _ => Ok(logs.clone()),
             }
         });
+        reorged_block_hashes(&mut rpc);
         let mut h = VerificationHarness::spawn(db, rpc, Vec::new(), Some(10), 0, 0).await;
         h.wait_round(1).await;
         h.send_finalized(Some(12));
@@ -1101,6 +1165,47 @@ mod tests {
         h.send_finalized(Some(11));
         h.wait_round(2).await;
         assert!(!h.state.verification_failed());
+        h.finish().await
+    }
+
+    #[tokio::test]
+    async fn empty_logs_from_lagging_backend_do_not_halt() -> anyhow::Result<()> {
+        let logs = vec![sample_log(11, 0, 1, 2), sample_log(12, 0, 3, 4)];
+
+        // Case 1: the backend returns an empty log result twice but has the blocks with the stored
+        // hashes. The stored logs are canonical, so the range matches and the cursor advances.
+        let db = prepare_db(12, logs.clone()).await?;
+        let mut rpc = MockCanonicalLogs::new();
+        rpc.expect_get_logs_for_block_range()
+            .times(1)
+            .returning(|_, _, _| Ok(Vec::new()));
+        rpc.expect_block_hash()
+            .returning(|block| Ok(Some(Hash::from(if block == 11 { [1; 32] } else { [3; 32] }))));
+        let mut h = VerificationHarness::spawn(db, rpc, vec![static_addr()], Some(10), 0, 0).await;
+        h.wait_round(1).await;
+        h.send_finalized(Some(12));
+        h.wait_round(2).await;
+        h.send_finalized(Some(12));
+        h.wait_round(3).await;
+        assert!(!h.state.verification_failed());
+        assert_eq!(h.db.verification_failed_at().await?, None);
+        h.finish().await?;
+
+        // Case 2: the backend returns an empty log result twice and does not have the blocks yet.
+        // Each round is skipped and the task does not halt.
+        let db = prepare_db(12, logs).await?;
+        let mut rpc = MockCanonicalLogs::new();
+        rpc.expect_get_logs_for_block_range()
+            .returning(|_, _, _| Ok(Vec::new()));
+        rpc.expect_block_hash().returning(|_| Ok(None));
+        let mut h = VerificationHarness::spawn(db, rpc, vec![static_addr()], Some(10), 0, 0).await;
+        h.wait_round(1).await;
+        for round in 2..=4 {
+            h.send_finalized(Some(12));
+            h.wait_round(round).await;
+        }
+        assert!(!h.state.verification_failed());
+        assert_eq!(h.db.verification_failed_at().await?, None);
         h.finish().await
     }
 

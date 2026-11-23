@@ -451,6 +451,9 @@ pub trait HoprIndexerRpcOperations {
     /// Retrieves the latest block number.
     async fn block_number(&self) -> Result<u64>;
 
+    /// Returns the hash of the block at `block`, or `None` if the endpoint does not have the block.
+    async fn block_hash(&self, block: u64) -> Result<Option<Hash>>;
+
     /// Last published confirmed height. The tracker does not refresh.
     fn cached_confirmed_block(&self) -> Option<u64> {
         None

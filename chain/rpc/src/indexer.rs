@@ -294,6 +294,13 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
         self.get_block_number().await
     }
 
+    async fn block_hash(&self, block: u64) -> Result<Option<Hash>> {
+        Ok(self
+            .get_block(block)
+            .await?
+            .map(|block| Hash::from(block.header.hash.0)))
+    }
+
     fn cached_confirmed_block(&self) -> Option<u64> {
         self.tip_tracker().current().map(|tip| tip.confirmed)
     }

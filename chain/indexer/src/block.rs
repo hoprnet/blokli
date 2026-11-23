@@ -2064,6 +2064,7 @@ mod tests {
         #[async_trait]
         impl HoprIndexerRpcOperations for HoprIndexerOps {
             async fn block_number(&self) -> blokli_chain_rpc::errors::Result<u64>;
+            async fn block_hash(&self, block: u64) -> blokli_chain_rpc::errors::Result<Option<hopr_types::crypto::types::Hash>>;
             fn cached_confirmed_block(&self) -> Option<u64>;
             fn cached_header_timestamp(&self, block: u64) -> Option<u64>;
             async fn get_transaction_sender(&self, tx_hash: hopr_types::crypto::types::Hash) -> blokli_chain_rpc::errors::Result<Address>;
