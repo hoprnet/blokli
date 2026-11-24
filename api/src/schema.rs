@@ -9,7 +9,7 @@ use blokli_chain_api::{
     transaction_store::TransactionStore,
 };
 use blokli_chain_indexer::IndexerState;
-use blokli_chain_rpc::{HoprRpcOperations, rpc::RpcOperations, transport::HttpRequestor};
+use blokli_chain_rpc::{HoprRpcOperations, rpc::RpcOperations, tip::ChainTipTracker, transport::HttpRequestor};
 use blokli_chain_types::ContractAddresses;
 use futures::Stream;
 use sea_orm::DatabaseConnection;
@@ -55,6 +55,10 @@ pub struct LogsDatabase(pub DatabaseConnection);
 /// Type-erased read-only RPC operations used by GraphQL query resolvers.
 #[derive(Clone)]
 pub struct RpcOperationsContext(pub Arc<dyn HoprRpcOperations + Send + Sync>);
+
+/// Chain tip tracker that GraphQL resolvers use to report the live state of the Fast Confirmation Rule.
+#[derive(Clone)]
+pub struct ChainTipTrackerContext(pub Arc<ChainTipTracker>);
 
 /// Build the registry of all supported versioned schemas.
 ///
@@ -166,6 +170,7 @@ where
 /// - Contract addresses injected as context data
 /// - Expected block time injected as context data
 /// - Finality (block confirmations) injected as context data
+/// - Chain tip tracker injected as context data (for the confirmation mode and the FCR status in chain info)
 /// - IndexerState injected as context data (for subscription coordination)
 /// - Transaction executor and store injected as context data (for mutations and transaction queries)
 /// - RPC operations injected as context data (for passthrough balance queries)
@@ -215,6 +220,7 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
         .data(transaction_executor)
         .data(transaction_store)
         .data(RpcOperationsContext(query_rpc))
+        .data(ChainTipTrackerContext(rpc_operations.tip_tracker()))
         .data(rpc_operations)
         .data(readiness_checker)
         .data(subscription_snapshots);

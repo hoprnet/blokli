@@ -1637,7 +1637,6 @@ mod tests {
         store
             .insert(submitted_record(TEST_UUID, vec![0x01, 0x02, 0x03]))
             .unwrap();
-        let submitted_at = store.get(TEST_UUID).unwrap().submitted_at;
 
         assert!(store.mark_timeout_if_unchanged(TEST_UUID, 0, None, None).unwrap());
         store.resume_tracking(TEST_UUID).unwrap();

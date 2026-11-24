@@ -30,7 +30,7 @@ use tokio::net::TcpListener;
 
 use crate::{
     config::{Config, DatabaseConfig, PoolRole, pool_application_name},
-    errors::BloklidError,
+    errors::{BloklidError, ConfigError},
 };
 
 #[tokio::main]
@@ -199,6 +199,10 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
 
             let database = require_database(&cfg)?;
 
+            let rpc_ws_url = cfg
+                .parsed_rpc_ws_url()
+                .map_err(|error| BloklidError::Config(ConfigError::Parse(format!("invalid rpc_ws_url: {error}"))))?;
+
             let indexer_config = blokli_chain_indexer::IndexerConfig {
                 start_block_number: chain_network.channel_contract_deploy_block as u64,
                 fast_sync: cfg.indexer.fast_sync,
@@ -209,10 +213,17 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 data_directory: cfg.data_directory.clone(),
                 event_bus_capacity: cfg.indexer.subscription.event_bus_capacity,
                 shutdown_signal_capacity: cfg.indexer.subscription.shutdown_signal_capacity,
+                confirmation_mode: cfg.indexer.confirmation.mode,
+                confirmation_depth: cfg.indexer.confirmation.depth,
+                max_safe_gap: cfg.indexer.confirmation.max_safe_gap,
+                head_poll_interval: cfg.indexer.head_tracking.head_poll_interval,
+                head_subscription: cfg.indexer.head_tracking.head_subscription,
+                head_ws_url: rpc_ws_url,
                 safe_tx_prefetch: blokli_chain_indexer::SafeTxPrefetchConfig {
                     batch_size: cfg.indexer.safe_tx_prefetch.batch_size,
                     concurrency: cfg.indexer.safe_tx_prefetch.concurrency,
                 },
+                verify_finalized: cfg.indexer.confirmation.verify_finalized,
             };
 
             (
@@ -353,10 +364,13 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
             );
         }
 
-        startup::refresh_preseeded_safe_modules(blokli_chain.db(), blokli_chain.rpc()).await?;
-
         // Get IndexerState for API subscriptions
         let indexer_state = blokli_chain.indexer_state();
+        // A stored post-finality verification halt stops the index until an operator restores
+        // or rebuilds it. While the halt is stored, startup does not refresh the Safe owners.
+        if !indexer_state.verification_failed() {
+            startup::refresh_preseeded_safe_modules(blokli_chain.db(), blokli_chain.rpc()).await?;
+        }
 
         // Start API server if enabled (before starting indexer processes)
         // This ensures the API is available immediately even if indexer initialization takes time
@@ -373,7 +387,10 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                     cfg.rpc_url.clone(),
                     cfg.contracts,
                     cfg.network.expected_block_time(),
-                    cfg.network.confirmations(),
+                    cfg.indexer
+                        .confirmation
+                        .depth
+                        .unwrap_or_else(|| cfg.network.confirmations()),
                 )
             };
 

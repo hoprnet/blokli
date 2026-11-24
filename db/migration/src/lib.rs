@@ -15,6 +15,7 @@ mod m011_account_state_safe_address_index;
 mod m012_safe_module_address_index;
 mod m013_account_unique_chain_key;
 mod m014_safe_owner_snapshot;
+mod m015_post_finality_verification;
 
 /// This is a special block ID that even pre-dates the v3 contract deployment on Gnosis chain,
 /// and therefore could be safely used to mark data added via the migration.
@@ -51,6 +52,7 @@ impl MigratorTrait for Migrator {
             Box::new(m012_safe_module_address_index::Migration),
             Box::new(m013_account_unique_chain_key::Migration),
             Box::new(m014_safe_owner_snapshot::Migration),
+            Box::new(m015_post_finality_verification::Migration),
         ]
     }
 }
@@ -78,6 +80,7 @@ impl MigratorTrait for MigratorIndex {
             Box::new(m012_safe_module_address_index::Migration),
             Box::new(m013_account_unique_chain_key::Migration),
             Box::new(m014_safe_owner_snapshot::Migration),
+            Box::new(m015_post_finality_verification::Migration),
         ]
     }
 }
@@ -157,6 +160,43 @@ mod tests {
         let result = Migrator::up(&db, None).await;
 
         assert!(result.is_ok(), "Migrations should run without errors");
+    }
+
+    /// The verification halt marker column is nullable, and reverting m015 drops it.
+    ///
+    /// Thus a fresh or cleared index starts without a halt marker.
+    #[tokio::test]
+    async fn test_post_finality_verification_migration_up_and_down() {
+        for (db, use_index_only) in [(setup_test_db().await, false), (setup_test_db().await, true)] {
+            if use_index_only {
+                MigratorIndex::up(&db, None).await.unwrap();
+            } else {
+                Migrator::up(&db, None).await.unwrap();
+            }
+            let row = db
+                .query_one_raw(Statement::from_string(
+                    DbBackend::Sqlite,
+                    "SELECT type, \"notnull\" AS is_not_null FROM pragma_table_info('chain_info') WHERE name = \
+                     'verification_failed_at'",
+                ))
+                .await
+                .unwrap()
+                .expect("verification_failed_at column should exist");
+            assert_eq!(row.try_get::<String>("", "type").unwrap(), "INTEGER");
+            assert_eq!(row.try_get::<i64>("", "is_not_null").unwrap(), 0);
+        }
+
+        let db = setup_test_db().await;
+        Migrator::up(&db, None).await.unwrap();
+        Migrator::down(&db, Some(1)).await.unwrap();
+        let column = db
+            .query_one_raw(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT name FROM pragma_table_info('chain_info') WHERE name = 'verification_failed_at'",
+            ))
+            .await
+            .unwrap();
+        assert!(column.is_none(), "reverting m015 drops verification_failed_at");
     }
 
     #[tokio::test]

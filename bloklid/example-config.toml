@@ -14,6 +14,11 @@ network = "jura-dev"
 # If not specified, uses the network's default RPC endpoint (default: http://localhost:8545)
 rpc_url = "http://localhost:8545"
 
+# WebSocket URL for newHeads notifications. This value is optional.
+# If it is not set, bloklid uses rpc_url and replaces http(s) with ws(s).
+# If the provider serves WebSocket on a different path or port, set this value.
+# rpc_ws_url = "wss://rpc.gnosischain.com/wss"
+
 # Hard cap on RPC requests per second, enforced by a token bucket on the shared RPC client
 # (indexer, transaction executor, transaction monitor and API all share this budget).
 # Retried requests count towards the cap. A burst of up to a tenth of the rate (at least 1 request) is allowed.
@@ -141,6 +146,33 @@ enable_logs_snapshot = false
 # PortalFactory is allowed, but Portal-specific GraphQL queries are unavailable.
 enable_curvy_indexing = false
 
+# Configuration for how the indexer follows the chain head.
+[indexer.head_tracking]
+# If true (default), the indexer uses WebSocket newHeads notifications.
+# If the RPC endpoint cannot serve subscriptions, the indexer uses polling.
+# Set this value to false to always use polling.
+head_subscription = true
+# Time between two polls of the chain tip (default: 1s). The value must be greater than 0.
+# Each poll is one batched JSON-RPC request with three eth_getBlockByNumber calls
+# (latest, safe, finalized).
+head_poll_interval = "1s"
+
+# Configuration for the rule that gives the confirmed block from the observed chain tip.
+[indexer.confirmation]
+# Confirmation rule: depth | safe_or_depth | safe | finalized
+# If you omit it, all networks use depth. Set safe_or_depth to use the Fast Confirmation Rule.
+# mode = "depth"
+# Number of blocks behind the latest block for `depth` and for the fallback of `safe_or_depth`.
+# If it is not set, the network value applies (1 on all networks).
+# The value must be from 1 to 100.
+# depth = 1
+# If the gap from the latest block to the safe block is this value or more, FCR is degraded
+# (default: 32). The value must be at least 1.
+max_safe_gap = 32
+# If true (default), post-finality verification compares indexed blocks with the canonical
+# chain after the blocks become final.
+# verify_finalized = true
+
 # Deprecated: the indexer no longer pre-fetches transactions, so the keys in this
 # section are accepted and ignored. They are kept so existing configs still start.
 [indexer.safe_tx_prefetch]
@@ -199,16 +231,19 @@ gas_multiplier = 1.0
 # headroom. Transactions pay base fee + priority fee, not the max fee. Nodes must
 # hold gas_limit x maxFeePerGas upfront (10M gas when signed by hoprd); this
 # reserved balance is bounded by max_max_fee_per_gas (1 gwei reserves 0.01 xDAI).
-# Capping the priority fee bounds what a transaction pays.
+# The priority fee is paid in full on every transaction, so min_priority_fee_per_gas
+# must stay near the real minimum; the max fee floor and ceiling are caps that cost
+# nothing unless the base fee reaches them. Capping the priority fee bounds what a
+# transaction pays.
 # Constraints: min_priority_fee_per_gas <= max_priority_fee_per_gas,
 # min_priority_fee_per_gas <= min_max_fee_per_gas <= max_max_fee_per_gas,
 # max_priority_fee_per_gas <= max_max_fee_per_gas, and base_fee_headroom_factor must
 # be a finite number greater than or equal to 1.
 base_fee_headroom_factor = 8.0
 max_max_fee_per_gas      = 1000000000 # 1 gwei
-max_priority_fee_per_gas = 50000000   # 0.05 gwei
+max_priority_fee_per_gas = 1000000000 # 1 gwei
 min_max_fee_per_gas      = 500000000  # 0.5 gwei
-min_priority_fee_per_gas = 10000000   # 0.01 gwei
+min_priority_fee_per_gas = 100        # 100 wei
 
 # Maximum GraphQL query nesting depth. Queries exceeding this are rejected.
 # Real queries reach depth ~4; the default of 8 gives ample headroom.
@@ -264,7 +299,7 @@ max_queued_trace_jobs     = 128
 
 # Limits for the background receipt monitor. Durations accept humantime strings ("30s", "1m").
 # unmined_timeout:         how long a submitted transaction may stay unmined before it is marked as
-#                          timed out and diagnosed (default: "300s")
+#                          timed out and diagnosed (default: "45s")
 # request_timeout:         maximum time for one transaction receipt RPC request (default: "30s")
 # safe_inspection_timeout: maximum time to determine the inner outcome of a confirmed Safe
 #                          transaction; on timeout the transaction stays submitted and is retried
@@ -277,7 +312,7 @@ max_concurrent_checks   = 16
 request_timeout         = "30s"
 revert_reason_timeout   = "30s"
 safe_inspection_timeout = "30s"
-unmined_timeout         = "300s"
+unmined_timeout         = "45s"
 
 # Set false for RPC providers that do not expose debug_traceTransaction.
 # Safe success/failure status remains available from the transaction receipt.
@@ -314,12 +349,14 @@ interval = "15s"
 [api.health]
 # Maximum allowed indexer lag before the server reports "not ready"
 #
-# This limit is compared against finality-adjusted blocks from the RPC:
-#   lag = (rpc_block - finality) - indexed_block
+# bloklid compares this limit with the lag from the confirmed block of the chain tip tracker:
+#   lag = confirmed_block - indexed_block
 #
-# For jura-dev (Gnosis), finality=3 blocks. So with max_indexer_lag=10:
-# - The indexer can be up to 13 blocks behind the RPC chain head
-# - But must be within 10 blocks of confirmed blocks (with 3 confirmations)
+# The confirmed block follows the configured confirmation rule (depth, safe_or_depth,
+# safe, or finalized). Example for jura-dev (Gnosis) with depth=1 and max_indexer_lag=10:
+# - When the depth rule is active (mode depth, or safe_or_depth in its fallback),
+#   the indexer can be up to 11 blocks behind the RPC chain head
+# - The indexer must stay within 10 blocks of the confirmed block
 #
 # This ensures the server doesn't report "ready" when caught up to
 # unconfirmed blocks that might be reorganized.

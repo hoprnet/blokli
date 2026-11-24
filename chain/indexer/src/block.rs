@@ -2,10 +2,12 @@
 use std::error::Error as StdError;
 #[cfg(test)]
 use std::sync::Mutex;
+#[cfg(all(feature = "telemetry", not(test)))]
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{
     collections::HashSet,
     fmt::Display as FmtDisplay,
-    future::Future,
+    future::{Future, pending},
     path::Path,
     result::Result as StdResult,
     sync::{
@@ -49,6 +51,7 @@ use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     IndexerConfig, IndexerState,
+    constants::topics,
     errors::{CoreEthereumIndexerError, Result},
     numeric::{u64_to_i64, u64_to_u32},
     safe_owner_refresh::{
@@ -58,6 +61,7 @@ use crate::{
     snapshot::{SnapshotInfo, SnapshotManager},
     traits::{ChainLogHandler, PrefetchedLogData},
     utils::AbortOnDrop,
+    verification::{VerificationContext, run_verification},
 };
 
 /// Number of not-yet-committed blocks whose chain data the indexer fetches ahead of time.
@@ -65,6 +69,10 @@ use crate::{
 /// Only the read-only RPC lookups overlap: blocks are still stored, processed and committed
 /// strictly in canonical order, one database transaction per block.
 const BLOCK_PREFETCH_DEPTH: usize = 4;
+
+/// Number of blocks behind the confirmed tip that still sample the head lag.
+#[cfg(any(feature = "telemetry", test))]
+const HEAD_LAG_SAMPLE_WINDOW: u64 = BLOCK_PREFETCH_DEPTH as u64;
 
 /// Attempts made to mark a committed block's logs as processed before giving up.
 ///
@@ -148,10 +156,115 @@ where
     Ok(queued)
 }
 
+/// Parks the caller forever after post-finality verification found a mismatch.
+///
+/// If verification did not fail, the function returns at once. The flag is sticky, so a parked
+/// caller never continues. The wait never ends, so the process stays alive. The API continues to
+/// serve the indexed data until an operator restarts the daemon.
+async fn halt_if_verification_failed(indexer_state: &IndexerState, at_block: u64) {
+    if !indexer_state.verification_failed() {
+        return;
+    }
+
+    error!(
+        at_block,
+        "post-finality verification failed; restore or rebuild the index before resuming"
+    );
+    pending::<()>().await;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Display)]
-enum LogFilterPhase {
+pub(crate) enum LogFilterPhase {
     HistoricalDiscovery,
     Continuous,
+}
+
+/// Builds the RPC log filter set for the given indexing phase.
+///
+/// # Errors
+///
+/// Returns an error when the database cannot read the Safe contract addresses.
+pub(crate) async fn generate_log_filters<U, Db>(db: &Db, logs_handler: &U, phase: LogFilterPhase) -> Result<FilterSet>
+where
+    U: ChainLogHandler,
+    Db: BlokliDbSafeContractOperations,
+{
+    let static_addresses = logs_handler.contract_addresses();
+    let addresses_no_token = static_addresses
+        .iter()
+        .copied()
+        .filter(|a| *a != logs_handler.contract_addresses_map().token)
+        .collect::<Vec<_>>();
+
+    let mut filter_base_addresses = vec![];
+    let mut filter_base_topics = vec![];
+
+    addresses_no_token.iter().for_each(|address| {
+        let topics = logs_handler.contract_address_topics(*address);
+        if !topics.is_empty() {
+            filter_base_addresses.push(AlloyAddress::from_hopr_address(*address));
+            filter_base_topics.extend(topics);
+        }
+    });
+
+    let filter_base = Filter::new()
+        .address(filter_base_addresses)
+        .event_signature(filter_base_topics);
+    let safe_addresses = db.get_safe_contract_addresses(None).await?;
+    let safe_filter = (!safe_addresses.is_empty()).then(|| {
+        Filter::new()
+            .address(
+                safe_addresses
+                    .iter()
+                    .copied()
+                    .map(AlloyAddress::from_hopr_address)
+                    .collect::<Vec<_>>(),
+            )
+            .event_signature(topics::safe_contract())
+    });
+    let filter_token_approval = (!safe_addresses.is_empty()).then(|| {
+        Filter::new()
+            .address(AlloyAddress::from_hopr_address(
+                logs_handler.contract_addresses_map().token,
+            ))
+            .event_signature(Approval::SIGNATURE_HASH)
+            .topic1(
+                safe_addresses
+                    .iter()
+                    .copied()
+                    .map(AlloyAddress::from_hopr_address)
+                    .map(|address| address.into_word())
+                    .collect::<Vec<_>>(),
+            )
+    });
+
+    match phase {
+        LogFilterPhase::HistoricalDiscovery => Ok(FilterSet {
+            all: vec![filter_base.clone()],
+            token: vec![],
+            no_token: vec![filter_base],
+        }),
+        LogFilterPhase::Continuous => {
+            let mut all_filters = vec![filter_base.clone()];
+            if let Some(filter_safe_contract) = safe_filter.clone() {
+                all_filters.push(filter_safe_contract);
+            }
+            if let Some(filter_token_approval) = filter_token_approval.clone() {
+                all_filters.push(filter_token_approval);
+            }
+
+            let mut no_token_filters = vec![filter_base];
+            if let Some(filter_safe_contract) = safe_filter {
+                no_token_filters.push(filter_safe_contract);
+            }
+
+            Ok(FilterSet {
+                all: all_filters,
+                token: filter_token_approval.into_iter().collect(),
+                no_token: no_token_filters,
+            })
+        }
+    }
 }
 
 #[cfg(all(feature = "telemetry", not(test)))]
@@ -178,6 +291,11 @@ lazy_static::lazy_static! {
             "Current data source of the Indexer",
             &["source"],
     ).inspect_err(|error| error!(%error, metric = "blokli_indexer_data_source", "failed to register telemetry metric")).ok();
+    static ref METRIC_INDEXER_HEAD_LAG_SECONDS: Option<SimpleGauge> =
+        SimpleGauge::new(
+            "blokli_indexer_head_lag_seconds",
+            "Seconds from block timestamp to commit, sampled near the confirmed tip when the timestamp is cached",
+    ).inspect_err(|error| error!(%error, metric = "blokli_indexer_head_lag_seconds", "failed to register telemetry metric")).ok();
 
 
     /// Wall-clock time the indexer spends in each per-block step.
@@ -204,6 +322,72 @@ pub struct ReorgInfo {
     pub affected_block_range: (u64, u64),
     /// Number of logs that were marked as removed
     pub removed_log_count: usize,
+}
+
+/// Returns whether a committed block is close enough to the confirmed tip to sample the head lag.
+///
+/// While the indexer works through a backlog, the confirmed tip is far ahead of the committed
+/// block. Only blocks inside the prefetch window of the confirmed tip measure the live head lag.
+#[cfg(any(feature = "telemetry", test))]
+fn is_near_confirmed_tip(confirmed: u64, block_id: u64) -> bool {
+    confirmed.saturating_sub(block_id) <= HEAD_LAG_SAMPLE_WINDOW
+}
+
+/// Samples the head lag of a committed block when the block is near the confirmed tip.
+///
+/// The gauge changes only when it is registered. If a cache entry is missing, the gauge does not
+/// change.
+#[cfg(feature = "telemetry")]
+fn maybe_record_head_lag<T>(rpc: &T, block_id: u64)
+where
+    T: HoprIndexerRpcOperations + Sync,
+{
+    if !rpc
+        .cached_confirmed_block()
+        .is_some_and(|confirmed| is_near_confirmed_tip(confirmed, block_id))
+    {
+        return;
+    }
+
+    #[cfg(not(test))]
+    let observed_at_secs = match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(now) => now.as_secs(),
+        Err(error) => {
+            debug!(%error, block_id, "failed to read the wall clock for the head lag sample");
+            return;
+        }
+    };
+
+    #[cfg(test)]
+    let observed_at_secs = 0;
+
+    record_indexer_head_lag(rpc.cached_header_timestamp(block_id), observed_at_secs);
+}
+
+/// Skips the head lag sample in builds without telemetry.
+///
+/// These builds have no gauge, so the function makes no RPC call.
+#[cfg(not(feature = "telemetry"))]
+fn maybe_record_head_lag<T>(_rpc: &T, _block_id: u64)
+where
+    T: HoprIndexerRpcOperations + Sync,
+{
+}
+
+/// Records the head lag of a block that the indexer just committed.
+///
+/// The sample comes after the writes of the block, so it includes the time that the indexer
+/// spent on the block. The lag is the wall-clock time minus the header timestamp of the committed
+/// block. The caller reads the wall-clock time before the header lookup.
+#[cfg(feature = "telemetry")]
+fn record_indexer_head_lag(header_timestamp: Option<u64>, observed_at_secs: u64) {
+    #[cfg(not(test))]
+    if let (Some(metric), Some(header_timestamp)) = (METRIC_INDEXER_HEAD_LAG_SECONDS.as_ref(), header_timestamp) {
+        metric.set(observed_at_secs.saturating_sub(header_timestamp) as f64);
+    }
+
+    #[cfg(test)]
+    let _ = (header_timestamp, observed_at_secs);
 }
 
 /// Records how long one per-block indexing step took.
@@ -392,6 +576,18 @@ where
 
         info!("Starting chain indexing");
 
+        // If a mismatch is not resolved, do not start fast sync or historical replay. This also
+        // applies when verification is now disabled. Return normally so that the daemon can serve
+        // /readyz.
+        if let Some(from) = self.db.verification_failed_at().await? {
+            self.indexer_state.mark_verification_failed();
+            error!(
+                from,
+                "index halted by post-finality verification; restore or rebuild the index"
+            );
+            return Ok(AbortHandle::new_pair().0);
+        }
+
         let rpc = self
             .rpc
             .take()
@@ -572,8 +768,45 @@ where
 
         info!(next_block_to_process, "Indexer start point");
 
+        let last_indexed_at_startup = u64::from(self.db.get_indexer_state_info(None).await?.latest_block_number);
+
         let indexer_state = self.indexer_state.clone();
+        let tip_updates = if self.cfg.verify_finalized {
+            rpc.subscribe_tip()
+        } else {
+            info!("post-finality verification is disabled by configuration");
+            None
+        };
+        // The indexer never indexes blocks below the configured start, so verification never checks them.
+        let verification_floor = self.cfg.start_block_number.saturating_sub(1);
+        let verification_db = db.clone();
+        let verification_handler = logs_handler.clone();
+        let verification_state = indexer_state.clone();
         let (indexing_process, indexing_abort_handle) = abortable(async move {
+            // The verification task, the indexing loop and the Safe owner refresh task share this client.
+            let rpc = Arc::new(rpc);
+            let verification_guard = tip_updates.map(|tip_updates| {
+                let rpc_for_verification = rpc.clone();
+                AbortOnDrop(tokio::spawn(async move {
+                    run_verification(
+                        tip_updates,
+                        rpc_for_verification.as_ref(),
+                        VerificationContext {
+                            db: verification_db,
+                            logs_handler: verification_handler,
+                            indexer_state: verification_state,
+                            last_indexed_at_startup,
+                            floor: verification_floor,
+                            round_updates: None,
+                        },
+                    )
+                    .await;
+                }))
+            });
+            if verification_guard.is_none() {
+                debug!("chain tip tracking is unavailable, post-finality verification is off");
+            }
+
             // Update the chain head once again
             debug!("Updating chain head at indexer startup");
             let historical_sync_head = Self::update_chain_head(&rpc, chain_head.clone()).await;
@@ -626,6 +859,11 @@ where
                     return;
                 }
 
+                if indexer_state.verification_failed() {
+                    let _ = tx.try_send(());
+                    halt_if_verification_failed(&indexer_state, historical_sync_head).await;
+                }
+
                 let checksum = match db.update_logs_checksums().await {
                     Ok(checksum) => checksum,
                     Err(error) => {
@@ -648,6 +886,7 @@ where
             }
 
             is_synced.store(true, Ordering::Relaxed);
+
             if let Err(error) = tx.try_send(()) {
                 error!(%error, "failed to notify about achieving indexer synchronization")
             }
@@ -663,11 +902,10 @@ where
             let refresh_goal_block = stream_start_block.saturating_sub(1);
             let latest_processed_block = Arc::new(AtomicU64::new(refresh_goal_block));
             let (snapshot_tx, mut snapshot_rx) = channel::<SafeSnapshotRead>(SAFE_SNAPSHOT_CONCURRENCY * 2);
-            let rpc = Arc::new(rpc);
             // The lookup of the Safes to refresh is retried; if it keeps failing the phase fails below, because
             // nothing rescans later and Safes whose owners changed during downtime would stay stale.
             let mut startup_failure: Option<String> = None;
-            let _owner_refresh_guard = {
+            let mut owner_refresh_guard = {
                 match queue_pending_safe_owner_snapshots(
                     || db.get_safes_pending_owner_snapshot(None, refresh_goal_block),
                     &indexer_state,
@@ -720,6 +958,12 @@ where
                 let mut event_stream = Box::pin(Self::prefetch_block_data(&logs_handler, block_stream, true));
 
                 loop {
+                    if indexer_state.verification_failed() {
+                        // Dropping the guard aborts the Safe owner refresh task.
+                        drop(owner_refresh_guard.take());
+                        halt_if_verification_failed(&indexer_state, stream_start_block).await;
+                    }
+
                     let (block, prefetched) = tokio::select! {
                         item = event_stream.next() => match item {
                             Some(item) => item,
@@ -739,6 +983,7 @@ where
                             continue;
                         }
                     };
+
                     let store_started = Instant::now();
                     if let Err(error) = Self::store_block_logs(&db, &logs_handler, &block).await {
                         break 'stream_refresh Some(format!(
@@ -749,7 +994,7 @@ where
                     record_block_step("store", store_started);
 
                     let process_started = Instant::now();
-                    Self::process_block(
+                    let processed = Self::process_block(
                         &db,
                         &logs_handler,
                         block.clone(),
@@ -761,6 +1006,10 @@ where
                     )
                     .await;
                     record_block_step("process", process_started);
+
+                    if processed.is_some() {
+                        maybe_record_head_lag(rpc.as_ref(), block.block_id);
+                    }
 
                     stream_start_block = block.block_id.saturating_add(1);
                     latest_processed_block.store(block.block_id, Ordering::Relaxed);
@@ -878,82 +1127,7 @@ where
     /// * `token` contains owner-filtered token Approval filters.
     /// * `no_token` contains non-token filters for historical discovery.
     async fn generate_log_filters(db: &Db, logs_handler: &U, phase: LogFilterPhase) -> Result<FilterSet> {
-        let static_addresses = logs_handler.contract_addresses();
-        let addresses_no_token = static_addresses
-            .iter()
-            .copied()
-            .filter(|a| *a != logs_handler.contract_addresses_map().token)
-            .collect::<Vec<_>>();
-
-        let mut filter_base_addresses = vec![];
-        let mut filter_base_topics = vec![];
-
-        addresses_no_token.iter().for_each(|address| {
-            let topics = logs_handler.contract_address_topics(*address);
-            if !topics.is_empty() {
-                filter_base_addresses.push(AlloyAddress::from_hopr_address(*address));
-                filter_base_topics.extend(topics);
-            }
-        });
-
-        let filter_base = Filter::new()
-            .address(filter_base_addresses)
-            .event_signature(filter_base_topics);
-        let safe_addresses = db.get_safe_contract_addresses(None).await?;
-        let safe_filter = (!safe_addresses.is_empty()).then(|| {
-            Filter::new()
-                .address(
-                    safe_addresses
-                        .iter()
-                        .copied()
-                        .map(AlloyAddress::from_hopr_address)
-                        .collect::<Vec<_>>(),
-                )
-                .event_signature(crate::constants::topics::safe_contract())
-        });
-        let filter_token_approval = (!safe_addresses.is_empty()).then(|| {
-            Filter::new()
-                .address(AlloyAddress::from_hopr_address(
-                    logs_handler.contract_addresses_map().token,
-                ))
-                .event_signature(Approval::SIGNATURE_HASH)
-                .topic1(
-                    safe_addresses
-                        .iter()
-                        .copied()
-                        .map(AlloyAddress::from_hopr_address)
-                        .map(|address| address.into_word())
-                        .collect::<Vec<_>>(),
-                )
-        });
-
-        match phase {
-            LogFilterPhase::HistoricalDiscovery => Ok(FilterSet {
-                all: vec![filter_base.clone()],
-                token: vec![],
-                no_token: vec![filter_base],
-            }),
-            LogFilterPhase::Continuous => {
-                let mut all_filters = vec![filter_base.clone()];
-                if let Some(filter_safe_contract) = safe_filter.clone() {
-                    all_filters.push(filter_safe_contract);
-                }
-                if let Some(filter_token_approval) = filter_token_approval.clone() {
-                    all_filters.push(filter_token_approval);
-                }
-
-                let mut no_token_filters = vec![filter_base];
-                if let Some(filter_safe_contract) = safe_filter {
-                    no_token_filters.push(filter_safe_contract);
-                }
-
-                Ok(FilterSet {
-                    all: all_filters,
-                    token: filter_token_approval.into_iter().collect(),
-                    no_token: no_token_filters,
-                })
-            }
-        }
+        generate_log_filters(db, logs_handler, phase).await
     }
 
     /// Wraps a stream of blocks so that each block's chain data is fetched ahead of its turn.
@@ -1101,6 +1275,10 @@ where
         while let Some((block, prefetched)) = event_stream.next().await {
             if block.block_id > end_block {
                 break;
+            }
+
+            if indexer_state.verification_failed() {
+                return Ok(());
             }
 
             let store_started = Instant::now();
@@ -1785,7 +1963,7 @@ mod tests {
     };
 
     use async_trait::async_trait;
-    use blokli_chain_rpc::{BlockWithLogs, SafeOwnersSnapshot, errors::RpcError};
+    use blokli_chain_rpc::{BlockWithLogs, SafeOwnersSnapshot, errors::RpcError, tip::ChainTip};
     use blokli_chain_types::{ContractAddresses, chain_events::ChainEventType};
     use blokli_db::{
         TargetDb, accounts::BlokliDbAccountOperations, db::BlokliDb, errors::DbSqlError,
@@ -1814,11 +1992,13 @@ mod tests {
     };
     use mockall::{mock, predicate};
     use multiaddr::Multiaddr;
+    use tokio::sync::{Notify, watch};
 
     use super::*;
     use crate::{
         safe_owner_refresh::SAFE_SNAPSHOT_BATCH_SIZE,
         traits::{ChainLogHandler, MockChainLogHandler, PrefetchedTransactions},
+        verification::compare_logs,
     };
 
     lazy_static::lazy_static! {
@@ -1884,6 +2064,9 @@ mod tests {
         #[async_trait]
         impl HoprIndexerRpcOperations for HoprIndexerOps {
             async fn block_number(&self) -> blokli_chain_rpc::errors::Result<u64>;
+            async fn block_hash(&self, block: u64) -> blokli_chain_rpc::errors::Result<Option<hopr_types::crypto::types::Hash>>;
+            fn cached_confirmed_block(&self) -> Option<u64>;
+            fn cached_header_timestamp(&self, block: u64) -> Option<u64>;
             async fn get_transaction_sender(&self, tx_hash: hopr_types::crypto::types::Hash) -> blokli_chain_rpc::errors::Result<Address>;
             async fn get_transaction_bytes(&self, tx_hash: hopr_types::crypto::types::Hash) -> blokli_chain_rpc::errors::Result<Vec<u8>>;
             async fn get_transaction_bytes_batch(&self, tx_hashes: &[hopr_types::crypto::types::Hash]) -> Vec<blokli_chain_rpc::errors::Result<Vec<u8>>>;
@@ -1912,7 +2095,53 @@ mod tests {
             async fn get_transaction_count(&self, address: Address) -> blokli_chain_rpc::errors::Result<u64>;
             async fn get_channel_closure_notice_period(&self) -> blokli_chain_rpc::errors::Result<std::time::Duration>;
             async fn get_hopr_module_from_safe(&self, safe_address: Address) -> blokli_chain_rpc::errors::Result<Option<Address>>;
+
+            fn subscribe_tip(&self) -> Option<watch::Receiver<Option<ChainTip>>>;
+            async fn get_logs_for_block_range(
+                &self,
+                filters: Vec<Filter>,
+                from_block: u64,
+                to_block: u64,
+            ) -> blokli_chain_rpc::errors::Result<Vec<SerializableLog>>;
         }
+    }
+
+    /// Returns mock RPC operations without a chain tip, so post-finality verification stays off.
+    fn mock_rpc() -> MockHoprIndexerOps {
+        let mut rpc = MockHoprIndexerOps::new();
+        rpc.expect_subscribe_tip().returning(|| None);
+        rpc.expect_cached_confirmed_block().return_const(None);
+        rpc
+    }
+
+    /// Time that a test gives the indexer to take one more step after the halt check.
+    ///
+    /// Each test first waits for a mocked call that runs before the check. Thus this period elapses
+    /// without progress only when the indexer is parked.
+    const HALT_QUIET_PERIOD: Duration = Duration::from_millis(500);
+
+    /// Asserts that the indexer does not take one more step after its halt check.
+    async fn assert_halts_without_progress<F>(progress: F, what: &str)
+    where
+        F: Future<Output = ()>,
+    {
+        assert!(
+            tokio::time::timeout(HALT_QUIET_PERIOD, progress).await.is_err(),
+            "{what}"
+        );
+    }
+
+    /// Upper bound for a setup step of a halt test.
+    const HALT_SETUP_TIMEOUT: Duration = Duration::from_secs(5);
+
+    /// Waits for a setup signal of a halt test and fails when the signal does not arrive in time.
+    async fn wait_for_setup(signal: &Notify, what: &str) {
+        assert!(
+            tokio::time::timeout(HALT_SETUP_TIMEOUT, signal.notified())
+                .await
+                .is_ok(),
+            "{what}"
+        );
     }
 
     #[derive(Clone)]
@@ -3323,7 +3552,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_indexer_refreshes_safe_filters_after_safe_discovery() -> anyhow::Result<()> {
-        let mut rpc = MockHoprIndexerOps::new();
+        let mut rpc = mock_rpc();
         let db = BlokliDb::new_in_memory().await?;
         let indexer_state = IndexerState::default();
         let cfg = IndexerConfig::default();
@@ -3410,11 +3639,367 @@ mod tests {
         Ok(())
     }
 
+    /// Returns an indexer configuration with fast sync that starts at `start_block`.
+    fn test_indexer_config(start_block: u64) -> IndexerConfig {
+        IndexerConfig::new(
+            start_block,
+            true,
+            false,
+            false,
+            None,
+            None,
+            "/tmp/test_data".to_string(),
+            1000,
+            10,
+        )
+    }
+
+    async fn setup_single_contract_env(
+        addr: Address,
+        contracts: ContractAddresses,
+    ) -> anyhow::Result<(BlokliDb, MockChainLogHandler)> {
+        let db = BlokliDb::new_in_memory().await?;
+        let topic = Hash::create(&[b"my topic"]);
+        db.ensure_logs_origin(vec![(addr, topic)]).await?;
+
+        let mut handlers = MockChainLogHandler::new();
+        handlers.expect_contract_addresses().return_const(vec![addr]);
+        handlers
+            .expect_contract_address_topics()
+            .return_const(vec![B256::from_slice(topic.as_ref())]);
+        handlers.expect_contract_addresses_map().return_const(contracts);
+        Ok((db, handlers))
+    }
+
+    // The indexer must take the head lag sample after it commits the block.
+    #[tokio::test]
+    async fn test_indexer_head_lag_sampling_near_tip_and_backlog() -> anyhow::Result<()> {
+        let addr = Address::new(b"my address 123456789");
+        let head_block = 10;
+        let block_id = head_block + 1;
+
+        // Near the tip: the indexer commits the block, then samples the cached header timestamp.
+        let (db, handlers) = setup_single_contract_env(addr, ContractAddresses::default()).await?;
+        let samples = Arc::new(StdAtomicUsize::new(0));
+        let sampled = samples.clone();
+        let mut rpc = MockHoprIndexerOps::new();
+        rpc.expect_subscribe_tip().returning(|| None);
+        rpc.expect_cached_confirmed_block()
+            .times(usize::from(cfg!(feature = "telemetry")))
+            .return_const(Some(head_block));
+        rpc.expect_block_number().times(2).returning(move || Ok(head_block));
+        rpc.expect_get_channel_closure_notice_period()
+            .returning(|| Ok(Duration::from_secs(1)));
+        rpc.expect_try_stream_logs()
+            .times(1)
+            .withf(move |start: &u64, _, is_synced: &bool| *start == block_id && *is_synced)
+            .return_once(move |_, _, _| {
+                Ok(Box::pin(futures::stream::iter(vec![BlockWithLogs {
+                    block_id,
+                    logs: BTreeSet::new(),
+                }])))
+            });
+        rpc.expect_cached_header_timestamp()
+            .times(usize::from(cfg!(feature = "telemetry")))
+            .returning(move |block| {
+                assert_eq!(block, block_id);
+                sampled.fetch_add(1, StdOrdering::SeqCst);
+                Some(1_700_000_000)
+            });
+
+        let indexer = Indexer::new(
+            rpc,
+            handlers,
+            db,
+            test_indexer_config(block_id),
+            IndexerState::default(),
+        )
+        .without_panic_on_completion();
+        let abort_handle = indexer.start().await?;
+        for _ in 0..100 {
+            if samples.load(StdOrdering::SeqCst) > 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        abort_handle.abort();
+        assert_eq!(
+            samples.load(StdOrdering::SeqCst),
+            usize::from(cfg!(feature = "telemetry"))
+        );
+
+        // A backlog block far behind the confirmed tip: the indexer skips the header lookup.
+        let (db, handlers) = setup_single_contract_env(addr, ContractAddresses::default()).await?;
+        let mut rpc = MockHoprIndexerOps::new();
+        rpc.expect_subscribe_tip().returning(|| None);
+        rpc.expect_block_number().times(2).returning(move || Ok(head_block));
+        rpc.expect_cached_confirmed_block()
+            .times(usize::from(cfg!(feature = "telemetry")))
+            .return_const(Some(block_id + HEAD_LAG_SAMPLE_WINDOW + 1));
+        rpc.expect_get_channel_closure_notice_period()
+            .returning(|| Ok(Duration::from_secs(1)));
+        rpc.expect_try_stream_logs()
+            .times(1)
+            .withf(move |start: &u64, _, is_synced: &bool| *start == block_id && *is_synced)
+            .return_once(move |_, _, _| {
+                Ok(Box::pin(futures::stream::iter(vec![BlockWithLogs {
+                    block_id,
+                    logs: BTreeSet::new(),
+                }])))
+            });
+        rpc.expect_cached_header_timestamp().never();
+
+        let indexer = Indexer::new(
+            rpc,
+            handlers,
+            db,
+            test_indexer_config(block_id),
+            IndexerState::default(),
+        )
+        .without_panic_on_completion();
+        let abort_handle = indexer.start().await?;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        abort_handle.abort();
+
+        // Without a confirmed height, the sample is skipped and no RPC call occurs. Then check the
+        // boundaries of the window.
+        let mut rpc = MockHoprIndexerOps::new();
+        rpc.expect_cached_confirmed_block()
+            .times(usize::from(cfg!(feature = "telemetry")))
+            .return_const(None);
+        rpc.expect_cached_header_timestamp().never();
+        rpc.expect_block_number().never();
+        maybe_record_head_lag(&rpc, 1);
+
+        assert!(is_near_confirmed_tip(100, 100));
+        assert!(is_near_confirmed_tip(100, 100 - HEAD_LAG_SAMPLE_WINDOW));
+        assert!(!is_near_confirmed_tip(100, 100 - HEAD_LAG_SAMPLE_WINDOW - 1));
+        assert!(is_near_confirmed_tip(10, 11));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_indexer_halts_without_processing_blocks_when_verification_failed() -> anyhow::Result<()> {
+        let addr = Address::new(b"my address 123456789");
+        let (db, mut handlers) = setup_single_contract_env(addr, ContractAddresses::default()).await?;
+
+        let head_block = 10;
+        let block = BlockWithLogs {
+            block_id: head_block + 1,
+            logs: build_announcement_logs(addr, 1, head_block + 1, 1)?
+                .into_iter()
+                .collect(),
+        };
+
+        let processed = Arc::new(Notify::new());
+        let processed_for_handler = processed.clone();
+        handlers.expect_collect_log_event().returning(move |_, _| {
+            processed_for_handler.notify_one();
+            Ok(())
+        });
+
+        let stream_requested = Arc::new(Notify::new());
+        let requested_for_rpc = stream_requested.clone();
+        let mut rpc = mock_rpc();
+        rpc.expect_block_number().times(2).returning(move || Ok(head_block));
+        rpc.expect_get_channel_closure_notice_period()
+            .returning(|| Ok(Duration::from_secs(1)));
+        rpc.expect_try_stream_logs()
+            .times(1)
+            .withf(move |start: &u64, _, is_synced: &bool| *start == head_block + 1 && *is_synced)
+            .return_once(move |_, _, _| {
+                requested_for_rpc.notify_one();
+                Ok(Box::pin(futures::stream::iter(vec![block])))
+            });
+
+        let indexer_state = IndexerState::default();
+        indexer_state.mark_verification_failed();
+        let indexer = Indexer::new(
+            rpc,
+            handlers,
+            db.clone(),
+            test_indexer_config(head_block + 1),
+            indexer_state,
+        )
+        .without_panic_on_completion();
+
+        let abort_handle = indexer.start().await?;
+        wait_for_setup(&stream_requested, "stream_requested").await;
+        assert_halts_without_progress(processed.notified(), "indexer must not process a block after halt").await;
+        abort_handle.abort();
+        assert_eq!(db.get_logs_count(None, None).await?, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_historical_phase_halts_before_storing_the_next_block_when_verification_failed() -> anyhow::Result<()>
+    {
+        let addr = Address::new(b"my address 123456789");
+        let (db, mut handlers) = setup_single_contract_env(addr, ContractAddresses::default()).await?;
+
+        let indexer_state = IndexerState::default();
+        let state_for_handler = indexer_state.clone();
+        let first_processed = Arc::new(Notify::new());
+        let second_processed = Arc::new(Notify::new());
+        let first_for_handler = first_processed.clone();
+        let second_for_handler = second_processed.clone();
+        handlers.expect_collect_log_event().returning(move |log, _| {
+            match log.block_number {
+                1 => {
+                    state_for_handler.mark_verification_failed();
+                    first_for_handler.notify_one();
+                }
+                2 => second_for_handler.notify_one(),
+                _ => {}
+            }
+            Ok(())
+        });
+
+        let first_block = BlockWithLogs {
+            block_id: 1,
+            logs: build_announcement_logs(addr, 1, 1, 0)?.into_iter().collect(),
+        };
+        let second_block = BlockWithLogs {
+            block_id: 2,
+            logs: build_announcement_logs(addr, 1, 2, 0)?.into_iter().collect(),
+        };
+        let mut rpc = mock_rpc();
+        rpc.expect_block_number().times(2).returning(|| Ok(2));
+        rpc.expect_get_channel_closure_notice_period()
+            .returning(|| Ok(Duration::from_secs(1)));
+        rpc.expect_try_stream_logs()
+            .times(1)
+            .withf(|start: &u64, _, is_synced: &bool| *start == 1 && !*is_synced)
+            .return_once(move |_, _, _| Ok(Box::pin(futures::stream::iter(vec![first_block, second_block]))));
+
+        let indexer = Indexer::new(rpc, handlers, db.clone(), test_indexer_config(1), indexer_state.clone())
+            .without_panic_on_completion();
+        let task = tokio::spawn(async move { indexer.start().await });
+
+        wait_for_setup(&first_processed, "first_processed").await;
+        assert_halts_without_progress(
+            second_processed.notified(),
+            "historical loop must not process block after failure",
+        )
+        .await;
+        assert!(indexer_state.verification_failed());
+        assert_eq!(db.get_logs_count(None, None).await?, 1);
+        tokio::time::timeout(HALT_SETUP_TIMEOUT, task).await???.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_persisted_verification_halt_skips_startup_without_rpc_calls() -> anyhow::Result<()> {
+        let addr = Address::new(b"my address 123456789");
+        let db = BlokliDb::new_in_memory().await?;
+        db.set_verification_failed_at(Some(11)).await?;
+
+        for verify_finalized in [true, false] {
+            let fresh = IndexerState::default();
+            let mut handlers = MockChainLogHandler::new();
+            handlers.expect_contract_addresses().return_const(vec![addr]);
+            handlers
+                .expect_contract_addresses_map()
+                .return_const(ContractAddresses::default());
+            handlers.expect_contract_address_topics().return_const(Vec::new());
+
+            let indexer = Indexer::new(
+                MockHoprIndexerOps::new(),
+                handlers,
+                db.clone(),
+                IndexerConfig {
+                    verify_finalized,
+                    ..Default::default()
+                },
+                fresh.clone(),
+            );
+            let handle = tokio::time::timeout(Duration::from_secs(1), indexer.start()).await??;
+            assert!(fresh.verification_failed());
+            handle.abort();
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_stored_block_logs_match_the_canonical_no_token_set() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let announcement_address = Address::from([0x11; 20]);
+        let token_address = Address::from([0x22; 20]);
+
+        let mut handlers = MockChainLogHandler::new();
+        handlers
+            .expect_contract_addresses()
+            .return_const(vec![announcement_address, token_address]);
+        handlers
+            .expect_contract_addresses_map()
+            .return_const(ContractAddresses {
+                token: token_address,
+                ..ContractAddresses::default()
+            });
+        handlers.expect_contract_address_topics().return_const(Vec::new());
+
+        let base_log = build_announcement_logs(announcement_address, 1, 11, 0)?.remove(0);
+        let token_log = SerializableLog {
+            address: token_address,
+            topics: vec![Approval::SIGNATURE_HASH.0],
+            data: vec![1, 2, 3],
+            tx_index: 1,
+            block_number: 11,
+            block_hash: Hash::create(&[b"block 11"]).into(),
+            tx_hash: Hash::create(&[b"token tx"]).into(),
+            log_index: 1,
+            removed: false,
+            ..Default::default()
+        };
+        let block = BlockWithLogs {
+            block_id: 11,
+            logs: BTreeSet::from([base_log.clone(), token_log]),
+        };
+
+        Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::store_block_logs(&db, &handlers, &block).await?;
+        let stored = db.get_logs(Some(11), Some(0)).await?;
+        assert_eq!(stored.len(), 1);
+        let static_addresses = BTreeSet::from([announcement_address, token_address]);
+        assert!(compare_logs(&stored, &[base_log], &static_addresses).is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_post_finality_verification_subscribes_only_when_enabled() -> anyhow::Result<()> {
+        let addr = Address::new(b"my address 123456789");
+        for (verify_finalized, expected_calls) in [(true, 1usize), (false, 0usize)] {
+            let (db, handlers) = setup_single_contract_env(addr, ContractAddresses::default()).await?;
+            let head_block = 10;
+            let subscribe_calls = Arc::new(StdAtomicUsize::new(0));
+            let calls = subscribe_calls.clone();
+            let mut rpc = MockHoprIndexerOps::new();
+            rpc.expect_subscribe_tip().returning(move || {
+                calls.fetch_add(1, StdOrdering::SeqCst);
+                None
+            });
+            rpc.expect_block_number().times(2).returning(move || Ok(head_block));
+            rpc.expect_get_channel_closure_notice_period()
+                .returning(|| Ok(Duration::from_secs(1)));
+            rpc.expect_try_stream_logs()
+                .times(1)
+                .withf(move |start: &u64, _, is_synced: &bool| *start == head_block + 1 && *is_synced)
+                .return_once(|_, _, _| Ok(Box::pin(futures::stream::empty())));
+
+            let mut cfg = test_indexer_config(head_block + 1);
+            cfg.verify_finalized = verify_finalized;
+            let indexer = Indexer::new(rpc, handlers, db, cfg, IndexerState::default()).without_panic_on_completion();
+            let abort_handle = indexer.start().await?;
+            assert_eq!(subscribe_calls.load(StdOrdering::SeqCst), expected_calls);
+            abort_handle.abort();
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_indexer_should_check_the_db_for_last_processed_block_and_supply_none_if_none_is_found()
     -> anyhow::Result<()> {
         let mut handlers = MockChainLogHandler::new();
-        let mut rpc = MockHoprIndexerOps::new();
+        let mut rpc = mock_rpc();
         let db = BlokliDb::new_in_memory().await?;
 
         let addr = Address::new(b"my address 123456789");
@@ -3467,7 +4052,7 @@ mod tests {
     async fn test_indexer_should_check_the_db_for_last_processed_block_and_supply_it_when_found() -> anyhow::Result<()>
     {
         let mut handlers = MockChainLogHandler::new();
-        let mut rpc = MockHoprIndexerOps::new();
+        let mut rpc = mock_rpc();
         let db = BlokliDb::new_in_memory().await?;
         let head_block = 1000;
         let latest_block = 15u64;
@@ -3544,7 +4129,7 @@ mod tests {
     #[tokio::test]
     async fn test_indexer_should_pass_blocks_that_are_finalized() -> anyhow::Result<()> {
         let mut handlers = MockChainLogHandler::new();
-        let mut rpc = MockHoprIndexerOps::new();
+        let mut rpc = mock_rpc();
         let db = BlokliDb::new_in_memory().await?;
 
         let cfg = IndexerConfig::default();
@@ -3638,7 +4223,7 @@ mod tests {
             let (tx, rx) = unbounded::<BlockWithLogs>();
 
             let head_block = 5;
-            let mut rpc = MockHoprIndexerOps::new();
+            let mut rpc = mock_rpc();
             rpc.expect_block_number().returning(move || Ok(head_block));
             rpc.expect_try_stream_logs()
                 .times(1)
@@ -3738,7 +4323,7 @@ mod tests {
             let (tx, rx) = unbounded::<BlockWithLogs>();
 
             let head_block = 5;
-            let mut rpc = MockHoprIndexerOps::new();
+            let mut rpc = mock_rpc();
             rpc.expect_block_number().returning(move || Ok(head_block));
             rpc.expect_try_stream_logs()
                 .times(1)
@@ -3798,7 +4383,7 @@ mod tests {
     #[tokio::test]
     async fn test_pre_start_fails_when_configured_snapshot_restore_fails() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
-        let rpc = MockHoprIndexerOps::new();
+        let rpc = mock_rpc();
         let handlers = MockChainLogHandler::new();
         let temp_dir = tempfile::tempdir()?;
 
@@ -3844,7 +4429,7 @@ mod tests {
     #[test_log::test(tokio::test)]
     async fn test_indexer_should_yield_back_once_the_past_events_are_indexed() -> anyhow::Result<()> {
         let mut handlers = MockChainLogHandler::new();
-        let mut rpc = MockHoprIndexerOps::new();
+        let mut rpc = mock_rpc();
         let db = BlokliDb::new_in_memory().await?;
 
         let cfg = IndexerConfig::default();
@@ -3941,7 +4526,7 @@ mod tests {
 
         let (mut tx, rx) = unbounded::<BlockWithLogs>();
 
-        let mut rpc = MockHoprIndexerOps::new();
+        let mut rpc = mock_rpc();
         rpc.expect_try_stream_logs()
             .once()
             .withf(move |x: &u64, _y: &FilterSet, is_synced: &bool| *x == last_processed_block + 1 && !*is_synced)

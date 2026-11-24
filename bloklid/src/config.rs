@@ -1,12 +1,24 @@
-use std::{fmt, time::Duration};
+use std::{fmt, ops::RangeInclusive, time::Duration};
 
 use blokli_chain_indexer::{snapshot::download::normalize_sha256_hex, utils::redact_url};
+use blokli_chain_rpc::tip::ConfirmationMode;
 use blokli_chain_types::{ChainConfig, ContractAddresses};
 use blokli_db::utils::redact_database_url;
 use hopr_types::primitive::primitives::Address;
 use tracing::warn;
+use url::{ParseError, Url};
+use validator::ValidationError;
 
 use crate::network::Network;
+
+/// Default time between two polls of the chain tip.
+const DEFAULT_HEAD_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Default gap from the latest block to the safe block at which FCR is degraded.
+const DEFAULT_MAX_SAFE_GAP: u64 = 32;
+
+/// Permitted values for `indexer.confirmation.depth`.
+const CONFIRMATION_DEPTH_RANGE: RangeInclusive<u16> = 1..=100;
 
 fn default_rpc_url() -> String {
     "http://localhost:8545".to_string()
@@ -34,6 +46,14 @@ fn default_max_block_range() -> u32 {
 
 fn default_block_range_reprobe_interval() -> u32 {
     100
+}
+
+fn default_head_poll_interval() -> Duration {
+    DEFAULT_HEAD_POLL_INTERVAL
+}
+
+fn default_max_safe_gap() -> u64 {
+    DEFAULT_MAX_SAFE_GAP
 }
 
 /// PostgreSQL database configuration
@@ -312,6 +332,13 @@ pub struct Config {
     #[serde(default = "default_rpc_url")]
     pub rpc_url: String,
 
+    /// WebSocket URL for `newHeads` notifications. This value is optional.
+    ///
+    /// If it is not set, bloklid uses `rpc_url` and replaces `http(s)` with `ws(s)`.
+    #[serde(default)]
+    #[validate(custom(function = "validate_rpc_ws_url"))]
+    pub rpc_ws_url: Option<String>,
+
     /// Hard cap on RPC requests per second (`None` = 100, `Some(0)` = unlimited).
     #[serde(default)]
     pub max_rpc_requests_per_sec: Option<u32>,
@@ -379,13 +406,57 @@ fn validate_api(api: &ApiConfig) -> Result<(), validator::ValidationError> {
     Ok(())
 }
 
+/// Parses a value of `rpc_ws_url`.
+///
+/// The parser ignores white space at the start and at the end. A blank value gives `None`.
+fn parse_rpc_ws_url(value: &str) -> Result<Option<Url>, ParseError> {
+    let raw = value.trim();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+
+    Url::parse(raw).map(Some)
+}
+
+/// Makes sure that `rpc_ws_url` is blank or is a valid URL with the `ws` or `wss` scheme.
+fn validate_rpc_ws_url(value: &str) -> Result<(), ValidationError> {
+    let Some(url) = parse_rpc_ws_url(value)
+        .map_err(|error| ValidationError::new("rpc_ws_url").with_message(error.to_string().into()))?
+    else {
+        return Ok(());
+    };
+
+    if !matches!(url.scheme(), "ws" | "wss") {
+        return Err(ValidationError::new("rpc_ws_url").with_message("rpc_ws_url must use the ws or wss scheme".into()));
+    }
+
+    Ok(())
+}
+
 impl Config {
+    /// Returns `rpc_ws_url` as a parsed URL.
+    ///
+    /// The value is `None` when `rpc_ws_url` is not set or is blank.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] when `rpc_ws_url` is set but is not a valid URL.
+    pub fn parsed_rpc_ws_url(&self) -> Result<Option<Url>, ParseError> {
+        match self.rpc_ws_url.as_deref() {
+            Some(value) => parse_rpc_ws_url(value),
+            None => Ok(None),
+        }
+    }
+
     /// Display the configuration with sensitive data redacted
     pub fn display_redacted(&self) -> String {
         let mut output = String::new();
         output.push_str("Configuration:\n");
         output.push_str(&format!("  network: {}\n", self.network));
         output.push_str(&format!("  rpc_url: {}\n", redact_url(&self.rpc_url)));
+        if let Some(rpc_ws_url) = &self.rpc_ws_url {
+            output.push_str(&format!("  rpc_ws_url: {}\n", redact_url(rpc_ws_url)));
+        }
         output.push_str(&format!("  data_directory: {}\n", self.data_directory));
         output.push_str(&format!(
             "  max_rpc_requests_per_sec: {:?}\n",
@@ -411,6 +482,26 @@ impl Config {
         output.push_str(&format!(
             "  indexer.enable_curvy_indexing: {}\n",
             self.indexer.enable_curvy_indexing
+        ));
+        output.push_str(&format!(
+            "  indexer.head_tracking.head_poll_interval: {:?}\n",
+            self.indexer.head_tracking.head_poll_interval
+        ));
+        output.push_str(&format!(
+            "  indexer.confirmation.mode: {:?}\n",
+            self.indexer.confirmation.mode
+        ));
+        output.push_str(&format!(
+            "  indexer.confirmation.depth: {:?}\n",
+            self.indexer.confirmation.depth
+        ));
+        output.push_str(&format!(
+            "  indexer.confirmation.max_safe_gap: {}\n",
+            self.indexer.confirmation.max_safe_gap
+        ));
+        output.push_str(&format!(
+            "  indexer.confirmation.verify_finalized: {}\n",
+            self.indexer.confirmation.verify_finalized
         ));
 
         if let Some(snapshot_url) = &self.indexer.logs_snapshot_url {
@@ -574,6 +665,57 @@ pub struct TelemetryConfig {
     pub otlp_signals: String,
 }
 
+/// Configuration for how the indexer follows the chain head.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
+#[serde(deny_unknown_fields)]
+pub struct HeadTrackingConfig {
+    /// If `true`, the indexer uses WebSocket `newHeads` notifications.
+    ///
+    /// If the RPC endpoint cannot serve subscriptions, the indexer uses polling.
+    /// Set this value to `false` to always use polling.
+    #[default(true)]
+    #[serde(default = "default_true")]
+    pub head_subscription: bool,
+
+    /// Time between two polls of the chain tip. The value must be greater than 0.
+    ///
+    /// Each poll is one batched JSON-RPC request with three `eth_getBlockByNumber` calls
+    /// (latest, safe, finalized).
+    #[default(_code = "default_head_poll_interval()")]
+    #[serde(default = "default_head_poll_interval", with = "humantime_serde")]
+    pub head_poll_interval: Duration,
+}
+
+/// Configuration for the rule that gives the confirmed block.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
+#[serde(deny_unknown_fields)]
+pub struct IndexerConfirmationConfig {
+    /// Confirmation rule. The default is `depth` on all networks.
+    #[serde(default)]
+    pub mode: ConfirmationMode,
+
+    /// Number of blocks behind the latest block for `depth` and for the fallback of `safe_or_depth`.
+    ///
+    /// If it is not set, the network value applies. The value must be from 1 to 100.
+    #[serde(default)]
+    pub depth: Option<u16>,
+
+    /// If the gap from the latest block to the safe block is this value or more, FCR is degraded.
+    ///
+    /// The value must be at least 1.
+    #[default(_code = "default_max_safe_gap()")]
+    #[serde(default = "default_max_safe_gap")]
+    pub max_safe_gap: u64,
+
+    /// If `true`, post-finality verification compares indexed blocks with the canonical chain
+    /// after the blocks become final.
+    ///
+    /// The default is `true`.
+    #[default(true)]
+    #[serde(default = "default_true")]
+    pub verify_finalized: bool,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
 #[serde(deny_unknown_fields)]
 pub struct IndexerConfig {
@@ -601,6 +743,14 @@ pub struct IndexerConfig {
     #[serde(default)]
     pub subscription: SubscriptionConfig,
 
+    /// Configuration for chain head tracking.
+    #[serde(default)]
+    pub head_tracking: HeadTrackingConfig,
+
+    /// Configuration for the confirmation rule.
+    #[serde(default)]
+    pub confirmation: IndexerConfirmationConfig,
+
     #[serde(default)]
     pub safe_tx_prefetch: SafeTxPrefetchConfig,
 }
@@ -621,11 +771,36 @@ pub struct SafeTxPrefetchConfig {
 }
 
 impl IndexerConfig {
-    /// Validates the logs snapshot settings.
+    /// Makes sure that the indexer configuration obeys these rules:
     ///
-    /// `logs_snapshot_sha256` is required when `enable_logs_snapshot` is true or a non-empty
-    /// `logs_snapshot_url` is set, and must be a SHA-256 digest of 64 hex characters when present.
+    /// - `head_tracking.head_poll_interval` must be greater than 0.
+    /// - If `confirmation.depth` is set, it must be from 1 to 100.
+    /// - `confirmation.max_safe_gap` must be at least 1.
+    /// - If `enable_logs_snapshot` is true or `logs_snapshot_url` is not empty, `logs_snapshot_sha256` must be set.
+    /// - If `logs_snapshot_sha256` is set, it must be a SHA-256 digest of 64 hex characters.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message about the first rule that the configuration does not obey.
     pub fn validate(&self) -> Result<(), String> {
+        if self.head_tracking.head_poll_interval.is_zero() {
+            return Err("indexer.head_tracking.head_poll_interval must be greater than 0".to_string());
+        }
+
+        if let Some(depth) = self.confirmation.depth
+            && !CONFIRMATION_DEPTH_RANGE.contains(&depth)
+        {
+            return Err(format!(
+                "indexer.confirmation.depth must be between {} and {}",
+                CONFIRMATION_DEPTH_RANGE.start(),
+                CONFIRMATION_DEPTH_RANGE.end()
+            ));
+        }
+
+        if self.confirmation.max_safe_gap == 0 {
+            return Err("indexer.confirmation.max_safe_gap must be at least 1".to_string());
+        }
+
         let snapshot_url_set = self
             .logs_snapshot_url
             .as_deref()
@@ -788,7 +963,7 @@ pub struct TransactionConfig {
 
     /// How long a submitted transaction may stay unmined before it is marked as timed out and
     /// diagnosed. Must be greater than `0s`.
-    #[default(_code = "Duration::from_secs(300)")]
+    #[default(_code = "Duration::from_secs(45)")]
     #[serde(default = "default_unmined_timeout", with = "humantime_serde")]
     pub unmined_timeout: Duration,
 
@@ -966,7 +1141,7 @@ fn default_max_replacements_per_nonce() -> usize {
 }
 
 fn default_unmined_timeout() -> Duration {
-    Duration::from_secs(300)
+    Duration::from_secs(45)
 }
 
 fn default_transaction_request_timeout() -> Duration {
@@ -1373,6 +1548,12 @@ mod tests {
         assert!(config.indexer.fast_sync);
         assert!(!config.indexer.enable_curvy_indexing);
         assert_eq!(config.indexer.subscription.event_bus_capacity, 1000);
+        assert!(config.indexer.head_tracking.head_subscription);
+        assert_eq!(config.indexer.head_tracking.head_poll_interval, Duration::from_secs(1));
+        assert_eq!(config.indexer.confirmation.mode, ConfirmationMode::Depth);
+        assert_eq!(config.indexer.confirmation.depth, None);
+        assert_eq!(config.indexer.confirmation.max_safe_gap, 32);
+        assert!(config.indexer.confirmation.verify_finalized);
 
         // Check API config
         assert!(config.api.enabled);
@@ -1382,7 +1563,7 @@ mod tests {
         assert_eq!(config.api.max_query_complexity, 500);
 
         // Transaction monitor limits documented in the example
-        assert_eq!(config.api.transactions.unmined_timeout, Duration::from_secs(300));
+        assert_eq!(config.api.transactions.unmined_timeout, Duration::from_secs(45));
         assert_eq!(config.api.transactions.request_timeout, Duration::from_secs(30));
         assert_eq!(config.api.transactions.safe_inspection_timeout, Duration::from_secs(30));
         assert_eq!(config.api.transactions.revert_reason_timeout, Duration::from_secs(30));
@@ -1404,7 +1585,7 @@ mod tests {
     fn test_transaction_monitor_limits_default_when_absent() {
         let config: Config = toml::from_str(MONITOR_LIMITS_DB).expect("config parses");
         let tx = &config.api.transactions;
-        assert_eq!(tx.unmined_timeout, Duration::from_secs(300));
+        assert_eq!(tx.unmined_timeout, Duration::from_secs(45));
         assert_eq!(TransactionConfig::default().unmined_timeout, tx.unmined_timeout);
         let observed = (
             tx.request_timeout,
@@ -1486,6 +1667,118 @@ mod tests {
         assert!(!cfg.indexer.enable_logs_snapshot); // Default
         assert!(!cfg.indexer.enable_curvy_indexing); // Default
         assert_eq!(cfg.indexer.subscription.event_bus_capacity, 1000); // Default
+        assert!(cfg.indexer.head_tracking.head_subscription); // Default
+        assert_eq!(cfg.indexer.head_tracking.head_poll_interval, Duration::from_secs(1)); // Default
+        assert_eq!(cfg.indexer.confirmation.mode, ConfirmationMode::Depth);
+        assert_eq!(cfg.indexer.confirmation.depth, None); // Network-specific default
+        assert_eq!(cfg.indexer.confirmation.max_safe_gap, 32); // Default
+        assert!(cfg.indexer.confirmation.verify_finalized); // Default
+    }
+
+    #[test]
+    fn test_indexer_head_tracking_and_confirmation_config() {
+        let config = r#"
+         [indexer.head_tracking]
+         head_subscription = false
+         head_poll_interval = "2s"
+         [indexer.confirmation]
+         mode = "safe_or_depth"
+         depth = 5
+         max_safe_gap = 20
+         verify_finalized = false
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
+
+        let cfg: Config = toml::from_str(config).expect("head tracking and confirmation should parse");
+        assert!(!cfg.indexer.head_tracking.head_subscription);
+        assert_eq!(cfg.indexer.head_tracking.head_poll_interval, Duration::from_secs(2));
+        assert_eq!(cfg.indexer.confirmation.mode, ConfirmationMode::SafeOrDepth);
+        assert_eq!(cfg.indexer.confirmation.depth, Some(5));
+        assert_eq!(cfg.indexer.confirmation.max_safe_gap, 20);
+        assert!(!cfg.indexer.confirmation.verify_finalized);
+        assert!(cfg.indexer.validate().is_ok());
+    }
+
+    #[test]
+    fn test_rpc_ws_url_validation_and_redaction() {
+        let mut cfg: Config = toml::from_str(
+            r#"
+            rpc_url = "https://rpc.example.com"
+            rpc_ws_url = "wss://user:pass@rpc.example.com:8443/secret?token=abc"
+        "#,
+        )
+        .expect("config with rpc_ws_url should parse");
+        cfg.validate().expect("ws and wss URLs should validate");
+
+        let redacted = cfg.display_redacted();
+        assert!(redacted.contains("rpc_url: https://rpc.example.com"));
+        assert!(redacted.contains("rpc_ws_url: wss://rpc.example.com:8443/REDACTED"));
+
+        cfg.rpc_ws_url = Some("http://rpc.example.com".to_string());
+        assert!(cfg.validate().is_err(), "http must not be accepted as a WebSocket URL");
+    }
+
+    #[test]
+    fn test_rpc_ws_url_is_optional() {
+        let cfg: Config =
+            toml::from_str(r#"rpc_url = "https://rpc.example.com""#).expect("config without rpc_ws_url should parse");
+        assert!(cfg.rpc_ws_url.is_none());
+        cfg.validate().expect("an absent rpc_ws_url should validate");
+    }
+
+    #[test]
+    fn test_parsed_rpc_ws_url() {
+        let mut cfg = Config::default();
+        assert_eq!(cfg.parsed_rpc_ws_url(), Ok(None));
+
+        cfg.rpc_ws_url = Some("   ".to_string());
+        assert_eq!(cfg.parsed_rpc_ws_url(), Ok(None));
+
+        cfg.rpc_ws_url = Some(" wss://rpc.example.com/ws ".to_string());
+        assert_eq!(
+            cfg.parsed_rpc_ws_url(),
+            Ok(Some(Url::parse("wss://rpc.example.com/ws").expect("test URL is valid")))
+        );
+
+        cfg.rpc_ws_url = Some("not a url".to_string());
+        assert!(cfg.parsed_rpc_ws_url().is_err());
+    }
+
+    #[test]
+    fn test_indexer_confirmation_rejects_invalid_values() {
+        let invalid = [
+            r#"mode = "unknown""#,
+            r#"depth = 0"#,
+            r#"depth = 101"#,
+            r#"max_safe_gap = 0"#,
+        ];
+
+        for entry in invalid {
+            let config = format!(
+                "[indexer.confirmation]\n{entry}\n[database]\ntype = \"sqlite\"\nindex_path = \":memory:\"\nlogs_path \
+                 = \":memory:\"\n"
+            );
+            let parsed: Result<Config, _> = toml::from_str(&config);
+            let rejected = match parsed {
+                Err(_) => true,
+                Ok(cfg) => cfg.indexer.validate().is_err(),
+            };
+            assert!(rejected, "{entry} must be rejected");
+        }
+
+        let zero_interval = r#"
+         [indexer.head_tracking]
+         head_poll_interval = "0s"
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
+        let cfg: Config = toml::from_str(zero_interval).expect("zero interval should parse");
+        assert!(cfg.indexer.validate().is_err(), "zero poll interval must be rejected");
     }
 
     #[test]
@@ -1563,8 +1856,8 @@ mod tests {
         assert!(!cfg.api.playground_enabled); // Default
         assert_eq!(cfg.api.bind_address.to_string(), "127.0.0.1:8080"); // Default
         assert_eq!(cfg.api.gas_multiplier, 1.0); // Default
-        assert_eq!(cfg.api.min_priority_fee_per_gas, 10_000_000); // Default
-        assert_eq!(cfg.api.max_priority_fee_per_gas, 50_000_000); // Default
+        assert_eq!(cfg.api.min_priority_fee_per_gas, 100); // Default
+        assert_eq!(cfg.api.max_priority_fee_per_gas, 1_000_000_000); // Default
         assert_eq!(cfg.api.min_max_fee_per_gas, 500_000_000); // Default
         assert_eq!(cfg.api.max_max_fee_per_gas, 1_000_000_000); // Default
         assert_eq!(cfg.api.base_fee_headroom_factor, 8.0); // Default

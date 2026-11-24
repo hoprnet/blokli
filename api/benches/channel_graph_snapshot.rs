@@ -14,7 +14,7 @@
 //! ```
 
 #[path = "../tests/common/mod.rs"]
-#[allow(dead_code, unused_imports)]
+#[allow(unused_imports)]
 mod common;
 
 use std::{

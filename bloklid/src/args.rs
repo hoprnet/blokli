@@ -91,6 +91,7 @@ impl Args {
             ("BLOKLI_DATA_DIRECTORY", "data_directory"),
             ("BLOKLI_NETWORK", "network"),
             ("BLOKLI_RPC_URL", "rpc_url"),
+            ("BLOKLI_RPC_WS_URL", "rpc_ws_url"),
             ("BLOKLI_MAX_RPC_REQUESTS_PER_SEC", "max_rpc_requests_per_sec"),
             ("BLOKLI_MAX_BLOCK_RANGE", "max_block_range"),
             (
@@ -129,6 +130,24 @@ impl Args {
             ("BLOKLI_INDEXER_ENABLE_CURVY_INDEXING", "indexer.enable_curvy_indexing"),
             ("BLOKLI_INDEXER_LOGS_SNAPSHOT_URL", "indexer.logs_snapshot_url"),
             ("BLOKLI_INDEXER_LOGS_SNAPSHOT_SHA256", "indexer.logs_snapshot_sha256"),
+            (
+                "BLOKLI_INDEXER_HEAD_TRACKING_HEAD_SUBSCRIPTION",
+                "indexer.head_tracking.head_subscription",
+            ),
+            (
+                "BLOKLI_INDEXER_HEAD_TRACKING_HEAD_POLL_INTERVAL",
+                "indexer.head_tracking.head_poll_interval",
+            ),
+            ("BLOKLI_INDEXER_CONFIRMATION_MODE", "indexer.confirmation.mode"),
+            ("BLOKLI_INDEXER_CONFIRMATION_DEPTH", "indexer.confirmation.depth"),
+            (
+                "BLOKLI_INDEXER_CONFIRMATION_MAX_SAFE_GAP",
+                "indexer.confirmation.max_safe_gap",
+            ),
+            (
+                "BLOKLI_INDEXER_CONFIRMATION_VERIFY_FINALIZED",
+                "indexer.confirmation.verify_finalized",
+            ),
             (
                 "BLOKLI_INDEXER_SUBSCRIPTION_EVENT_BUS_CAPACITY",
                 "indexer.subscription.event_bus_capacity",
@@ -251,6 +270,8 @@ impl Args {
             "indexer.fast_sync",
             "indexer.enable_logs_snapshot",
             "indexer.enable_curvy_indexing",
+            "indexer.head_tracking.head_subscription",
+            "indexer.confirmation.verify_finalized",
             "api.enabled",
             "api.playground_enabled",
             "api.transactions.enable_revert_reason_tracing",
@@ -290,6 +311,7 @@ impl Args {
         }
 
         let config_rs_config = builder.build().map_err(|error| ConfigError::Parse(error.to_string()))?;
+
         let mut config: Config = config_rs_config
             .try_deserialize()
             .map_err(|error| ConfigError::Parse(error.to_string()))?;
@@ -595,6 +617,49 @@ mod tests {
         assert!(
             matches!(result, Err(BloklidError::Config(ConfigError::Parse(message))) if message.contains("zero address"))
         );
+    }
+
+    #[test]
+    fn test_confirmation_settings_env_overrides() {
+        let _env = env_guard();
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "jura-dev"
+            rpc_url = "http://localhost:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+        "#
+        )
+        .unwrap();
+        let args = Args {
+            verbose: 0,
+            config: Some(file.path().to_path_buf()),
+            command: None,
+        };
+
+        temp_env::with_vars(
+            [
+                ("BLOKLI_INDEXER_CONFIRMATION_DEPTH", Some("5")),
+                ("BLOKLI_INDEXER_CONFIRMATION_MAX_SAFE_GAP", Some("20")),
+            ],
+            || {
+                let config = args.load_config(false).expect("whole number settings should load");
+
+                assert_eq!(config.indexer.confirmation.depth, Some(5));
+                assert_eq!(
+                    config.chain_network.unwrap().confirmations,
+                    config.network.confirmations()
+                );
+                assert_eq!(config.indexer.confirmation.max_safe_gap, 20);
+            },
+        );
+
+        let config = args.load_config(false).expect("omitted settings should load");
+        assert_eq!(config.indexer.confirmation.depth, None);
+        assert_eq!(config.indexer.confirmation.max_safe_gap, 32);
     }
 
     #[test]

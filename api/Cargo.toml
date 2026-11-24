@@ -95,6 +95,7 @@ clap = { workspace = true }
 lazy_static = { workspace = true, optional = true }
 
 [dev-dependencies]
+async-trait         = { workspace = true }
 base64ct            = { workspace = true, features = ["alloc"] }
 blokli-db-migration = { path = "../db/migration" }
 criterion           = { workspace = true }
@@ -102,6 +103,7 @@ curvy-bindings      = { workspace = true }
 env_logger          = { workspace = true }
 hopr-types          = { workspace = true, features = ["internal"] }
 insta               = { workspace = true, features = ["redactions", "yaml"] }
+mockito             = { workspace = true }
 multiaddr           = { workspace = true }
 rand                = { workspace = true }
 regex               = { workspace = true }

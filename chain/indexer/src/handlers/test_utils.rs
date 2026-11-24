@@ -46,6 +46,7 @@ pub(super) mod test_helpers {
         #[async_trait::async_trait]
         impl HoprIndexerRpcOperations for IndexerRpcOperations {
             async fn block_number(&self) -> blokli_chain_rpc::errors::Result<u64>;
+            async fn block_hash(&self, block: u64) -> blokli_chain_rpc::errors::Result<Option<hopr_types::crypto::types::Hash>>;
             async fn get_transaction_sender(&self, tx_hash: hopr_types::crypto::types::Hash) -> blokli_chain_rpc::errors::Result<Address>;
             async fn get_transaction_bytes(&self, tx_hash: hopr_types::crypto::types::Hash) -> blokli_chain_rpc::errors::Result<Vec<u8>>;
             async fn get_transaction_bytes_batch(&self, tx_hashes: &[hopr_types::crypto::types::Hash]) -> Vec<blokli_chain_rpc::errors::Result<Vec<u8>>>;
@@ -85,6 +86,13 @@ pub(super) mod test_helpers {
     impl HoprIndexerRpcOperations for ClonableMockOperations {
         async fn block_number(&self) -> blokli_chain_rpc::errors::Result<u64> {
             self.inner.block_number().await
+        }
+
+        async fn block_hash(
+            &self,
+            block: u64,
+        ) -> blokli_chain_rpc::errors::Result<Option<hopr_types::crypto::types::Hash>> {
+            self.inner.block_hash(block).await
         }
 
         async fn get_transaction_sender(

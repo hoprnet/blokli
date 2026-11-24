@@ -28,12 +28,21 @@ database:
 config:
   network: "jura-prod"
   rpcUrl: "https://rpc.gnosischain.com"
+  rpcWsUrl: "wss://rpc.gnosischain.com/wss"
   maxRpcRequestsPerSec: 0
   maxBlockRange: 2500
   # Indexer settings
   indexer:
     fastSync: true
     enableLogsSnapshot: false
+    headTracking:
+      headSubscription: true
+      headPollInterval: "1s"
+    confirmation:
+      mode: "safe_or_depth"
+      depth: 3
+      maxSafeGap: 32
+      verifyFinalized: true
     subscription:
       eventBusCapacity: 1000
       shutdownSignalCapacity: 10

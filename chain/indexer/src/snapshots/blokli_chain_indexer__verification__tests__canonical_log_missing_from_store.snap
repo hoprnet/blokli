@@ -1,0 +1,11 @@
+---
+source: chain/indexer/src/verification.rs
+expression: mismatch
+---
+missing_from_chain: []
+missing_from_store:
+  - block_number: 11
+    block_hash: "0x0303030303030303030303030303030303030303030303030303030303030303"
+    tx_hash: "0x0404040404040404040404040404040404040404040404040404040404040404"
+    log_index: 0
+changed: []

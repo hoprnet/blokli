@@ -327,13 +327,12 @@ async fn test_curvy_events_are_indexed_and_streamed() -> anyhow::Result<()> {
         .noteIds
         .iter()
         .enumerate()
-        .filter_map(|(item_index, note_id)| {
-            (*note_id != U256::ZERO).then(|| {
-                json!({
-                    "batchIndex": hex32(committed_notes_event.batchIndex),
-                    "noteId": hex32(*note_id),
-                    "position": event_position(&Log::from(committed_notes_log.clone()), item_index),
-                })
+        .filter(|(_, note_id)| **note_id != U256::ZERO)
+        .map(|(item_index, note_id)| {
+            json!({
+                "batchIndex": hex32(committed_notes_event.batchIndex),
+                "noteId": hex32(*note_id),
+                "position": event_position(&Log::from(committed_notes_log.clone()), item_index),
             })
         })
         .collect::<Vec<_>>();
@@ -369,13 +368,12 @@ async fn test_curvy_events_are_indexed_and_streamed() -> anyhow::Result<()> {
         .nullifiers
         .iter()
         .enumerate()
-        .filter_map(|(item_index, nullifier)| {
-            (*nullifier != U256::ZERO).then(|| {
-                json!({
-                    "batchIndex": hex32(committed_nullifiers_event.batchIndex),
-                    "nullifier": hex32(*nullifier),
-                    "position": event_position(&Log::from(committed_nullifiers_log.clone()), item_index),
-                })
+        .filter(|(_, nullifier)| **nullifier != U256::ZERO)
+        .map(|(item_index, nullifier)| {
+            json!({
+                "batchIndex": hex32(committed_nullifiers_event.batchIndex),
+                "nullifier": hex32(*nullifier),
+                "position": event_position(&Log::from(committed_nullifiers_log.clone()), item_index),
             })
         })
         .collect::<Vec<_>>();

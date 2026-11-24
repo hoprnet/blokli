@@ -17,6 +17,10 @@ members = [
 ]
 
 [workspace.dependencies]
+alloy = { version = "2.5.0", default-features = false, features = [
+  "provider-ws",
+  "pubsub",
+] }
 alloy-sol-types = "1.7.3"
 anyhow = "1.0.104"
 async-broadcast = "0.7.2"

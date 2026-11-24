@@ -1,0 +1,17 @@
+---
+source: chain/indexer/src/verification.rs
+expression: mismatch
+---
+missing_from_chain: []
+missing_from_store: []
+changed:
+  - stored:
+      block_number: 10
+      block_hash: "0x0101010101010101010101010101010101010101010101010101010101010101"
+      tx_hash: "0x0202020202020202020202020202020202020202020202020202020202020202"
+      log_index: 0
+    canonical:
+      block_number: 10
+      block_hash: "0x0909090909090909090909090909090909090909090909090909090909090909"
+      tx_hash: "0x0202020202020202020202020202020202020202020202020202020202020202"
+      log_index: 0

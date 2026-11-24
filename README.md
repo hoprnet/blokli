@@ -265,6 +265,7 @@ priority over their canonical database aliases when both are set. Boolean enviro
 | `data_directory`               | `data`                  | `BLOKLI_DATA_DIRECTORY`               | Directory for daemon data                                                                                                 |
 | `network`                      | `jura-dev`              | `BLOKLI_NETWORK`                      | `jura-dev`, `jura-prod`, or `anvil-localhost` (`localhost` is an alias)                                                   |
 | `rpc_url`                      | `http://localhost:8545` | `BLOKLI_RPC_URL`                      | Chain JSON-RPC endpoint                                                                                                   |
+| `rpc_ws_url`                   | derived from `rpc_url`  | `BLOKLI_RPC_WS_URL`                   | WebSocket endpoint for `newHeads`. The default is `rpc_url` with `http(s)` replaced by `ws(s)`                            |
 | `max_rpc_requests_per_sec`     | `100`                   | `BLOKLI_MAX_RPC_REQUESTS_PER_SEC`     | Hard cap on RPC requests per second (token bucket, retries count); `0` means unlimited                                    |
 | `max_block_range`              | `10000`                 | `BLOKLI_MAX_BLOCK_RANGE`              | Ceiling for adaptive `eth_getLogs` ranges; `0` auto-discovers up to 10000                                                 |
 | `block_range_reprobe_interval` | `100`                   | `BLOKLI_BLOCK_RANGE_REPROBE_INTERVAL` | Successful `eth_getLogs` requests spanning the full reduced range before a larger range is probed again; `0` never probes |
@@ -291,14 +292,20 @@ fields. SQLite uses separate index and raw-log databases.
 
 #### Indexer Configuration
 
-| Config Key                                      | Default | Environment Variable                                   | Description                                           |
-| :---------------------------------------------- | :------ | :----------------------------------------------------- | :---------------------------------------------------- |
-| `indexer.fast_sync`                             | `true`  | `BLOKLI_INDEXER_FAST_SYNC`                             | Enables the fast initial synchronization path         |
-| `indexer.enable_logs_snapshot`                  | `false` | `BLOKLI_INDEXER_ENABLE_LOGS_SNAPSHOT`                  | Restores raw logs from a snapshot before catch-up     |
-| `indexer.logs_snapshot_url`                     | unset   | `BLOKLI_INDEXER_LOGS_SNAPSHOT_URL`                     | URL of a `.tar.xz` archive containing `hopr_logs.sql` |
-| `indexer.logs_snapshot_sha256`                  | unset   | `BLOKLI_INDEXER_LOGS_SNAPSHOT_SHA256`                  | SHA-256 hex digest of the archive (required with URL) |
-| `indexer.subscription.event_bus_capacity`       | `1000`  | `BLOKLI_INDEXER_SUBSCRIPTION_EVENT_BUS_CAPACITY`       | Channel-event bus capacity                            |
-| `indexer.subscription.shutdown_signal_capacity` | `10`    | `BLOKLI_INDEXER_SUBSCRIPTION_SHUTDOWN_SIGNAL_CAPACITY` | Shutdown signal buffer capacity                       |
+| Config Key                                      | Default | Environment Variable                                   | Description                                            |
+| :---------------------------------------------- | :------ | :----------------------------------------------------- | :----------------------------------------------------- |
+| `indexer.fast_sync`                             | `true`  | `BLOKLI_INDEXER_FAST_SYNC`                             | Enables the fast initial synchronization path          |
+| `indexer.enable_logs_snapshot`                  | `false` | `BLOKLI_INDEXER_ENABLE_LOGS_SNAPSHOT`                  | Restores raw logs from a snapshot before catch-up      |
+| `indexer.logs_snapshot_url`                     | unset   | `BLOKLI_INDEXER_LOGS_SNAPSHOT_URL`                     | URL of a `.tar.xz` archive containing `hopr_logs.sql`  |
+| `indexer.logs_snapshot_sha256`                  | unset   | `BLOKLI_INDEXER_LOGS_SNAPSHOT_SHA256`                  | SHA-256 hex digest of the archive (required with URL)  |
+| `indexer.head_tracking.head_subscription`       | `true`  | `BLOKLI_INDEXER_HEAD_TRACKING_HEAD_SUBSCRIPTION`       | Uses `newHeads` over WebSocket. `false` forces polling |
+| `indexer.head_tracking.head_poll_interval`      | `1s`    | `BLOKLI_INDEXER_HEAD_TRACKING_HEAD_POLL_INTERVAL`      | Polling interval for the head source fallback          |
+| `indexer.confirmation.mode`                     | `depth` | `BLOKLI_INDEXER_CONFIRMATION_MODE`                     | `depth`, `safe_or_depth`, `safe` or `finalized`        |
+| `indexer.confirmation.depth`                    | network | `BLOKLI_INDEXER_CONFIRMATION_DEPTH`                    | Blocks behind the latest block in depth-based modes    |
+| `indexer.confirmation.max_safe_gap`             | `32`    | `BLOKLI_INDEXER_CONFIRMATION_MAX_SAFE_GAP`             | Minimum gap from latest to safe that degrades FCR      |
+| `indexer.confirmation.verify_finalized`         | `true`  | `BLOKLI_INDEXER_CONFIRMATION_VERIFY_FINALIZED`         | Re-checks indexed logs. Needs a `finalized` block      |
+| `indexer.subscription.event_bus_capacity`       | `1000`  | `BLOKLI_INDEXER_SUBSCRIPTION_EVENT_BUS_CAPACITY`       | Channel-event bus capacity                             |
+| `indexer.subscription.shutdown_signal_capacity` | `10`    | `BLOKLI_INDEXER_SUBSCRIPTION_SHUTDOWN_SIGNAL_CAPACITY` | Shutdown signal buffer capacity                        |
 
 #### API Configuration
 
@@ -308,8 +315,8 @@ fields. SQLite uses separate index and raw-log databases.
 | `api.bind_address`                    | `127.0.0.1:8080` | `BLOKLI_API_BIND_ADDRESS`                    | API listen address                            |
 | `api.playground_enabled`              | `false`          | `BLOKLI_API_PLAYGROUND_ENABLED`              | Enables GraphQL Playground                    |
 | `api.gas_multiplier`                  | `1.0`            | `BLOKLI_API_GAS_MULTIPLIER`                  | Finite EIP-1559 fee multiplier, minimum `1.0` |
-| `api.min_priority_fee_per_gas`        | `10000000`       | `BLOKLI_API_MIN_PRIORITY_FEE_PER_GAS`        | Minimum priority fee in wei (0.01 gwei)       |
-| `api.max_priority_fee_per_gas`        | `50000000`       | `BLOKLI_API_MAX_PRIORITY_FEE_PER_GAS`        | Maximum priority fee in wei (0.05 gwei)       |
+| `api.min_priority_fee_per_gas`        | `100`            | `BLOKLI_API_MIN_PRIORITY_FEE_PER_GAS`        | Minimum priority fee in wei                   |
+| `api.max_priority_fee_per_gas`        | `1000000000`     | `BLOKLI_API_MAX_PRIORITY_FEE_PER_GAS`        | Maximum priority fee in wei (1 gwei)          |
 | `api.min_max_fee_per_gas`             | `500000000`      | `BLOKLI_API_MIN_MAX_FEE_PER_GAS`             | Minimum max fee in wei (0.5 gwei)             |
 | `api.max_max_fee_per_gas`             | `1000000000`     | `BLOKLI_API_MAX_MAX_FEE_PER_GAS`             | Maximum max fee in wei (1 gwei)               |
 | `api.base_fee_headroom_factor`        | `8.0`            | `BLOKLI_API_BASE_FEE_HEADROOM_FACTOR`        | Base fee multiple in max fee, minimum `1.0`   |
@@ -318,7 +325,7 @@ fields. SQLite uses separate index and raw-log databases.
 | `api.database_max_connections`        | `10`             | —                                            | Size of the API's own PostgreSQL pool         |
 | `api.max_concurrent_snapshots`        | `8`              | —                                            | Subscription snapshots loaded at once         |
 | `api.snapshot_queue_timeout`          | `10s`            | —                                            | Longest wait for a snapshot load slot         |
-| `api.transactions.unmined_timeout`    | `300s`           | `BLOKLI_API_TRANSACTIONS_UNMINED_TIMEOUT`    | Unmined time before a transaction times out   |
+| `api.transactions.unmined_timeout`    | `45s`            | `BLOKLI_API_TRANSACTIONS_UNMINED_TIMEOUT`    | Unmined time before a transaction times out   |
 | `api.sse_keepalive.enabled`           | `true`           | `BLOKLI_API_SSE_KEEPALIVE_ENABLED`           | Enables SSE keep-alive events                 |
 | `api.sse_keepalive.interval`          | `15s`            | `BLOKLI_API_SSE_KEEPALIVE_INTERVAL`          | Keep-alive interval                           |
 | `api.health.max_indexer_lag`          | `10`             | `BLOKLI_API_HEALTH_MAX_INDEXER_LAG`          | Maximum finality-adjusted lag for readiness   |
@@ -340,12 +347,20 @@ base fee, the capped max fee could not be included in the next block, so `chainI
 (null) until the base fee drops. Nodes pay base fee plus tip, not the max fee; the balance they reserve is gas limit times max fee, which
 `api.max_max_fee_per_gas` bounds.
 
-Upgrading: the tip cap and the max fee ceiling default to `50000000` and `1000000000` wei, and startup fails when a floor is above its
-ceiling. A configuration that sets `api.min_priority_fee_per_gas` above `50000000` (for example `100000000`) or `api.min_max_fee_per_gas`
-above `1000000000` (for example `2000000000`) must either lower the floor, or set `api.max_priority_fee_per_gas` and
-`api.max_max_fee_per_gas` at or above the floors. In TOML set the keys under `[api]`, as environment variables set
-`BLOKLI_API_MAX_PRIORITY_FEE_PER_GAS` and `BLOKLI_API_MAX_MAX_FEE_PER_GAS`, and in Helm set `config.api.maxPriorityFeePerGas` and
-`config.api.maxMaxFeePerGas`.
+The tip floor `api.min_priority_fee_per_gas` is paid in full on every transaction, so it should stay near the real minimum (default `100`
+wei); the max fee floor and ceiling, the headroom factor and the tip cap are caps that are paid only when the base fee or market tip
+actually reaches them.
+
+Upgrading: the tip cap and the max fee ceiling both default to `1000000000` wei (the tip cap was `50000000` before), and startup fails when
+a floor is above its ceiling. A configuration that sets `api.min_priority_fee_per_gas` or `api.min_max_fee_per_gas` above `1000000000` (for
+example `2000000000`) must either lower the floor, or set `api.max_priority_fee_per_gas` and `api.max_max_fee_per_gas` at or above the
+floors. In TOML set the keys under `[api]`, as environment variables set `BLOKLI_API_MAX_PRIORITY_FEE_PER_GAS` and
+`BLOKLI_API_MAX_MAX_FEE_PER_GAS`, and in Helm set `config.api.maxPriorityFeePerGas` and `config.api.maxMaxFeePerGas`.
+
+`api.transactions.unmined_timeout` now defaults to `45s` (it was `300s`): 9 Gnosis blocks, three times the finality window, so the unmined
+diagnosis is available before the connector gives up after 30s (normal transactions) or 60s (tickets). Set
+`api.transactions.unmined_timeout` (`BLOKLI_API_TRANSACTIONS_UNMINED_TIMEOUT`, Helm `config.api.transactions.unminedTimeout`) to keep a
+longer window.
 
 #### Telemetry Configuration
 

@@ -539,6 +539,9 @@ mod tests {
     use super::*;
     use crate::{db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations};
 
+    /// Builds one guard statement for the given database backend.
+    type StatementBuilder = Box<dyn Fn(DbBackend) -> Statement>;
+
     fn random_address() -> Address {
         Address::from(hopr_types::crypto_random::random_bytes())
     }
@@ -752,7 +755,7 @@ mod tests {
     #[test]
     fn test_statements_render_with_backend_placeholders() {
         let position = (10, 2, 3);
-        let statements: Vec<(&str, Box<dyn Fn(DbBackend) -> Statement>)> = vec![
+        let statements: Vec<(&str, StatementBuilder)> = vec![
             (
                 "owner upsert",
                 Box::new(move |backend| {

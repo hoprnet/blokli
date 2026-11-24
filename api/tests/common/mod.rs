@@ -11,6 +11,10 @@
 //!
 //! Tests can use this shared setup to ensure consistency and reduce maintenance burden.
 
+// Each test crate compiles this module on its own and uses only some of its helpers. `expect` cannot
+// replace `allow` here, because the lint fires in some test crates and not in others.
+#![allow(dead_code)]
+
 use std::{sync::Arc, time::Duration};
 
 use async_graphql::Schema;
@@ -387,6 +391,8 @@ pub struct HttpTestContext {
     pub rpc_operations: Arc<RpcOperations<ReqwestClient>>,
     /// In-memory transaction store used by the HTTP API
     pub transaction_store: Arc<TransactionStore>,
+    /// Shared indexer state, with the post-finality verification status
+    pub indexer_state: IndexerState,
 }
 
 /// Setup test environment for HTTP endpoint testing.
@@ -479,7 +485,7 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
         api_config,
         expected_block_time.as_secs(),
         3, // Test finality value
-        indexer_state,
+        indexer_state.clone(),
         transaction_executor,
         transaction_store.clone(),
         rpc_operations.clone(),
@@ -493,6 +499,7 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
         db,
         rpc_operations,
         transaction_store,
+        indexer_state,
     })
 }
 

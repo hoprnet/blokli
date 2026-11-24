@@ -1,4 +1,15 @@
+use std::time::Duration;
+
+use blokli_chain_rpc::tip::ConfirmationMode;
+use url::Url;
+
 use crate::snapshot::download::normalize_sha256_hex;
+
+/// Default of [`IndexerConfig::max_safe_gap`].
+const DEFAULT_MAX_SAFE_GAP: u64 = 32;
+
+/// Default of [`IndexerConfig::head_poll_interval`].
+const DEFAULT_HEAD_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Tuning for the concurrent pre-fetch of transactions needed to decode Safe execution failures.
 ///
@@ -102,9 +113,60 @@ pub struct IndexerConfig {
     #[default(10)]
     pub shutdown_signal_capacity: usize,
 
+    /// Rule that derives the confirmed block from the chain tip.
+    ///
+    /// Default is `ConfirmationMode::Depth`.
+    #[default(_code = "ConfirmationMode::Depth")]
+    pub confirmation_mode: ConfirmationMode,
+
+    /// Override for the indexing depth.
+    ///
+    /// If this value is not set, the tracker uses the network confirmation count.
+    pub confirmation_depth: Option<u16>,
+
+    /// Gap between the latest block and the safe block at which FCR becomes degraded.
+    ///
+    /// FCR counts as degraded when the gap is equal to or larger than this value.
+    ///
+    /// Default is `32`.
+    #[default(_code = "DEFAULT_MAX_SAFE_GAP")]
+    pub max_safe_gap: u64,
+
+    /// Interval between two polls of the chain tip.
+    ///
+    /// Default is `1s`.
+    #[default(_code = "DEFAULT_HEAD_POLL_INTERVAL")]
+    pub head_poll_interval: Duration,
+
+    /// Whether the indexer can use a WebSocket `newHeads` head source.
+    ///
+    /// If the endpoint cannot serve subscriptions, the indexer falls back to polling.
+    ///
+    /// Default is `true`.
+    #[default(true)]
+    pub head_subscription: bool,
+
+    /// WebSocket URL for `newHeads` notifications.
+    ///
+    /// If this value is not set and subscriptions are enabled, Blokli derives the URL from the
+    /// HTTP RPC URL.
+    ///
+    /// Default is `None`.
+    #[default(None)]
+    pub head_ws_url: Option<Url>,
+
     /// Tuning for the concurrent pre-fetch of Safe transactions.
     #[default(_code = "SafeTxPrefetchConfig::default()")]
     pub safe_tx_prefetch: SafeTxPrefetchConfig,
+
+    /// Whether to re-check indexed blocks against the canonical chain after they become final.
+    ///
+    /// A detected mismatch halts the indexer. A deployment that accepts this risk can turn the
+    /// check off to avoid the verification traffic.
+    ///
+    /// Default is `true`.
+    #[default(true)]
+    pub verify_finalized: bool,
 }
 
 impl IndexerConfig {
@@ -147,7 +209,14 @@ impl IndexerConfig {
             data_directory,
             event_bus_capacity,
             shutdown_signal_capacity,
+            confirmation_mode: ConfirmationMode::default(),
+            confirmation_depth: None,
+            max_safe_gap: DEFAULT_MAX_SAFE_GAP,
+            head_poll_interval: DEFAULT_HEAD_POLL_INTERVAL,
+            head_subscription: true,
+            head_ws_url: None,
             safe_tx_prefetch: SafeTxPrefetchConfig::default(),
+            verify_finalized: true,
         }
     }
 
@@ -262,6 +331,12 @@ mod tests {
 
         cfg.validate().expect("Failed to validate snapshot configuration");
         assert!(cfg.is_valid(), "Valid configuration should return true for is_valid()");
+    }
+
+    #[test]
+    fn test_post_finality_verification_is_enabled_by_default() {
+        assert!(IndexerConfig::default().verify_finalized);
+        assert!(IndexerConfig::new(0, true, false, false, None, None, "".to_string(), 1000, 10,).verify_finalized);
     }
 
     #[test]
