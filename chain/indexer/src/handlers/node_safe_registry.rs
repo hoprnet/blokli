@@ -55,18 +55,18 @@ where
         block: u64,
         tx_index: u64,
         log_index: u64,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let account = self
             .db
             .get_account(Some(tx), ChainOrPacketKey::ChainKey(node_addr))
             .await?;
 
         let Some(account) = account else {
-            warn!(
+            debug!(
                 node_address = %node_addr.to_hex(),
-                "Account missing for node-safe update; skipping account_state update"
+                "Account missing for node-safe update; it is created on KeyBinding, which links the Safe"
             );
-            return Ok(());
+            return Ok(false);
         };
 
         let block_u32 = u32::try_from(block).map_err(|_| {
@@ -95,7 +95,7 @@ where
             )
             .await?;
 
-        Ok(())
+        Ok(true)
     }
 
     pub(super) async fn on_node_safe_registry_event(
@@ -195,7 +195,8 @@ where
                     );
                 }
 
-                self.update_account_safe_address(tx, node_addr, Some(safe_addr), block, tx_index, log_index)
+                let account_exists = self
+                    .update_account_safe_address(tx, node_addr, Some(safe_addr), block, tx_index, log_index)
                     .await?;
 
                 debug!(
@@ -206,7 +207,7 @@ where
                 );
 
                 // Publish AccountUpdated event if synced
-                if is_synced {
+                if is_synced && account_exists {
                     match construct_account_update(tx.as_ref(), &node_addr).await {
                         Ok(account) => {
                             events.push(IndexerEvent::AccountUpdated(account));

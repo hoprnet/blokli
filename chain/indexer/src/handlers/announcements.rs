@@ -128,7 +128,7 @@ where
                         let safe_address = match self.db.get_safe_for_registered_node(Some(tx), chain_key).await {
                             Ok(safe) => safe,
                             Err(e) => {
-                                warn!(
+                                error!(
                                     chain_key = %chain_key,
                                     error = %e,
                                     "Failed to lookup safe registration for node, proceeding without safe address"
@@ -282,6 +282,7 @@ mod tests {
             AddressAnnouncement as AddressAnnouncementEvent, KeyBinding as KeyBindingEvent,
             KeyBindingFeeUpdate as KeyBindingFeeUpdateEvent, RevokeAnnouncement as RevokeAnnouncementEvent,
         },
+        hopr_node_safe_registry::HoprNodeSafeRegistry,
     };
     use hopr_types::{
         crypto::{keypairs::Keypair, prelude::OffchainKeypair},
@@ -292,6 +293,7 @@ mod tests {
         primitive::prelude::{SerializableLog, U256},
     };
     use multiaddr::Multiaddr;
+    use primitive_types::H256;
 
     use super::*;
     use crate::{handlers::test_utils::test_helpers::*, state::IndexerEvent};
@@ -829,5 +831,71 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    async fn assert_safe_linked_regardless_of_order(safe_first: bool) -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let mut rpc_operations = MockIndexerRpcOperations::new();
+        rpc_operations
+            .expect_get_hopr_module_from_safe()
+            .returning(|_| Ok(None));
+        let clonable_rpc_operations = ClonableMockOperations {
+            inner: Arc::new(rpc_operations),
+        };
+        let (handlers, ..) = init_handlers_with_events(clonable_rpc_operations, db.clone());
+
+        let safe_address = *SAFE_INSTANCE_ADDR;
+        let node_address = *SELF_CHAIN_ADDRESS;
+
+        let safe_log = SerializableLog {
+            address: handlers.addresses.node_safe_registry,
+            topics: vec![
+                HoprNodeSafeRegistry::RegisteredNodeSafe::SIGNATURE_HASH.into(),
+                H256::from_slice(&safe_address.to_bytes32()).into(),
+                H256::from_slice(&node_address.to_bytes32()).into(),
+            ],
+            data: ().abi_encode(),
+            block_number: if safe_first { 10 } else { 11 },
+            tx_index: 0,
+            log_index: 0,
+            ..test_log()
+        };
+        let binding_log = key_binding_log(
+            node_address,
+            &SELF_PRIV_KEY,
+            1,
+            handlers.addresses.announcements,
+            if safe_first { 11 } else { 10 },
+        );
+
+        let logs = if safe_first {
+            [safe_log, binding_log]
+        } else {
+            [binding_log, safe_log]
+        };
+        for log in logs {
+            let handlers = handlers.clone();
+            db.begin_transaction()
+                .await?
+                .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, log, true).await }))
+                .await?;
+        }
+
+        let account = db
+            .get_account(None, ChainOrPacketKey::ChainKey(node_address))
+            .await?
+            .context("account should exist")?;
+        assert_eq!(account.safe_address, Some(safe_address));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_safe_registered_before_key_binding_links_safe() -> anyhow::Result<()> {
+        assert_safe_linked_regardless_of_order(true).await
+    }
+
+    #[tokio::test]
+    async fn test_safe_registered_after_key_binding_links_safe() -> anyhow::Result<()> {
+        assert_safe_linked_regardless_of_order(false).await
     }
 }
