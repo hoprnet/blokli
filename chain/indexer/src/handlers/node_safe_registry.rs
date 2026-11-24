@@ -20,33 +20,11 @@ where
     T: HoprIndexerRpcOperations + Clone + Send + 'static,
     Db: BlokliDbAllOperations + Clone,
 {
-    /// Handle `HoprNodeSafeRegistryEvents` by creating or deleting safe entries in the database.
+    /// Set or clear the Safe address of the node's account.
     ///
-    /// Processes three event variants:
-    /// - `RegisteredNodeSafe`: creates a safe contract entry if it doesn't exist. Fetches module address from the Safe
-    ///   contract via RPC if no existing entry with a module address is found. Idempotent due to unique constraint on
-    ///   event coordinates.
-    /// - `DeregisteredNodeSafe`: removes the node's registration from the safe. The safe contract record remains in the
-    ///   database.
-    /// - `DomainSeparatorUpdated`: updates the SafeRegistry domain separator in the database.
-    ///
-    /// # Returns
-    ///
-    /// `Result<()>` indicating success, or an error if a database operation fails.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// # async fn run_example() -> crate::Result<()> {
-    /// # use crate::ContractEventHandlers;
-    /// # let handlers = todo!();
-    /// # let tx = todo!();
-    /// # let log = todo!();
-    /// # let event = todo!();
-    /// handlers.on_node_safe_registry_event(&tx, &log, event, true).await?;
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// Returns `true` when the account exists and was updated, and `false` when the node has no account yet. The
+    /// latter is expected when the Safe is registered before the node's `KeyBinding`: the Safe is then linked when
+    /// the account is created.
     async fn update_account_safe_address(
         &self,
         tx: &OpenTransaction,
@@ -55,18 +33,18 @@ where
         block: u64,
         tx_index: u64,
         log_index: u64,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let account = self
             .db
             .get_account(Some(tx), ChainOrPacketKey::ChainKey(node_addr))
             .await?;
 
         let Some(account) = account else {
-            warn!(
+            debug!(
                 node_address = %node_addr.to_hex(),
-                "Account missing for node-safe update; skipping account_state update"
+                "Account missing for node-safe update; it is created on KeyBinding, which links the Safe"
             );
-            return Ok(());
+            return Ok(false);
         };
 
         let block_u32 = u32::try_from(block).map_err(|_| {
@@ -95,9 +73,36 @@ where
             )
             .await?;
 
-        Ok(())
+        Ok(true)
     }
 
+    /// Handle `HoprNodeSafeRegistryEvents` by creating or deleting safe entries in the database.
+    ///
+    /// Processes three event variants:
+    /// - `RegisteredNodeSafe`: creates a safe contract entry if it doesn't exist. Fetches module address from the Safe
+    ///   contract via RPC if no existing entry with a module address is found. Idempotent due to unique constraint on
+    ///   event coordinates.
+    /// - `DeregisteredNodeSafe`: removes the node's registration from the safe. The safe contract record remains in the
+    ///   database.
+    /// - `DomainSeparatorUpdated`: updates the SafeRegistry domain separator in the database.
+    ///
+    /// # Returns
+    ///
+    /// The `IndexerEvent`s to publish, or an error if a database operation fails.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # async fn run_example() -> crate::Result<()> {
+    /// # use crate::ContractEventHandlers;
+    /// # let handlers = todo!();
+    /// # let tx = todo!();
+    /// # let log = todo!();
+    /// # let event = todo!();
+    /// handlers.on_node_safe_registry_event(&tx, &log, event, true).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub(super) async fn on_node_safe_registry_event(
         &self,
         tx: &OpenTransaction,
@@ -195,7 +200,8 @@ where
                     );
                 }
 
-                self.update_account_safe_address(tx, node_addr, Some(safe_addr), block, tx_index, log_index)
+                let account_exists = self
+                    .update_account_safe_address(tx, node_addr, Some(safe_addr), block, tx_index, log_index)
                     .await?;
 
                 debug!(
@@ -205,8 +211,9 @@ where
                     "Safe contract entry and node registration created from RegisteredNodeSafe"
                 );
 
-                // Publish AccountUpdated event if synced
-                if is_synced {
+                // Publish AccountUpdated event if synced and the account exists (otherwise the Safe is linked when
+                // the account is created by its KeyBinding)
+                if is_synced && account_exists {
                     match construct_account_update(tx.as_ref(), &node_addr).await {
                         Ok(account) => {
                             events.push(IndexerEvent::AccountUpdated(account));
