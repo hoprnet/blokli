@@ -999,7 +999,11 @@ mod tests {
         SerializableLog {
             address: Address::new(b"my address 123456789"),
             topics: [Hash::create(&[b"my topic"]).into()].into(),
-            data: vec![block_number as u8, tx_index as u8, log_index as u8],
+            data: vec![
+                block_number.to_le_bytes()[0],
+                tx_index.to_le_bytes()[0],
+                log_index.to_le_bytes()[0],
+            ],
             block_hash: Hash::create(&[b"my block hash"]).into(),
             tx_hash: Hash::create(&[b"my tx hash"]).into(),
             block_number,

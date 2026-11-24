@@ -145,6 +145,10 @@ mod integration_tests {
             Ok(1000)
         }
 
+        async fn block_hash(&self, _block: u64) -> blokli_chain_rpc::errors::Result<Option<Hash>> {
+            Ok(None)
+        }
+
         async fn get_hopr_allowance(
             &self,
             _owner: Address,

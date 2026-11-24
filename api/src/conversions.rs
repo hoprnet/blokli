@@ -6,14 +6,16 @@
 //! independent of GraphQL presentation types.
 
 use blokli_api_types::{
-    Announcement, Hex32, QueryFailedError, SafeExecution, ServiceEntry, ServiceRegistryConfig, ServiceTypeInfo,
-    TokenValueString, Transaction, TransactionDiagnosis, TransactionFees, TransactionStatus as GqlTransactionStatus,
-    UInt64, UnminedReason as GqlUnminedReason,
+    Announcement, ConfirmationMode as GqlConfirmationMode, FcrStatus as GqlFcrStatus, Hex32, QueryFailedError,
+    SafeExecution, ServiceEntry, ServiceRegistryConfig, ServiceTypeInfo, TokenValueString, Transaction,
+    TransactionDiagnosis, TransactionFees, TransactionStatus as GqlTransactionStatus, UInt64,
+    UnminedReason as GqlUnminedReason,
 };
 use blokli_chain_api::transaction_store::{
     FeePair, SafeExecutionResult, TransactionDiagnosis as StoreTransactionDiagnosis, TransactionRecord,
     TransactionStatus as StoreTransactionStatus, UnminedReason,
 };
+use blokli_chain_rpc::tip::{ConfirmationMode as ChainConfirmationMode, FcrState as ChainFcrState};
 use blokli_db_entity::{
     conversions::service_aggregation::{AggregatedServiceEntry, AggregatedServiceType},
     service_registry_config,
@@ -86,6 +88,25 @@ pub fn convert_transaction_status(status: StoreTransactionStatus) -> GqlTransact
         StoreTransactionStatus::Timeout => GqlTransactionStatus::Timeout,
         StoreTransactionStatus::ValidationFailed => GqlTransactionStatus::ValidationFailed,
         StoreTransactionStatus::SubmissionFailed => GqlTransactionStatus::SubmissionFailed,
+    }
+}
+
+/// Convert [`ChainConfirmationMode`] to the GraphQL [`GqlConfirmationMode`]
+pub fn convert_confirmation_mode(mode: ChainConfirmationMode) -> GqlConfirmationMode {
+    match mode {
+        ChainConfirmationMode::Depth => GqlConfirmationMode::Depth,
+        ChainConfirmationMode::SafeOrDepth => GqlConfirmationMode::SafeOrDepth,
+        ChainConfirmationMode::Safe => GqlConfirmationMode::Safe,
+        ChainConfirmationMode::Finalized => GqlConfirmationMode::Finalized,
+    }
+}
+
+/// Convert [`ChainFcrState`] to the GraphQL [`GqlFcrStatus`]
+pub fn convert_fcr_status(state: ChainFcrState) -> GqlFcrStatus {
+    match state {
+        ChainFcrState::Unavailable => GqlFcrStatus::Unavailable,
+        ChainFcrState::Degraded => GqlFcrStatus::Degraded,
+        ChainFcrState::Healthy => GqlFcrStatus::Healthy,
     }
 }
 

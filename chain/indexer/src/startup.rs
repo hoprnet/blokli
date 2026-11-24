@@ -89,6 +89,10 @@ mod tests {
             Err(RpcError::Other("unused".into()))
         }
 
+        async fn block_hash(&self, _block: u64) -> blokli_chain_rpc::errors::Result<Option<Hash>> {
+            Err(RpcError::Other("unused".into()))
+        }
+
         async fn get_transaction_sender(&self, _tx_hash: Hash) -> blokli_chain_rpc::errors::Result<Address> {
             Err(RpcError::Other("unused".into()))
         }

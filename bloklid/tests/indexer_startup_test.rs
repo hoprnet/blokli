@@ -1,15 +1,43 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
+use blokli_chain_api::BlokliChain;
 use blokli_chain_indexer::{IndexerConfig, block::Indexer, handlers::ContractEventHandlers, traits::ChainLogHandler};
 use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
-use blokli_chain_types::ContractAddresses;
+use blokli_chain_types::{ChainConfig, ContractAddresses};
 use blokli_db::{api::logs::BlokliDbLogOperations, db::BlokliDb, info::BlokliDbInfoOperations};
 use futures::stream::{self, StreamExt};
 use hopr_bindings::exports::alloy::primitives::B256;
 use hopr_types::{crypto::types::Hash, primitive::prelude::*};
 use tempfile::TempDir;
 use tokio::sync::Mutex;
+
+#[tokio::test]
+async fn persisted_halt_is_visible_before_indexer_start() -> anyhow::Result<()> {
+    let db = BlokliDb::new_in_memory().await?;
+    db.set_verification_failed_at(Some(11)).await?;
+    let chain = BlokliChain::new(
+        db,
+        ChainConfig {
+            chain_id: 100,
+            tx_polling_interval: 1000,
+            confirmations: 3,
+            max_block_range: 100,
+            block_range_reprobe_interval: 0,
+            channel_contract_deploy_block: 0,
+            max_requests_per_sec: None,
+            expected_block_time: 5,
+        },
+        ContractAddresses::default(),
+        IndexerConfig::default(),
+        "http://127.0.0.1:8545".into(),
+        Default::default(),
+        Default::default(),
+    )
+    .await?;
+    assert!(chain.indexer_state().verification_failed());
+    Ok(())
+}
 
 /// Mock RPC operations for testing
 #[derive(Clone)]
@@ -37,6 +65,10 @@ impl MockRpcOperations {
 impl HoprIndexerRpcOperations for MockRpcOperations {
     async fn block_number(&self) -> blokli_chain_rpc::errors::Result<u64> {
         Ok(self.block_number)
+    }
+
+    async fn block_hash(&self, _block: u64) -> blokli_chain_rpc::errors::Result<Option<Hash>> {
+        Ok(None)
     }
 
     async fn get_transaction_sender(&self, _tx_hash: Hash) -> blokli_chain_rpc::errors::Result<Address> {
@@ -114,7 +146,7 @@ impl HoprIndexerRpcOperations for MockRpcOperations {
     }
 
     async fn get_xhopr_balance(&self, _address: Address) -> blokli_chain_rpc::errors::Result<XHoprBalance> {
-        Ok(self.xhopr_balance.clone())
+        Ok(self.xhopr_balance)
     }
 
     async fn get_hopr_allowance(
@@ -208,6 +240,7 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
         event_bus_capacity: 1000,
         shutdown_signal_capacity: 10,
         safe_tx_prefetch: Default::default(),
+        ..Default::default()
     };
 
     // Create indexer
@@ -298,6 +331,7 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
         event_bus_capacity: 1000,
         shutdown_signal_capacity: 10,
         safe_tx_prefetch: Default::default(),
+        ..Default::default()
     };
 
     // Create indexer
@@ -335,6 +369,10 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
     impl HoprIndexerRpcOperations for TrackingMockRpc {
         async fn block_number(&self) -> blokli_chain_rpc::errors::Result<u64> {
             self.inner.block_number().await
+        }
+
+        async fn block_hash(&self, block: u64) -> blokli_chain_rpc::errors::Result<Option<Hash>> {
+            self.inner.block_hash(block).await
         }
 
         async fn get_transaction_sender(&self, tx_hash: Hash) -> blokli_chain_rpc::errors::Result<Address> {
@@ -508,6 +546,7 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         event_bus_capacity: 1000,
         shutdown_signal_capacity: 10,
         safe_tx_prefetch: Default::default(),
+        ..Default::default()
     };
 
     // Create and start indexer
@@ -620,6 +659,7 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
         event_bus_capacity: 1000,
         shutdown_signal_capacity: 10,
         safe_tx_prefetch: Default::default(),
+        ..Default::default()
     };
 
     // Create indexer

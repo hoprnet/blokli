@@ -34,6 +34,7 @@ lazy_static       = { workspace = true }
 multiaddr         = { workspace = true }
 reqwest           = { workspace = true, features = ["brotli", "json", "stream", "zstd"] }
 sea-orm           = { workspace = true }
+serde             = { workspace = true }
 sha2              = { workspace = true }
 smart-default     = { workspace = true }
 sysinfo           = { workspace = true }
@@ -83,3 +84,9 @@ hopr-types = { workspace = true, features = [
 [[bench]]
 harness = false
 name    = "event_bus"
+
+[lints.rust]
+# `tests/indexer_integration_test.rs` keeps its disabled tests behind this cfg until they are refactored.
+unexpected_cfgs = { level = "warn", check-cfg = [
+  "cfg(disabled_pending_refactor)",
+] }

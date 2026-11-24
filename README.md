@@ -265,6 +265,7 @@ priority over their canonical database aliases when both are set. Boolean enviro
 | `data_directory`               | `data`                  | `BLOKLI_DATA_DIRECTORY`               | Directory for daemon data                                                                                                 |
 | `network`                      | `jura-dev`              | `BLOKLI_NETWORK`                      | `jura-dev`, `jura-prod`, or `anvil-localhost` (`localhost` is an alias)                                                   |
 | `rpc_url`                      | `http://localhost:8545` | `BLOKLI_RPC_URL`                      | Chain JSON-RPC endpoint                                                                                                   |
+| `rpc_ws_url`                   | derived from `rpc_url`  | `BLOKLI_RPC_WS_URL`                   | WebSocket endpoint for `newHeads`. The default is `rpc_url` with `http(s)` replaced by `ws(s)`                            |
 | `max_rpc_requests_per_sec`     | `100`                   | `BLOKLI_MAX_RPC_REQUESTS_PER_SEC`     | Hard cap on RPC requests per second (token bucket, retries count); `0` means unlimited                                    |
 | `max_block_range`              | `10000`                 | `BLOKLI_MAX_BLOCK_RANGE`              | Ceiling for adaptive `eth_getLogs` ranges; `0` auto-discovers up to 10000                                                 |
 | `block_range_reprobe_interval` | `100`                   | `BLOKLI_BLOCK_RANGE_REPROBE_INTERVAL` | Successful `eth_getLogs` requests spanning the full reduced range before a larger range is probed again; `0` never probes |
@@ -291,14 +292,20 @@ fields. SQLite uses separate index and raw-log databases.
 
 #### Indexer Configuration
 
-| Config Key                                      | Default | Environment Variable                                   | Description                                           |
-| :---------------------------------------------- | :------ | :----------------------------------------------------- | :---------------------------------------------------- |
-| `indexer.fast_sync`                             | `true`  | `BLOKLI_INDEXER_FAST_SYNC`                             | Enables the fast initial synchronization path         |
-| `indexer.enable_logs_snapshot`                  | `false` | `BLOKLI_INDEXER_ENABLE_LOGS_SNAPSHOT`                  | Restores raw logs from a snapshot before catch-up     |
-| `indexer.logs_snapshot_url`                     | unset   | `BLOKLI_INDEXER_LOGS_SNAPSHOT_URL`                     | URL of a `.tar.xz` archive containing `hopr_logs.sql` |
-| `indexer.logs_snapshot_sha256`                  | unset   | `BLOKLI_INDEXER_LOGS_SNAPSHOT_SHA256`                  | SHA-256 hex digest of the archive (required with URL) |
-| `indexer.subscription.event_bus_capacity`       | `1000`  | `BLOKLI_INDEXER_SUBSCRIPTION_EVENT_BUS_CAPACITY`       | Channel-event bus capacity                            |
-| `indexer.subscription.shutdown_signal_capacity` | `10`    | `BLOKLI_INDEXER_SUBSCRIPTION_SHUTDOWN_SIGNAL_CAPACITY` | Shutdown signal buffer capacity                       |
+| Config Key                                      | Default | Environment Variable                                   | Description                                            |
+| :---------------------------------------------- | :------ | :----------------------------------------------------- | :----------------------------------------------------- |
+| `indexer.fast_sync`                             | `true`  | `BLOKLI_INDEXER_FAST_SYNC`                             | Enables the fast initial synchronization path          |
+| `indexer.enable_logs_snapshot`                  | `false` | `BLOKLI_INDEXER_ENABLE_LOGS_SNAPSHOT`                  | Restores raw logs from a snapshot before catch-up      |
+| `indexer.logs_snapshot_url`                     | unset   | `BLOKLI_INDEXER_LOGS_SNAPSHOT_URL`                     | URL of a `.tar.xz` archive containing `hopr_logs.sql`  |
+| `indexer.logs_snapshot_sha256`                  | unset   | `BLOKLI_INDEXER_LOGS_SNAPSHOT_SHA256`                  | SHA-256 hex digest of the archive (required with URL)  |
+| `indexer.head_tracking.head_subscription`       | `true`  | `BLOKLI_INDEXER_HEAD_TRACKING_HEAD_SUBSCRIPTION`       | Uses `newHeads` over WebSocket. `false` forces polling |
+| `indexer.head_tracking.head_poll_interval`      | `1s`    | `BLOKLI_INDEXER_HEAD_TRACKING_HEAD_POLL_INTERVAL`      | Polling interval for the head source fallback          |
+| `indexer.confirmation.mode`                     | `depth` | `BLOKLI_INDEXER_CONFIRMATION_MODE`                     | `depth`, `safe_or_depth`, `safe` or `finalized`        |
+| `indexer.confirmation.depth`                    | network | `BLOKLI_INDEXER_CONFIRMATION_DEPTH`                    | Blocks behind the latest block in depth-based modes    |
+| `indexer.confirmation.max_safe_gap`             | `32`    | `BLOKLI_INDEXER_CONFIRMATION_MAX_SAFE_GAP`             | Minimum gap from latest to safe that degrades FCR      |
+| `indexer.confirmation.verify_finalized`         | `true`  | `BLOKLI_INDEXER_CONFIRMATION_VERIFY_FINALIZED`         | Re-checks indexed logs. Needs a `finalized` block      |
+| `indexer.subscription.event_bus_capacity`       | `1000`  | `BLOKLI_INDEXER_SUBSCRIPTION_EVENT_BUS_CAPACITY`       | Channel-event bus capacity                             |
+| `indexer.subscription.shutdown_signal_capacity` | `10`    | `BLOKLI_INDEXER_SUBSCRIPTION_SHUTDOWN_SIGNAL_CAPACITY` | Shutdown signal buffer capacity                        |
 
 #### API Configuration
 

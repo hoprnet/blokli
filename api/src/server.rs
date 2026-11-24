@@ -25,11 +25,10 @@ use blokli_chain_api::{
 use blokli_chain_indexer::IndexerState;
 use blokli_chain_rpc::{rpc::RpcOperations, transport::ReqwestClient};
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
-use blokli_db_entity::prelude::ChainInfo;
 use futures::stream::{Stream, StreamExt};
 #[cfg(feature = "telemetry")]
 use hopr_types::telemetry as hopr_metrics;
-use sea_orm::{DatabaseConnection, EntityTrait};
+use sea_orm::DatabaseConnection;
 use serde::Serialize;
 use serde_json::Value;
 use tower_http::{
@@ -47,7 +46,7 @@ use crate::{
     config::{ApiConfig, HealthConfig},
     errors::ApiResult,
     metrics,
-    readiness::{ReadinessChecker, ReadinessState},
+    readiness::{ReadinessChecker, ReadinessChecks, ReadinessReport, ReadinessState},
     schema::{ErasedSchema, LATEST_SCHEMA_VERSION, build_version_registry},
     snapshot::SubscriptionSnapshots,
     sse_connection::{SseConnectionLog, subscription_events},
@@ -66,44 +65,6 @@ struct ReadinessResponse {
     status: String,
     version: String,
     checks: ReadinessChecks,
-}
-
-/// Individual readiness checks
-#[derive(Serialize)]
-struct ReadinessChecks {
-    database: CheckStatus,
-    rpc: RpcCheckStatus,
-    indexer: IndexerCheckStatus,
-}
-
-/// Generic check status
-#[derive(Serialize)]
-struct CheckStatus {
-    status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-}
-
-/// RPC check status with block number
-#[derive(Serialize)]
-struct RpcCheckStatus {
-    status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    block_number: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-}
-
-/// Indexer check status with lag information
-#[derive(Serialize)]
-struct IndexerCheckStatus {
-    status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    last_indexed_block: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    lag: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
 }
 
 /// Predicate that excludes Server-Sent Events from compression
@@ -330,7 +291,8 @@ pub async fn build_app(
 ) -> ApiResult<Router> {
     let db = databases.index;
     let logs_db = databases.logs;
-    let readiness_checker = ReadinessChecker::new(db.clone(), rpc_operations.clone(), config.health.clone());
+    let readiness_checker = ReadinessChecker::new(db.clone(), rpc_operations.clone(), config.health.clone())
+        .with_verification_status(indexer_state.verification_status());
     // One instance for every schema: the limit on snapshot loads protects the connection pool,
     // which all schema versions share.
     let subscription_snapshots =
@@ -639,98 +601,26 @@ fn health_response(version: String) -> HealthResponse {
 /// Readiness probe endpoint - comprehensive check for service readiness
 async fn readyz_handler(State(state): State<AppState>) -> impl IntoResponse {
     // Perform an immediate out-of-band readiness check and update the cached state
-    state.readiness_checker.check_and_update().await;
+    let report = state.readiness_checker.check_and_update().await;
+    let (status, response) = readiness_http_response(report, &state.app_version);
 
-    let mut all_healthy = true;
-    let mut checks = ReadinessChecks {
-        database: CheckStatus {
-            status: "healthy".to_string(),
-            error: None,
-        },
-        rpc: RpcCheckStatus {
-            status: "healthy".to_string(),
-            block_number: None,
-            error: None,
-        },
-        indexer: IndexerCheckStatus {
-            status: "healthy".to_string(),
-            last_indexed_block: None,
-            lag: None,
-            error: None,
-        },
-    };
+    (status, Json(response)).into_response()
+}
 
-    // 1. Check database connectivity by querying chain_info
-    let db_result = ChainInfo::find().one(&state.db).await;
-    let indexed_block = match db_result {
-        Ok(Some(info)) => Some(info.last_indexed_block),
-        Ok(None) => {
-            // No chain info yet - indexer hasn't started
-            all_healthy = false;
-            checks.database = CheckStatus {
-                status: "unhealthy".to_string(),
-                error: Some("No chain info found - indexer may not have started".to_string()),
-            };
-            None
-        }
-        Err(e) => {
-            all_healthy = false;
-            checks.database = CheckStatus {
-                status: "unhealthy".to_string(),
-                error: Some(e.to_string()),
-            };
-            None
-        }
-    };
-
-    // 2. Check RPC connectivity and get current block
-    let rpc_block = match state.rpc_operations.get_block_number().await {
-        Ok(block) => {
-            checks.rpc.block_number = Some(block);
-            Some(block)
-        }
-        Err(e) => {
-            all_healthy = false;
-            checks.rpc = RpcCheckStatus {
-                status: "unhealthy".to_string(),
-                block_number: None,
-                error: Some(e.to_string()),
-            };
-            None
-        }
-    };
-
-    // 3. Check indexer lag
-    if let (Some(indexed), Some(rpc_block)) = (indexed_block, rpc_block) {
-        let indexed_u64 = u64::try_from(indexed).unwrap_or(0);
-        let lag = rpc_block.saturating_sub(indexed_u64);
-        checks.indexer.last_indexed_block = Some(indexed);
-        checks.indexer.lag = Some(lag);
-
-        if lag > state.health_config.max_indexer_lag {
-            all_healthy = false;
-            checks.indexer.status = "unhealthy".to_string();
-            checks.indexer.error = Some(format!(
-                "indexer lag exceeds threshold ({} > {} blocks)",
-                lag, state.health_config.max_indexer_lag
-            ));
-        }
-    } else if indexed_block.is_some() {
-        // We have indexed block but no RPC block - already marked RPC as unhealthy
-        checks.indexer.last_indexed_block = indexed_block;
-    }
-
-    let response = ReadinessResponse {
-        status: if all_healthy { "ready" } else { "not_ready" }.to_string(),
-        version: state.app_version.clone(),
-        checks,
-    };
-
-    if all_healthy {
-        (StatusCode::OK, Json(response)).into_response()
+/// Renders a readiness report as the `/readyz` HTTP response.
+fn readiness_http_response(report: ReadinessReport, app_version: &str) -> (StatusCode, ReadinessResponse) {
+    let is_ready = report.state == ReadinessState::Ready;
+    let status = if is_ready {
+        StatusCode::OK
     } else {
-        (StatusCode::SERVICE_UNAVAILABLE, Json(response)).into_response()
-    }
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    let response = ReadinessResponse {
+        status: if is_ready { "ready" } else { "not_ready" }.to_string(),
+        version: app_version.to_string(),
+        checks: report.checks,
+    };
+    (status, response)
 }
 
 #[cfg(test)]
@@ -744,6 +634,7 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+    use crate::readiness::{CheckStatus, IndexerCheckStatus, RpcCheckStatus};
 
     /// Helper to create a response with specific Content-Type header
     fn make_response(content_type: Option<&str>) -> Response<String> {
@@ -786,6 +677,10 @@ mod tests {
                 lag: Some(5),
                 error: None,
             },
+            verification: CheckStatus {
+                status: "healthy".to_string(),
+                error: None,
+            },
         };
 
         let response = ReadinessResponse {
@@ -821,6 +716,10 @@ mod tests {
                 lag: None,
                 error: None,
             },
+            verification: CheckStatus {
+                status: "healthy".to_string(),
+                error: None,
+            },
         };
 
         let response = ReadinessResponse {
@@ -851,6 +750,10 @@ mod tests {
                 status: "healthy".to_string(),
                 last_indexed_block: Some(12340),
                 lag: None,
+                error: None,
+            },
+            verification: CheckStatus {
+                status: "healthy".to_string(),
                 error: None,
             },
         };
@@ -886,6 +789,10 @@ mod tests {
                 lag: Some(45),
                 error: Some("indexer lag exceeds threshold (45 > 10 blocks)".to_string()),
             },
+            verification: CheckStatus {
+                status: "healthy".to_string(),
+                error: None,
+            },
         };
 
         let response = ReadinessResponse {
@@ -904,6 +811,41 @@ mod tests {
                 .unwrap()
                 .contains("exceeds threshold")
         );
+    }
+
+    #[test]
+    fn test_readiness_http_response_verification_failure_wins_over_zero_lag() {
+        let report = ReadinessReport {
+            state: ReadinessState::NotReady,
+            health_status: metrics::HEALTH_STATUS_VERIFICATION_FAILED,
+            checks: ReadinessChecks {
+                database: CheckStatus::healthy(),
+                rpc: RpcCheckStatus {
+                    status: "healthy".to_string(),
+                    block_number: Some(12340),
+                    error: None,
+                },
+                indexer: IndexerCheckStatus {
+                    status: "healthy".to_string(),
+                    last_indexed_block: Some(12340),
+                    lag: Some(0),
+                    error: None,
+                },
+                verification: CheckStatus::unhealthy("Post-finality verification found a mismatch"),
+            },
+        };
+
+        let (status, response) = readiness_http_response(report, "0.0.0-test");
+        let json = serde_json::to_value(&response).unwrap();
+
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(json["status"], "not_ready");
+        assert_eq!(json["checks"]["database"]["status"], "healthy");
+        assert_eq!(json["checks"]["rpc"]["status"], "healthy");
+        assert_eq!(json["checks"]["indexer"]["status"], "healthy");
+        assert_eq!(json["checks"]["indexer"]["lag"], 0);
+        assert_eq!(json["checks"]["verification"]["status"], "unhealthy");
+        assert!(json["checks"]["verification"]["error"].is_string());
     }
 
     #[test]

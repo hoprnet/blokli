@@ -17,6 +17,7 @@ runtime-tokio = ["dep:reqwest"]
 telemetry     = ["hopr-types/telemetry"]
 
 [dependencies]
+alloy                      = { workspace = true }
 async-stream               = { workspace = true }
 async-trait                = { workspace = true }
 futures                    = { workspace = true }
@@ -32,7 +33,9 @@ serde_json                 = { workspace = true }
 serde_with                 = { workspace = true }
 serde_yaml                 = { workspace = true }
 smart-default              = { workspace = true }
+strum                      = { workspace = true }
 thiserror                  = { workspace = true }
+tokio                      = { workspace = true, features = ["rt", "sync", "time"] }
 url                        = { workspace = true }
 validator                  = { workspace = true }
 
@@ -56,4 +59,12 @@ mockito     = { workspace = true }
 reqwest     = { workspace = true }
 tempfile    = { workspace = true }
 test-log    = { workspace = true }
-tokio       = { workspace = true }
+tokio       = { workspace = true, features = ["test-util"] }
+
+# `alloy` is used through `hopr_bindings::exports::alloy`. The direct dependency only enables the
+# WebSocket provider features that the head subscription needs.
+[package.metadata.cargo-machete]
+ignored = ["alloy"]
+
+[package.metadata.cargo-shear]
+ignored = ["alloy"]

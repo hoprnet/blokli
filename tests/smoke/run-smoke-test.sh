@@ -5,6 +5,7 @@
 # Usage:
 #   ./run-smoke-test.sh                           # Test with local Anvil (fast, no external deps)
 #   SMOKE_CONFIG=config-smoke-gnosis.toml ./run-smoke-test.sh  # Test with Gnosis Chain RPC (allows high lag)
+#   SMOKE_CONFIG=config-smoke-piz-palu-prod.toml ./run-smoke-test.sh  # Test piz-palu-prod on Gnosis Chain with safe_or_depth FCR
 #   SMOKE_CONFIG=config-smoke-gnosis-full-sync.toml ./run-smoke-test.sh  # Test with Gnosis Chain RPC (requires full sync within 10 blocks)
 #   SOURCE_IMAGE=myimage:tag ./run-smoke-test.sh  # Pull image, push to local registry
 #
@@ -12,6 +13,7 @@
 #   SMOKE_CONFIG     - Config file to use (default: config-smoke.toml)
 #                      - config-smoke.toml: Local Anvil testing (fast, 30s timeout)
 #                      - config-smoke-gnosis.toml: Real Gnosis Chain RPC testing (allows high lag, 30s timeout)
+#                      - config-smoke-piz-palu-prod.toml: Piz Palu prod on Gnosis Chain with safe_or_depth FCR (allows high lag, 30s timeout)
 #                      - config-smoke-gnosis-full-sync.toml: Real Gnosis Chain RPC testing (requires full sync within 10 blocks, 600s timeout)
 #   SOURCE_IMAGE     - Image to pull from remote registry (optional, builds from nix if not set)
 #   REGISTRY_HOST    - Local registry hostname (default: localhost)
@@ -699,6 +701,9 @@ main() {
     ;;
   "config-smoke-gnosis.toml")
     config_desc="Gnosis Chain RPC (allows high lag for connectivity testing)"
+    ;;
+  "config-smoke-piz-palu-prod.toml")
+    config_desc="Piz Palu prod on Gnosis Chain with safe_or_depth FCR (allows high lag for connectivity testing)"
     ;;
   "config-smoke-gnosis-full-sync.toml")
     config_desc="Gnosis Chain RPC (requires full sync within 10 blocks)"

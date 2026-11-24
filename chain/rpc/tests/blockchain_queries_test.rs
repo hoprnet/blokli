@@ -40,9 +40,19 @@ async fn test_get_timestamp() -> anyhow::Result<()> {
     // Get current block number
     let block_number = rpc.provider.get_block_number().await?;
 
-    // Get timestamp for a block (accounting for finality)
+    // Get the timestamp of the requested block
     let timestamp = rpc.get_timestamp(block_number).await?;
     assert!(timestamp.is_some(), "timestamp should exist for valid block");
+
+    // The timestamp must belong to block `block_number`, not to an earlier block
+    let expected_timestamp = rpc
+        .provider
+        .get_block_by_number(block_number.into())
+        .await?
+        .expect("requested block should exist")
+        .header
+        .timestamp;
+    assert_eq!(timestamp, Some(expected_timestamp));
 
     // Verify timestamp is reasonable (Unix timestamp)
     let ts = timestamp.unwrap();

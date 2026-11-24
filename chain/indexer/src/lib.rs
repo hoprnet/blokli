@@ -33,6 +33,7 @@ pub mod state;
 pub(crate) mod test_postgres;
 pub mod traits;
 pub mod utils;
+pub mod verification;
 
 /// Configuration for the chain indexer functionality.
 ///

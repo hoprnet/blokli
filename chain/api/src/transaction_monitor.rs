@@ -993,6 +993,9 @@ mod tests {
         transaction_store::TransactionRecord,
     };
 
+    /// Receipt lookup result of the mock: `Ok(Some(logs))` found, `Ok(None)` pending, `Err` RPC error.
+    type ReceiptLogsResult = Result<Option<Vec<ReceiptLog>>, String>;
+
     const TEST_UUID: Uuid = Uuid::from_bytes([
         0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
     ]);
@@ -1011,7 +1014,7 @@ mod tests {
         statuses: Arc<DashMap<Hash, Option<bool>>>,
         // Map from tx_hash to receipt logs (or error).
         // Some(Ok(logs)) = receipt found with logs, Some(Err(..)) = RPC error, None = pending
-        receipt_logs: Arc<DashMap<Hash, Result<Option<Vec<ReceiptLog>>, String>>>,
+        receipt_logs: Arc<DashMap<Hash, ReceiptLogsResult>>,
         // Map from tx_hash to revert reason result
         revert_reasons: Arc<DashMap<Hash, Result<Option<String>, String>>>,
         // Transactions whose revert-reason trace never completes
