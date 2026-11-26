@@ -1101,6 +1101,15 @@ type MutationRoot {
 	Validates the pre-signed raw transaction data and submits it to the chain immediately.
 	Returns the transaction ID that can be used to query status later.
 	Does not wait for on-chain confirmation. Background monitor tracks confirmation.
+	
+	A transaction with the same signer and nonce as a tracked pending one, but a different
+	hash, is a fee-bumped replacement. It is broadcast and tracked as a transaction of its
+	own, next to the original, which stays tracked. Both `maxFeePerGas` and
+	`maxPriorityFeePerGas` must be at least 12.5% above the pending transaction's, or the
+	recommended fees when those are higher. Refusals are `RpcError` results: code
+	`REPLACEMENT_UNDERPRICED` with the minimum fees in the message, and
+	`REPLACEMENT_LIMIT_REACHED` once the nonce was replaced the configured maximum number of
+	times. Resubmitting the identical raw transaction returns the tracked one as before.
 	"""
 	sendTransactionAsync(input: TransactionInput!): SendTransactionAsyncResult!
 	"""

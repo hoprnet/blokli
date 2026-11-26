@@ -174,6 +174,10 @@ impl Args {
                 "api.transactions.max_submitted_transactions_per_identity",
             ),
             (
+                "BLOKLI_API_TRANSACTIONS_MAX_REPLACEMENTS_PER_NONCE",
+                "api.transactions.max_replacements_per_nonce",
+            ),
+            (
                 "BLOKLI_API_TRANSACTIONS_TERMINAL_TRANSACTION_TTL",
                 "api.transactions.terminal_transaction_ttl",
             ),

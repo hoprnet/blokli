@@ -102,6 +102,13 @@ pub enum SubmissionMode {
     Tracked,
     /// Synchronous or fire-and-forget submission: no `Submitted` record is left behind.
     Untracked,
+    /// Asynchronous submission of a fee-bumped replacement of the tracked transaction
+    /// `replaces`, which is still `Submitted`.
+    ///
+    /// If `replaces` carries the same logical action, the duplicate check is skipped and the
+    /// admitted claim is registered on the replacement's own record. Anything else about the
+    /// transaction is evaluated exactly as in [`SubmissionMode::Tracked`].
+    Replacement { replaces: Uuid },
 }
 
 /// Outcome of evaluating a raw transaction against the HOPR-aware policy.
@@ -341,6 +348,8 @@ struct ActionClaim {
     key: String,
     claim: u64,
     settled: watch::Sender<Option<Uuid>>,
+    /// The entry this claim took over, put back if the claim is dropped unregistered.
+    restore: Option<TrackedAction>,
 }
 
 impl ActionClaim {
@@ -373,7 +382,14 @@ impl Drop for ActionClaim {
         // claim that never produced a tracked transaction.
         let mut actions = lock(&self.actions);
         if self.owns(&actions) {
-            actions.remove(&self.key);
+            match self.restore.take() {
+                Some(previous) => {
+                    actions.insert(self.key.clone(), previous);
+                }
+                None => {
+                    actions.remove(&self.key);
+                }
+            }
         }
     }
 }
@@ -521,20 +537,23 @@ impl HoprPolicy {
         }
 
         let key = action_key(&action, source);
-        let claim = match mode {
+        let outcome = match mode {
             SubmissionMode::Untracked => None,
-            SubmissionMode::Tracked => match self.claim_action(&key).await {
-                ClaimOutcome::Claimed(claim) => Some(claim),
-                ClaimOutcome::Untracked => None,
-                ClaimOutcome::Duplicate(existing) => {
-                    crate::metrics::record_hopr_validation(operation, "deduplicated");
-                    debug!(
-                        tx_hash = %action.transaction_hash, signer = %action.signer, operation, %existing,
-                        "returning the in-flight transaction for an equivalent HOPR action"
-                    );
-                    return PolicyDecision::Duplicate { operation, existing };
-                }
-            },
+            SubmissionMode::Tracked => Some(self.claim_action(&key).await),
+            SubmissionMode::Replacement { replaces } => Some(self.claim_replacement(&key, replaces).await),
+        };
+        let claim = match outcome {
+            None => None,
+            Some(ClaimOutcome::Claimed(claim)) => Some(claim),
+            Some(ClaimOutcome::Untracked) => None,
+            Some(ClaimOutcome::Duplicate(existing)) => {
+                crate::metrics::record_hopr_validation(operation, "deduplicated");
+                debug!(
+                    tx_hash = %action.transaction_hash, signer = %action.signer, operation, %existing,
+                    "returning the in-flight transaction for an equivalent HOPR action"
+                );
+                return PolicyDecision::Duplicate { operation, existing };
+            }
         };
 
         crate::metrics::record_hopr_validation(operation, "admitted");
@@ -567,6 +586,49 @@ impl HoprPolicy {
                 }
             }
         }
+    }
+
+    /// Claim a logical action key for a replacement of `replaces`.
+    ///
+    /// When `replaces` is the transaction that carries the key, the replacement takes the key
+    /// over for the length of its broadcast: an equivalent submission arriving meanwhile waits
+    /// on it, and if the broadcast fails the key goes back to `replaces`, so a re-signed copy
+    /// is still refused while the original is `Submitted`. In every other case, including a
+    /// key carried by some other transaction, the claim is the ordinary one and may report a
+    /// duplicate.
+    async fn claim_replacement(&self, key: &str, replaces: Uuid) -> ClaimOutcome {
+        match self.try_claim_from(key, replaces) {
+            Some(claim) => ClaimOutcome::Claimed(claim),
+            None => self.claim_action(key).await,
+        }
+    }
+
+    /// Take the key over from `replaces` under the lock, if `replaces` is what registered it.
+    fn try_claim_from(&self, key: &str, replaces: Uuid) -> Option<ActionClaim> {
+        let mut actions = lock(&self.actions);
+        let previous = match actions.get(key) {
+            Some(registered @ &TrackedAction::Registered { transaction, .. }) if transaction == replaces => {
+                registered.clone()
+            }
+            _ => return None,
+        };
+        let (sender, receiver) = watch::channel(None);
+        let claim = self.next_claim.fetch_add(1, Ordering::Relaxed);
+        actions.insert(
+            key.to_owned(),
+            TrackedAction::Claimed {
+                claim,
+                claimed_at: Instant::now(),
+                settled: receiver,
+            },
+        );
+        Some(ActionClaim {
+            actions: self.actions.clone(),
+            key: key.to_owned(),
+            claim,
+            settled: sender,
+            restore: Some(previous),
+        })
     }
 
     /// One claim attempt under the lock. `Err` carries the receiver of an equivalent claim
@@ -613,6 +675,7 @@ impl HoprPolicy {
             key: key.to_owned(),
             claim,
             settled: sender,
+            restore: None,
         }))
     }
 
@@ -1197,6 +1260,185 @@ mod tests {
             PolicyDecision::Duplicate {
                 operation: "fund_channel",
                 existing: id,
+            }
+        );
+    }
+
+    /// A funding call from `signer` at `nonce`, priced at `gas_price`: the same logical action
+    /// as any other with the same amount, whatever its nonce and price.
+    async fn signed_funding(signer: &PrivateKeySigner, nonce: u64, gas_price: u128) -> Vec<u8> {
+        let input = HoprNodeManagementModule::execTransactionFromModuleCall {
+            to: AlloyAddress::from_slice(&CHANNELS),
+            value: U256::ZERO,
+            data: Bytes::from(fund_channel(1_000)),
+            operation: 0,
+        }
+        .abi_encode();
+        let tx = TxLegacy {
+            chain_id: Some(1),
+            nonce,
+            gas_price,
+            gas_limit: 300_000,
+            to: TxKind::Call(AlloyAddress::from_slice(&MODULE)),
+            value: U256::ZERO,
+            input: input.into(),
+        };
+        let signature = signer.sign_hash(&tx.signature_hash()).await.expect("signing failed");
+        let mut encoded = Vec::new();
+        tx.into_signed(signature).encode_2718(&mut encoded);
+        encoded
+    }
+
+    /// Admit and register a funding call on a tracked record, returning the policy and store.
+    async fn tracked_funding(signer: &PrivateKeySigner, original: Uuid) -> (HoprPolicy, Arc<TransactionStore>) {
+        let store = store();
+        let policy = policy(StubChain::with_channel(Some(ChannelState::Open)), store.clone());
+        let first = signed_funding(signer, 0, 1_000_000_000).await;
+        let PolicyDecision::Admit(action) = policy.evaluate(&first, SubmissionMode::Tracked).await else {
+            panic!("the first submission should be admitted");
+        };
+        store.insert(submitted_record(original)).expect("insert failed");
+        action.register(original);
+        (policy, store)
+    }
+
+    #[tokio::test]
+    async fn a_replacement_of_the_tracked_action_is_admitted_and_bound_to_the_replacement() {
+        let signer = PrivateKeySigner::random();
+        let (original, replacement) = (Uuid::new_v4(), Uuid::new_v4());
+        let (policy, store) = tracked_funding(&signer, original).await;
+
+        let bumped = signed_funding(&signer, 0, 2_000_000_000).await;
+        let PolicyDecision::Admit(action) = policy
+            .evaluate(&bumped, SubmissionMode::Replacement { replaces: original })
+            .await
+        else {
+            panic!("a replacement of the tracked action must not be a duplicate");
+        };
+        assert!(action.is_tracked());
+        store.insert(submitted_record(replacement)).expect("insert failed");
+        action.register(replacement);
+
+        // The action is now carried by the replacement: a re-signed copy at another nonce
+        // resolves to it, and not to the original.
+        let copy = signed_funding(&signer, 7, 1_000_000_000).await;
+        assert_eq!(
+            policy.evaluate(&copy, SubmissionMode::Tracked).await,
+            PolicyDecision::Duplicate {
+                operation: "fund_channel",
+                existing: replacement,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_re_signed_copy_that_is_not_a_replacement_is_refused_while_the_original_is_submitted() {
+        let signer = PrivateKeySigner::random();
+        let original = Uuid::new_v4();
+        let (policy, _store) = tracked_funding(&signer, original).await;
+
+        // A different nonce is not a replacement, so it is evaluated as an ordinary submission.
+        let other_nonce = signed_funding(&signer, 1, 9_000_000_000).await;
+        assert_eq!(
+            policy.evaluate(&other_nonce, SubmissionMode::Tracked).await,
+            PolicyDecision::Duplicate {
+                operation: "fund_channel",
+                existing: original,
+            }
+        );
+        // A same-nonce copy that the caller did not recognise as a valid replacement (for
+        // instance below the minimum fee) is an ordinary submission too.
+        let underpriced = signed_funding(&signer, 0, 1_000_000_001).await;
+        assert_eq!(
+            policy.evaluate(&underpriced, SubmissionMode::Tracked).await,
+            PolicyDecision::Duplicate {
+                operation: "fund_channel",
+                existing: original,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_replacement_of_another_transaction_is_still_a_duplicate() {
+        let signer = PrivateKeySigner::random();
+        let original = Uuid::new_v4();
+        let (policy, _store) = tracked_funding(&signer, original).await;
+
+        let bumped = signed_funding(&signer, 0, 2_000_000_000).await;
+        assert_eq!(
+            policy
+                .evaluate(
+                    &bumped,
+                    SubmissionMode::Replacement {
+                        replaces: Uuid::new_v4()
+                    }
+                )
+                .await,
+            PolicyDecision::Duplicate {
+                operation: "fund_channel",
+                existing: original,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_replacement_broadcast_hands_the_action_back_to_the_original() {
+        let signer = PrivateKeySigner::random();
+        let original = Uuid::new_v4();
+        let (policy, _store) = tracked_funding(&signer, original).await;
+
+        let bumped = signed_funding(&signer, 0, 2_000_000_000).await;
+        let decision = policy
+            .evaluate(&bumped, SubmissionMode::Replacement { replaces: original })
+            .await;
+        assert!(matches!(decision, PolicyDecision::Admit(_)));
+        // The broadcast failed: the admission is dropped without being registered.
+        drop(decision);
+
+        let copy = signed_funding(&signer, 7, 1_000_000_000).await;
+        assert_eq!(
+            policy.evaluate(&copy, SubmissionMode::Tracked).await,
+            PolicyDecision::Duplicate {
+                operation: "fund_channel",
+                existing: original,
+            },
+            "the original still carries the action"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_equivalent_submission_waits_for_a_replacement_in_flight() {
+        let signer = PrivateKeySigner::random();
+        let (original, replacement) = (Uuid::new_v4(), Uuid::new_v4());
+        let (policy, store) = tracked_funding(&signer, original).await;
+        let policy = Arc::new(policy);
+
+        let bumped = signed_funding(&signer, 0, 2_000_000_000).await;
+        let PolicyDecision::Admit(action) = policy
+            .evaluate(&bumped, SubmissionMode::Replacement { replaces: original })
+            .await
+        else {
+            panic!("replacement should be admitted");
+        };
+
+        let waiting = {
+            let policy = policy.clone();
+            let copy = signed_funding(&signer, 7, 1_000_000_000).await;
+            tokio::spawn(async move { policy.evaluate(&copy, SubmissionMode::Tracked).await })
+        };
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            !waiting.is_finished(),
+            "the copy must wait for the replacement's broadcast"
+        );
+
+        store.insert(submitted_record(replacement)).expect("insert failed");
+        action.register(replacement);
+        assert_eq!(
+            waiting.await.expect("task panicked"),
+            PolicyDecision::Duplicate {
+                operation: "fund_channel",
+                existing: replacement,
             }
         );
     }

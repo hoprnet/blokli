@@ -95,6 +95,15 @@ impl MutationRoot {
     /// Validates the pre-signed raw transaction data and submits it to the chain immediately.
     /// Returns the transaction ID that can be used to query status later.
     /// Does not wait for on-chain confirmation. Background monitor tracks confirmation.
+    ///
+    /// A transaction with the same signer and nonce as a tracked pending one, but a different
+    /// hash, is a fee-bumped replacement. It is broadcast and tracked as a transaction of its
+    /// own, next to the original, which stays tracked. Both `maxFeePerGas` and
+    /// `maxPriorityFeePerGas` must be at least 12.5% above the pending transaction's, or the
+    /// recommended fees when those are higher. Refusals are `RpcError` results: code
+    /// `REPLACEMENT_UNDERPRICED` with the minimum fees in the message, and
+    /// `REPLACEMENT_LIMIT_REACHED` once the nonce was replaced the configured maximum number of
+    /// times. Resubmitting the identical raw transaction returns the tracked one as before.
     #[graphql(name = "sendTransactionAsync")]
     async fn send_transaction_async(
         &self,
@@ -277,6 +286,17 @@ fn executor_error_to_async_result(error: TransactionExecutorError) -> SendTransa
         TransactionExecutorError::OverloadedError => {
             SendTransactionAsyncResult::Overloaded(errors::submission_capacity_exceeded())
         }
+        // Replacement refusals reuse `RpcError`, so no client needs a new result type.
+        TransactionExecutorError::ReplacementUnderpriced { .. }
+        | TransactionExecutorError::ReplacementRefusedByNode { .. } => {
+            SendTransactionAsyncResult::RpcError(errors::replacement_underpriced(error.to_string()))
+        }
+        TransactionExecutorError::ReplacementLimitReached { .. } => {
+            SendTransactionAsyncResult::RpcError(errors::replacement_limit_reached(error.to_string()))
+        }
+        TransactionExecutorError::ReplacementConflict => {
+            SendTransactionAsyncResult::RpcError(errors::rpc_error_with_message(error.to_string()))
+        }
         _ => SendTransactionAsyncResult::RpcError(errors::rpc_internal_error(&error)),
     }
 }
@@ -320,7 +340,103 @@ fn executor_error_to_sync_result(error: TransactionExecutorError) -> SendTransac
 
 #[cfg(test)]
 mod tests {
+    use async_graphql::{EmptySubscription, Schema};
+    use blokli_chain_api::transaction_store::FeePair;
+
     use super::*;
+    use crate::query::QueryRoot;
+
+    #[test]
+    fn test_replacement_refusals_are_rpc_errors_with_the_fees_and_the_cap() {
+        let underpriced = executor_error_to_async_result(TransactionExecutorError::ReplacementUnderpriced {
+            minimum: FeePair {
+                max_fee_per_gas: 1_125_000_000,
+                max_priority_fee_per_gas: 250_000_000,
+            },
+        });
+        let SendTransactionAsyncResult::RpcError(RpcError { code, message }) = underpriced else {
+            panic!("a below-minimum replacement must be an RpcError");
+        };
+        assert_eq!(code, errors::codes::REPLACEMENT_UNDERPRICED);
+        assert!(message.contains("1125000000"), "{message}");
+        assert!(message.contains("250000000"), "{message}");
+
+        let refused_by_node = executor_error_to_async_result(TransactionExecutorError::ReplacementRefusedByNode {
+            minimum: FeePair {
+                max_fee_per_gas: 1_125_000_000,
+                max_priority_fee_per_gas: 250_000_000,
+            },
+        });
+        let SendTransactionAsyncResult::RpcError(RpcError { code, message }) = refused_by_node else {
+            panic!("a replacement the node refused must be an RpcError");
+        };
+        assert_eq!(code, errors::codes::REPLACEMENT_UNDERPRICED);
+        assert!(message.contains("may require more"), "{message}");
+
+        let capped = executor_error_to_async_result(TransactionExecutorError::ReplacementLimitReached { max: 3 });
+        let SendTransactionAsyncResult::RpcError(RpcError { code, message }) = capped else {
+            panic!("an over-cap replacement must be an RpcError");
+        };
+        assert_eq!(code, errors::codes::REPLACEMENT_LIMIT_REACHED);
+        assert!(message.contains('3'), "{message}");
+
+        let conflict = executor_error_to_async_result(TransactionExecutorError::ReplacementConflict);
+        assert!(matches!(conflict, SendTransactionAsyncResult::RpcError(_)));
+    }
+
+    #[test]
+    fn test_result_unions_and_error_types_are_unchanged_for_old_clients() {
+        let sdl = Schema::build(QueryRoot, MutationRoot, EmptySubscription).finish().sdl();
+
+        for union in [
+            "union SendTransactionAsyncResult = Transaction | ContractNotAllowedError | FunctionNotAllowedError | \
+             RpcError | OverloadedError | HoprActionRejectedError | HoprActionThrottledError | DeduplicatedTransaction",
+            "union SendTransactionSyncResult = Transaction | ContractNotAllowedError | FunctionNotAllowedError | \
+             RpcError | TimeoutError | HoprActionRejectedError | HoprActionThrottledError",
+            "union SendTransactionResult = SendTransactionSuccess | ContractNotAllowedError | FunctionNotAllowedError \
+             | RpcError | HoprActionRejectedError | HoprActionThrottledError",
+        ] {
+            assert!(sdl.contains(union), "missing or changed: {union}");
+        }
+
+        // `RpcError` keeps exactly its two fields.
+        let rpc_error = sdl
+            .split("type RpcError {")
+            .nth(1)
+            .and_then(|rest| rest.split('}').next())
+            .expect("RpcError is in the schema");
+        let fields: Vec<&str> = rpc_error
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.contains(": "))
+            .collect();
+        assert_eq!(fields, ["code: String!", "message: String!"]);
+
+        // No status was added to the transaction status enum, and no replacement-specific type.
+        let status = sdl
+            .split("enum TransactionStatus {")
+            .nth(1)
+            .and_then(|rest| rest.split('}').next())
+            .expect("TransactionStatus is in the schema");
+        let values: Vec<&str> = status
+            .lines()
+            .map(|line| line.trim().split(' ').next().unwrap_or_default())
+            .filter(|word| !word.is_empty() && word.chars().all(|c| c.is_ascii_uppercase() || c == '_'))
+            .collect();
+        assert_eq!(
+            values,
+            [
+                "PENDING",
+                "SUBMITTED",
+                "CONFIRMED",
+                "REVERTED",
+                "TIMEOUT",
+                "VALIDATION_FAILED",
+                "SUBMISSION_FAILED"
+            ]
+        );
+        assert!(!sdl.contains("replacedBy") && !sdl.contains("ReplacementError"));
+    }
 
     #[test]
     fn test_sync_confirmations_bounds() {
